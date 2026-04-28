@@ -1,0 +1,5 @@
+.venv-llama
+models
+data-lake
+__pycache__
+*.csv
