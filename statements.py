@@ -146,6 +146,42 @@ def parse_node2_financial_note(html_or_js: str) -> List[NodeMatch]:
 
     return matches
 
+
+def parse_node2_financial_individual_note(html_or_js: str) -> List[NodeMatch]:
+    """
+    JS/HTML 텍스트에서
+    - var node = {}; 로 시작하는 블록들을 찾고
+    - node2['text'] 값에 '재무제표'와 '주석'이 동시에 들어간 블록만 골라
+    - eleId, offset, length를 파싱해서 반환
+    """
+    start_pat = re.compile(r"\bvar\s+node(?:2|3)\s*=\s*\{\}\s*;", flags=re.DOTALL)
+    starts = [m.start() for m in start_pat.finditer(html_or_js)]
+    if not starts:
+        return []
+
+    matches: List[NodeMatch] = []
+
+    for i, s in enumerate(starts):
+        e = starts[i + 1] if i + 1 < len(starts) else len(html_or_js)
+        block = html_or_js[s:e]
+
+        text = _find_field(block, "text")
+        if not text:
+            continue
+
+        # "재무제표" + "주석" 동시 포함 필터
+        if not ("연결재무제표" in text) and ("재무제표" in text):
+            rcpNo = _find_field(block, "rcpNo")
+            dcmNo = _find_field(block, "dcmNo")
+            eleId = _find_field(block, "eleId")
+            offset = _find_field(block, "offset")
+            length = _find_field(block, "length")
+
+            matches.append(NodeMatch(text=text, rcpNo=rcpNo, dcmNo=dcmNo, eleId=eleId, offset=offset, length=length))
+
+    return matches
+
+
 def _safe_title_from_anchor(a) -> str:
     # "보고서명" 텍스트가 통째로 붙는 경우가 많아서 strip 기반으로 안전하게
     txt = a.get_text(" ", strip=True)
@@ -199,6 +235,9 @@ def fetch_dart_search(ticker: str, save_dir: str, save_filename: str | None = No
                 continue
             if href in seen_hrefs:
                 continue
+            if not "dsaf001" in href:
+                continue
+
             seen_hrefs.add(href)
 
             title = _safe_title_from_anchor(a)
@@ -217,10 +256,15 @@ def fetch_dart_search(ticker: str, save_dir: str, save_filename: str | None = No
                 continue
 
             statement_comment_positions = parse_node2_financial_note(meta_scripts[0].get_text())
+            statement_comment_individual_positions = parse_node2_financial_individual_note(meta_scripts[0].get_text())
             if not statement_comment_positions:
                 continue
+            
+            if int(statement_comment_positions[0].length) <= 1024:
+                statement_position = statement_comment_individual_positions[0]
+            else:
+                statement_position = statement_comment_positions[0]
 
-            statement_position = statement_comment_positions[0]
             params = {
                 "rcpNo": statement_position.rcpNo,
                 "dcmNo": statement_position.dcmNo,
@@ -232,14 +276,19 @@ def fetch_dart_search(ticker: str, save_dir: str, save_filename: str | None = No
             report_viewer_url = f"https://dart.fss.or.kr/report/viewer.do?{urlencode(params)}"
 
             # 3) viewer GET
-            time.sleep(1)
+            time.sleep(0.5)
             viewer_resp = request_with_retry(s, "GET", report_viewer_url, timeout=30)
             viewer_resp.encoding = viewer_resp.apparent_encoding
             statement_content = viewer_resp.text
 
             # 파일명 안전화(윈도우 파일명 금지문자 제거)
             safe_title = title.strip()
-            safe_title_line = safe_title.split("\n")[1].strip()
+
+            if len(safe_title.split("\n")) >= 2:
+                safe_title_line = safe_title.split("\n")[1].strip()
+            else:
+                print("WARNING! title line is omitted!\n")
+                safe_title_line = safe_title #진원생명과학 말고는 다른 케이스 없음으로 보임 
             out_name = f"finance_statement_{safe_title_line}.html"
 
             _write_html_text(statement_content, save_dir, out_name)
@@ -248,7 +297,7 @@ def download_statements(stock_codes, download_offset):
     download_stock_codes = stock_codes[download_offset:]
 
     for offset, stock_code in enumerate(download_stock_codes):
-        print(f"downloading {stock_code}....")
+        print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
         dir = f"./data-lake/bronze/dart/finance-statement/{ticker}"
         fetch_dart_search(ticker, dir)

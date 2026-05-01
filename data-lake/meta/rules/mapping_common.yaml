@@ -1,0 +1,600 @@
+rules:
+  # =========================
+  # 0. 강제 제외 / 섹션 헤더
+  # =========================
+
+  - id: bs_section_headers
+    fs_type: BS
+    priority: 1000
+    exact_any:
+      - 자산
+      - 부채
+      - 자본
+    canonical_id: UNMAPPED
+    reason: 재무상태표 섹션 헤더
+
+  - id: is_section_headers
+    fs_type: IS
+    priority: 1000
+    exact_any:
+      - 당기순이익의귀속
+      - 당기순손익의귀속
+      - 총포괄이익의귀속
+      - 총포괄손익의귀속
+      - 주당손익
+      - 지배기업의소유주지분에대한주당이익
+    canonical_id: UNMAPPED
+    reason: 손익계산서 섹션 헤더
+
+  - id: cf_cash_begin_end
+    fs_type: CF
+    priority: 1000
+    include_any:
+      - 기초의현금및현금성자산
+      - 기말의현금및현금성자산
+      - 현금및현금성자산의증가
+      - 현금및현금성자산의감소
+      - 현금및현금성자산에대한환율변동효과
+    canonical_id: UNMAPPED
+    reason: 현금흐름표 보조 subtotal
+
+  # =========================
+  # 1. 현금흐름표 CF
+  # =========================
+
+  - id: cf_cash_generated_from_operations
+    fs_type: CF
+    priority: 950
+    include_any:
+      - 영업활동에서창출된현금흐름
+      - 영업에서창출된현금
+      - 영업으로부터창출된현금
+    canonical_id: UNMAPPED
+    reason: CFO 이전 subtotal
+
+  - id: cf_cfo
+    fs_type: CF
+    priority: 900
+    include_all:
+      - 영업활동
+      - 현금흐름
+    exclude_any:
+      - 영업활동에서창출된현금흐름
+      - 영업에서창출된현금
+      - 영업으로부터창출된현금
+    canonical_id: CFO
+    reason: 영업활동 최종 현금흐름
+
+  - id: cf_cfi
+    fs_type: CF
+    priority: 900
+    include_all:
+      - 투자활동
+      - 현금흐름
+    canonical_id: CFI
+    reason: 투자활동 최종 현금흐름
+
+  - id: cf_cff
+    fs_type: CF
+    priority: 900
+    include_all:
+      - 재무활동
+      - 현금흐름
+    canonical_id: CFF
+    reason: 재무활동 최종 현금흐름
+
+  - id: cf_debt_net_borrowing
+    fs_type: CF
+    priority: 850
+    exact_any:
+      - 단기차입금의순차입
+      - 차입금의순차입
+    canonical_id: DEBT_NET_BORROWING
+    fallback_if_missing: UNMAPPED
+    reason: 차입금 차입/상환 순액
+
+  - id: cf_lease_repayment
+    fs_type: CF
+    priority: 850
+    exact_any:
+      - 리스부채의상환
+      - 리스부채상환
+      - 리스부채의감소
+      - 리스부채감소
+    canonical_id: LEASE_REPAYMENT
+    reason: 리스부채 상환/감소
+
+  - id: cf_capex_ppe
+    fs_type: CF
+    priority: 800
+    exact_any:
+      - 유형자산의취득
+      - 유형자산취득
+    canonical_id: CAPEX_PPE
+    reason: 유형자산 취득 지출
+
+  - id: cf_capex_intang
+    fs_type: CF
+    priority: 800
+    exact_any:
+      - 무형자산의취득
+      - 무형자산취득
+    canonical_id: CAPEX_INTANG
+    reason: 무형자산 취득 지출
+
+  - id: cf_ppe_disposal
+    fs_type: CF
+    priority: 800
+    exact_any:
+      - 유형자산의처분
+      - 유형자산처분
+    canonical_id: PPE_DISPOSAL_PROCEEDS
+    reason: 유형자산 처분대금
+
+  - id: cf_intangible_disposal
+    fs_type: CF
+    priority: 800
+    exact_any:
+      - 무형자산의처분
+      - 무형자산처분
+    canonical_id: INTANGIBLE_DISPOSAL_PROCEEDS
+    reason: 무형자산 처분대금
+
+  - id: cf_interest_paid
+    fs_type: CF
+    priority: 800
+    exact_any:
+      - 이자의지급
+      - 이자지급
+    canonical_id: INT_PAID
+    reason: 이자 지급
+
+  - id: cf_tax_paid
+    fs_type: CF
+    priority: 800
+    exact_any:
+      - 법인세의납부
+      - 법인세납부
+      - 법인세지급
+    canonical_id: TAX_PAID
+    reason: 법인세 지급
+
+  - id: cf_dividend_paid
+    fs_type: CF
+    priority: 800
+    exact_any:
+      - 배당금의지급
+      - 배당의지급
+      - 배당
+    canonical_id: DIV_PAID
+    reason: 배당금 지급
+
+  - id: cf_tax_paid_or_refund
+    fs_type: CF
+    priority: 800
+    exact_any:
+      - 법인세의환급납부
+      - 법인세환급납부
+      - 법인세의납부
+      - 법인세납부
+      - 법인세지급
+    canonical_id: TAX_PAID
+    reason: 법인세 현금흐름. 환급/납부 순액은 현재 TAX_PAID로 fallback
+
+  - id: cf_debt_issue
+    fs_type: CF
+    priority: 700
+    include_any:
+      - 차입금의차입
+      - 차입금의증가
+      - 사채의발행
+      - 금융부채의증가
+      - 단기금융부채의증가
+      - 장기금융부채의증가
+      - 단기차입금의순차입
+    canonical_id: DEBT_ISSUE
+    reason: 차입금/사채 유입
+
+  - id: cf_debt_repay
+    fs_type: CF
+    priority: 700
+    include_any:
+      - 차입금의상환
+      - 차입금의감소
+      - 사채의상환
+      - 금융부채의감소
+      - 단기금융부채의감소
+      - 장기금융부채의감소
+      - 유동성장기부채의상환
+    canonical_id: DEBT_REPAY
+    reason: 차입금/사채 상환
+
+  - id: bs_non_current_liabilities
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 비유동부채
+    canonical_id: NON_CURRENT_LIABILITIES
+    fallback_if_missing: UNMAPPED
+
+  - id: cf_buyback
+    fs_type: CF
+    priority: 700
+    exact_any:
+      - 자기주식의취득
+      - 자기주식취득
+    canonical_id: BUYBACK
+    reason: 자기주식 취득
+
+  - id: cf_equity_issue
+    fs_type: CF
+    priority: 700
+    include_any:
+      - 유상증자
+      - 주식발행
+      - 비지배지분의유상증자참여
+      - 연결자본거래로인한현금유입
+    canonical_id: EQ_ISSUE
+    reason: 자본 유입
+
+  # =========================
+  # 2. 재무상태표 BS
+  # =========================
+
+  - id: bs_long_term_debt_generic_borrowings
+    fs_type: BS
+    priority: 850
+    exact_any:
+      - 차입금
+    context_include_any:
+      - 비유동부채
+    canonical_id: LONG_TERM_DEBT
+    reason: 비유동부채 하위 차입금
+
+  - id: bs_short_term_debt_generic_borrowings
+    fs_type: BS
+    priority: 850
+    exact_any:
+      - 차입금
+    context_include_any:
+      - 유동부채
+    canonical_id: SHORT_TERM_DEBT
+    reason: 유동부채 하위 차입금
+
+  - id: bs_liabilities_and_equity_total
+    fs_type: BS
+    priority: 850
+    exact_any:
+      - 부채및자본총계
+      - 부채와자본총계
+      - 부채와자본합계
+    canonical_id: UNMAPPED
+    reason: 자산총계와 중복되는 보조 총계
+
+  - id: bs_total_assets
+    fs_type: BS
+    priority: 800
+    exact_any:
+      - 자산총계
+      - 자산합계
+    canonical_id: TOTAL_ASSETS
+
+  - id: bs_total_liabilities
+    fs_type: BS
+    priority: 800
+    exact_any:
+      - 부채총계
+      - 부채합계
+    canonical_id: TOTAL_LIABILITIES
+
+  - id: bs_total_equity
+    fs_type: BS
+    priority: 800
+    exact_any:
+      - 자본총계
+      - 자본합계
+    canonical_id: TOTAL_EQUITY
+
+  - id: bs_current_assets
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 유동자산
+    canonical_id: CURRENT_ASSETS
+
+  - id: bs_non_current_assets
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 비유동자산
+    canonical_id: NON_CURRENT_ASSETS
+
+  - id: bs_current_liabilities
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 유동부채
+    canonical_id: CURRENT_LIABILITIES
+
+  - id: bs_cash
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 현금및현금성자산
+    canonical_id: CASH_AND_EQUIVALENTS
+
+  - id: bs_short_term_financial_assets
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 단기금융자산
+      - 단기금융상품
+      - 단기투자자산
+    canonical_id: SHORT_TERM_FINANCIAL_ASSETS
+
+  - id: bs_inventory
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 재고자산
+    canonical_id: INVENTORIES
+
+  - id: bs_ppe
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 유형자산
+    canonical_id: PPE
+
+  - id: bs_intangible_assets
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 무형자산
+    canonical_id: INTANGIBLE_ASSETS
+
+  - id: bs_contract_assets
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 계약자산
+    canonical_id: CONTRACT_ASSETS
+
+  - id: bs_contract_liabilities
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 계약부채
+      - 장기계약부채
+    canonical_id: CONTRACT_LIABILITIES
+
+  - id: bs_advances_from_customers
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 선수금
+    canonical_id: ADVANCES_FROM_CUSTOMERS
+
+  - id: bs_trade_receivables
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 매출채권
+    canonical_id: TRADE_RECEIVABLES
+
+  - id: bs_trade_and_other_receivables_fallback
+    fs_type: BS
+    priority: 680
+    exact_any:
+      - 매출채권및기타채권
+      - 장기매출채권및기타채권
+    canonical_id: OTHER_RECEIVABLES
+    reason: 현재 캐노니컬에 매출채권및기타채권 계정이 없어 fallback
+
+  - id: bs_trade_payables
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 매입채무
+    canonical_id: TRADE_PAYABLES
+
+  - id: bs_trade_and_other_payables_fallback
+    fs_type: BS
+    priority: 680
+    exact_any:
+      - 매입채무및기타채무
+      - 장기매입채무및기타채무
+    canonical_id: OTHER_PAYABLES
+    reason: 현재 캐노니컬에 매입채무및기타채무 계정이 없어 fallback
+
+  - id: bs_short_term_debt
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 단기차입금
+      - 유동성장기부채
+      - 단기금융부채
+    canonical_id: SHORT_TERM_DEBT
+
+  - id: bs_long_term_debt
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 장기차입금
+      - 사채
+      - 장기금융부채
+    canonical_id: LONG_TERM_DEBT
+
+  - id: bs_lease_liability
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 리스부채
+      - 유동리스부채
+      - 비유동리스부채
+    canonical_id: LEASE_LIABILITY
+
+  - id: bs_parent_equity
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 지배기업의소유주에게귀속되는자본
+      - 지배기업소유주지분
+      - 지배주주지분
+    canonical_id: EAOP
+
+  - id: bs_nci_equity
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 비지배지분
+    canonical_id: NEAOP
+
+  - id: bs_retained_earnings
+    fs_type: BS
+    priority: 700
+    exact_any:
+      - 이익잉여금
+    canonical_id: RETAINED_EARNINGS
+
+  # =========================
+  # 3. 손익계산서 IS
+  # =========================
+  - id: is_net_income_parent_explicit
+    fs_type: IS
+    priority: 950
+    exact_any:
+      - 지배기업소유주지분순이익
+      - 지배기업의소유주지분순이익
+      - 지배주주순이익
+    canonical_id: NET_INCOME_PARENT
+    reason: 명시적 지배주주순이익
+
+  - id: is_revenue
+    fs_type: IS
+    priority: 700
+    exact_any:
+      - 매출액
+      - 영업수익
+      - 수익
+    canonical_id: REVENUE
+
+  - id: is_cogs
+    fs_type: IS
+    priority: 700
+    exact_any:
+      - 매출원가
+    canonical_id: COGS
+
+  - id: is_gross_profit
+    fs_type: IS
+    priority: 700
+    exact_any:
+      - 매출총이익
+    canonical_id: GROSS_PROFIT
+
+  - id: is_sgna
+    fs_type: IS
+    priority: 700
+    exact_any:
+      - 판매비와관리비
+      - 판매비및관리비
+      - 판매관리비
+    canonical_id: SGNA
+
+  - id: is_rnd
+    fs_type: IS
+    priority: 700
+    exact_any:
+      - 연구개발비
+    canonical_id: RND
+
+  - id: is_operating_income
+    fs_type: IS
+    priority: 700
+    exact_any:
+      - 영업이익
+      - 영업이익손실
+    canonical_id: OPERATING_INCOME
+
+  - id: is_pbt
+    fs_type: IS
+    priority: 700
+    exact_any:
+      - 법인세비용차감전순이익
+      - 법인세비용차감전순이익손실
+      - 세전이익
+    canonical_id: PBT
+
+  - id: is_tax_expense
+    fs_type: IS
+    priority: 700
+    exact_any:
+      - 법인세비용
+      - 법인세비용수익
+    canonical_id: TAX_EXPENSE
+
+  - id: is_net_income
+    fs_type: IS
+    priority: 700
+    exact_any:
+      - 당기순이익
+      - 당기순이익손실
+      - 당기순손익
+    canonical_id: NET_INCOME
+
+  - id: is_gross_profit
+    fs_type: IS
+    priority: 700
+    exact_any:
+      - 매출총이익
+      - 매출총이익손실
+    canonical_id: GROSS_PROFIT
+
+  - id: is_net_income_parent
+    fs_type: IS
+    priority: 900
+    exact_any:
+      - 지배기업의소유주지분
+      - 지배주주지분
+    context_include_any:
+      - 당기순이익의귀속
+      - 당기순손익의귀속
+      - 당기순이익손실의귀속
+    canonical_id: NET_INCOME_PARENT
+    reason: 당기순이익 귀속 중 지배주주순이익
+
+  - id: is_parent_comprehensive_income_unmapped
+    fs_type: IS
+    priority: 900
+    exact_any:
+      - 지배기업의소유주지분
+      - 지배주주지분
+    context_include_any:
+      - 총포괄이익의귀속
+      - 총포괄손익의귀속
+      - 총포괄이익손실의귀속
+    canonical_id: UNMAPPED
+    reason: 현재 캐노니컬에 지배주주총포괄이익 계정 없음
+
+  - id: is_nci_income_unmapped
+    fs_type: IS
+    priority: 900
+    exact_any:
+      - 비지배지분
+    context_include_any:
+      - 당기순이익의귀속
+      - 당기순손익의귀속
+    canonical_id: UNMAPPED
+    reason: 현재 캐노니컬에 비지배지분순이익 계정 없음
+
+  - id: is_nci_comprehensive_income_unmapped
+    fs_type: IS
+    priority: 900
+    exact_any:
+      - 비지배지분
+    context_include_any:
+      - 총포괄이익의귀속
+      - 총포괄손익의귀속
+    canonical_id: UNMAPPED
+    reason: 현재 캐노니컬에 비지배지분총포괄이익 계정 없음

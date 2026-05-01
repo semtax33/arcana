@@ -1,0 +1,254 @@
+version: 1
+
+settings:
+  default_tolerance_abs: 10000
+  large_unmapped_threshold: 10000000000
+
+required_statements:
+  - BS
+  - IS
+  - CF
+
+core_ids:
+  BS:
+    - TOTAL_ASSETS
+    - TOTAL_LIABILITIES
+    - TOTAL_EQUITY
+  IS:
+    - NET_INCOME
+  CF:
+    - CFO
+    - CFI
+    - CFF
+
+dangerous_duplicate_ids:
+  - TOTAL_ASSETS
+  - TOTAL_LIABILITIES
+  - TOTAL_EQUITY
+  - CFO
+  - CFI
+  - CFF
+  - REVENUE
+  - COGS
+  - GROSS_PROFIT
+  - SGNA
+  - OPERATING_INCOME
+  - PBT
+  - TAX_EXPENSE
+  - NET_INCOME
+  - NET_INCOME_PARENT
+  - EAOP
+  - NEAOP
+
+formula_checks:
+  - name: "BS: 자산총계 = 부채총계 + 자본총계"
+    statement_type: BS
+    lhs:
+      cid: TOTAL_ASSETS
+      agg: first
+    rhs:
+      sum:
+        - cid: TOTAL_LIABILITIES
+          agg: first
+        - cid: TOTAL_EQUITY
+          agg: first
+
+  - name: "BS: 유동자산 + 비유동자산 = 자산총계"
+    statement_type: BS
+    skip_if_missing: true
+    lhs:
+      sum:
+        - cid: CURRENT_ASSETS
+          agg: first
+        - cid: NON_CURRENT_ASSETS
+          agg: first
+    rhs:
+      cid: TOTAL_ASSETS
+      agg: first
+
+  - name: "BS: 유동부채 + 비유동부채 = 부채총계"
+    statement_type: BS
+    skip_if_missing: true
+    lhs:
+      sum:
+        - cid: CURRENT_LIABILITIES
+          agg: first
+        - cid: NON_CURRENT_LIABILITIES
+          agg: first
+    rhs:
+      cid: TOTAL_LIABILITIES
+      agg: first
+
+  - name: "BS: 지배주주지분 + 비지배지분 = 자본총계"
+    statement_type: BS
+    skip_if_missing: true
+    lhs:
+      sum:
+        - cid: EAOP
+          agg: first
+        - cid: NEAOP
+          agg: first
+    rhs:
+      cid: TOTAL_EQUITY
+      agg: first
+
+  - name: "IS: 매출액 - 매출원가 = 매출총이익"
+    statement_type: IS
+    skip_if_missing: true
+    lhs:
+      sub:
+        - cid: REVENUE
+          agg: first
+        - cid: COGS
+          agg: first
+    rhs:
+      cid: GROSS_PROFIT
+      agg: first
+
+  - name: "IS: 매출총이익 - 판관비 = 영업이익"
+    statement_type: IS
+    skip_if_missing: true
+    lhs:
+      sub:
+        - cid: GROSS_PROFIT
+          agg: first
+        - cid: SGNA
+          agg: first
+    rhs:
+      cid: OPERATING_INCOME
+      agg: first
+
+  - name: "IS: PBT - TAX = NET_INCOME"
+    statement_type: IS
+    skip_if_missing: true
+    lhs:
+      sub:
+        - cid: PBT
+          agg: first
+        - cid: TAX_EXPENSE
+          agg: first
+    rhs:
+      cid: NET_INCOME
+      agg: first
+
+  - name: "IS: 지배주주순이익 + 비지배지분순이익 = 당기순이익"
+    statement_type: IS
+    skip_if_missing: true
+    lhs:
+      sum:
+        - cid: NET_INCOME_PARENT
+          agg: first
+        - cid: NET_INCOME_NCI
+          agg: first
+    rhs:
+      cid: NET_INCOME
+      agg: first
+
+  - name: "CF: CFO + CFI + CFF + 환율효과 + 특수현금변동 = 현금증가"
+    statement_type: CF
+    source: debug
+    skip_if_missing: true
+    lhs:
+      sum:
+        - cid: CFO
+          agg: first
+        - cid: CFI
+          agg: first
+        - cid: CFF
+          agg: first
+        - name_contains_any:
+            - 환율변동효과
+            - 현금및현금성자산에대한환율변동효과
+          agg: first
+          optional: true
+        - name_contains_any:
+            - 매각예정자산의순현금변동
+            - 매각예정자산대체
+            - 중단영업현금
+          agg: sum
+          optional: true
+    rhs:
+      name_contains_any:
+        - 현금및현금성자산의증가감소
+        - 현금및현금성자산의증가
+        - 현금및현금성자산의감소
+      agg: first
+
+  - name: "CF: 기초현금 + 현금증가 = 기말현금"
+    statement_type: CF
+    source: debug
+    skip_if_missing: true
+    lhs:
+      sum:
+        - name_contains_any:
+            - 기초의현금및현금성자산
+            - 기초현금및현금성자산
+          agg: first
+        - name_contains_any:
+            - 현금및현금성자산의증가감소
+            - 현금및현금성자산의증가
+            - 현금및현금성자산의감소
+          agg: first
+    rhs:
+      name_contains_any:
+        - 기말의현금및현금성자산
+        - 기말현금및현금성자산
+      agg: first
+
+warning_rules:
+  - id: section_header_mapped
+    severity: ERROR
+    description: "섹션 헤더가 canonical 계정으로 매핑됨"
+    conditions:
+      name_exact_any:
+        - 자산
+        - 부채
+        - 자본
+        - 주당손익
+        - 당기순이익의귀속
+        - 당기순손익의귀속
+        - 총포괄이익의귀속
+        - 총포괄손익의귀속
+      canonical_id_not: UNMAPPED
+
+  - id: comprehensive_income_as_net_income_parent
+    severity: ERROR
+    description: "총포괄손익 귀속이 NET_INCOME_PARENT로 매핑됨"
+    conditions:
+      canonical_id: NET_INCOME_PARENT
+      context_contains_any:
+        - 총포괄
+
+  - id: cash_generated_from_operations_as_cfo
+    severity: ERROR
+    description: "영업활동에서 창출된 현금흐름이 CFO로 매핑됨"
+    conditions:
+      canonical_id: CFO
+      name_contains_any:
+        - 영업활동에서창출된현금
+        - 영업에서창출된현금
+        - 영업으로부터창출된현금
+
+  - id: cf_begin_end_cash_as_bs_cash
+    severity: ERROR
+    description: "CF의 기초/기말 현금이 CASH_AND_EQUIVALENTS로 매핑됨"
+    conditions:
+      statement_type: CF
+      canonical_id: CASH_AND_EQUIVALENTS
+      name_contains_any:
+        - 기초의현금및현금성자산
+        - 기말의현금및현금성자산
+
+  - id: net_borrowing_as_issue_or_repay
+    severity: WARN
+    description: "순차입/순상환이 DEBT_ISSUE 또는 DEBT_REPAY로 직접 매핑됨"
+    conditions:
+      canonical_id_in:
+        - DEBT_ISSUE
+        - DEBT_REPAY
+      name_contains_any:
+        - 순차입
+        - 순상환
+
+factor_snapshot:
+  enabled: true

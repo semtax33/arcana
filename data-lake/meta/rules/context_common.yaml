@@ -1,0 +1,191 @@
+context_rules:
+  # =========================
+  # IGNORE: context로 쓰면 안 되는 행
+  # =========================
+
+  - id: ignore_bs_totals
+    priority: 1000
+    fs_type: BS
+    include_any:
+      - 자산총계
+      - 부채총계
+      - 자본총계
+      - 부채및자본총계
+      - 부채와자본총계
+    action:
+      type: IGNORE_CONTEXT
+    reason: 총계 행은 section_context로 사용하지 않음
+
+  - id: ignore_is_totals_and_profit_lines
+    priority: 1000
+    fs_type: IS
+    exact_any:
+      - 매출총이익
+      - 영업이익
+      - 법인세비용차감전순이익
+      - 당기순이익
+      - 총포괄이익
+      - 총포괄손익
+      - 기본주당이익
+      - 희석주당이익
+    action:
+      type: IGNORE_CONTEXT
+    reason: 손익계산서 성과 계정은 context로 사용하지 않음
+
+  - id: ignore_cf_cash_begin_end
+    priority: 1000
+    fs_type: CF
+    include_any:
+      - 기초의현금및현금성자산
+      - 기말의현금및현금성자산
+      - 현금및현금성자산의증가
+      - 현금및현금성자산의감소
+      - 현금및현금성자산에대한환율변동효과
+    action:
+      type: IGNORE_CONTEXT
+    reason: 현금흐름표 보조 subtotal은 context로 사용하지 않음
+
+  # =========================
+  # IS context
+  # =========================
+
+  - id: is_profit_attribution_section
+    priority: 900
+    fs_type: IS
+    exact_any:
+      - 당기순이익의귀속
+      - 당기순손익의귀속
+      - 당기순이익귀속
+      - 당기순손익귀속
+      - 당기순이익손실의귀속
+      - 당기순이익손실귀속
+    action:
+      type: PUSH_CONTEXT
+      context_label: 당기순이익의귀속
+    reason: 지배주주순이익/비지배지분순이익 구분용 section
+
+  - id: is_comprehensive_attribution_section
+    priority: 900
+    fs_type: IS
+    exact_any:
+      - 총포괄이익의귀속
+      - 총포괄손익의귀속
+      - 총포괄이익귀속
+      - 총포괄손익귀속
+      - 총포괄이익손실의귀속
+      - 총포괄이익손실귀속
+    action:
+      type: PUSH_CONTEXT
+      context_label: 총포괄이익의귀속
+    reason: 총포괄손익 귀속 section
+
+  - id: is_eps_section
+    priority: 800
+    fs_type: IS
+    include_any:
+      - 주당이익
+      - 주당손익
+    action:
+      type: PUSH_CONTEXT
+      context_label: 주당손익
+    reason: 주당손익 section
+
+  - id: is_oci_reclass_section
+    priority: 700
+    fs_type: IS
+    include_any:
+      - 후속적으로당기손익으로재분류되는
+      - 후속적으로당기손익으로재분류되지않는
+    action:
+      type: PUSH_CONTEXT
+      context_label: SELF
+    reason: 기타포괄손익 하위 section
+
+  # =========================
+  # BS context
+  # =========================
+
+  - id: bs_non_current_liabilities_section
+    priority: 850
+    fs_type: BS
+    exact_any:
+      - 비유동부채
+    action:
+      type: PUSH_CONTEXT
+      context_label: 비유동부채
+    reason: 비유동부채 section
+
+  - id: bs_current_liabilities_section
+    priority: 850
+    fs_type: BS
+    exact_any:
+      - 유동부채
+    action:
+      type: PUSH_CONTEXT
+      context_label: 유동부채
+    reason: 유동부채 section
+
+  - id: bs_non_current_assets_section
+    priority: 850
+    fs_type: BS
+    exact_any:
+      - 비유동자산
+    action:
+      type: PUSH_CONTEXT
+      context_label: 비유동자산
+    reason: 비유동자산 section
+
+  - id: bs_current_assets_section
+    priority: 850
+    fs_type: BS
+    exact_any:
+      - 유동자산
+    action:
+      type: PUSH_CONTEXT
+      context_label: 유동자산
+    reason: 유동자산 section
+
+  - id: bs_assets_section
+    priority: 800
+    fs_type: BS
+    exact_any:
+      - 자산
+    action:
+      type: PUSH_CONTEXT
+      context_label: 자산
+    reason: 자산 section
+
+  - id: bs_liabilities_section
+    priority: 800
+    fs_type: BS
+    exact_any:
+      - 부채
+    action:
+      type: PUSH_CONTEXT
+      context_label: 부채
+    reason: 부채 section
+
+  - id: bs_equity_section
+    priority: 800
+    fs_type: BS
+    exact_any:
+      - 자본
+    action:
+      type: PUSH_CONTEXT
+      context_label: 자본
+    reason: 자본 section
+
+  # =========================
+  # Generic fallback context
+  # =========================
+
+  - id: generic_group_header
+    priority: 100
+    fs_type: ANY
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: SELF
+    reason: 하위 행이 있고 금액이 비어 있거나 0인 일반 그룹 헤더

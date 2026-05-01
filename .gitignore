@@ -1,5 +1,8 @@
 .venv-llama
 models
-data-lake
 __pycache__
 *.csv
+temp
+data-lake/bronze/**
+data-lake/silver/**
+data-lake/gold/**
