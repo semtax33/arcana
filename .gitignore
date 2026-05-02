@@ -1,8 +1,8 @@
 .venv-llama
 models
 __pycache__
-*.csv
 temp
+normalized
 data-lake/bronze/**
 data-lake/silver/**
 data-lake/gold/**
