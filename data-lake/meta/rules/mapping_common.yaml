@@ -122,6 +122,22 @@ rules:
     canonical_id: CAPEX_INTANG
     reason: 무형자산 취득 지출
 
+  - id: cf_depreciation_expense
+    fs_type: CF
+    priority: 800
+    exact_any:
+      - 감가상각비
+    canonical_id: DEPRECIATION_EXPENSE
+    reason: 감가상각비
+
+  - id: cf_amortization
+    fs_type: CF
+    priority: 800
+    exact_any:
+      - 무형자산상각비
+    canonical_id: AMORTIZATION
+    reason: 무형자산 상각비
+
   - id: cf_ppe_disposal
     fs_type: CF
     priority: 800
@@ -300,6 +316,10 @@ rules:
     priority: 700
     exact_any:
       - 유동자산
+      - 유동자산 합계
+      - 유동자산합계
+      - 유동자산 계
+      - 유동자산(금융업)
     canonical_id: CURRENT_ASSETS
 
   - id: bs_non_current_assets
@@ -307,6 +327,11 @@ rules:
     priority: 700
     exact_any:
       - 비유동자산
+      - 비유동 자산
+      - 비유동자산 합계
+      - 비유동자산합계
+      - 비유동자산 계
+      - 비유동자산(금융업)
     canonical_id: NON_CURRENT_ASSETS
 
   - id: bs_current_liabilities
@@ -321,6 +346,9 @@ rules:
     priority: 700
     exact_any:
       - 현금및현금성자산
+      - 현금및현금성자산, 금융업
+      - 현금및현금성자산, 비금융업
+      - 현금및현금성자산-증권업
     canonical_id: CASH_AND_EQUIVALENTS
 
   - id: bs_short_term_financial_assets
@@ -388,6 +416,13 @@ rules:
     exact_any:
       - 매출채권및기타채권
       - 장기매출채권및기타채권
+      - 매출채권 및 기타채권
+      - 매출채권과기타채권
+      - 매출채권및기타수취채권
+      - 매출채권과기타수취채권
+      - 매출채권및기타금융채권
+      - 매출채권 및 기타채권 합계
+      - 매출채권 및 기타유동채권
     canonical_id: OTHER_RECEIVABLES
     reason: 현재 캐노니컬에 매출채권및기타채권 계정이 없어 fallback
 
@@ -403,7 +438,11 @@ rules:
     priority: 680
     exact_any:
       - 매입채무및기타채무
+      - 매입채무 및 기타채무
       - 장기매입채무및기타채무
+      - 장기매입채무 및 기타채무
+      - 매입채무및미지급금
+      - 매입채무 및 미지급금
     canonical_id: OTHER_PAYABLES
     reason: 현재 캐노니컬에 매입채무및기타채무 계정이 없어 fallback
 
@@ -477,6 +516,7 @@ rules:
       - 매출액
       - 영업수익
       - 수익
+      - 수익(매출액)
     canonical_id: REVENUE
 
   - id: is_cogs
@@ -507,6 +547,8 @@ rules:
     priority: 700
     exact_any:
       - 연구개발비
+      - 개발비
+      - 연구비
     canonical_id: RND
 
   - id: is_operating_income
@@ -541,6 +583,7 @@ rules:
       - 당기순이익
       - 당기순이익손실
       - 당기순손익
+      - 당기순이익(손실)
     canonical_id: NET_INCOME
 
   - id: is_gross_profit
@@ -557,6 +600,8 @@ rules:
     exact_any:
       - 지배기업의소유주지분
       - 지배주주지분
+      - 지배주주순이익
+      - 지배주주귀속순이익
     context_include_any:
       - 당기순이익의귀속
       - 당기순손익의귀속
@@ -577,24 +622,29 @@ rules:
     canonical_id: UNMAPPED
     reason: 현재 캐노니컬에 지배주주총포괄이익 계정 없음
 
-  - id: is_nci_income_unmapped
+  - id: is_net_income_nci
     fs_type: IS
     priority: 900
     exact_any:
       - 비지배지분
+      - 비지배주주지분
     context_include_any:
       - 당기순이익의귀속
       - 당기순손익의귀속
-    canonical_id: UNMAPPED
-    reason: 현재 캐노니컬에 비지배지분순이익 계정 없음
+      - 당기순이익손실의귀속
+    canonical_id: NET_INCOME_NCI
+    reason: CanonicalAccount에 비지배지분순이익 계정이 있으므로 UNMAPPED 대신 매핑
 
-  - id: is_nci_comprehensive_income_unmapped
+  - id: is_comprehensive_income_parent
     fs_type: IS
     priority: 900
     exact_any:
-      - 비지배지분
+      - 지배기업의소유주지분
+      - 지배기업소유주지분
+      - 지배주주지분
     context_include_any:
       - 총포괄이익의귀속
       - 총포괄손익의귀속
-    canonical_id: UNMAPPED
-    reason: 현재 캐노니컬에 비지배지분총포괄이익 계정 없음
+      - 총포괄이익손실의귀속
+    canonical_id: COMPREHENSIVE_INCOME_PARENT
+    reason: CanonicalAccount에 지배주주총포괄이익 계정이 있으므로 UNMAPPED 대신 매핑
