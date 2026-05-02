@@ -82,13 +82,77 @@ def normalize_account_name(value: Any) -> str:
     if value is None:
         return ""
 
-    s = str(value)
+    s = str(value).strip()
+
+    # 앞뒤 따옴표 제거
+    # 예: "리스부채, 금융업"
+    s = s.strip().strip('"').strip("'").strip("“”‘’")
+
+    # 꺾쇠 wrapper 제거
+    # 예: <운전자본 조정> -> 운전자본 조정
+    s = re.sub(r"^\s*[<〈《]\s*", "", s)
+    s = re.sub(r"\s*[>〉》]\s*$", "", s)
 
     # DART 주석 제거: (주26), (주29,35,36,48)
-    s = re.sub(r"\(주\s*\d+(?:\s*,\s*\d+)*\)", "", s)
+    s = re.sub(r"\(주\s*\d+(?:\s*[,\.]\s*\d+)*\)", "", s)
+
+    # DART 주석 제거: (주석3.5.12.22.28), (주석8,29,30)
+    s = re.sub(r"\(주석\s*[^)]*\)", "", s)
+
+    # 순수 주석 번호 제거: (19,35,36,37), (10.23.29)
+    # 단, (유동), (장기), (결손금) 같은 의미 있는 괄호는 여기서 제거하지 않는다.
+    s = re.sub(r"\(\s*\d+(?:\s*[,\.]\s*\d+)*\s*\)", "", s)
 
     # 단위 제거: (단위 : 원)
     s = re.sub(r"\(단위\s*[:：]\s*[^)]*\)", "", s)
+
+    # [개요] 같은 대괄호 설명 제거
+    # 예: 영업권 이외의 무형자산 [개요]
+    s = re.sub(r"\[[^\]]*개요[^\]]*\]", "", s)
+
+    # (*) 같은 별표 주석 제거
+    s = re.sub(r"\(\s*\*\s*\)", "", s)
+    s = s.replace("*", "")
+
+    # 업종/시장 suffix 제거
+    # 예: 현금및현금성자산-증권업, "리스부채, 금융업", 유동자산(금융업)
+    s = re.sub(r"[-,，]\s*(금융업|증권업)\s*$", "", s)
+    s = re.sub(r"\(\s*(금융업|증권업)\s*\)", "", s)
+
+    # 앞 번호/로마자/괄호/마침표 prefix 제거
+    # 주의: 한글/영문 prefix는 반드시 구분자가 있을 때만 제거한다.
+    prefix_patterns = [
+        # 1. / 1) / (1) / (10) / (6.
+        r"^\s*\(\s*\d+\s*\)\s*",
+        r"^\s*\(?\s*\d+\s*[.)．、]\s*",
+
+        # I. / II. / III. / IV. / V. / ll.
+        r"^\s*\(?[IVXLCDMivxlcdm]+\)?\s*[.)．、]\s*",
+
+        # Ⅰ. / Ⅱ. / Ⅲ. / Ⅳ. / Ⅴ.
+        r"^\s*\(?[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+\)?\s*[.)．、]\s*",
+
+        # ① / ② / ⑩
+        r"^\s*[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]\s*",
+
+        # 가. / 나) / (다)
+        r"^\s*(?:\([가-힣]\)|[가-힣][.)．、])\s*",
+
+        # A. / b) / (c)
+        # 한국 DART에서는 드물지만 일부 표에서 가능
+        r"^\s*(?:\([A-Za-z]\)|[A-Za-z][.)．、])\s*",
+    ]
+
+    changed = True
+    while changed:
+        before = s
+        for pattern in prefix_patterns:
+            s = re.sub(pattern, "", s)
+        changed = before != s
+
+    # ", 총액" 같은 후행 설명 제거
+    # 예: 장기차입금(사채 포함), 총액 -> 장기차입금
+    s = re.sub(r"[,，]\s*(총액|합계|계)\s*$", "", s)
 
     # IFRS 표기에서 괄호 안의 손실/수익은 매칭용으로 붙여서 본다.
     # 예: 법인세비용(수익) -> 법인세비용수익
@@ -103,6 +167,17 @@ def normalize_account_name(value: Any) -> str:
     s = s.replace("·", "")
     s = s.replace("/", "")
     s = s.replace("-", "")
+    s = s.replace(",", "")
+    s = s.replace("，", "")
+
+    # 끝 마침표 제거
+    # 예: 장기차입금. -> 장기차입금
+    s = re.sub(r"[.．。]+$", "", s)
+
+    # 끝 숫자 suffix 제거
+    # 예: 단기차입금1 -> 단기차입금
+    # 너무 공격적으로 쓰면 위험하므로 "한글 + 숫자 끝"에만 적용
+    s = re.sub(r"(?<=[가-힣])\d+$", "", s)
 
     return s.strip()
 
@@ -367,6 +442,14 @@ def extract_rows_from_dart_html(
     )
 
     return [normalize_input_row(r) for r in rows]
+
+
+def extract_rows_from_dart_comment_html(
+    html_path: str | Path,
+    company_name: str,
+    period: str,
+) -> list[dict[str, Any]]:
+    pass
 
 
 @dataclass(frozen=True)

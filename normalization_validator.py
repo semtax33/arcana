@@ -1104,6 +1104,11 @@ def build_zai_year_prompt(context_bundle: dict[str, Any], max_context_chars: int
 4. 총포괄손익 귀속이 NET_INCOME_PARENT로 매핑되면 오류다.
 5. 영업활동에서 창출된 현금흐름이 CFO로 매핑되면 오류다.
 6. 순차입/순상환이 DEBT_ISSUE 또는 DEBT_REPAY로 직접 매핑되면 경고다.
+7. canonical_add_candidates에는 재무제표 원문에 존재할 수 있는 계정과목만 제안하라.
+8. 비율, 회전율, 마진, 순부채, ROIC, NOPAT, FCF 같은 파생지표는 절대 canonical_add_candidates에 넣지 마라.
+9. 이미 canonical_accounts에 존재하는 의미의 alias는 canonical_add_candidates가 아니라 rule_patch_candidates로 제안하라.
+10. placeholder 값(CANONICAL_ID, 계정과목1 등)은 절대 출력하지 마라.
+11. rule_patch_candidates.yaml은 반드시 지정 schema만 사용하라.
 
 출력 JSON 스키마:
 {{

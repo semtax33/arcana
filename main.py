@@ -2,7 +2,7 @@ from datetime import date
 
 from canonical_rule_normalizer import normalize_financial_statement_rule_based
 from company import kospi_kosdaq_corp_list
-from statements import download_statements
+from statements import download_recent_statement_comments, download_statements
 
 
 def main() -> None:
@@ -57,3 +57,6 @@ if __name__ == "__main__":
 
 #download_all_statements()
 #download_statements(stock_codes, 451)
+#corps_list = kospi_kosdaq_corp_list()
+#stock_codes = corps_list["stock_code"].tolist()
+#download_recent_statement_comments(stock_codes, 0)
