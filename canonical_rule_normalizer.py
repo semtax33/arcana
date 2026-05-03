@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import csv
 import math
 import re
@@ -11,9 +10,10 @@ from typing import Any
 
 import pandas as pd
 import yaml
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 
+# amount는 하위 호환용으로 normalized_amount와 동일하게 저장한다.
 EXPECTED_HEADER = [
     "canonical_account_id",
     "canonical_account_name",
@@ -21,6 +21,11 @@ EXPECTED_HEADER = [
     "statement_type",
     "period",
     "amount",
+    "raw_amount",
+    "normalized_amount",
+    "cash_effect_amount",
+    "amount_policy",
+    "cash_direction",
 ]
 
 DEBUG_COLUMNS = [
@@ -35,6 +40,8 @@ DEBUG_COLUMNS = [
     "context_path",
     "context_rule_id",
     "context_reason",
+    "amount_raw",
+    "unit_factor",
 ]
 
 UNITS = {
@@ -48,6 +55,10 @@ UNITS = {
     "원": 1,
 }
 
+VALID_AMOUNT_POLICIES = {"as_reported", "abs", "neg_abs"}
+VALID_CASH_DIRECTIONS = {"", "inflow", "outflow"}
+
+
 def safe_str(value: Any) -> str:
     if value is None:
         return ""
@@ -58,7 +69,7 @@ def safe_str(value: Any) -> str:
     except Exception:
         pass
 
-    if isinstance(value, (int,)):
+    if isinstance(value, int):
         return str(value)
 
     if isinstance(value, float):
@@ -85,11 +96,9 @@ def normalize_account_name(value: Any) -> str:
     s = str(value).strip()
 
     # 앞뒤 따옴표 제거
-    # 예: "리스부채, 금융업"
     s = s.strip().strip('"').strip("'").strip("“”‘’")
 
     # 꺾쇠 wrapper 제거
-    # 예: <운전자본 조정> -> 운전자본 조정
     s = re.sub(r"^\s*[<〈《]\s*", "", s)
     s = re.sub(r"\s*[>〉》]\s*$", "", s)
 
@@ -107,7 +116,6 @@ def normalize_account_name(value: Any) -> str:
     s = re.sub(r"\(단위\s*[:：]\s*[^)]*\)", "", s)
 
     # [개요] 같은 대괄호 설명 제거
-    # 예: 영업권 이외의 무형자산 [개요]
     s = re.sub(r"\[[^\]]*개요[^\]]*\]", "", s)
 
     # (*) 같은 별표 주석 제거
@@ -115,32 +123,18 @@ def normalize_account_name(value: Any) -> str:
     s = s.replace("*", "")
 
     # 업종/시장 suffix 제거
-    # 예: 현금및현금성자산-증권업, "리스부채, 금융업", 유동자산(금융업)
     s = re.sub(r"[-,，]\s*(금융업|증권업)\s*$", "", s)
     s = re.sub(r"\(\s*(금융업|증권업)\s*\)", "", s)
 
     # 앞 번호/로마자/괄호/마침표 prefix 제거
     # 주의: 한글/영문 prefix는 반드시 구분자가 있을 때만 제거한다.
     prefix_patterns = [
-        # 1. / 1) / (1) / (10) / (6.
-        r"^\s*\(\s*\d+\s*\)\s*",
-        r"^\s*\(?\s*\d+\s*[.)．、]\s*",
-
-        # I. / II. / III. / IV. / V. / ll.
-        r"^\s*\(?[IVXLCDMivxlcdm]+\)?\s*[.)．、]\s*",
-
-        # Ⅰ. / Ⅱ. / Ⅲ. / Ⅳ. / Ⅴ.
-        r"^\s*\(?[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+\)?\s*[.)．、]\s*",
-
-        # ① / ② / ⑩
-        r"^\s*[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]\s*",
-
-        # 가. / 나) / (다)
-        r"^\s*(?:\([가-힣]\)|[가-힣][.)．、])\s*",
-
-        # A. / b) / (c)
-        # 한국 DART에서는 드물지만 일부 표에서 가능
-        r"^\s*(?:\([A-Za-z]\)|[A-Za-z][.)．、])\s*",
+        r"^\s*\(\s*\d+\s*\)\s*",                    # (1)
+        r"^\s*\(?\s*\d+\s*[.)．、]\s*",             # 1. / 1)
+        r"^\s*\(?[IVXLCDMivxlcdmⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+\)?\s*[.)．、]\s*",  # I. / XIII. / ⅩⅢ. / XⅢ.
+        r"^\s*[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]\s*",      # ①
+        r"^\s*(?:\([가-힣]\)|[가-힣][.)．、])\s*",    # 가. / 나) / (다)
+        r"^\s*(?:\([A-Za-z]\)|[A-Za-z][.)．、])\s*",  # A. / b)
     ]
 
     changed = True
@@ -150,8 +144,7 @@ def normalize_account_name(value: Any) -> str:
             s = re.sub(pattern, "", s)
         changed = before != s
 
-    # ", 총액" 같은 후행 설명 제거
-    # 예: 장기차입금(사채 포함), 총액 -> 장기차입금
+    # 후행 설명 제거
     s = re.sub(r"[,，]\s*(총액|합계|계)\s*$", "", s)
 
     # IFRS 표기에서 괄호 안의 손실/수익은 매칭용으로 붙여서 본다.
@@ -171,12 +164,9 @@ def normalize_account_name(value: Any) -> str:
     s = s.replace("，", "")
 
     # 끝 마침표 제거
-    # 예: 장기차입금. -> 장기차입금
     s = re.sub(r"[.．。]+$", "", s)
 
-    # 끝 숫자 suffix 제거
-    # 예: 단기차입금1 -> 단기차입금
-    # 너무 공격적으로 쓰면 위험하므로 "한글 + 숫자 끝"에만 적용
+    # 끝 숫자 suffix 제거: 단기차입금1 -> 단기차입금
     s = re.sub(r"(?<=[가-힣])\d+$", "", s)
 
     return s.strip()
@@ -230,10 +220,11 @@ def parse_unit_factor(text: str) -> int:
             return factor
     return 1
 
+
 def parse_amount(value: Any, unit_factor: int = 1) -> int:
     """
     DART HTML 표 금액을 원 단위 int로 변환.
-    괄호 금액은 음수 처리.
+    괄호, △, ▲, - 금액은 음수 처리한다.
     """
     if value is None:
         return 0
@@ -243,13 +234,27 @@ def parse_amount(value: Any, unit_factor: int = 1) -> int:
     s = s.replace(",", "")
     s = s.strip()
 
-    if s in {"", "-", "－", "—"}:
+    if s in {"", "-", "－", "—", "–"}:
         return 0
 
     sign = 1
+
     if len(s) >= 2 and s[0] == "(" and s[-1] == ")":
         sign = -1
         s = s[1:-1].strip()
+
+    if s.startswith(("△", "▲")):
+        sign = -1
+        s = s[1:].strip()
+
+    if s.startswith(("-", "－")):
+        sign = -1
+        s = s[1:].strip()
+
+    s = re.sub(r"[^0-9.]", "", s)
+
+    if not s:
+        return 0
 
     try:
         return int(float(s)) * sign * unit_factor
@@ -257,14 +262,48 @@ def parse_amount(value: Any, unit_factor: int = 1) -> int:
         return 0
 
 
+def amount_to_int(value: Any) -> int:
+    s = safe_str(value).replace(",", "").strip()
+    if not s:
+        return 0
+    try:
+        return int(float(s))
+    except Exception:
+        return 0
+
+
+def apply_amount_policy(raw_amount: int, amount_policy: str) -> int:
+    policy = safe_str(amount_policy).strip() or "as_reported"
+
+    if policy not in VALID_AMOUNT_POLICIES:
+        policy = "as_reported"
+
+    if policy == "abs":
+        return abs(raw_amount)
+
+    if policy == "neg_abs":
+        return -abs(raw_amount)
+
+    return raw_amount
+
+
+def apply_cash_direction(normalized_amount: int, cash_direction: str) -> int:
+    direction = safe_str(cash_direction).strip()
+
+    if direction == "inflow":
+        return abs(normalized_amount)
+
+    if direction == "outflow":
+        return -abs(normalized_amount)
+
+    return normalized_amount
+
+
 def detect_indent_level(raw_name: str, td_style: str = "") -> int:
     s = safe_str(raw_name)
-
-    # 줄바꿈/탭은 제거하되 전각공백은 보존
     s = re.sub(r"^[\r\n\t]+", "", s)
 
     level = 0
-
     for ch in s:
         if ch == "\u3000":
             level += 1
@@ -291,7 +330,10 @@ def normalize_input_row(row: dict[str, Any]) -> dict[str, Any]:
     out["statement_type"] = normalize_statement_type(out.get("statement_type"))
     out["period"] = safe_str(out.get("period"))
     out["amount"] = safe_str(out.get("amount"))
+    out["amount_raw"] = safe_str(out.get("amount_raw"))
+    out["unit_factor"] = safe_str(out.get("unit_factor"))
     return out
+
 
 def get_statement_type_from_text(text: str) -> str:
     t = safe_str(text)
@@ -318,7 +360,6 @@ def is_header_table(table) -> bool:
 
     text = table.get_text(" ", strip=True)
 
-    # 첨부 주석 안내 테이블 제외
     if "첨부된 연결재무제표에 대한 주석" in text:
         return False
 
@@ -349,7 +390,6 @@ def find_next_data_table(header_table):
         if is_data_table(node):
             return node
 
-        # 다음 재무제표 헤더를 만나면 현재 헤더의 본문을 못 찾은 것
         if is_header_table(node):
             return None
 
@@ -379,7 +419,6 @@ def extract_rows_from_dart_html(
         header_text = header_table.get_text(" ", strip=True)
         fs_type = get_statement_type_from_text(header_text)
 
-        # 자본변동표 제외
         if "자본변동표" in header_text:
             continue
 
@@ -411,7 +450,7 @@ def extract_rows_from_dart_html(
 
             td_style = safe_str(account_td.get("style", ""))
             amount_raw = amount_td.get_text(" ", strip=True)
-            amount = parse_amount(amount_raw, unit_factor)
+            raw_amount = parse_amount(amount_raw, unit_factor)
 
             rows.append(
                 {
@@ -424,7 +463,8 @@ def extract_rows_from_dart_html(
                     "original_account_name": original_account_name,
                     "normalized_name": normalize_account_name(original_account_name),
                     "indent_level": detect_indent_level(raw_account_name, td_style),
-                    "amount": safe_str(amount),
+                    "amount": safe_str(raw_amount),
+                    "raw_amount": safe_str(raw_amount),
                     "amount_raw": amount_raw,
                     "unit_factor": safe_str(unit_factor),
                     "table_title": header_text,
@@ -444,12 +484,167 @@ def extract_rows_from_dart_html(
     return [normalize_input_row(r) for r in rows]
 
 
+
+def text_of(tag: Tag) -> str:
+    return " ".join(tag.get_text(" ", strip=True).split())
+
+def iter_section_tables(soup: BeautifulSoup, section_name: str):
+    section_headers = soup.select("p.table-group-xbrl")
+    unit_re = re.compile(r"\(\s*단위\s*:\s*[^)]+?원\s*\)")
+
+    for header in section_headers:
+        section_title = text_of(header)
+
+        if section_name not in section_title:
+            continue
+
+        node = header.find_next_sibling()
+        while node:
+            # 다음 주석/섹션 제목 만나면 현재 섹션 종료
+            if isinstance(node, Tag) and node.name == "p" and "table-group-xbrl" in node.get("class", []):
+                break
+            
+            if isinstance(node, Tag) and node.name == "table":
+                unit_matches = unit_re.findall(node.get_text())
+                if len(unit_matches) > 0:
+                    unit_value = parse_unit_factor(unit_matches[0])
+                # 실제 숫자 테이블 후보
+                elif node.get("border") == "1":
+                    yield {
+                        "unit": safe_str(unit_value),
+                        "section_title": section_title,
+                        "table": node,
+                    }
+
+            node = node.find_next_sibling()
+
+def clean_text(tag: Tag | None) -> str:
+    if tag is None:
+        return ""
+    return " ".join(
+        tag.get_text(" ", strip=True)
+        .replace("\xa0", " ")
+        .replace("　", " ")
+        .split()
+    )
+
+def parse_number(value: str):
+    """
+    '8,705'     -> 8705
+    '(131)'     -> -131
+    '0.380'     -> 0.38
+    """
+    if value is None:
+        return None
+
+    s = value.strip().replace(",", "").replace(" ", "")
+    if not s:
+        return None
+
+    is_negative = s.startswith("(") and s.endswith(")")
+    if is_negative:
+        s = s[1:-1]
+
+    if not re.fullmatch(r"-?\d+(\.\d+)?", s):
+        return None
+
+    num = float(s) if "." in s else int(s)
+    return -num if is_negative else num
+
+
+def find_last_value_in_matched_row_by_regex(table: Tag, patterns: dict[str, str], unit: str):
+    """
+    patterns 예:
+    {
+        "AMORTIZATION": r"^무형자산상각비$",
+        "AR_CHANGE": r"^매출채권의 증가$",
+        "AR_DISPOSAL_LOSS": r"^매출채권처분손실$",
+    }
+    """
+
+    compiled = {
+        key: re.compile(pattern)
+        for key, pattern in patterns.items()
+    }
+
+    results = []
+
+    for row_idx, tr in enumerate(table.select("tr")):
+        cells = tr.find_all(["td", "th"], recursive=False)
+
+        if not cells:
+            continue
+
+        cell_texts = [clean_text(cell) for cell in cells]
+        row_text = " ".join(cell_texts)
+
+        # 보통 첫 번째 또는 두 번째 셀이 계정명이고 마지막 셀이 값
+        label_candidates = cell_texts[:-1]
+        raw_value = cell_texts[-1]
+        value = parse_number(raw_value)
+
+        for label in label_candidates:
+            for key, regex in compiled.items():
+                if regex.search(label):
+                    results.append({
+                        "key": key,
+                        "matched_label": label,
+                        "row_text": row_text,
+                        "raw_value": raw_value,
+                        "value": value * int(unit),
+                        "row_idx": row_idx,
+                    })
+
+    return results
+
 def extract_rows_from_dart_comment_html(
     html_path: str | Path,
     company_name: str,
     period: str,
+    section_name: str = "현금흐름",
+    target_patterns: dict[str, str] = {
+        "DEPRECIATION": r"^감가상각비$",
+        "AMORTIZATION": r"^무형자산상각비$",
+        "BAD_DEBT_EXPENSE": r"^대손상각비$",
+        "AR": r"^매출채권$",
+        "INTEREST_EXPENSE": r"^이자비용$",
+    }
 ) -> list[dict[str, Any]]:
-    pass
+    html_path = Path(html_path)
+
+    if not html_path.exists():
+        raise FileNotFoundError(f"HTML 파일을 찾을 수 없습니다: {html_path}")
+
+    html = html_path.read_text(encoding="utf-8", errors="ignore")
+    soup = BeautifulSoup(html, "lxml")
+
+    rows = []
+    
+    for item in iter_section_tables(soup, section_name):
+        section_title = item["section_title"]
+        table = item["table"]
+
+        hits = find_last_value_in_matched_row_by_regex(table, target_patterns, item["unit"])
+
+        for hit in hits:
+            rows.append({
+                "section_title": section_title,
+                "key": hit["key"],
+                "label": hit["matched_label"],
+                "raw_value": hit["raw_value"],
+                "value": hit["value"],
+            })
+
+    unique_rows = {}
+    for row in rows:
+        if not row["key"] in unique_rows:
+            unique_rows[row["key"]] = row
+
+    #for row in unique_rows.values():
+    #    print(row)
+
+    return unique_rows.values()
+
 
 
 @dataclass(frozen=True)
@@ -480,7 +675,6 @@ def add_structural_features(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         enriched.append(out)
 
-    # 같은 statement/table 안에서 다음 row indent가 더 깊으면 children 보유
     for i, row in enumerate(enriched):
         has_children = False
 
@@ -521,21 +715,17 @@ class ContextEngine:
 
     def enrich_context(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rows = add_structural_features(rows)
-
         output: list[dict[str, Any]] = []
         context_stack: list[dict[str, Any]] = []
-
         prev_group = None
 
         for row in rows:
             group = (row.get("statement_type"), row.get("table_index"))
 
-            # 새 표/새 재무제표로 넘어가면 context 초기화
             if prev_group is not None and group != prev_group:
                 context_stack = []
 
             prev_group = group
-
             level = int(row.get("indent_level", 0))
 
             while context_stack and int(context_stack[-1]["level"]) >= level:
@@ -632,8 +822,7 @@ class ContextEngine:
         if include_all and not all(token in name for token in include_all):
             return False
 
-        include_any = self._normalize_list(rule.get("include_any", []))
-        if include_any and not any(token in name for token in include_any):
+        if not _match_include_any_groups(name, rule, prefix="include_any"):
             return False
 
         exclude_any = self._normalize_list(rule.get("exclude_any", []))
@@ -655,14 +844,7 @@ class ContextEngine:
 
     @staticmethod
     def _normalize_list(values: Any) -> list[str]:
-        if values is None:
-            return []
-
-        if isinstance(values, str):
-            values = [values]
-
-        return [normalize_account_name(v) for v in values if safe_str(v).strip()]
-
+        return normalize_values_to_list(values)
 
 
 @dataclass(frozen=True)
@@ -671,6 +853,107 @@ class MappingResult:
     canonical_account_name: str
     rule_id: str
     reason: str
+    amount_policy: str
+    cash_direction: str
+
+
+@dataclass(frozen=True)
+class SignDecision:
+    amount_policy: str
+    cash_direction: str
+
+
+class SignPolicyEngine:
+    def __init__(self, config: dict[str, Any] | None = None):
+        self.config = config or {}
+        self.defaults = self.config.get("defaults", {}) or {}
+        self.canonical_policies = self.config.get("canonical_policies", {}) or {}
+
+    @classmethod
+    def from_yaml(cls, path: str | Path | None) -> "SignPolicyEngine":
+        if path is None:
+            return cls({})
+
+        p = Path(path)
+        if not p.exists():
+            print(f"[WARN] sign policy file not found: {p}; using defaults")
+            return cls({})
+
+        with p.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+        return cls(data)
+
+    def decide(
+        self,
+        fs_type: str,
+        canonical_id: str,
+        rule: dict[str, Any] | None = None,
+    ) -> SignDecision:
+        rule = rule or {}
+        fs_type = safe_str(fs_type).strip()
+        canonical_id = safe_str(canonical_id).strip()
+
+        default_policy = self.defaults.get(fs_type, {}) or {}
+        canonical_policy = self.canonical_policies.get(canonical_id, {}) or {}
+
+        amount_policy = (
+            safe_str(rule.get("amount_policy"))
+            or safe_str(canonical_policy.get("amount_policy"))
+            or safe_str(default_policy.get("amount_policy"))
+            or "as_reported"
+        )
+
+        cash_direction = (
+            safe_str(rule.get("cash_direction"))
+            or safe_str(rule.get("cash_effect"))
+            or safe_str(canonical_policy.get("cash_direction"))
+            or safe_str(default_policy.get("cash_direction"))
+            or ""
+        )
+
+        if amount_policy not in VALID_AMOUNT_POLICIES:
+            amount_policy = "as_reported"
+
+        if cash_direction not in VALID_CASH_DIRECTIONS:
+            cash_direction = ""
+
+        return SignDecision(amount_policy=amount_policy, cash_direction=cash_direction)
+
+
+def normalize_values_to_list(values: Any) -> list[str]:
+    if values is None:
+        return []
+
+    if isinstance(values, str):
+        values = [values]
+
+    return [normalize_account_name(v) for v in values if safe_str(v).strip()]
+
+
+def _match_include_any_groups(text: str, rule: dict[str, Any], prefix: str) -> bool:
+    """
+    include_any, include_any_2, include_any_3 ... 형태를 모두 AND 그룹으로 처리한다.
+    각 그룹 안에서는 OR, 그룹 간에는 AND.
+    """
+    group_keys = []
+    if prefix in rule:
+        group_keys.append(prefix)
+
+    numbered = []
+    for key in rule.keys():
+        m = re.fullmatch(rf"{re.escape(prefix)}_(\d+)", str(key))
+        if m:
+            numbered.append((int(m.group(1)), key))
+
+    group_keys.extend(k for _, k in sorted(numbered))
+
+    for key in group_keys:
+        tokens = normalize_values_to_list(rule.get(key, []))
+        if tokens and not any(token in text for token in tokens):
+            return False
+
+    return True
 
 
 def load_mapping_rules(paths: list[str | Path]) -> list[dict[str, Any]]:
@@ -699,6 +982,7 @@ class RuleEngine:
         self,
         canonical_df: pd.DataFrame,
         rules: list[dict[str, Any]],
+        sign_policy_engine: SignPolicyEngine | None = None,
     ):
         self.canonical_df = canonical_df.copy()
         self.rules = sorted(
@@ -706,6 +990,7 @@ class RuleEngine:
             key=lambda r: int(r.get("priority", 0)),
             reverse=True,
         )
+        self.sign_policy_engine = sign_policy_engine or SignPolicyEngine()
 
         self.id_to_name = dict(
             zip(
@@ -720,10 +1005,16 @@ class RuleEngine:
         cls,
         canonical_csv_path: str | Path,
         rule_paths: list[str | Path],
+        sign_policy_path: str | Path | None = None,
     ) -> "RuleEngine":
         canonical_df = pd.read_csv(canonical_csv_path, dtype=str).fillna("")
         rules = load_mapping_rules(rule_paths)
-        return cls(canonical_df=canonical_df, rules=rules)
+        sign_policy_engine = SignPolicyEngine.from_yaml(sign_policy_path)
+        return cls(
+            canonical_df=canonical_df,
+            rules=rules,
+            sign_policy_engine=sign_policy_engine,
+        )
 
     def has_canonical_id(self, canonical_id: str) -> bool:
         return canonical_id == "UNMAPPED" or canonical_id in self.valid_ids
@@ -748,18 +1039,34 @@ class RuleEngine:
             if not self.has_canonical_id(canonical_id):
                 canonical_id = "UNMAPPED"
 
+            sign_decision = self.sign_policy_engine.decide(
+                fs_type=normalized_row["fs_type"],
+                canonical_id=canonical_id,
+                rule=rule,
+            )
+
             return MappingResult(
                 canonical_account_id=canonical_id,
                 canonical_account_name=self.canonical_name(canonical_id),
                 rule_id=safe_str(rule.get("id")),
                 reason=safe_str(rule.get("reason")),
+                amount_policy=sign_decision.amount_policy,
+                cash_direction=sign_decision.cash_direction,
             )
+
+        sign_decision = self.sign_policy_engine.decide(
+            fs_type=normalized_row["fs_type"],
+            canonical_id="UNMAPPED",
+            rule=None,
+        )
 
         return MappingResult(
             canonical_account_id="UNMAPPED",
             canonical_account_name="미매핑",
             rule_id="default_unmapped",
             reason="매칭된 룰 없음",
+            amount_policy=sign_decision.amount_policy,
+            cash_direction=sign_decision.cash_direction,
         )
 
     def map_rows(
@@ -773,13 +1080,23 @@ class RuleEngine:
             row = normalize_input_row(row)
             result = self.map_row(row)
 
+            raw_amount = amount_to_int(row.get("raw_amount", row.get("amount")))
+            normalized_amount = apply_amount_policy(raw_amount, result.amount_policy)
+            cash_effect_amount = apply_cash_direction(normalized_amount, result.cash_direction)
+
             item = {
                 "canonical_account_id": result.canonical_account_id,
                 "canonical_account_name": result.canonical_account_name,
                 "original_account_name": safe_str(row.get("original_account_name")),
                 "statement_type": normalize_statement_type(row.get("statement_type")),
                 "period": safe_str(row.get("period")),
-                "amount": safe_str(row.get("amount")),
+                # 하위 호환: amount는 분석용 normalized_amount로 둔다.
+                "amount": safe_str(normalized_amount),
+                "raw_amount": safe_str(raw_amount),
+                "normalized_amount": safe_str(normalized_amount),
+                "cash_effect_amount": safe_str(cash_effect_amount),
+                "amount_policy": result.amount_policy,
+                "cash_direction": result.cash_direction,
             }
 
             if include_debug_cols:
@@ -796,6 +1113,8 @@ class RuleEngine:
                         "context_path": safe_str(row.get("context_path")),
                         "context_rule_id": safe_str(row.get("context_rule_id")),
                         "context_reason": safe_str(row.get("context_reason")),
+                        "amount_raw": safe_str(row.get("amount_raw")),
+                        "unit_factor": safe_str(row.get("unit_factor")),
                     }
                 )
 
@@ -811,10 +1130,14 @@ class RuleEngine:
             row.get("context_path", ""),
         ]
 
+        raw_amount = amount_to_int(row.get("raw_amount", row.get("amount")))
+
         return {
             "fs_type": normalize_statement_type(row.get("statement_type")),
             "name": normalize_account_name(row.get("original_account_name")),
             "context": normalize_context(" ".join(map(str, context_parts))),
+            "has_children": bool(row.get("has_children", False)),
+            "amount_is_zero_or_blank": raw_amount == 0,
         }
 
     def _match_rule(
@@ -838,8 +1161,7 @@ class RuleEngine:
         if include_all and not all(token in name for token in include_all):
             return False
 
-        include_any = self._normalize_list(rule.get("include_any", []))
-        if include_any and not any(token in name for token in include_any):
+        if not _match_include_any_groups(name, rule, prefix="include_any"):
             return False
 
         exclude_any = self._normalize_list(rule.get("exclude_any", []))
@@ -850,27 +1172,32 @@ class RuleEngine:
         if context_include_all and not all(token in context for token in context_include_all):
             return False
 
-        context_include_any = self._normalize_list(rule.get("context_include_any", []))
-        if context_include_any and not any(token in context for token in context_include_any):
+        if not _match_include_any_groups(context, rule, prefix="context_include_any"):
             return False
 
         context_exclude_any = self._normalize_list(rule.get("context_exclude_any", []))
         if context_exclude_any and any(token in context for token in context_exclude_any):
             return False
+        
+        conditions = rule.get("conditions", {}) or {}
+
+        if "has_children" in conditions:
+            if bool(conditions["has_children"]) != bool(row.get("has_children")):
+                return False
+
+        if "amount_is_zero_or_blank" in conditions:
+            expected = bool(conditions["amount_is_zero_or_blank"])
+            if expected != bool(row.get("amount_is_zero_or_blank")):
+                return False
 
         return True
 
     @staticmethod
     def _normalize_list(values: Any) -> list[str]:
-        if values is None:
-            return []
+        return normalize_values_to_list(values)
 
-        if isinstance(values, str):
-            values = [values]
 
-        return [normalize_account_name(v) for v in values if safe_str(v).strip()]
-
-def dedupe_duplicate_subtotals(df):
+def dedupe_duplicate_subtotals(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     keys = ["statement_type", "period", "canonical_account_id", "amount"]
@@ -883,15 +1210,17 @@ def dedupe_duplicate_subtotals(df):
     df.loc[dup_mask, "canonical_account_name"] = "미매핑"
     df.loc[dup_mask, "rule_id"] = "post_duplicate_net_income_unmapped"
     df.loc[dup_mask, "reason"] = "중복 당기순이익 subtotal 제거"
+    df.loc[dup_mask, "amount_policy"] = "as_reported"
+    df.loc[dup_mask, "cash_direction"] = ""
 
     return df
+
 
 def validate_mapped_df(
     mapped_df: pd.DataFrame,
     canonical_df: pd.DataFrame,
 ) -> list[str]:
     errors: list[str] = []
-
     valid_ids = set(canonical_df["canonical_id"].astype(str))
 
     for idx, row in mapped_df.iterrows():
@@ -950,6 +1279,7 @@ def normalize_financial_statement_rule_based(
     canonical_csv_path: str | Path,
     context_rule_path: str | Path,
     mapping_rule_paths: list[str | Path],
+    sign_policy_path: str | Path | None = None,
     save_debug: bool = True,
 ) -> pd.DataFrame:
     input_rows = extract_rows_from_dart_html(
@@ -964,13 +1294,14 @@ def normalize_financial_statement_rule_based(
     mapping_engine = RuleEngine.from_files(
         canonical_csv_path=canonical_csv_path,
         rule_paths=mapping_rule_paths,
+        sign_policy_path=sign_policy_path,
     )
 
     mapped_df = mapping_engine.map_rows(
         enriched_rows,
         include_debug_cols=True,
     )
-    
+
     mapped_df = dedupe_duplicate_subtotals(mapped_df)
 
     canonical_df = load_canonical_accounts(canonical_csv_path)

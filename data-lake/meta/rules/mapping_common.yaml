@@ -26,17 +26,38 @@ rules:
     canonical_id: UNMAPPED
     reason: 손익계산서 섹션 헤더
 
-  - id: cf_cash_begin_end
+  - id: cf_cfo_section_header_unmapped
     fs_type: CF
     priority: 1000
-    include_any:
-      - 기초의현금및현금성자산
-      - 기말의현금및현금성자산
-      - 현금및현금성자산의증가
-      - 현금및현금성자산의감소
-      - 현금및현금성자산에대한환율변동효과
+    exact_any:
+      - 영업활동현금흐름
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
     canonical_id: UNMAPPED
-    reason: 현금흐름표 보조 subtotal
+    reason: 영업활동현금흐름 섹션 제목이므로 최종 CFO가 아님
+
+  - id: cf_cfi_section_header_unmapped
+    fs_type: CF
+    priority: 1000
+    exact_any:
+      - 투자활동현금흐름
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
+    canonical_id: UNMAPPED
+    reason: 투자활동현금흐름 섹션 제목이므로 최종 CFI가 아님
+
+  - id: cf_cff_section_header_unmapped
+    fs_type: CF
+    priority: 1000
+    exact_any:
+      - 재무활동현금흐름
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
+    canonical_id: UNMAPPED
+    reason: 재무활동현금흐름 섹션 제목이므로 최종 CFF가 아님
 
   # =========================
   # 1. 현금흐름표 CF
@@ -49,39 +70,85 @@ rules:
       - 영업활동에서창출된현금흐름
       - 영업에서창출된현금
       - 영업으로부터창출된현금
+      - 영업활동으로부터 창출된 현금흐름
     canonical_id: UNMAPPED
     reason: CFO 이전 subtotal
 
-  - id: cf_cfo
+  - id: cf_cfo_plain_subtotal
     fs_type: CF
     priority: 900
-    include_all:
-      - 영업활동
-      - 현금흐름
+    exact_any:
+      - 영업활동현금흐름
+      - 영업활동순현금흐름
+      - 영업활동으로인한순현금흐름
+      - 영업활동으로인한현금흐름
+    conditions:
+      amount_is_zero_or_blank: false
     exclude_any:
-      - 영업활동에서창출된현금흐름
-      - 영업에서창출된현금
-      - 영업으로부터창출된현금
+      - 창출
+      - 조정전
     canonical_id: CFO
-    reason: 영업활동 최종 현금흐름
+    amount_policy: as_reported
+    reason: 금액 있는 영업활동현금흐름 subtotal
 
-  - id: cf_cfi
+  - id: cf_cfi_plain_subtotal
     fs_type: CF
     priority: 900
-    include_all:
-      - 투자활동
-      - 현금흐름
+    exact_any:
+      - 투자활동현금흐름
+      - 투자활동순현금흐름
+      - 투자활동으로인한순현금흐름
+      - 투자활동으로인한현금흐름
+    conditions:
+      amount_is_zero_or_blank: false
     canonical_id: CFI
-    reason: 투자활동 최종 현금흐름
+    amount_policy: as_reported
+    reason: 금액 있는 투자활동현금흐름 subtotal
 
-  - id: cf_cff
+  - id: cf_cff_plain_subtotal
     fs_type: CF
     priority: 900
-    include_all:
-      - 재무활동
-      - 현금흐름
+    exact_any:
+      - 재무활동현금흐름
+      - 재무활동순현금흐름
+      - 재무활동으로인한순현금흐름
+      - 재무활동으로인한현금흐름
+    conditions:
+      amount_is_zero_or_blank: false
     canonical_id: CFF
-    reason: 재무활동 최종 현금흐름
+    amount_policy: as_reported
+    reason: 금액 있는 재무활동현금흐름 subtotal
+
+  - id: cf_cash_begin
+    fs_type: CF
+    priority: 850
+    exact_any:
+      - 기초의현금및현금성자산
+      - 기초현금및현금성자산
+    canonical_id: CF_CASH_BEGIN
+    amount_policy: as_reported
+    reason: 현금흐름표 기초 현금
+
+  - id: cf_cash_end
+    fs_type: CF
+    priority: 850
+    exact_any:
+      - 기말의현금및현금성자산
+      - 당기말의현금및현금성자산
+      - 기말현금및현금성자산
+    canonical_id: CF_CASH_END
+    amount_policy: as_reported
+    reason: 현금흐름표 기말 현금
+
+  - id: cf_fx_effect_cash
+    fs_type: CF
+    priority: 850
+    exact_any:
+      - 외화표시현금및현금성자산의환율변동효과
+      - 현금및현금성자산에대한환율변동효과
+    canonical_id: FX_EFFECT_CASH
+    amount_policy: as_reported
+    reason: 현금및현금성자산 환율변동효과
 
   - id: cf_debt_net_borrowing
     fs_type: CF
@@ -102,7 +169,50 @@ rules:
       - 리스부채의감소
       - 리스부채감소
     canonical_id: LEASE_REPAYMENT
+    amount_policy: abs
+    cash_direction: outflow
     reason: 리스부채 상환/감소
+
+  - id: cf_cash_change_before_fx
+    fs_type: CF
+    priority: 850
+    exact_any:
+      - 환율변동효과전현금및현금성자산의증가감소
+      - 환율효과전현금및현금성자산의증가감소
+      - 환율변동효과반영전현금및현금성자산의순증가감소
+    canonical_id: CF_CASH_CHANGE_BEFORE_FX
+    amount_policy: as_reported
+    reason: CFO+CFI+CFF와 일치하는 환율효과 전 현금증가
+
+  - id: cf_fx_effect_cash
+    fs_type: CF
+    priority: 850
+    exact_any:
+      - 외화표시현금및현금성자산의환율변동효과
+      - 현금및현금성자산에대한환율변동효과
+    canonical_id: FX_EFFECT_CASH
+    amount_policy: as_reported
+    reason: 기초현금과 기말현금 검산에 필요한 환율변동효과
+
+  - id: cf_cash_begin
+    fs_type: CF
+    priority: 850
+    exact_any:
+      - 기초의현금및현금성자산
+      - 기초현금및현금성자산
+    canonical_id: CF_CASH_BEGIN
+    amount_policy: as_reported
+    reason: 현금흐름표 기초 현금
+
+  - id: cf_cash_end
+    fs_type: CF
+    priority: 850
+    exact_any:
+      - 기말의현금및현금성자산
+      - 기말현금및현금성자산
+    canonical_id: CF_CASH_END
+    amount_policy: as_reported
+    reason: 현금흐름표 기말 현금
 
   - id: cf_capex_ppe
     fs_type: CF
@@ -111,6 +221,8 @@ rules:
       - 유형자산의취득
       - 유형자산취득
     canonical_id: CAPEX_PPE
+    amount_policy: abs
+    cash_direction: outflow
     reason: 유형자산 취득 지출
 
   - id: cf_capex_intang
@@ -120,6 +232,8 @@ rules:
       - 무형자산의취득
       - 무형자산취득
     canonical_id: CAPEX_INTANG
+    amount_policy: abs
+    cash_direction: outflow
     reason: 무형자산 취득 지출
 
   - id: cf_depreciation_expense
@@ -145,6 +259,8 @@ rules:
       - 유형자산의처분
       - 유형자산처분
     canonical_id: PPE_DISPOSAL_PROCEEDS
+    amount_policy: abs
+    cash_direction: inflow
     reason: 유형자산 처분대금
 
   - id: cf_intangible_disposal
@@ -154,6 +270,8 @@ rules:
       - 무형자산의처분
       - 무형자산처분
     canonical_id: INTANGIBLE_DISPOSAL_PROCEEDS
+    amount_policy: abs
+    cash_direction: inflow
     reason: 무형자산 처분대금
 
   - id: cf_interest_paid
@@ -163,6 +281,8 @@ rules:
       - 이자의지급
       - 이자지급
     canonical_id: INT_PAID
+    amount_policy: abs
+    cash_direction: outflow
     reason: 이자 지급
 
   - id: cf_tax_paid
@@ -173,6 +293,8 @@ rules:
       - 법인세납부
       - 법인세지급
     canonical_id: TAX_PAID
+    amount_policy: abs
+    cash_direction: outflow
     reason: 법인세 지급
 
   - id: cf_dividend_paid
@@ -183,6 +305,8 @@ rules:
       - 배당의지급
       - 배당
     canonical_id: DIV_PAID
+    amount_policy: abs
+    cash_direction: outflow
     reason: 배당금 지급
 
   - id: cf_tax_paid_or_refund
@@ -209,6 +333,8 @@ rules:
       - 장기금융부채의증가
       - 단기차입금의순차입
     canonical_id: DEBT_ISSUE
+    amount_policy: abs
+    cash_direction: inflow
     reason: 차입금/사채 유입
 
   - id: cf_debt_repay
@@ -223,6 +349,8 @@ rules:
       - 장기금융부채의감소
       - 유동성장기부채의상환
     canonical_id: DEBT_REPAY
+    amount_policy: abs
+    cash_direction: outflow
     reason: 차입금/사채 상환
 
   - id: bs_non_current_liabilities
@@ -240,6 +368,8 @@ rules:
       - 자기주식의취득
       - 자기주식취득
     canonical_id: BUYBACK
+    amount_policy: abs
+    cash_direction: outflow
     reason: 자기주식 취득
 
   - id: cf_equity_issue
@@ -251,6 +381,8 @@ rules:
       - 비지배지분의유상증자참여
       - 연결자본거래로인한현금유입
     canonical_id: EQ_ISSUE
+    amount_policy: abs
+    cash_direction: inflow
     reason: 자본 유입
 
   # =========================
@@ -508,6 +640,30 @@ rules:
       - 지배주주순이익
     canonical_id: NET_INCOME_PARENT
     reason: 명시적 지배주주순이익
+
+  - id: is_continuing_operations_income
+    fs_type: IS
+    priority: 850
+    exact_any:
+      - 계속영업이익손실
+      - 계속영업손익
+      - 계속영업이익
+      - 계속영업손실
+    canonical_id: CONTINUING_OPERATIONS_INCOME
+    amount_policy: as_reported
+    reason: 계속영업손익
+
+  - id: is_discontinued_operations_income
+    fs_type: IS
+    priority: 850
+    exact_any:
+      - 중단영업이익손실
+      - 중단영업손익
+      - 중단영업이익
+      - 중단영업손실
+    canonical_id: DISCONTINUED_OPERATIONS_INCOME
+    amount_policy: as_reported
+    reason: 중단영업손익
 
   - id: is_revenue
     fs_type: IS

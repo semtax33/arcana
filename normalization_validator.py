@@ -32,6 +32,8 @@ class CheckResult:
     diff: float | None = None
     tolerance: float | None = None
     message: str = ""
+    mode: str = ""
+    formula: str = ""
 
 
 @dataclass
@@ -198,6 +200,13 @@ def filter_rows(df: pd.DataFrame, spec: dict[str, Any]) -> pd.DataFrame:
         names = {normalize_name(x) for x in spec["name_exact_any"]}
         out = out[out["name_norm"].isin(names)]
 
+    if "name_exclude_any" in spec:
+        tokens = [normalize_name(x) for x in spec["name_exclude_any"]]
+        tokens = [t for t in tokens if t]
+        if tokens:
+            pattern = "|".join(re.escape(t) for t in tokens)
+            out = out[~out["name_norm"].str.contains(pattern, regex=True, na=False)]
+
     if "name_contains_any" in spec:
         tokens = [normalize_name(x) for x in spec["name_contains_any"]]
         tokens = [t for t in tokens if t]
@@ -230,6 +239,103 @@ def filter_rows(df: pd.DataFrame, spec: dict[str, Any]) -> pd.DataFrame:
 
     return out
 
+def run_formula_choice_check(
+    rule: dict[str, Any],
+    normalized_df: pd.DataFrame,
+    debug_df: pd.DataFrame,
+    default_tol: float,
+) -> CheckResult:
+    source = rule.get("source", "normalized")
+    tolerance = float(rule.get("tolerance_abs", default_tol))
+    skip_if_missing = bool(rule.get("skip_if_missing", True))
+
+    candidates = rule.get("candidates", []) or []
+    evaluated: list[CheckResult] = []
+
+    if not candidates:
+        return CheckResult(
+            name=safe_str(rule.get("name", "formula_choice_check")),
+            status="SKIP" if skip_if_missing else "FAIL",
+            tolerance=tolerance,
+            message="candidates가 비어 있습니다.",
+        )
+
+    for candidate in candidates:
+        mode = safe_str(candidate.get("mode"))
+        formula = safe_str(candidate.get("formula"))
+
+        # expected/lhs와 actual/rhs 모두 지원
+        expected_expr = (
+            candidate.get("expected")
+            or candidate.get("lhs")
+            or rule.get("expected")
+            or rule.get("lhs")
+        )
+
+        actual_expr = (
+            candidate.get("actual")
+            or candidate.get("rhs")
+            or rule.get("actual")
+            or rule.get("rhs")
+        )
+
+        if expected_expr is None or actual_expr is None:
+            evaluated.append(
+                CheckResult(
+                    name=safe_str(rule.get("name", "formula_choice_check")),
+                    status="SKIP" if skip_if_missing else "FAIL",
+                    tolerance=tolerance,
+                    message="후보식에 expected/lhs 또는 actual/rhs가 없습니다.",
+                    mode=mode,
+                    formula=formula,
+                )
+            )
+            continue
+
+        expected = eval_expr(expected_expr, normalized_df, debug_df, source)
+        actual = eval_expr(actual_expr, normalized_df, debug_df, source)
+
+        evaluated.append(
+            check_equal(
+                name=safe_str(rule.get("name", "formula_choice_check")),
+                lhs=expected,
+                rhs=actual,
+                tolerance=tolerance,
+                skip_if_missing=skip_if_missing,
+                mode=mode,
+                formula=formula,
+            )
+        )
+
+    passed = [r for r in evaluated if r.status == "PASS"]
+    if passed:
+        return min(passed, key=lambda r: abs(r.diff or 0.0))
+
+    failed = [r for r in evaluated if r.status == "FAIL"]
+    if failed:
+        best = min(failed, key=lambda r: abs(r.diff or float("inf")))
+        return CheckResult(
+            name=safe_str(rule.get("name", "formula_choice_check")),
+            status="FAIL",
+            lhs=best.lhs,
+            rhs=best.rhs,
+            diff=best.diff,
+            tolerance=tolerance,
+            message=f"모든 후보식 실패; best={best.mode}; diff={best.diff:,.0f}",
+            mode=best.mode,
+            formula=best.formula,
+        )
+
+    # 전부 SKIP이면, 어떤 후보가 왜 SKIP됐는지 일부라도 보여주는 게 좋음
+    messages = [r.message for r in evaluated if r.message]
+    return CheckResult(
+        name=safe_str(rule.get("name", "formula_choice_check")),
+        status="SKIP" if skip_if_missing else "FAIL",
+        tolerance=tolerance,
+        message="모든 후보식 필요 항목 부족"
+        if not messages
+        else " / ".join(sorted(set(messages))[:3]),
+    )
 
 def aggregate_amount(rows: pd.DataFrame, agg: str) -> float | None:
     if rows.empty:
@@ -249,6 +355,14 @@ def eval_expr(
     debug_df: pd.DataFrame,
     default_source: str = "normalized",
 ) -> float | None:
+    if expr is None:
+        return None
+
+    if not isinstance(expr, dict):
+        raise TypeError(
+            f"formula expression must be dict or None, got {type(expr).__name__}: {expr!r}"
+        )
+
     if "sum" in expr:
         total = 0.0
         for child in expr["sum"]:
@@ -262,14 +376,26 @@ def eval_expr(
         return total
 
     if "sub" in expr:
+        # [A, B, C] -> A - B - C
         items = expr["sub"]
-        if len(items) != 2:
-            raise ValueError("sub expects exactly 2 items")
-        a = eval_expr(items[0], normalized_df, debug_df, default_source)
-        b = eval_expr(items[1], normalized_df, debug_df, default_source)
-        if a is None or b is None:
+        if len(items) < 2:
+            raise ValueError("sub expects at least 2 items")
+
+        first = eval_expr(items[0], normalized_df, debug_df, default_source)
+        if first is None:
             return None
-        return a - b
+
+        total = first
+        for child in items[1:]:
+            value = eval_expr(child, normalized_df, debug_df, default_source)
+            if value is None:
+                if child.get("optional", False):
+                    value = 0.0
+                else:
+                    return None
+            total -= value
+
+        return total
 
     if "neg" in expr:
         value = eval_expr(expr["neg"], normalized_df, debug_df, default_source)
@@ -292,6 +418,8 @@ def check_equal(
     rhs: float | None,
     tolerance: float,
     skip_if_missing: bool,
+    mode: str = "",
+    formula: str = "",
 ) -> CheckResult:
     if lhs is None or rhs is None:
         return CheckResult(
@@ -302,6 +430,8 @@ def check_equal(
             diff=None,
             tolerance=tolerance,
             message="필요 항목 부족",
+            mode=mode,
+            formula=formula,
         )
 
     diff = lhs - rhs
@@ -315,8 +445,41 @@ def check_equal(
         diff=diff,
         tolerance=tolerance,
         message="" if status == "PASS" else f"차이 {diff:,.0f}",
+        mode=mode,
+        formula=formula,
     )
 
+def run_single_formula_check(
+    rule: dict[str, Any],
+    normalized_df: pd.DataFrame,
+    debug_df: pd.DataFrame,
+    default_tol: float,
+) -> CheckResult:
+    source = rule.get("source", "normalized")
+    tolerance = float(rule.get("tolerance_abs", default_tol))
+    skip_if_missing = bool(rule.get("skip_if_missing", True))
+
+    lhs = eval_expr(
+        rule["lhs"],
+        normalized_df,
+        debug_df,
+        source,
+    )
+
+    rhs = eval_expr(
+        rule["rhs"],
+        normalized_df,
+        debug_df,
+        source,
+    )
+
+    return check_equal(
+        name=rule["name"],
+        lhs=lhs,
+        rhs=rhs,
+        tolerance=tolerance,
+        skip_if_missing=skip_if_missing,
+    )
 
 def run_formula_checks(
     normalized_df: pd.DataFrame,
@@ -324,23 +487,40 @@ def run_formula_checks(
     config: dict[str, Any],
 ) -> list[CheckResult]:
     checks: list[CheckResult] = []
-    default_tol = float(config.get("settings", {}).get("default_tolerance_abs", 10_000))
+    default_tol = float(
+        config.get("settings", {}).get("default_tolerance_abs", 10_000)
+    )
 
     for rule in config.get("formula_checks", []):
-        source = rule.get("source", "normalized")
-        tolerance = float(rule.get("tolerance_abs", default_tol))
-        skip_if_missing = bool(rule.get("skip_if_missing", True))
+        # 하위 호환:
+        # 기존 단일 공식은 run_single_formula_check
+        # formula_checks 안에 candidates가 있으면 choice check로 처리
+        if "candidates" in rule:
+            checks.append(
+                run_formula_choice_check(
+                    rule,
+                    normalized_df,
+                    debug_df,
+                    default_tol,
+                )
+            )
+        else:
+            checks.append(
+                run_single_formula_check(
+                    rule,
+                    normalized_df,
+                    debug_df,
+                    default_tol,
+                )
+            )
 
-        lhs = eval_expr(rule["lhs"], normalized_df, debug_df, source)
-        rhs = eval_expr(rule["rhs"], normalized_df, debug_df, source)
-
+    for rule in config.get("formula_choice_checks", []):
         checks.append(
-            check_equal(
-                name=rule["name"],
-                lhs=lhs,
-                rhs=rhs,
-                tolerance=tolerance,
-                skip_if_missing=skip_if_missing,
+            run_formula_choice_check(
+                rule,
+                normalized_df,
+                debug_df,
+                default_tol,
             )
         )
 
@@ -596,6 +776,7 @@ def build_factor_snapshot(
         "net_margin_pct": pct(safe_div(net_income, revenue)),
         "fcf_margin_pct": pct(safe_div(fcf, revenue)),
         "roa_pct": pct(safe_div(net_income, total_assets)),
+        "roe_pct": pct(safe_div(net_income, total_equity)),
         "roe_parent_pct": pct(safe_div(net_income_parent, eaop)),
         "inventory_turnover": safe_div(cogs, inventory),
         "receivables_turnover_proxy": safe_div(revenue, receivable_proxy),
@@ -2042,6 +2223,20 @@ def file_version_num(path: str | Path) -> int:
     m = re.search(r"\((\d+)\)\.csv$", name)
     return int(m.group(1)) if m else 0
 
+def period_month(path: str | Path) -> int:
+    meta = parse_stock_period_from_filename(path)
+    period = meta.get("period", "")
+    if "." not in period:
+        return 0
+    try:
+        return int(period.split(".")[1])
+    except Exception:
+        return 0
+
+def file_select_key(path: str | Path) -> tuple[int, int]:
+    # 1순위: 월. 연간 검증에서는 12월 우선
+    # 2순위: 버전. 같은 월이면 (2), (3) 같은 높은 버전 우선
+    return period_month(path), file_version_num(path)
 
 def find_stock_year_pairs(
     input_dir: str | Path,
@@ -2084,7 +2279,7 @@ def find_stock_year_pairs(
             )
             continue
 
-        files = sorted(files, key=file_version_num, reverse=True)
+        files = sorted(files, key=file_select_key, reverse=True)
         selected_normalized = None
         selected_debug = None
 

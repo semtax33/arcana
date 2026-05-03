@@ -204,7 +204,7 @@ def parse_node2_financial_comment_note(html_or_js: str) -> List[NodeMatch]:
             continue
         
         # "재무제표" + "주석" 동시 포함 필터
-        if not ("재무제표" in text) and ("주석" in text):
+        if ("재무제표" in text) and ("주석" in text):
             rcpNo = _find_field(block, "rcpNo")
             dcmNo = _find_field(block, "dcmNo")
             eleId = _find_field(block, "eleId")
@@ -253,7 +253,7 @@ def fetch_dart_comment_search(ticker: str, save_dir: str, comment_prop_name: str
 
     with requests.Session() as s:
         # 1) 검색 POST (재시도 적용)
-        resp = request_with_retry(s, "POST", url, headers=headers, data=data, timeout=30)
+        resp = request_with_retry(s, "POST", url, headers=headers, data=data, timeout=10)
         resp.encoding = resp.apparent_encoding
         html = resp.text
 
@@ -278,7 +278,7 @@ def fetch_dart_comment_search(ticker: str, save_dir: str, comment_prop_name: str
             page_url = f"https://dart.fss.or.kr{href}"
 
             # 2) 공시 페이지 GET
-            page_resp = request_with_retry(s, "GET", page_url, timeout=30)
+            page_resp = request_with_retry(s, "GET", page_url, timeout=10)
             page_resp.encoding = page_resp.apparent_encoding
             page_soup = BeautifulSoup(page_resp.text, "lxml")
 
@@ -328,7 +328,7 @@ def fetch_dart_recent_comment_search(ticker: str, save_dir: str, comment_prop_na
         "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7,ar-IQ;q=0.6,ar-JO;q=0.5,ar;q=0.4,ja-JP;q=0.3,ja;q=0.2",
         "Connection": "keep-alive",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "User-Agent": "Mozilla/8.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/137.36",
+        "User-Agent": "Mozilla/10.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/137.36",
     }
 
     data = [
@@ -352,7 +352,7 @@ def fetch_dart_recent_comment_search(ticker: str, save_dir: str, comment_prop_na
 
     with requests.Session() as s:
         # 1) 검색 POST (재시도 적용)
-        resp = request_with_retry(s, "POST", url, headers=headers, data=data, timeout=30)
+        resp = request_with_retry(s, "POST", url, headers=headers, data=data, timeout=10)
         resp.encoding = resp.apparent_encoding
         html = resp.text
 
@@ -361,6 +361,8 @@ def fetch_dart_recent_comment_search(ticker: str, save_dir: str, comment_prop_na
 
         # ✅ anchor↔href 매칭 깨짐 방지: anchor를 그대로 순회하면서 href 중복만 skip
         seen_hrefs: set[str] = set()
+
+        print(anchors)
 
         for a in anchors:
             href = a.get("href")
@@ -377,7 +379,7 @@ def fetch_dart_recent_comment_search(ticker: str, save_dir: str, comment_prop_na
             page_url = f"https://dart.fss.or.kr{href}"
 
             # 2) 공시 페이지 GET
-            page_resp = request_with_retry(s, "GET", page_url, timeout=30)
+            page_resp = request_with_retry(s, "GET", page_url, timeout=10)
             page_resp.encoding = page_resp.apparent_encoding
             page_soup = BeautifulSoup(page_resp.text, "lxml")
 
@@ -540,7 +542,7 @@ def download_statements(stock_codes, download_offset):
         fetch_dart_search(ticker, dir)
 
 def download_statement_comments(stock_codes, download_offset):
-    download_stock_codes = stock_codes[download_offset:]
+    download_stock_codes = sorted(stock_codes[download_offset:])
 
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")

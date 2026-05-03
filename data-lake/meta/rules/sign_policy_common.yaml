@@ -1,0 +1,124 @@
+version: 1
+
+# amount_policy:
+#   as_reported : DART 원문 부호 유지
+#   abs         : 절대값 양수화. 비용/지출/유입 magnitude로 사용
+#   neg_abs     : 항상 음수화. 일반적으로 거의 사용하지 않음
+#
+# cash_direction:
+#   inflow      : cash_effect_amount를 +abs(normalized_amount)로 계산
+#   outflow     : cash_effect_amount를 -abs(normalized_amount)로 계산
+#   ""          : cash_effect_amount = normalized_amount
+#
+# 저장 원칙:
+#   raw_amount             = DART 원문 부호 보존
+#   normalized_amount      = 분석/팩터 계산용 부호 통일
+#   cash_effect_amount     = 현금흐름 방향 반영
+#   amount                 = 하위 호환용. normalized_amount와 동일
+
+defaults:
+  BS:
+    amount_policy: as_reported
+  IS:
+    amount_policy: as_reported
+  CF:
+    amount_policy: as_reported
+
+canonical_policies:
+  # =========================
+  # IS: 수익/비용성 항목
+  # =========================
+  REVENUE:
+    amount_policy: abs
+  COGS:
+    amount_policy: abs
+  GROSS_PROFIT:
+    amount_policy: as_reported
+  SGNA:
+    amount_policy: abs
+  RND:
+    amount_policy: abs
+  DNA_IS:
+    amount_policy: abs
+  TAX_EXPENSE:
+    amount_policy: abs
+
+  # =========================
+  # IS: 이익 subtotal / 귀속이익
+  # =========================
+  OPERATING_INCOME:
+    amount_policy: as_reported
+  PBT:
+    amount_policy: as_reported
+  NET_INCOME:
+    amount_policy: as_reported
+  NET_INCOME_PARENT:
+    amount_policy: as_reported
+  NET_INCOME_NCI:
+    amount_policy: as_reported
+  COMPREHENSIVE_INCOME_PARENT:
+    amount_policy: as_reported
+
+  # =========================
+  # CF: 순현금흐름 subtotal
+  # =========================
+  CFO:
+    amount_policy: as_reported
+  CFI:
+    amount_policy: as_reported
+  CFF:
+    amount_policy: as_reported
+  WC_CHANGE:
+    amount_policy: as_reported
+
+  # =========================
+  # CF: 투자활동 개별 항목
+  # =========================
+  CAPEX_PPE:
+    amount_policy: abs
+    cash_direction: outflow
+  CAPEX_INTANG:
+    amount_policy: abs
+    cash_direction: outflow
+  PPE_DISPOSAL_PROCEEDS:
+    amount_policy: abs
+    cash_direction: inflow
+  INTANGIBLE_DISPOSAL_PROCEEDS:
+    amount_policy: abs
+    cash_direction: inflow
+
+  # =========================
+  # CF: 영업현금흐름 add-back / 지급
+  # =========================
+  DEPRECIATION_EXPENSE:
+    amount_policy: abs
+  AMORTIZATION:
+    amount_policy: abs
+  INT_PAID:
+    amount_policy: abs
+    cash_direction: outflow
+  TAX_PAID:
+    amount_policy: abs
+    cash_direction: outflow
+
+  # =========================
+  # CF: 재무활동 개별 항목
+  # =========================
+  DIV_PAID:
+    amount_policy: abs
+    cash_direction: outflow
+  DEBT_ISSUE:
+    amount_policy: abs
+    cash_direction: inflow
+  DEBT_REPAY:
+    amount_policy: abs
+    cash_direction: outflow
+  EQ_ISSUE:
+    amount_policy: abs
+    cash_direction: inflow
+  BUYBACK:
+    amount_policy: abs
+    cash_direction: outflow
+  LEASE_REPAYMENT:
+    amount_policy: abs
+    cash_direction: outflow

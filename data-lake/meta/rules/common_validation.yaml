@@ -92,108 +92,199 @@ formula_checks:
       cid: TOTAL_EQUITY
       agg: first
 
-  - name: "IS: 매출액 - 매출원가 = 매출총이익"
+  - name: "IS: 매출총이익 - 판관비[/R&D] = 영업이익"
     statement_type: IS
     skip_if_missing: true
-    lhs:
-      sub:
-        - cid: REVENUE
-          agg: first
-        - cid: COGS
-          agg: first
-    rhs:
-      cid: GROSS_PROFIT
-      agg: first
-
-  - name: "IS: 매출총이익 - 판관비 = 영업이익"
-    statement_type: IS
-    skip_if_missing: true
-    lhs:
-      sub:
-        - cid: GROSS_PROFIT
-          agg: first
-        - cid: SGNA
-          agg: first
-    rhs:
+    actual:
+      statement_type: IS
       cid: OPERATING_INCOME
       agg: first
+    candidates:
+      - mode: RND_INCLUDED_IN_SGNA
+        formula: GROSS_PROFIT - SGNA
+        expected:
+          sub:
+            - statement_type: IS
+              cid: GROSS_PROFIT
+              agg: first
+            - statement_type: IS
+              cid: SGNA
+              agg: first
 
-  - name: "IS: PBT - TAX = NET_INCOME"
+      - mode: RND_SEPARATE_FROM_SGNA
+        formula: GROSS_PROFIT - SGNA - RND
+        expected:
+          sub:
+            - statement_type: IS
+              cid: GROSS_PROFIT
+              agg: first
+            - statement_type: IS
+              cid: SGNA
+              agg: first
+            - statement_type: IS
+              cid: RND
+              agg: sum
+
+  - name: "IS: PBT +/- TAX = NET_INCOME"
     statement_type: IS
     skip_if_missing: true
-    lhs:
-      sub:
-        - cid: PBT
-          agg: first
-        - cid: TAX_EXPENSE
-          agg: first
-    rhs:
+    actual:
+      statement_type: IS
       cid: NET_INCOME
       agg: first
+    candidates:
+      - mode: TAX_AS_EXPENSE
+        formula: PBT - TAX_EXPENSE
+        expected:
+          sub:
+            - statement_type: IS
+              cid: PBT
+              agg: first
+            - statement_type: IS
+              cid: TAX_EXPENSE
+              agg: first
+
+      - mode: TAX_AS_BENEFIT
+        formula: PBT + TAX_EXPENSE
+        expected:
+          sum:
+            - statement_type: IS
+              cid: PBT
+              agg: first
+            - statement_type: IS
+              cid: TAX_EXPENSE
+              agg: first
+
+      - mode: WITH_DISCONTINUED_OPERATIONS_TAX_AS_EXPENSE
+        formula: PBT - TAX_EXPENSE + DISCONTINUED_OPERATIONS_INCOME
+        expected:
+          sum:
+            - sub:
+                - statement_type: IS
+                  cid: PBT
+                  agg: first
+                - statement_type: IS
+                  cid: TAX_EXPENSE
+                  agg: first
+            - statement_type: IS
+              cid: DISCONTINUED_OPERATIONS_INCOME
+              agg: sum
+              optional: true
+
+      - mode: WITH_DISCONTINUED_OPERATIONS_TAX_AS_BENEFIT
+        formula: PBT + TAX_EXPENSE + DISCONTINUED_OPERATIONS_INCOME
+        expected:
+          sum:
+            - statement_type: IS
+              cid: PBT
+              agg: first
+            - statement_type: IS
+              cid: TAX_EXPENSE
+              agg: first
+            - statement_type: IS
+              cid: DISCONTINUED_OPERATIONS_INCOME
+              agg: sum
+              optional: true
 
   - name: "IS: 지배주주순이익 + 비지배지분순이익 = 당기순이익"
     statement_type: IS
     skip_if_missing: true
     lhs:
       sum:
-        - cid: NET_INCOME_PARENT
+        - statement_type: IS
+          cid: NET_INCOME_PARENT
           agg: first
-        - cid: NET_INCOME_NCI
+        - statement_type: IS
+          cid: NET_INCOME_NCI
           agg: first
+          optional: true
     rhs:
+      statement_type: IS
       cid: NET_INCOME
       agg: first
 
-  - name: "CF: CFO + CFI + CFF + 환율효과 + 특수현금변동 = 현금증가"
+  - name: "CF: CFO + CFI + CFF = 현금증가 후보식"
     statement_type: CF
-    source: debug
+    source: normalized
     skip_if_missing: true
-    lhs:
-      sum:
-        - cid: CFO
+    candidates:
+      - mode: CASH_CHANGE_AFTER_FX
+        formula: CFO + CFI + CFF + FX_EFFECT_CASH + SPECIAL_CASH_CHANGE = CF_CASH_CHANGE
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CFO
+              agg: first
+            - statement_type: CF
+              cid: CFI
+              agg: first
+            - statement_type: CF
+              cid: CFF
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: SPECIAL_CASH_CHANGE
+              agg: sum
+              optional: true
+        actual:
+          statement_type: CF
+          cid: CF_CASH_CHANGE
           agg: first
-        - cid: CFI
-          agg: first
-        - cid: CFF
-          agg: first
-        - name_contains_any:
-            - 환율변동효과
-            - 현금및현금성자산에대한환율변동효과
-          agg: first
-          optional: true
-        - name_contains_any:
-            - 매각예정자산의순현금변동
-            - 매각예정자산대체
-            - 중단영업현금
-          agg: sum
-          optional: true
-    rhs:
-      name_contains_any:
-        - 현금및현금성자산의증가감소
-        - 현금및현금성자산의증가
-        - 현금및현금성자산의감소
-      agg: first
 
-  - name: "CF: 기초현금 + 현금증가 = 기말현금"
+      - mode: CASH_CHANGE_BEFORE_FX
+        formula: CFO + CFI + CFF = CF_CASH_CHANGE_BEFORE_FX
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CFO
+              agg: first
+            - statement_type: CF
+              cid: CFI
+              agg: first
+            - statement_type: CF
+              cid: CFF
+              agg: first
+        actual:
+          statement_type: CF
+          cid: CF_CASH_CHANGE_BEFORE_FX
+          agg: first
+
+  - name: "CF: 기초현금 + 현금증가 후보식 = 기말현금"
     statement_type: CF
-    source: debug
+    source: normalized
     skip_if_missing: true
-    lhs:
-      sum:
-        - name_contains_any:
-            - 기초의현금및현금성자산
-            - 기초현금및현금성자산
-          agg: first
-        - name_contains_any:
-            - 현금및현금성자산의증가감소
-            - 현금및현금성자산의증가
-            - 현금및현금성자산의감소
-          agg: first
-    rhs:
-      name_contains_any:
-        - 기말의현금및현금성자산
-        - 기말현금및현금성자산
+    actual:
+      statement_type: CF
+      cid: CF_CASH_END
       agg: first
+    candidates:
+      - mode: BEGIN_PLUS_CASH_CHANGE
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE
+              agg: first
+      - mode: BEGIN_PLUS_BEFORE_FX_PLUS_FX
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE_BEFORE_FX + FX_EFFECT_CASH = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE_BEFORE_FX
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
 
 warning_rules:
   - id: section_header_mapped
