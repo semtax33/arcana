@@ -6,8 +6,8 @@ from statements import download_recent_statement_comments, download_statement_co
 
 
 def main() -> None:
-    #corps_list = kospi_kosdaq_corp_list()
-    stock_codes = []#sorted(corps_list["stock_code"].tolist())
+    corps_list = kospi_kosdaq_corp_list()
+    stock_codes = sorted(corps_list["stock_code"].tolist())
     today = date.today()
     end_year = today.year
     start_year = end_year - 10
@@ -60,8 +60,8 @@ def download_all_statement_comments():
 
 if __name__ == "__main__":
     #download_all_statements()
-    download_all_statement_comments()
-    #main()
+    #download_all_statement_comments()
+    main()
 
 '''
 #download_all_statements()

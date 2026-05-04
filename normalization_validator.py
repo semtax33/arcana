@@ -34,6 +34,7 @@ class CheckResult:
     message: str = ""
     mode: str = ""
     formula: str = ""
+    matched_unmapped_candidates: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -677,6 +678,121 @@ def collect_unmapped_candidates(
     ].to_dict("records")
 
 
+def infer_statement_type_from_check_name(check_name: str) -> str:
+    if check_name.startswith("BS:"):
+        return "BS"
+    if check_name.startswith("IS:"):
+        return "IS"
+    if check_name.startswith("CF:"):
+        return "CF"
+    return ""
+
+
+def find_diff_matching_unmapped_candidates(
+    debug_df: pd.DataFrame,
+    statement_type: str,
+    diff: float | None,
+    tolerance_abs: float = 10_000,
+    max_candidates: int = 10,
+) -> list[dict[str, Any]]:
+    """
+    검산 diff와 금액이 같은 UNMAPPED 후보를 찾는다.
+    diff 또는 -diff와 매칭되는 계정이 있으면 원인 후보로 본다.
+    """
+    if diff is None:
+        return []
+
+    d = debug_df.copy()
+
+    if "amount_num" not in d.columns:
+        d["amount_num"] = to_number_series(d["amount"])
+
+    for col in [
+        "statement_type",
+        "canonical_account_id",
+        "original_account_name",
+        "section_context",
+        "parent_context",
+        "context_path",
+        "rule_id",
+        "reason",
+    ]:
+        if col not in d.columns:
+            d[col] = ""
+
+    candidates = d[
+        d["statement_type"].eq(statement_type)
+        & d["canonical_account_id"].eq("UNMAPPED")
+    ].copy()
+
+    rows = []
+
+    for _, row in candidates.iterrows():
+        amount = float(row["amount_num"])
+
+        same_diff = abs(amount - diff)
+        opposite_diff = abs(amount + diff)
+
+        matched_sign = ""
+        matched_abs_diff = None
+
+        if same_diff <= tolerance_abs:
+            matched_sign = "same_sign"
+            matched_abs_diff = same_diff
+        elif opposite_diff <= tolerance_abs:
+            matched_sign = "opposite_sign"
+            matched_abs_diff = opposite_diff
+
+        if not matched_sign:
+            continue
+
+        rows.append(
+            {
+                "original_account_name": row.get("original_account_name", ""),
+                "amount": amount,
+                "diff": diff,
+                "matched_sign": matched_sign,
+                "matched_abs_diff": matched_abs_diff,
+                "section_context": row.get("section_context", ""),
+                "parent_context": row.get("parent_context", ""),
+                "context_path": row.get("context_path", ""),
+                "rule_id": row.get("rule_id", ""),
+                "reason": row.get("reason", ""),
+            }
+        )
+
+    rows.sort(key=lambda x: x["matched_abs_diff"])
+
+    return rows[:max_candidates]
+
+
+def attach_formula_failure_diagnosis(
+    checks: list[CheckResult],
+    debug_df: pd.DataFrame,
+    tolerance_abs: float = 10_000,
+) -> list[CheckResult]:
+    """
+    FAIL check마다 diff와 같은 UNMAPPED 후보를 붙인다.
+    """
+    for check in checks:
+        if check.status != "FAIL":
+            continue
+
+        statement_type = infer_statement_type_from_check_name(check.name)
+
+        if not statement_type:
+            continue
+
+        check.matched_unmapped_candidates = find_diff_matching_unmapped_candidates(
+            debug_df=debug_df,
+            statement_type=statement_type,
+            diff=check.diff,
+            tolerance_abs=tolerance_abs,
+        )
+
+    return checks
+
+
 # ============================================================
 # Factor snapshot
 # ============================================================
@@ -807,6 +923,9 @@ def decide_verdict(
                 "severity": "ERROR",
                 "description": c.name,
                 "diff": c.diff,
+                "mode": c.mode,
+                "formula": c.formula,
+                "matched_unmapped_candidates": c.matched_unmapped_candidates or [],
             }
         )
 
@@ -871,6 +990,7 @@ def evaluate_normalized_pair(
     mapped_ratio = round(mapped_rows / max(1, len(n)), 4)
 
     checks = run_formula_checks(n, d, config)
+    checks = attach_formula_failure_diagnosis(checks, d)
 
     warnings: list[dict[str, Any]] = []
     warnings.extend(check_statement_presence(n, config))
@@ -2049,6 +2169,192 @@ def aggregate_zai_suggestions(
     )
 
     return result
+
+def extract_stock_period_from_report_file(report: dict[str, Any]) -> tuple[str, str]:
+    """
+    normalized_000180_2019.12.csv -> 000180, 2019.12
+    """
+    file_path = Path(report.get("file", ""))
+    stem = file_path.stem
+
+    m = re.search(r"normalized_(\d{6})_(\d{4}\.\d{2})", stem)
+    if m:
+        return m.group(1), m.group(2)
+
+    return "", ""
+
+
+def suggest_action_for_failure_cluster(
+    check_name: str,
+    candidate_name_norm: str,
+) -> dict[str, str]:
+    n = candidate_name_norm
+
+    if "유동자산" in check_name and "매각예정" in n:
+        return {
+            "suggested_type": "canonical_and_validation",
+            "suggested_canonical_id": "ASSETS_HELD_FOR_SALE",
+            "suggested_rule": "bs_assets_held_for_sale",
+            "note": "CURRENT_ASSETS + NON_CURRENT_ASSETS + ASSETS_HELD_FOR_SALE 후보식 추가",
+        }
+
+    if "유동부채" in check_name and "매각예정" in n:
+        return {
+            "suggested_type": "canonical_and_validation",
+            "suggested_canonical_id": "LIABILITIES_HELD_FOR_SALE",
+            "suggested_rule": "bs_liabilities_held_for_sale",
+            "note": "CURRENT_LIABILITIES + NON_CURRENT_LIABILITIES + LIABILITIES_HELD_FOR_SALE 후보식 추가",
+        }
+
+    if "PBT" in check_name and "중단영업" in n:
+        return {
+            "suggested_type": "validation_fix",
+            "suggested_canonical_id": "DISCONTINUED_OPERATIONS_INCOME",
+            "suggested_rule": "is_discontinued_operations_income",
+            "note": "중단영업손익은 agg:first 또는 subtotal dedupe 필요",
+        }
+
+    if "CFO + CFI + CFF" in check_name and ("환율변동차이" in n or "외화환산차이" in n):
+        return {
+            "suggested_type": "canonical_and_validation",
+            "suggested_canonical_id": "CF_TRANSLATION_DIFFERENCE",
+            "suggested_rule": "cf_translation_difference",
+            "note": "CFO+CFI+CFF와 CF_CASH_CHANGE_BEFORE_FX 사이 보정항목",
+        }
+
+    if "기초현금" in check_name and ("환율" in n or "외화환산" in n):
+        return {
+            "suggested_type": "mapping_alias",
+            "suggested_canonical_id": "FX_EFFECT_CASH",
+            "suggested_rule": "cf_fx_effect_cash",
+            "note": "기초현금 + 현금증가 + FX = 기말현금 후보식에 필요",
+        }
+
+    if "기초현금" in check_name and ("매각예정" in n or "처분자산집단" in n):
+        return {
+            "suggested_type": "canonical_and_validation",
+            "suggested_canonical_id": "SPECIAL_CASH_CHANGE",
+            "suggested_rule": "cf_special_cash_change",
+            "note": "매각예정/처분자산집단 현금 변동 후보식 추가",
+        }
+
+    return {
+        "suggested_type": "manual_review",
+        "suggested_canonical_id": "",
+        "suggested_rule": "",
+        "note": "",
+    }
+
+
+def collect_failure_cases(validation_root: str | Path) -> pd.DataFrame:
+    rows = []
+
+    for path in Path(validation_root).rglob("*.validation.json"):
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        stock_code, period = extract_stock_period_from_report_file(report)
+
+        for err in report.get("errors", []):
+            if err.get("id") != "formula_check_failed":
+                continue
+
+            check_name = err.get("description", "")
+            diff = err.get("diff")
+
+            candidates = err.get("matched_unmapped_candidates", [])
+
+            if not candidates:
+                rows.append(
+                    {
+                        "stock_code": stock_code,
+                        "period": period,
+                        "check_name": check_name,
+                        "diff": diff,
+                        "candidate_name": "",
+                        "candidate_name_norm": "",
+                        "candidate_amount": None,
+                        "matched_sign": "",
+                        "json_path": str(path),
+                    }
+                )
+                continue
+
+            for c in candidates:
+                candidate_name = c.get("original_account_name", "")
+                candidate_name_norm = normalize_name(candidate_name)
+
+                rows.append(
+                    {
+                        "stock_code": stock_code,
+                        "period": period,
+                        "check_name": check_name,
+                        "diff": diff,
+                        "candidate_name": candidate_name,
+                        "candidate_name_norm": candidate_name_norm,
+                        "candidate_amount": c.get("amount"),
+                        "matched_sign": c.get("matched_sign", ""),
+                        "json_path": str(path),
+                    }
+                )
+
+    return pd.DataFrame(rows)
+
+
+def summarize_failure_clusters(cases: pd.DataFrame) -> pd.DataFrame:
+    if cases.empty:
+        return cases
+
+    grouped = (
+        cases.groupby(["check_name", "candidate_name_norm"], dropna=False)
+        .agg(
+            candidate_name=("candidate_name", "first"),
+            case_count=("json_path", "count"),
+            stock_count=("stock_code", "nunique"),
+            period_count=("period", "nunique"),
+            avg_abs_diff=("diff", lambda s: pd.to_numeric(s, errors="coerce").abs().mean()),
+            examples=("json_path", lambda s: " | ".join(list(dict.fromkeys(s))[:5])),
+        )
+        .reset_index()
+        .sort_values(["stock_count", "case_count"], ascending=False)
+    )
+
+    suggested = grouped.apply(
+        lambda r: suggest_action_for_failure_cluster(
+            check_name=r["check_name"],
+            candidate_name_norm=r["candidate_name_norm"],
+        ),
+        axis=1,
+    )
+
+    suggested_df = pd.DataFrame(list(suggested))
+    return pd.concat([grouped.reset_index(drop=True), suggested_df], axis=1)
+
+
+def cluster_failures_to_files(
+    input_dir: str | Path,
+    out_dir: str | Path,
+) -> dict[str, str]:
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    cases = collect_failure_cases(input_dir)
+    clusters = summarize_failure_clusters(cases)
+
+    cases_path = out_dir / "validation_failure_cases.csv"
+    clusters_path = out_dir / "validation_failure_clusters.csv"
+
+    cases.to_csv(cases_path, index=False, encoding="utf-8-sig")
+    clusters.to_csv(clusters_path, index=False, encoding="utf-8-sig")
+
+    return {
+        "cases_path": str(cases_path),
+        "clusters_path": str(clusters_path),
+        "case_count": str(len(cases)),
+        "cluster_count": str(len(clusters)),
+    }
 
 
 def write_aggregated_suggestions_markdown(
@@ -3260,6 +3566,10 @@ def main() -> None:
     )
     add_zai_args(stock_batch)
 
+    cluster = sub.add_parser("cluster-failures")
+    cluster.add_argument("--input-dir", required=True)
+    cluster.add_argument("--out-dir", required=True)
+
     args = parser.parse_args()
     zai_config = build_zai_config_from_args(args)
 
@@ -3334,7 +3644,13 @@ def main() -> None:
             resume=args.resume,
         )
         print(summary.to_string(index=False))
-
+    
+    elif args.cmd == "cluster-failures":
+        result = cluster_failures_to_files(
+            input_dir=args.input_dir,
+            out_dir=args.out_dir,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
 
 if __name__ == "__main__":
     main()

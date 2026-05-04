@@ -43,6 +43,7 @@ dangerous_duplicate_ids:
 formula_checks:
   - name: "BS: 자산총계 = 부채총계 + 자본총계"
     statement_type: BS
+    skip_if_missing: true
     lhs:
       cid: TOTAL_ASSETS
       agg: first
@@ -52,33 +53,112 @@ formula_checks:
           agg: first
         - cid: TOTAL_EQUITY
           agg: first
-
   - name: "BS: 유동자산 + 비유동자산 = 자산총계"
     statement_type: BS
+    source: normalized
     skip_if_missing: true
-    lhs:
-      sum:
-        - cid: CURRENT_ASSETS
-          agg: first
-        - cid: NON_CURRENT_ASSETS
-          agg: first
-    rhs:
+    actual:
+      statement_type: BS
       cid: TOTAL_ASSETS
       agg: first
-
+    candidates:
+      - mode: CURRENT_PLUS_NON_CURRENT
+        formula: CURRENT_ASSETS + NON_CURRENT_ASSETS = TOTAL_ASSETS
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_ASSETS
+              agg: first
+            - statement_type: BS
+              cid: NON_CURRENT_ASSETS
+              agg: first
+      - mode: CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE
+        formula: CURRENT_ASSETS + NON_CURRENT_ASSETS + ASSETS_HELD_FOR_SALE = TOTAL_ASSETS
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_ASSETS
+              agg: first
+            - statement_type: BS
+              cid: NON_CURRENT_ASSETS
+              agg: first
+            - statement_type: BS
+              cid: ASSETS_HELD_FOR_SALE
+              agg: sum
+              optional: true
+      - mode: CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE_PLUS_FINANCIAL_BUSINESS
+        formula: CURRENT_ASSETS + NON_CURRENT_ASSETS + ASSETS_HELD_FOR_SALE + FINANCIAL_BUSINESS_ASSETS = TOTAL_ASSETS
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_ASSETS
+              agg: first
+            - statement_type: BS
+              cid: NON_CURRENT_ASSETS
+              agg: first
+            - statement_type: BS
+              cid: ASSETS_HELD_FOR_SALE
+              agg: sum
+              optional: true
+            - statement_type: BS
+              cid: FINANCIAL_BUSINESS_ASSETS
+              agg: sum
+              optional: true
+    tolerance_abs: 10000
   - name: "BS: 유동부채 + 비유동부채 = 부채총계"
     statement_type: BS
+    source: normalized
     skip_if_missing: true
-    lhs:
-      sum:
-        - cid: CURRENT_LIABILITIES
-          agg: first
-        - cid: NON_CURRENT_LIABILITIES
-          agg: first
-    rhs:
+    actual:
+      statement_type: BS
       cid: TOTAL_LIABILITIES
       agg: first
-
+    candidates:
+      - mode: CURRENT_PLUS_NON_CURRENT
+        formula: CURRENT_LIABILITIES + NON_CURRENT_LIABILITIES = TOTAL_LIABILITIES
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_LIABILITIES
+              agg: first
+            - statement_type: BS
+              cid: NON_CURRENT_LIABILITIES
+              agg: first
+      - mode: CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE
+        formula: CURRENT_LIABILITIES + NON_CURRENT_LIABILITIES + LIABILITIES_HELD_FOR_SALE = TOTAL_LIABILITIES
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_LIABILITIES
+              agg: first
+            - statement_type: BS
+              cid: NON_CURRENT_LIABILITIES
+              agg: first
+            - statement_type: BS
+              cid: LIABILITIES_HELD_FOR_SALE
+              agg: sum
+              optional: true
+      - mode: CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE_PLUS_FINANCIAL_BUSINESS
+        formula:
+          CURRENT_LIABILITIES + NON_CURRENT_LIABILITIES + LIABILITIES_HELD_FOR_SALE + FINANCIAL_BUSINESS_LIABILITIES =
+          TOTAL_LIABILITIES
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_LIABILITIES
+              agg: first
+            - statement_type: BS
+              cid: NON_CURRENT_LIABILITIES
+              agg: first
+            - statement_type: BS
+              cid: LIABILITIES_HELD_FOR_SALE
+              agg: sum
+              optional: true
+            - statement_type: BS
+              cid: FINANCIAL_BUSINESS_LIABILITIES
+              agg: sum
+              optional: true
+    tolerance_abs: 10000
   - name: "BS: 지배주주지분 + 비지배지분 = 자본총계"
     statement_type: BS
     skip_if_missing: true
@@ -91,9 +171,9 @@ formula_checks:
     rhs:
       cid: TOTAL_EQUITY
       agg: first
-
   - name: "IS: 매출총이익 - 판관비[/R&D] = 영업이익"
     statement_type: IS
+    source: normalized
     skip_if_missing: true
     actual:
       statement_type: IS
@@ -101,7 +181,7 @@ formula_checks:
       agg: first
     candidates:
       - mode: RND_INCLUDED_IN_SGNA
-        formula: GROSS_PROFIT - SGNA
+        formula: GROSS_PROFIT - SGNA = OPERATING_INCOME
         expected:
           sub:
             - statement_type: IS
@@ -110,9 +190,8 @@ formula_checks:
             - statement_type: IS
               cid: SGNA
               agg: first
-
       - mode: RND_SEPARATE_FROM_SGNA
-        formula: GROSS_PROFIT - SGNA - RND
+        formula: GROSS_PROFIT - SGNA - RND = OPERATING_INCOME
         expected:
           sub:
             - statement_type: IS
@@ -124,9 +203,47 @@ formula_checks:
             - statement_type: IS
               cid: RND
               agg: sum
-
+      - mode: WITH_OPERATING_ITEMS
+        formula:
+          GROSS_PROFIT - SGNA - RND - BAD_DEBT_EXPENSE + BAD_DEBT_REVERSAL - LOGISTICS_COST + OTHER_OPERATING_INCOME -
+          OTHER_OPERATING_EXPENSES = OPERATING_INCOME
+        expected:
+          sum:
+            - sub:
+                - statement_type: IS
+                  cid: GROSS_PROFIT
+                  agg: first
+                - statement_type: IS
+                  cid: SGNA
+                  agg: first
+                - statement_type: IS
+                  cid: RND
+                  agg: sum
+                  optional: true
+                - statement_type: IS
+                  cid: BAD_DEBT_EXPENSE
+                  agg: sum
+                  optional: true
+                - statement_type: IS
+                  cid: LOGISTICS_COST
+                  agg: sum
+                  optional: true
+                - statement_type: IS
+                  cid: OTHER_OPERATING_EXPENSES
+                  agg: sum
+                  optional: true
+            - statement_type: IS
+              cid: BAD_DEBT_REVERSAL
+              agg: sum
+              optional: true
+            - statement_type: IS
+              cid: OTHER_OPERATING_INCOME
+              agg: sum
+              optional: true
+    tolerance_abs: 10000
   - name: "IS: PBT +/- TAX = NET_INCOME"
     statement_type: IS
+    source: normalized
     skip_if_missing: true
     actual:
       statement_type: IS
@@ -134,7 +251,7 @@ formula_checks:
       agg: first
     candidates:
       - mode: TAX_AS_EXPENSE
-        formula: PBT - TAX_EXPENSE
+        formula: PBT - TAX_EXPENSE = NET_INCOME
         expected:
           sub:
             - statement_type: IS
@@ -143,9 +260,8 @@ formula_checks:
             - statement_type: IS
               cid: TAX_EXPENSE
               agg: first
-
       - mode: TAX_AS_BENEFIT
-        formula: PBT + TAX_EXPENSE
+        formula: PBT + TAX_EXPENSE = NET_INCOME
         expected:
           sum:
             - statement_type: IS
@@ -154,9 +270,8 @@ formula_checks:
             - statement_type: IS
               cid: TAX_EXPENSE
               agg: first
-
       - mode: WITH_DISCONTINUED_OPERATIONS_TAX_AS_EXPENSE
-        formula: PBT - TAX_EXPENSE + DISCONTINUED_OPERATIONS_INCOME
+        formula: PBT - TAX_EXPENSE + DISCONTINUED_OPERATIONS_INCOME = NET_INCOME
         expected:
           sum:
             - sub:
@@ -168,11 +283,10 @@ formula_checks:
                   agg: first
             - statement_type: IS
               cid: DISCONTINUED_OPERATIONS_INCOME
-              agg: sum
+              agg: first
               optional: true
-
       - mode: WITH_DISCONTINUED_OPERATIONS_TAX_AS_BENEFIT
-        formula: PBT + TAX_EXPENSE + DISCONTINUED_OPERATIONS_INCOME
+        formula: PBT + TAX_EXPENSE + DISCONTINUED_OPERATIONS_INCOME = NET_INCOME
         expected:
           sum:
             - statement_type: IS
@@ -183,9 +297,9 @@ formula_checks:
               agg: first
             - statement_type: IS
               cid: DISCONTINUED_OPERATIONS_INCOME
-              agg: sum
+              agg: first
               optional: true
-
+    tolerance_abs: 10000
   - name: "IS: 지배주주순이익 + 비지배지분순이익 = 당기순이익"
     statement_type: IS
     skip_if_missing: true
@@ -202,7 +316,6 @@ formula_checks:
       statement_type: IS
       cid: NET_INCOME
       agg: first
-
   - name: "CF: CFO + CFI + CFF = 현금증가 후보식"
     statement_type: CF
     source: normalized
@@ -233,7 +346,6 @@ formula_checks:
           statement_type: CF
           cid: CF_CASH_CHANGE
           agg: first
-
       - mode: CASH_CHANGE_BEFORE_FX
         formula: CFO + CFI + CFF = CF_CASH_CHANGE_BEFORE_FX
         expected:
@@ -251,7 +363,28 @@ formula_checks:
           statement_type: CF
           cid: CF_CASH_CHANGE_BEFORE_FX
           agg: first
-
+      - mode: CASH_CHANGE_BEFORE_FX_WITH_TRANSLATION_DIFFERENCE
+        formula: CFO + CFI + CFF + CF_TRANSLATION_DIFFERENCE = CF_CASH_CHANGE_BEFORE_FX
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CFO
+              agg: first
+            - statement_type: CF
+              cid: CFI
+              agg: first
+            - statement_type: CF
+              cid: CFF
+              agg: first
+            - statement_type: CF
+              cid: CF_TRANSLATION_DIFFERENCE
+              agg: sum
+              optional: true
+        actual:
+          statement_type: CF
+          cid: CF_CASH_CHANGE_BEFORE_FX
+          agg: first
+    tolerance_abs: 10000
   - name: "CF: 기초현금 + 현금증가 후보식 = 기말현금"
     statement_type: CF
     source: normalized
@@ -285,6 +418,39 @@ formula_checks:
               cid: FX_EFFECT_CASH
               agg: sum
               optional: true
+      - mode: BEGIN_PLUS_BEFORE_FX_PLUS_FX_PLUS_SPECIAL
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE_BEFORE_FX + FX_EFFECT_CASH + SPECIAL_CASH_CHANGE = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE_BEFORE_FX
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: SPECIAL_CASH_CHANGE
+              agg: sum
+              optional: true
+      - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_SPECIAL
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE + SPECIAL_CASH_CHANGE = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE
+              agg: first
+            - statement_type: CF
+              cid: SPECIAL_CASH_CHANGE
+              agg: sum
+              optional: true
+    tolerance_abs: 10000
 
 warning_rules:
   - id: section_header_mapped

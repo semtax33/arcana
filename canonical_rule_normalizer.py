@@ -1200,18 +1200,48 @@ class RuleEngine:
 def dedupe_duplicate_subtotals(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    keys = ["statement_type", "period", "canonical_account_id", "amount"]
-    dup_mask = (
-        df["canonical_account_id"].eq("NET_INCOME")
-        & df.duplicated(keys, keep="first")
-    )
+    duplicate_sensitive_ids = {
+        "EAOP",
+        "NEAOP",
+        "TOTAL_EQUITY",
+        "TOTAL_ASSETS",
+        "TOTAL_LIABILITIES",
+        "CURRENT_ASSETS",
+        "NON_CURRENT_ASSETS",
+        "CURRENT_LIABILITIES",
+        "NON_CURRENT_LIABILITIES",
+    }
 
-    df.loc[dup_mask, "canonical_account_id"] = "UNMAPPED"
-    df.loc[dup_mask, "canonical_account_name"] = "미매핑"
-    df.loc[dup_mask, "rule_id"] = "post_duplicate_net_income_unmapped"
-    df.loc[dup_mask, "reason"] = "중복 당기순이익 subtotal 제거"
-    df.loc[dup_mask, "amount_policy"] = "as_reported"
-    df.loc[dup_mask, "cash_direction"] = ""
+    for cid in duplicate_sensitive_ids:
+        mask = df["canonical_account_id"].eq(cid)
+
+        if not mask.any():
+            continue
+
+        # 같은 statement/period/canonical/amount가 중복이면 leaf 우선
+        sub = df[mask].copy()
+
+        if "has_children" in sub.columns:
+            sub["_is_parent"] = sub["has_children"].astype(str).str.lower().eq("true")
+        else:
+            sub["_is_parent"] = False
+
+        sub["_indent"] = pd.to_numeric(sub.get("indent_level", 0), errors="coerce").fillna(0)
+
+        # leaf 우선, indent 깊은 row 우선
+        keep_idx = (
+            sub.sort_values(["_is_parent", "_indent"], ascending=[True, False])
+            .groupby(["statement_type", "period", "canonical_account_id", "amount"], as_index=False)
+            .head(1)
+            .index
+        )
+
+        dup_idx = sub.index.difference(keep_idx)
+
+        df.loc[dup_idx, "canonical_account_id"] = "UNMAPPED"
+        df.loc[dup_idx, "canonical_account_name"] = "미매핑"
+        df.loc[dup_idx, "rule_id"] = "post_duplicate_subtotal_unmapped"
+        df.loc[dup_idx, "reason"] = f"중복 subtotal 제거: {cid}"
 
     return df
 

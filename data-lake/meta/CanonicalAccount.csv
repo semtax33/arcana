@@ -26,6 +26,10 @@ OTHER_PAYABLES,기타채무,BS,FALSE,,기타채무,
 NON_CURRENT_LIABILITIES,비유동부채,BS,FALSE,,비유동부채,
 TRADE_AND_OTHER_RECEIVABLES,매출채권및기타채권,BS,FALSE,,매출채권과 기타채권 합산,
 TRADE_AND_OTHER_PAYABLES,매입채무및기타채무,BS,FALSE,,매입채무와 기타채무 합산,
+ASSETS_HELD_FOR_SALE,매각예정비유동자산,BS,FALSE,,매각예정으로 분류된 비유동자산 또는 처분자산집단,BS 유동자산+비유동자산 검증식 후보에 포함
+LIABILITIES_HELD_FOR_SALE,매각예정비유동부채,BS,FALSE,,매각예정으로 분류된 처분자산집단 관련 부채,BS 유동부채+비유동부채 검증식 후보에 포함
+FINANCIAL_BUSINESS_ASSETS,금융업자산,BS,FALSE,,일반기업 내 금융업/금융부문 자산 subtotal,금융업자산이 자산총계 안에서 별도 표시되는 경우 후보식에 포함
+FINANCIAL_BUSINESS_LIABILITIES,금융업부채,BS,FALSE,,일반기업 내 금융업/금융부문 부채 subtotal,금융업부채가 부채총계 안에서 별도 표시되는 경우 후보식에 포함
 CFO,영업활동현금흐름,CF,FALSE,,영업활동현금흐름,
 CFI,투자활동현금흐름,CF,FALSE,,투자활동현금흐름,
 CFF,재무활동현금흐름,CF,FALSE,,재무활동현금흐름,
@@ -49,6 +53,8 @@ FX_EFFECT_CASH,현금및현금성자산 환율변동효과,CF,FALSE,,현금및�
 CF_CASH_BEGIN,기초 현금및현금성자산,CF,FALSE,,현금흐름표 기초 현금및현금성자산,
 CF_CASH_END,기말 현금및현금성자산,CF,FALSE,,현금흐름표 기말 현금및현금성자산,
 CF_CASH_CHANGE,현금및현금성자산 증가감소,CF,FALSE,,현금흐름표 현금및현금성자산 증가감소,
+CF_TRANSLATION_DIFFERENCE,환율변동차이,CF,FALSE,,CFO+CFI+CFF와 환율효과 전 현금증가 사이의 환산/환율 차이 보정항목,CFO+CFI+CFF 검증 후보에 포함
+SPECIAL_CASH_CHANGE,특수 현금및현금성자산 변동,CF,FALSE,,연결범위 변동/매각예정/처분자산집단 등으로 인한 현금및현금성자산 변동,기초+증감=기말 후보식에 포함
 REVENUE,매출액(영업수익),IS,FALSE,,매출액(영업수익),
 COGS,매출원가,IS,FALSE,,매출원가,
 GROSS_PROFIT,매출총이익,IS,FALSE,,매출총이익,
@@ -65,3 +71,8 @@ NET_INCOME_NCI,비지배지분순이익,IS,FALSE,,비지배지분 귀속 당기�
 COMPREHENSIVE_INCOME_PARENT,지배주주총포괄이익,IS,FALSE,,지배주주 귀속 총포괄이익,
 DISCONTINUED_OPERATIONS_INCOME,중단영업손익,IS,FALSE,,중단영업이익(손실),
 CONTINUING_OPERATIONS_INCOME,계속영업손익,IS,FALSE,,계속영업이익(손실),
+BAD_DEBT_EXPENSE,대손상각비,IS,FALSE,,대손상각비/매출채권 손상차손 등 별도 영업비용,영업이익 rollup에서 차감
+BAD_DEBT_REVERSAL,대손상각비환입,IS,FALSE,,대손상각비 환입/손상차손 환입 등 별도 영업수익성 차감비용 환입,영업이익 rollup에서 가산
+LOGISTICS_COST,물류원가,IS,FALSE,,물류원가/물류비가 매출총이익 이후 별도 표시되는 영업비용,영업이익 rollup에서 차감
+OTHER_OPERATING_INCOME,기타영업수익,IS,FALSE,,영업이익 계산에 포함되는 기타영업수익,영업이익 rollup에서 가산
+OTHER_OPERATING_EXPENSES,기타영업비용,IS,FALSE,,영업이익 계산에 포함되는 기타영업비용/기타영업손실,영업이익 rollup에서 차감
