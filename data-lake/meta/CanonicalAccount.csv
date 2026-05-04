@@ -76,3 +76,9 @@ BAD_DEBT_REVERSAL,대손상각비환입,IS,FALSE,,대손상각비 환입/손상�
 LOGISTICS_COST,물류원가,IS,FALSE,,물류원가/물류비가 매출총이익 이후 별도 표시되는 영업비용,영업이익 rollup에서 차감
 OTHER_OPERATING_INCOME,기타영업수익,IS,FALSE,,영업이익 계산에 포함되는 기타영업수익,영업이익 rollup에서 가산
 OTHER_OPERATING_EXPENSES,기타영업비용,IS,FALSE,,영업이익 계산에 포함되는 기타영업비용/기타영업손실,영업이익 rollup에서 차감
+OTHER_CURRENT_ASSETS,기타유동자산,BS,FALSE,,주요 유동자산 외 기타 유동자산,
+OTHER_NON_CURRENT_ASSETS,기타비유동자산,BS,FALSE,,기타 비유동자산,
+OTHER_CURRENT_LIABILITIES,기타유동부채,BS,FALSE,,기타 유동부채,
+OTHER_NON_CURRENT_LIABILITIES,기타비유동부채,BS,FALSE,,기타 비유동부채,
+OTHER_NON_OPERATING_INCOME,기타영업외수익,IS,FALSE,,기타 영업외수익,
+OTHER_NON_OPERATING_EXPENSES,기타영업외비용,IS,FALSE,,기타 영업외비용,

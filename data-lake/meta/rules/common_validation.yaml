@@ -418,6 +418,24 @@ formula_checks:
               cid: FX_EFFECT_CASH
               agg: sum
               optional: true
+      - mode: BEGIN_PLUS_BEFORE_FX_PLUS_FX_PLUS_TRANSLATION
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE_BEFORE_FX + FX_EFFECT_CASH + CF_TRANSLATION_DIFFERENCE = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE_BEFORE_FX
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: CF_TRANSLATION_DIFFERENCE
+              agg: sum
+              optional: true
       - mode: BEGIN_PLUS_BEFORE_FX_PLUS_FX_PLUS_SPECIAL
         formula: CF_CASH_BEGIN + CF_CASH_CHANGE_BEFORE_FX + FX_EFFECT_CASH + SPECIAL_CASH_CHANGE = CF_CASH_END
         expected:
@@ -434,6 +452,28 @@ formula_checks:
               optional: true
             - statement_type: CF
               cid: SPECIAL_CASH_CHANGE
+              agg: sum
+              optional: true
+      - mode: BEGIN_PLUS_BEFORE_FX_PLUS_FX_PLUS_SPECIAL_TRANSLATION
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE_BEFORE_FX + FX_EFFECT_CASH + SPECIAL_CASH_CHANGE + CF_TRANSLATION_DIFFERENCE = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE_BEFORE_FX
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: SPECIAL_CASH_CHANGE
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: CF_TRANSLATION_DIFFERENCE
               agg: sum
               optional: true
       - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_SPECIAL

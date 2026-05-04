@@ -42,6 +42,10 @@ canonical_policies:
     amount_policy: abs
   TAX_EXPENSE:
     amount_policy: abs
+  OTHER_NON_OPERATING_INCOME:
+    amount_policy: abs
+  OTHER_NON_OPERATING_EXPENSES:
+    amount_policy: abs
 
   # =========================
   # IS: 이익 subtotal / 귀속이익

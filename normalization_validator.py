@@ -10,6 +10,7 @@ import os
 import re
 import time
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 import hashlib
@@ -114,9 +115,14 @@ def to_number_series(s: pd.Series) -> pd.Series:
     ).fillna(0.0)
 
 
-def load_config(path: str | Path) -> dict[str, Any]:
-    with Path(path).open("r", encoding="utf-8") as f:
+@lru_cache(maxsize=32)
+def _load_config_cached(path_str: str) -> dict[str, Any]:
+    with Path(path_str).open("r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def load_config(path: str | Path) -> dict[str, Any]:
+    return _load_config_cached(str(Path(path).resolve()))
 
 
 def write_json(path: str | Path, data: Any) -> None:
@@ -973,14 +979,13 @@ def decide_verdict(
 # Single-year validation
 # ============================================================
 
-def evaluate_normalized_pair(
+def build_validation_report_from_frames(
     normalized_csv: str | Path,
     debug_csv: str | Path,
-    validation_rule_path: str | Path,
+    n: pd.DataFrame,
+    d: pd.DataFrame,
+    config: dict[str, Any],
 ) -> ValidationReport:
-    config = load_config(validation_rule_path)
-    n, d = load_csv_pair(normalized_csv, debug_csv)
-
     row_counts = {
         k: int(v)
         for k, v in n["statement_type"].value_counts().to_dict().items()
@@ -1027,6 +1032,23 @@ def evaluate_normalized_pair(
         duplicate_risks=duplicate_risks,
         unmapped_candidates=unmapped_candidates,
         factor_snapshot=factor_snapshot,
+    )
+
+
+def evaluate_normalized_pair(
+    normalized_csv: str | Path,
+    debug_csv: str | Path,
+    validation_rule_path: str | Path,
+) -> ValidationReport:
+    config = load_config(validation_rule_path)
+    n, d = load_csv_pair(normalized_csv, debug_csv)
+
+    return build_validation_report_from_frames(
+        normalized_csv=normalized_csv,
+        debug_csv=debug_csv,
+        n=n,
+        d=d,
+        config=config,
     )
 
 
@@ -2544,29 +2566,67 @@ def file_select_key(path: str | Path) -> tuple[int, int]:
     # 2순위: 버전. 같은 월이면 (2), (3) 같은 높은 버전 우선
     return period_month(path), file_version_num(path)
 
+StockYearIndex = dict[str, dict[int, list[Path]]]
+
+
+def build_stock_year_index(
+    input_dir: str | Path,
+    start_year: int,
+    end_year: int,
+    stock_codes: list[str] | None = None,
+) -> StockYearIndex:
+    input_dir = Path(input_dir)
+    wanted = set(stock_codes or [])
+    index: StockYearIndex = {}
+
+    for p in input_dir.rglob("normalized_*.csv"):
+        name = p.name
+        if ".debug" in name or ".validation" in name:
+            continue
+
+        meta = parse_stock_period_from_filename(p)
+        stock_code = meta["stock_code"]
+        year = meta["year"]
+
+        if not stock_code or year is None:
+            continue
+        if wanted and stock_code not in wanted:
+            continue
+
+        index.setdefault(stock_code, {}).setdefault(year, []).append(p)
+
+    return index
+
+
 def find_stock_year_pairs(
     input_dir: str | Path,
     stock_code: str,
     start_year: int,
     end_year: int,
+    stock_year_index: StockYearIndex | None = None,
 ) -> list[dict[str, Any]]:
     input_dir = Path(input_dir)
 
-    candidates = [
-        p
-        for p in input_dir.rglob(f"normalized_{stock_code}_*.csv")
-        if ".debug" not in p.name and ".validation" not in p.name
-    ]
-
     by_year: dict[int, list[Path]] = {}
 
-    for p in candidates:
-        meta = parse_stock_period_from_filename(p)
-        year = meta["year"]
-        if year is None:
-            continue
-        if start_year <= year <= end_year:
-            by_year.setdefault(year, []).append(p)
+    if stock_year_index is None:
+        candidates = [
+            p
+            for p in input_dir.rglob(f"normalized_{stock_code}_*.csv")
+            if ".debug" not in p.name and ".validation" not in p.name
+        ]
+
+        for p in candidates:
+            meta = parse_stock_period_from_filename(p)
+            year = meta["year"]
+            if year is None:
+                continue
+            if start_year <= year <= end_year:
+                by_year.setdefault(year, []).append(p)
+    else:
+        for year, paths in stock_year_index.get(stock_code, {}).items():
+            if start_year <= year <= end_year:
+                by_year[year] = list(paths)
 
     results: list[dict[str, Any]] = []
 
@@ -2756,13 +2816,16 @@ def context_bucket(row: pd.Series) -> str:
 
 
 def collect_stock_mapping_inconsistency(
-    debug_paths_by_year: dict[int, str],
+    debug_paths_by_year: dict[int, str | Path | pd.DataFrame],
     min_year_count: int = 2,
 ) -> list[dict[str, Any]]:
     rows = []
 
-    for year, debug_path in debug_paths_by_year.items():
-        d = read_csv_flexible(debug_path)
+    for year, debug_source in debug_paths_by_year.items():
+        if isinstance(debug_source, pd.DataFrame):
+            d = debug_source.copy()
+        else:
+            d = read_csv_flexible(debug_source)
 
         for col in [
             "statement_type",
@@ -2779,22 +2842,29 @@ def collect_stock_mapping_inconsistency(
 
         d["name_norm"] = d["original_account_name"].map(normalize_name)
         d["context_bucket"] = d.apply(context_bucket, axis=1)
+        d["canonical_account_id"] = d["canonical_account_id"].astype(str)
 
-        for _, r in d.iterrows():
-            cid = safe_str(r["canonical_account_id"])
-            if cid == "" or cid == "UNMAPPED":
-                continue
+        mapped = d[
+            d["canonical_account_id"].ne("")
+            & d["canonical_account_id"].ne("UNMAPPED")
+        ].copy()
 
-            rows.append(
-                {
-                    "year": year,
-                    "statement_type": r["statement_type"],
-                    "name_norm": r["name_norm"],
-                    "context_bucket": r["context_bucket"],
-                    "original_account_name": r["original_account_name"],
-                    "canonical_account_id": cid,
-                }
-            )
+        if mapped.empty:
+            continue
+
+        mapped["year"] = year
+        rows.extend(
+            mapped[
+                [
+                    "year",
+                    "statement_type",
+                    "name_norm",
+                    "context_bucket",
+                    "original_account_name",
+                    "canonical_account_id",
+                ]
+            ].to_dict("records")
+        )
 
     if not rows:
         return []
@@ -3073,6 +3143,8 @@ def evaluate_stock_to_files(
     zai_mode: Literal["none", "warn_fail", "all"] = "none",
     zai_config: ZaiConfig | None = None,
     zai_dry_run: bool = False,
+    stock_year_index: StockYearIndex | None = None,
+    validation_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     stock_out_dir = Path(out_dir) / stock_code
     stock_out_dir.mkdir(parents=True, exist_ok=True)
@@ -3082,13 +3154,15 @@ def evaluate_stock_to_files(
         stock_code=stock_code,
         start_year=start_year,
         end_year=end_year,
+        stock_year_index=stock_year_index,
     )
+    config = validation_config if validation_config is not None else load_config(validation_rule_path)
 
     expected_years = list(range(start_year, end_year + 1))
 
     yearly_reports: list[dict[str, Any]] = []
     factor_rows: list[dict[str, Any]] = []
-    debug_paths_by_year: dict[int, str] = {}
+    debug_paths_by_year: dict[int, str | Path | pd.DataFrame] = {}
 
     for pair in pairs:
         year = int(pair["year"])
@@ -3106,10 +3180,13 @@ def evaluate_stock_to_files(
             )
             continue
 
-        report = evaluate_normalized_pair(
+        n, d = load_csv_pair(pair["normalized"], pair["debug"])
+        report = build_validation_report_from_frames(
             normalized_csv=pair["normalized"],
             debug_csv=pair["debug"],
-            validation_rule_path=validation_rule_path,
+            n=n,
+            d=d,
+            config=config,
         )
 
         yearly_reports.append(
@@ -3133,7 +3210,7 @@ def evaluate_stock_to_files(
             )
         )
 
-        debug_paths_by_year[year] = pair["debug"]
+        debug_paths_by_year[year] = d
 
         year_json = stock_out_dir / f"{stock_code}_{year}.validation.json"
         year_md = stock_out_dir / f"{stock_code}_{year}.validation.md"
@@ -3316,9 +3393,19 @@ def evaluate_stock_batch_to_files(
     zai_config: ZaiConfig | None = None,
     zai_dry_run: bool = False,
     resume: bool = False,
+    summary_every: int = 50,
 ) -> pd.DataFrame:
+    stock_year_index = build_stock_year_index(
+        input_dir=input_dir,
+        start_year=start_year,
+        end_year=end_year,
+        stock_codes=stock_codes if stock_codes else None,
+    )
+
     if stock_codes is None or len(stock_codes) == 0:
-        stock_codes = discover_stock_codes(input_dir)
+        stock_codes = sorted(stock_year_index)
+
+    validation_config = load_config(validation_rule_path)
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -3331,8 +3418,10 @@ def evaluate_stock_batch_to_files(
     rows = []
 
     batch_start = time.time()
+    summary_every = max(1, int(summary_every or 1))
 
     print(f"[BATCH START] stocks={total}, years={start_year}-{end_year}, resume={resume}")
+    print(f"[INPUT INDEX] indexed_stocks={len(stock_year_index)}")
     print(f"[PROGRESS CSV] {progress_path}")
     print(f"[SUMMARY CSV]  {summary_path}")
 
@@ -3377,11 +3466,12 @@ def evaluate_stock_batch_to_files(
                         f"verdict={completed.get('verdict')} score={completed.get('score')}"
                     )
 
-                    pd.DataFrame(rows).to_csv(
-                        summary_path,
-                        index=False,
-                        encoding="utf-8-sig",
-                    )
+                    if idx % summary_every == 0 or idx == total:
+                        pd.DataFrame(rows).to_csv(
+                            summary_path,
+                            index=False,
+                            encoding="utf-8-sig",
+                        )
 
                     continue
 
@@ -3396,6 +3486,8 @@ def evaluate_stock_batch_to_files(
                 zai_mode=zai_mode,
                 zai_config=zai_config,
                 zai_dry_run=zai_dry_run,
+                stock_year_index=stock_year_index,
+                validation_config=validation_config,
             )
 
             elapsed = time.time() - item_start
@@ -3465,11 +3557,12 @@ def evaluate_stock_batch_to_files(
             )
 
         # 종목 하나 끝날 때마다 summary도 중간 저장
-        pd.DataFrame(rows).to_csv(
-            summary_path,
-            index=False,
-            encoding="utf-8-sig",
-        )
+        if idx % summary_every == 0 or idx == total:
+            pd.DataFrame(rows).to_csv(
+                summary_path,
+                index=False,
+                encoding="utf-8-sig",
+            )
 
         total_elapsed = time.time() - batch_start
         avg_sec = total_elapsed / idx
@@ -3564,6 +3657,12 @@ def main() -> None:
         action="store_true",
         help="이미 생성된 종목 단위 validation.json이 있으면 해당 종목 skip",
     )
+    stock_batch.add_argument(
+        "--summary-every",
+        type=int,
+        default=50,
+        help="write summary CSV every N stocks",
+    )
     add_zai_args(stock_batch)
 
     cluster = sub.add_parser("cluster-failures")
@@ -3642,6 +3741,7 @@ def main() -> None:
             zai_config=zai_config,
             zai_dry_run=args.zai_dry_run,
             resume=args.resume,
+            summary_every=args.summary_every,
         )
         print(summary.to_string(index=False))
     

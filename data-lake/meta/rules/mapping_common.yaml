@@ -541,6 +541,9 @@ rules:
       - 부채및자본총계
       - 부채와자본총계
       - 부채와자본합계
+      - 자본과부채총계
+      - 자본및부채총계
+      - 자본과부채합계
     canonical_id: UNMAPPED
     reason: 자산총계와 중복되는 보조 총계
 
@@ -597,6 +600,54 @@ rules:
     exact_any:
       - 유동부채
     canonical_id: CURRENT_LIABILITIES
+
+  - id: bs_other_current_assets
+    fs_type: BS
+    priority: 640
+    include_any:
+      - 기타
+    include_any_2:
+      - 유동자산
+    exclude_any:
+      - 비유동
+    canonical_id: OTHER_CURRENT_ASSETS
+    amount_policy: as_reported
+    reason: 기타 유동자산 매핑
+
+  - id: bs_other_non_current_assets
+    fs_type: BS
+    priority: 640
+    include_any:
+      - 기타
+    include_any_2:
+      - 비유동자산
+    canonical_id: OTHER_NON_CURRENT_ASSETS
+    amount_policy: as_reported
+    reason: 기타 비유동자산 매핑
+
+  - id: bs_other_current_liabilities
+    fs_type: BS
+    priority: 640
+    include_any:
+      - 기타
+    include_any_2:
+      - 유동부채
+    exclude_any:
+      - 비유동
+    canonical_id: OTHER_CURRENT_LIABILITIES
+    amount_policy: as_reported
+    reason: 기타 유동부채 매핑
+
+  - id: bs_other_non_current_liabilities
+    fs_type: BS
+    priority: 640
+    include_any:
+      - 기타
+    include_any_2:
+      - 비유동부채
+    canonical_id: OTHER_NON_CURRENT_LIABILITIES
+    amount_policy: as_reported
+    reason: 기타 비유동부채 매핑
 
   - id: bs_cash
     fs_type: BS
@@ -740,6 +791,8 @@ rules:
       - 지배기업소유주지분
       - 지배기업주주지분
       - 지배주주지분
+      - 지배기업소유주에게귀속되는자본
+      - 지배기업의소유주에게귀속되는자본
     conditions:
       has_children: false
     canonical_id: EAOP
@@ -806,6 +859,8 @@ rules:
       - 중단사업손익
       - 중단사업이익손실
       - 중단사업당기순이익손실
+      - 중단사업당기순이익
+      - 중단사업순이익손실
       - 세후중단영업손익
       - 세후중단영업이익손실
     canonical_id: DISCONTINUED_OPERATIONS_INCOME
@@ -873,6 +928,28 @@ rules:
     canonical_id: OTHER_OPERATING_EXPENSES
     amount_policy: abs
     reason: 영업이익 계산에 포함되는 기타영업비용
+
+  - id: is_other_non_operating_income
+    fs_type: IS
+    priority: 650
+    exact_any:
+      - 기타영업외수익
+      - 기타영업외이익
+      - 기타수익
+    canonical_id: OTHER_NON_OPERATING_INCOME
+    amount_policy: abs
+    reason: 기타 영업외수익 매핑
+
+  - id: is_other_non_operating_expenses
+    fs_type: IS
+    priority: 650
+    exact_any:
+      - 기타영업외비용
+      - 기타영업외손실
+      - 기타비용
+    canonical_id: OTHER_NON_OPERATING_EXPENSES
+    amount_policy: abs
+    reason: 기타 영업외비용 매핑
 
   - id: is_revenue
     fs_type: IS

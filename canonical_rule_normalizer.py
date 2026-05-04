@@ -696,7 +696,7 @@ def add_structural_features(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 class ContextEngine:
     def __init__(self, rules: list[dict[str, Any]]):
         self.rules = sorted(
-            rules,
+            [compile_rule_for_matching(rule) for rule in rules],
             key=lambda r: int(r.get("priority", 0)),
             reverse=True,
         )
@@ -807,25 +807,25 @@ class ContextEngine:
             return False
 
     def _match_rule(self, row: dict[str, Any], rule: dict[str, Any]) -> bool:
-        fs_type = safe_str(rule.get("fs_type", "ANY")).strip()
+        fs_type = safe_str(rule.get("_fs_type") or rule.get("fs_type", "ANY")).strip()
 
         if fs_type not in {"", "ANY"} and fs_type != row["fs_type"]:
             return False
 
         name = row["name"]
 
-        exact_any = self._normalize_list(rule.get("exact_any", []))
+        exact_any = rule.get("_exact_any", frozenset())
         if exact_any and name not in exact_any:
             return False
 
-        include_all = self._normalize_list(rule.get("include_all", []))
+        include_all = rule.get("_include_all", ())
         if include_all and not all(token in name for token in include_all):
             return False
 
-        if not _match_include_any_groups(name, rule, prefix="include_any"):
+        if not _match_compiled_include_any_groups(name, rule.get("_include_any_groups", [])):
             return False
 
-        exclude_any = self._normalize_list(rule.get("exclude_any", []))
+        exclude_any = rule.get("_exclude_any", ())
         if exclude_any and any(token in name for token in exclude_any):
             return False
 
@@ -931,11 +931,7 @@ def normalize_values_to_list(values: Any) -> list[str]:
     return [normalize_account_name(v) for v in values if safe_str(v).strip()]
 
 
-def _match_include_any_groups(text: str, rule: dict[str, Any], prefix: str) -> bool:
-    """
-    include_any, include_any_2, include_any_3 ... 형태를 모두 AND 그룹으로 처리한다.
-    각 그룹 안에서는 OR, 그룹 간에는 AND.
-    """
+def _include_group_keys(rule: dict[str, Any], prefix: str) -> list[str]:
     group_keys = []
     if prefix in rule:
         group_keys.append(prefix)
@@ -947,6 +943,32 @@ def _match_include_any_groups(text: str, rule: dict[str, Any], prefix: str) -> b
             numbered.append((int(m.group(1)), key))
 
     group_keys.extend(k for _, k in sorted(numbered))
+    return group_keys
+
+
+def _compile_include_any_groups(rule: dict[str, Any], prefix: str) -> list[tuple[str, ...]]:
+    groups = []
+    for key in _include_group_keys(rule, prefix):
+        tokens = tuple(normalize_values_to_list(rule.get(key, [])))
+        if tokens:
+            groups.append(tokens)
+    return groups
+
+
+def _match_compiled_include_any_groups(text: str, groups: list[tuple[str, ...]]) -> bool:
+    for tokens in groups:
+        if not any(token in text for token in tokens):
+            return False
+
+    return True
+
+
+def _match_include_any_groups(text: str, rule: dict[str, Any], prefix: str) -> bool:
+    """
+    include_any, include_any_2, include_any_3 ... 형태를 모두 AND 그룹으로 처리한다.
+    각 그룹 안에서는 OR, 그룹 간에는 AND.
+    """
+    group_keys = _include_group_keys(rule, prefix)
 
     for key in group_keys:
         tokens = normalize_values_to_list(rule.get(key, []))
@@ -954,6 +976,23 @@ def _match_include_any_groups(text: str, rule: dict[str, Any], prefix: str) -> b
             return False
 
     return True
+
+
+def compile_rule_for_matching(rule: dict[str, Any]) -> dict[str, Any]:
+    """
+    룰의 문자열 조건은 모든 행마다 반복 정규화하지 않고 최초 로드 시 한 번만 정규화한다.
+    원본 키는 유지해서 기존 sign policy / debug 출력과 호환한다.
+    """
+    compiled = dict(rule)
+    compiled["_fs_type"] = safe_str(rule.get("fs_type", "")).strip()
+    compiled["_exact_any"] = frozenset(normalize_values_to_list(rule.get("exact_any", [])))
+    compiled["_include_all"] = tuple(normalize_values_to_list(rule.get("include_all", [])))
+    compiled["_include_any_groups"] = _compile_include_any_groups(rule, "include_any")
+    compiled["_exclude_any"] = tuple(normalize_values_to_list(rule.get("exclude_any", [])))
+    compiled["_context_include_all"] = tuple(normalize_values_to_list(rule.get("context_include_all", [])))
+    compiled["_context_include_any_groups"] = _compile_include_any_groups(rule, "context_include_any")
+    compiled["_context_exclude_any"] = tuple(normalize_values_to_list(rule.get("context_exclude_any", [])))
+    return compiled
 
 
 def load_mapping_rules(paths: list[str | Path]) -> list[dict[str, Any]]:
@@ -986,7 +1025,7 @@ class RuleEngine:
     ):
         self.canonical_df = canonical_df.copy()
         self.rules = sorted(
-            rules,
+            [compile_rule_for_matching(rule) for rule in rules],
             key=lambda r: int(r.get("priority", 0)),
             reverse=True,
         )
@@ -1145,37 +1184,37 @@ class RuleEngine:
         row: dict[str, str],
         rule: dict[str, Any],
     ) -> bool:
-        fs_type = safe_str(rule.get("fs_type", "")).strip()
+        fs_type = safe_str(rule.get("_fs_type") or rule.get("fs_type", "")).strip()
 
-        if fs_type and fs_type != row["fs_type"]:
+        if fs_type and fs_type != "ANY" and fs_type != row["fs_type"]:
             return False
 
         name = row["name"]
         context = row["context"]
 
-        exact_any = self._normalize_list(rule.get("exact_any", []))
+        exact_any = rule.get("_exact_any", frozenset())
         if exact_any and name not in exact_any:
             return False
 
-        include_all = self._normalize_list(rule.get("include_all", []))
+        include_all = rule.get("_include_all", ())
         if include_all and not all(token in name for token in include_all):
             return False
 
-        if not _match_include_any_groups(name, rule, prefix="include_any"):
+        if not _match_compiled_include_any_groups(name, rule.get("_include_any_groups", [])):
             return False
 
-        exclude_any = self._normalize_list(rule.get("exclude_any", []))
+        exclude_any = rule.get("_exclude_any", ())
         if exclude_any and any(token in name for token in exclude_any):
             return False
 
-        context_include_all = self._normalize_list(rule.get("context_include_all", []))
+        context_include_all = rule.get("_context_include_all", ())
         if context_include_all and not all(token in context for token in context_include_all):
             return False
 
-        if not _match_include_any_groups(context, rule, prefix="context_include_any"):
+        if not _match_compiled_include_any_groups(context, rule.get("_context_include_any_groups", [])):
             return False
 
-        context_exclude_any = self._normalize_list(rule.get("context_exclude_any", []))
+        context_exclude_any = rule.get("_context_exclude_any", ())
         if context_exclude_any and any(token in context for token in context_exclude_any):
             return False
         
@@ -1311,6 +1350,10 @@ def normalize_financial_statement_rule_based(
     mapping_rule_paths: list[str | Path],
     sign_policy_path: str | Path | None = None,
     save_debug: bool = True,
+    context_engine: ContextEngine | None = None,
+    mapping_engine: RuleEngine | None = None,
+    canonical_df: pd.DataFrame | None = None,
+    verbose: bool = True,
 ) -> pd.DataFrame:
     input_rows = extract_rows_from_dart_html(
         html_path=input_html_path,
@@ -1318,26 +1361,29 @@ def normalize_financial_statement_rule_based(
         period=period,
     )
 
-    context_engine = ContextEngine.from_yaml(context_rule_path)
+    context_engine = context_engine or ContextEngine.from_yaml(context_rule_path)
     enriched_rows = context_engine.enrich_context(input_rows)
 
-    mapping_engine = RuleEngine.from_files(
-        canonical_csv_path=canonical_csv_path,
-        rule_paths=mapping_rule_paths,
-        sign_policy_path=sign_policy_path,
-    )
+    if mapping_engine is None:
+        mapping_engine = RuleEngine.from_files(
+            canonical_csv_path=canonical_csv_path,
+            rule_paths=mapping_rule_paths,
+            sign_policy_path=sign_policy_path,
+        )
 
     mapped_df = mapping_engine.map_rows(
         enriched_rows,
-        include_debug_cols=True,
+        include_debug_cols=save_debug,
     )
 
     mapped_df = dedupe_duplicate_subtotals(mapped_df)
 
-    canonical_df = load_canonical_accounts(canonical_csv_path)
+    if canonical_df is None:
+        canonical_df = mapping_engine.canonical_df if mapping_engine is not None else load_canonical_accounts(canonical_csv_path)
+
     errors = validate_mapped_df(mapped_df, canonical_df)
 
-    if errors:
+    if verbose and errors:
         print("[WARN] 매핑 검증 경고")
         for error in errors:
             print(" -", error)
@@ -1362,7 +1408,8 @@ def normalize_financial_statement_rule_based(
         quoting=csv.QUOTE_ALL,
     )
 
-    print(f"[SAVED] {output_path}")
+    if verbose:
+        print(f"[SAVED] {output_path}")
 
     if save_debug:
         debug_path = output_path.with_suffix(".debug.csv")
@@ -1372,6 +1419,7 @@ def normalize_financial_statement_rule_based(
             encoding="utf-8-sig",
             quoting=csv.QUOTE_ALL,
         )
-        print(f"[SAVED] {debug_path}")
+        if verbose:
+            print(f"[SAVED] {debug_path}")
 
     return final_df
