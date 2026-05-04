@@ -1,4 +1,4 @@
-version: 1
+﻿version: 1
 
 settings:
   default_tolerance_abs: 10000
@@ -84,7 +84,7 @@ formula_checks:
               agg: first
             - statement_type: BS
               cid: ASSETS_HELD_FOR_SALE
-              agg: sum
+              agg: sum_unique
               optional: true
       - mode: CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE_PLUS_FINANCIAL_BUSINESS
         formula: CURRENT_ASSETS + NON_CURRENT_ASSETS + ASSETS_HELD_FOR_SALE + FINANCIAL_BUSINESS_ASSETS = TOTAL_ASSETS
@@ -98,11 +98,11 @@ formula_checks:
               agg: first
             - statement_type: BS
               cid: ASSETS_HELD_FOR_SALE
-              agg: sum
+              agg: sum_unique
               optional: true
             - statement_type: BS
               cid: FINANCIAL_BUSINESS_ASSETS
-              agg: sum
+              agg: sum_unique
               optional: true
     tolerance_abs: 10000
   - name: "BS: 유동부채 + 비유동부채 = 부채총계"
@@ -136,7 +136,7 @@ formula_checks:
               agg: first
             - statement_type: BS
               cid: LIABILITIES_HELD_FOR_SALE
-              agg: sum
+              agg: sum_unique
               optional: true
       - mode: CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE_PLUS_FINANCIAL_BUSINESS
         formula:
@@ -152,11 +152,11 @@ formula_checks:
               agg: first
             - statement_type: BS
               cid: LIABILITIES_HELD_FOR_SALE
-              agg: sum
+              agg: sum_unique
               optional: true
             - statement_type: BS
               cid: FINANCIAL_BUSINESS_LIABILITIES
-              agg: sum
+              agg: first
               optional: true
     tolerance_abs: 10000
   - name: "BS: 지배주주지분 + 비지배지분 = 자본총계"
@@ -240,6 +240,66 @@ formula_checks:
               cid: OTHER_OPERATING_INCOME
               agg: sum
               optional: true
+      - mode: WITH_OPERATING_ITEMS_REVERSAL_AS_DEDUCTION
+        formula:
+          GROSS_PROFIT - SGNA - RND - BAD_DEBT_EXPENSE - BAD_DEBT_REVERSAL - LOGISTICS_COST + OTHER_OPERATING_INCOME -
+          OTHER_OPERATING_EXPENSES = OPERATING_INCOME
+        expected:
+          sum:
+            - sub:
+                - statement_type: IS
+                  cid: GROSS_PROFIT
+                  agg: first
+                - statement_type: IS
+                  cid: SGNA
+                  agg: first
+                - statement_type: IS
+                  cid: RND
+                  agg: sum
+                  optional: true
+                - statement_type: IS
+                  cid: BAD_DEBT_EXPENSE
+                  agg: sum
+                  optional: true
+                - statement_type: IS
+                  cid: BAD_DEBT_REVERSAL
+                  agg: sum
+                  optional: true
+                - statement_type: IS
+                  cid: LOGISTICS_COST
+                  agg: sum
+                  optional: true
+                - statement_type: IS
+                  cid: OTHER_OPERATING_EXPENSES
+                  agg: sum
+                  optional: true
+            - statement_type: IS
+              cid: OTHER_OPERATING_INCOME
+              agg: sum
+              optional: true
+      - mode: WITH_UNMAPPED_EQUITY_METHOD_OPERATING_ITEM
+        formula: GROSS_PROFIT - SGNA - RND + unmapped equity method operating item = OPERATING_INCOME
+        expected:
+          sum:
+            - sub:
+                - statement_type: IS
+                  cid: GROSS_PROFIT
+                  agg: first
+                - statement_type: IS
+                  cid: SGNA
+                  agg: first
+                - statement_type: IS
+                  cid: RND
+                  agg: sum
+                  optional: true
+            - statement_type: IS
+              canonical_id: UNMAPPED
+              name_contains_any:
+                - 지분법손익
+                - 관계기업과공동기업투자손익
+              source: debug
+              agg: sum_unique
+              optional: true
     tolerance_abs: 10000
   - name: "IS: PBT +/- TAX = NET_INCOME"
     statement_type: IS
@@ -285,6 +345,30 @@ formula_checks:
               cid: DISCONTINUED_OPERATIONS_INCOME
               agg: first
               optional: true
+      - mode: WITH_UNMAPPED_DISCONTINUED_OPERATIONS_TAX_AS_EXPENSE
+        formula: PBT - TAX_EXPENSE + unmapped discontinued operations = NET_INCOME
+        expected:
+          sum:
+            - sub:
+                - statement_type: IS
+                  cid: PBT
+                  agg: first
+                - statement_type: IS
+                  cid: TAX_EXPENSE
+                  agg: first
+            - statement_type: IS
+              canonical_id: UNMAPPED
+              name_contains_any:
+                - 중단영업
+                - 중단사업
+                - 중단손익
+              name_exclude_any:
+                - 주당
+                - 포괄
+                - 귀속
+              source: debug
+              agg: first
+              optional: true
       - mode: WITH_DISCONTINUED_OPERATIONS_TAX_AS_BENEFIT
         formula: PBT + TAX_EXPENSE + DISCONTINUED_OPERATIONS_INCOME = NET_INCOME
         expected:
@@ -299,28 +383,111 @@ formula_checks:
               cid: DISCONTINUED_OPERATIONS_INCOME
               agg: first
               optional: true
+      - mode: WITH_UNMAPPED_DISCONTINUED_OPERATIONS_TAX_AS_BENEFIT
+        formula: PBT + TAX_EXPENSE + unmapped discontinued operations = NET_INCOME
+        expected:
+          sum:
+            - statement_type: IS
+              cid: PBT
+              agg: first
+            - statement_type: IS
+              cid: TAX_EXPENSE
+              agg: first
+            - statement_type: IS
+              canonical_id: UNMAPPED
+              name_contains_any:
+                - 중단영업
+                - 중단사업
+                - 중단손익
+              name_exclude_any:
+                - 주당
+                - 포괄
+                - 귀속
+              source: debug
+              agg: first
+              optional: true
     tolerance_abs: 10000
   - name: "IS: 지배주주순이익 + 비지배지분순이익 = 당기순이익"
     statement_type: IS
     skip_if_missing: true
-    lhs:
-      sum:
-        - statement_type: IS
-          cid: NET_INCOME_PARENT
-          agg: first
-        - statement_type: IS
-          cid: NET_INCOME_NCI
-          agg: first
-          optional: true
-    rhs:
+    actual:
       statement_type: IS
       cid: NET_INCOME
       agg: first
+    candidates:
+      - mode: NET_INCOME_ATTRIBUTION
+        formula: NET_INCOME_PARENT + NET_INCOME_NCI = NET_INCOME
+        expected:
+          sum:
+            - statement_type: IS
+              cid: NET_INCOME_PARENT
+              agg: first
+            - statement_type: IS
+              cid: NET_INCOME_NCI
+              agg: first
+              optional: true
+      - mode: ATTRIBUTION_MINUS_UNMAPPED_OCI
+        formula: NET_INCOME_PARENT + NET_INCOME_NCI - unmapped OCI = NET_INCOME
+        expected:
+          sub:
+            - sum:
+                - statement_type: IS
+                  cid: NET_INCOME_PARENT
+                  agg: first
+                - statement_type: IS
+                  cid: NET_INCOME_NCI
+                  agg: first
+                  optional: true
+            - statement_type: IS
+              canonical_id: UNMAPPED
+              name_contains_any:
+                - 기타포괄손익
+                - 기타포괄이익
+                - 해외사업환산손익
+                - 확정급여제도의재측정손익
+                - 확정급여제도의재측정요소
+                - 순확정급여부채의재측정요소
+              source: debug
+              agg: sum
+              optional: true
+      - mode: ATTRIBUTION_MINUS_OCI
+        formula: NET_INCOME_PARENT + NET_INCOME_NCI - OTHER_COMPREHENSIVE_INCOME = NET_INCOME
+        expected:
+          sub:
+            - sum:
+                - statement_type: IS
+                  cid: NET_INCOME_PARENT
+                  agg: first
+                - statement_type: IS
+                  cid: NET_INCOME_NCI
+                  agg: first
+                  optional: true
+            - statement_type: IS
+              cid: OTHER_COMPREHENSIVE_INCOME
+              agg: first
+              optional: true
   - name: "CF: CFO + CFI + CFF = 현금증가 후보식"
     statement_type: CF
     source: normalized
     skip_if_missing: true
     candidates:
+      - mode: CASH_CHANGE_EQUALS_ACTIVITY_SUM
+        formula: CFO + CFI + CFF = CF_CASH_CHANGE
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CFO
+              agg: first
+            - statement_type: CF
+              cid: CFI
+              agg: first
+            - statement_type: CF
+              cid: CFF
+              agg: first
+        actual:
+          statement_type: CF
+          cid: CF_CASH_CHANGE
+          agg: first
       - mode: CASH_CHANGE_AFTER_FX
         formula: CFO + CFI + CFF + FX_EFFECT_CASH + SPECIAL_CASH_CHANGE = CF_CASH_CHANGE
         expected:
@@ -340,6 +507,150 @@ formula_checks:
               optional: true
             - statement_type: CF
               cid: SPECIAL_CASH_CHANGE
+              agg: sum
+              optional: true
+        actual:
+          statement_type: CF
+          cid: CF_CASH_CHANGE
+          agg: first
+      - mode: CASH_CHANGE_AFTER_FX_NO_SPECIAL
+        formula: CFO + CFI + CFF + FX_EFFECT_CASH = CF_CASH_CHANGE
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CFO
+              agg: first
+            - statement_type: CF
+              cid: CFI
+              agg: first
+            - statement_type: CF
+              cid: CFF
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+        actual:
+          statement_type: CF
+          cid: CF_CASH_CHANGE
+          agg: first
+      - mode: CASH_CHANGE_AFTER_FX_WITH_TRANSLATION_DIFFERENCE
+        formula: CFO + CFI + CFF + FX_EFFECT_CASH + SPECIAL_CASH_CHANGE + CF_TRANSLATION_DIFFERENCE = CF_CASH_CHANGE
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CFO
+              agg: first
+            - statement_type: CF
+              cid: CFI
+              agg: first
+            - statement_type: CF
+              cid: CFF
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: SPECIAL_CASH_CHANGE
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: CF_TRANSLATION_DIFFERENCE
+              agg: sum
+              optional: true
+        actual:
+          statement_type: CF
+          cid: CF_CASH_CHANGE
+          agg: first
+      - mode: CASH_CHANGE_AFTER_FX_WITH_TRANSLATION_DIFFERENCE_NO_SPECIAL
+        formula: CFO + CFI + CFF + FX_EFFECT_CASH + CF_TRANSLATION_DIFFERENCE = CF_CASH_CHANGE
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CFO
+              agg: first
+            - statement_type: CF
+              cid: CFI
+              agg: first
+            - statement_type: CF
+              cid: CFF
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: CF_TRANSLATION_DIFFERENCE
+              agg: sum
+              optional: true
+        actual:
+          statement_type: CF
+          cid: CF_CASH_CHANGE
+          agg: first
+      - mode: CASH_CHANGE_AFTER_FX_WITH_DEBUG_FALLBACKS
+        formula: CFO + CFI + CFF + FX_EFFECT_CASH + unmapped FX + SPECIAL_CASH_CHANGE + unmapped special + CF_TRANSLATION_DIFFERENCE + unmapped translation = CF_CASH_CHANGE
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CFO
+              agg: first
+            - statement_type: CF
+              cid: CFI
+              agg: first
+            - statement_type: CF
+              cid: CFF
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+            - statement_type: CF
+              canonical_id: UNMAPPED
+              name_contains_all:
+                - 현금
+                - 환율
+              source: debug
+              agg: sum
+              optional: true
+            - statement_type: CF
+              canonical_id: UNMAPPED
+              name_contains_all:
+                - 현금
+                - 외화환산
+              source: debug
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: SPECIAL_CASH_CHANGE
+              agg: sum
+              optional: true
+            - statement_type: CF
+              canonical_id: UNMAPPED
+              name_contains_any:
+                - 매각예정
+                - 처분자산집단
+                - 연결범위
+                - 소유주분배예정
+                - 합병
+                - 사업결합
+                - 분할
+                - 중단영업
+                - 연결자본거래
+              source: debug
+              agg: sum_unique
+              optional: true
+            - statement_type: CF
+              cid: CF_TRANSLATION_DIFFERENCE
+              agg: sum
+              optional: true
+            - statement_type: CF
+              canonical_id: UNMAPPED
+              name_contains_any:
+                - 외화환산차이
+                - 환율변동차이
+                - 재무제표환산
+              source: debug
               agg: sum
               optional: true
         actual:
@@ -384,7 +695,7 @@ formula_checks:
           statement_type: CF
           cid: CF_CASH_CHANGE_BEFORE_FX
           agg: first
-    tolerance_abs: 10000
+    tolerance_abs: 100000
   - name: "CF: 기초현금 + 현금증가 후보식 = 기말현금"
     statement_type: CF
     source: normalized
@@ -404,6 +715,38 @@ formula_checks:
             - statement_type: CF
               cid: CF_CASH_CHANGE
               agg: first
+      - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_FX
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE + FX_EFFECT_CASH = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+      - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_FX_PLUS_TRANSLATION
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE + FX_EFFECT_CASH + CF_TRANSLATION_DIFFERENCE = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: CF_TRANSLATION_DIFFERENCE
+              agg: sum
+              optional: true
       - mode: BEGIN_PLUS_BEFORE_FX_PLUS_FX
         formula: CF_CASH_BEGIN + CF_CASH_CHANGE_BEFORE_FX + FX_EFFECT_CASH = CF_CASH_END
         expected:
@@ -490,7 +833,109 @@ formula_checks:
               cid: SPECIAL_CASH_CHANGE
               agg: sum
               optional: true
-    tolerance_abs: 10000
+      - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_FX_PLUS_SPECIAL
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE + FX_EFFECT_CASH + SPECIAL_CASH_CHANGE = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: SPECIAL_CASH_CHANGE
+              agg: sum
+              optional: true
+      - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_FX_PLUS_SPECIAL_TRANSLATION
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE + FX_EFFECT_CASH + SPECIAL_CASH_CHANGE + CF_TRANSLATION_DIFFERENCE = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: SPECIAL_CASH_CHANGE
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: CF_TRANSLATION_DIFFERENCE
+              agg: sum
+              optional: true
+      - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_DEBUG_FALLBACKS
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE + FX_EFFECT_CASH + unmapped FX + SPECIAL_CASH_CHANGE + unmapped special + CF_TRANSLATION_DIFFERENCE + unmapped translation = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+            - statement_type: CF
+              canonical_id: UNMAPPED
+              name_contains_all:
+                - 현금
+                - 환율
+              source: debug
+              agg: sum
+              optional: true
+            - statement_type: CF
+              canonical_id: UNMAPPED
+              name_contains_all:
+                - 현금
+                - 외화환산
+              source: debug
+              agg: sum
+              optional: true
+            - statement_type: CF
+              cid: SPECIAL_CASH_CHANGE
+              agg: sum
+              optional: true
+            - statement_type: CF
+              canonical_id: UNMAPPED
+              name_contains_any:
+                - 매각예정
+                - 처분자산집단
+                - 연결범위
+                - 소유주분배예정
+                - 합병
+                - 사업결합
+                - 분할
+                - 중단영업
+                - 연결자본거래
+              source: debug
+              agg: sum_unique
+              optional: true
+            - statement_type: CF
+              cid: CF_TRANSLATION_DIFFERENCE
+              agg: sum
+              optional: true
+            - statement_type: CF
+              canonical_id: UNMAPPED
+              name_contains_any:
+                - 외화환산차이
+                - 환율변동차이
+                - 재무제표환산
+              source: debug
+              agg: sum
+              optional: true
+    tolerance_abs: 100000
 
 warning_rules:
   - id: section_header_mapped

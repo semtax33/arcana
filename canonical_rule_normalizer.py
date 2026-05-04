@@ -5,6 +5,7 @@ import math
 import re
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -93,7 +94,12 @@ def normalize_account_name(value: Any) -> str:
     if value is None:
         return ""
 
-    s = str(value).strip()
+    return _normalize_account_name_text(str(value))
+
+
+@lru_cache(maxsize=200_000)
+def _normalize_account_name_text(value: str) -> str:
+    s = value.strip()
 
     # 앞뒤 따옴표 제거
     s = s.strip().strip('"').strip("'").strip("“”‘’")
@@ -150,6 +156,7 @@ def normalize_account_name(value: Any) -> str:
     # IFRS 표기에서 괄호 안의 손실/수익은 매칭용으로 붙여서 본다.
     # 예: 법인세비용(수익) -> 법인세비용수익
     s = s.replace("(", "").replace(")", "")
+    s = s.replace("（", "").replace("）", "")
 
     # 공백 제거
     s = s.replace("\u3000", "")
@@ -176,6 +183,7 @@ def normalize_context(value: Any) -> str:
     return normalize_account_name(value)
 
 
+@lru_cache(maxsize=1_024)
 def normalize_statement_type(value: Any) -> str:
     s = safe_str(value).strip()
     lower = s.lower()
@@ -221,6 +229,7 @@ def parse_unit_factor(text: str) -> int:
     return 1
 
 
+@lru_cache(maxsize=100_000)
 def parse_amount(value: Any, unit_factor: int = 1) -> int:
     """
     DART HTML 표 금액을 원 단위 int로 변환.
@@ -262,6 +271,7 @@ def parse_amount(value: Any, unit_factor: int = 1) -> int:
         return 0
 
 
+@lru_cache(maxsize=100_000)
 def amount_to_int(value: Any) -> int:
     s = safe_str(value).replace(",", "").strip()
     if not s:
@@ -694,12 +704,15 @@ def add_structural_features(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 class ContextEngine:
+    _CACHE_MAX_SIZE = 100_000
+
     def __init__(self, rules: list[dict[str, Any]]):
         self.rules = sorted(
             [compile_rule_for_matching(rule) for rule in rules],
             key=lambda r: int(r.get("priority", 0)),
             reverse=True,
         )
+        self._classify_cache: dict[tuple[Any, ...], ContextAction | None] = {}
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ContextEngine":
@@ -763,6 +776,16 @@ class ContextEngine:
 
     def classify(self, row: dict[str, Any]) -> ContextAction | None:
         normalized_row = self._normalize_row(row)
+        cache_key = (
+            normalized_row["fs_type"],
+            normalized_row["name"],
+            normalized_row["indent_level"],
+            normalized_row["has_children"],
+            normalized_row["amount_is_zero_or_blank"],
+        )
+
+        if cache_key in self._classify_cache:
+            return self._classify_cache[cache_key]
 
         for rule in self.rules:
             if self._match_rule(normalized_row, rule):
@@ -775,19 +798,31 @@ class ContextEngine:
                 else:
                     context_label = normalize_account_name(label_spec)
 
-                return ContextAction(
+                result = ContextAction(
                     action_type=action_type,
                     context_label=context_label,
                     rule_id=safe_str(rule.get("id")),
                     reason=safe_str(rule.get("reason")),
                 )
+                self._remember_classification(cache_key, result)
+                return result
 
+        self._remember_classification(cache_key, None)
         return None
+
+    def _remember_classification(
+        self,
+        cache_key: tuple[Any, ...],
+        result: ContextAction | None,
+    ) -> None:
+        if len(self._classify_cache) >= self._CACHE_MAX_SIZE:
+            self._classify_cache.clear()
+        self._classify_cache[cache_key] = result
 
     def _normalize_row(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
             "fs_type": normalize_statement_type(row.get("statement_type")),
-            "name": normalize_account_name(row.get("original_account_name")),
+            "name": safe_str(row.get("normalized_name")) or normalize_account_name(row.get("original_account_name")),
             "indent_level": int(row.get("indent_level", 0) or 0),
             "has_children": bool(row.get("has_children", False)),
             "amount": safe_str(row.get("amount")),
@@ -1017,6 +1052,9 @@ def load_mapping_rules(paths: list[str | Path]) -> list[dict[str, Any]]:
 
 
 class RuleEngine:
+    _CACHE_MAX_SIZE = 200_000
+    _KNOWN_FS_TYPES = ("BS", "CF", "IS", "UNKNOWN")
+
     def __init__(
         self,
         canonical_df: pd.DataFrame,
@@ -1038,6 +1076,12 @@ class RuleEngine:
             )
         )
         self.valid_ids = set(self.id_to_name.keys())
+        self._map_cache: dict[tuple[Any, ...], MappingResult] = {}
+        self._candidate_buckets = {
+            fs_type: self._build_rule_candidate_bucket(fs_type)
+            for fs_type in self._KNOWN_FS_TYPES
+        }
+        self._candidate_cache: dict[tuple[str, str], tuple[dict[str, Any], ...]] = {}
 
     @classmethod
     def from_files(
@@ -1065,8 +1109,19 @@ class RuleEngine:
 
     def map_row(self, row: dict[str, Any]) -> MappingResult:
         normalized_row = self._normalize_row_for_matching(row)
+        cache_key = (
+            normalized_row["fs_type"],
+            normalized_row["name"],
+            normalized_row["context"],
+            normalized_row["has_children"],
+            normalized_row["amount_is_zero_or_blank"],
+        )
 
-        for rule in self.rules:
+        cached = self._map_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        for rule in self._candidate_rules(normalized_row["fs_type"], normalized_row["name"]):
             if not self._match_rule(normalized_row, rule):
                 continue
 
@@ -1084,7 +1139,7 @@ class RuleEngine:
                 rule=rule,
             )
 
-            return MappingResult(
+            result = MappingResult(
                 canonical_account_id=canonical_id,
                 canonical_account_name=self.canonical_name(canonical_id),
                 rule_id=safe_str(rule.get("id")),
@@ -1092,6 +1147,8 @@ class RuleEngine:
                 amount_policy=sign_decision.amount_policy,
                 cash_direction=sign_decision.cash_direction,
             )
+            self._remember_mapping(cache_key, result)
+            return result
 
         sign_decision = self.sign_policy_engine.decide(
             fs_type=normalized_row["fs_type"],
@@ -1099,7 +1156,7 @@ class RuleEngine:
             rule=None,
         )
 
-        return MappingResult(
+        result = MappingResult(
             canonical_account_id="UNMAPPED",
             canonical_account_name="미매핑",
             rule_id="default_unmapped",
@@ -1107,6 +1164,61 @@ class RuleEngine:
             amount_policy=sign_decision.amount_policy,
             cash_direction=sign_decision.cash_direction,
         )
+        self._remember_mapping(cache_key, result)
+        return result
+
+    def _remember_mapping(self, cache_key: tuple[Any, ...], result: MappingResult) -> None:
+        if len(self._map_cache) >= self._CACHE_MAX_SIZE:
+            self._map_cache.clear()
+        self._map_cache[cache_key] = result
+
+    def _build_rule_candidate_bucket(self, fs_type: str) -> dict[str, Any]:
+        exact_by_name: dict[str, list[dict[str, Any]]] = {}
+        non_exact: list[dict[str, Any]] = []
+
+        for order, rule in enumerate(self.rules):
+            rule["_match_order"] = order
+            rule_fs_type = safe_str(rule.get("_fs_type") or rule.get("fs_type", "")).strip()
+
+            if rule_fs_type and rule_fs_type != "ANY" and rule_fs_type != fs_type:
+                continue
+
+            exact_any = rule.get("_exact_any", frozenset())
+            if exact_any:
+                for name in exact_any:
+                    exact_by_name.setdefault(name, []).append(rule)
+            else:
+                non_exact.append(rule)
+
+        return {"exact_by_name": exact_by_name, "non_exact": tuple(non_exact)}
+
+    def _candidate_rules(self, fs_type: str, name: str) -> tuple[dict[str, Any], ...]:
+        cache_key = (fs_type, name)
+        cached = self._candidate_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        bucket = self._candidate_buckets.get(fs_type)
+
+        if bucket is None:
+            bucket = self._build_rule_candidate_bucket(fs_type)
+            self._candidate_buckets[fs_type] = bucket
+
+        exact_rules = bucket["exact_by_name"].get(name, ())
+        non_exact_rules = bucket["non_exact"]
+
+        if not exact_rules:
+            self._candidate_cache[cache_key] = non_exact_rules
+            return non_exact_rules
+
+        candidates = tuple(
+            sorted(
+                (*non_exact_rules, *exact_rules),
+                key=lambda rule: int(rule.get("_match_order", 0)),
+            )
+        )
+        self._candidate_cache[cache_key] = candidates
+        return candidates
 
     def map_rows(
         self,
@@ -1144,7 +1256,7 @@ class RuleEngine:
                         "rule_id": result.rule_id,
                         "reason": result.reason,
                         "raw_account_name": safe_str(row.get("raw_account_name")),
-                        "normalized_name": normalize_account_name(row.get("original_account_name")),
+                        "normalized_name": safe_str(row.get("normalized_name")) or normalize_account_name(row.get("original_account_name")),
                         "indent_level": safe_str(row.get("indent_level")),
                         "has_children": safe_str(row.get("has_children")),
                         "section_context": safe_str(row.get("section_context")),
@@ -1173,7 +1285,7 @@ class RuleEngine:
 
         return {
             "fs_type": normalize_statement_type(row.get("statement_type")),
-            "name": normalize_account_name(row.get("original_account_name")),
+            "name": safe_str(row.get("normalized_name")) or normalize_account_name(row.get("original_account_name")),
             "context": normalize_context(" ".join(map(str, context_parts))),
             "has_children": bool(row.get("has_children", False)),
             "amount_is_zero_or_blank": raw_amount == 0,

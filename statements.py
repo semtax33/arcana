@@ -542,7 +542,7 @@ def download_statements(stock_codes, download_offset):
         fetch_dart_search(ticker, dir)
 
 def download_statement_comments(stock_codes, download_offset):
-    download_stock_codes = sorted(stock_codes[download_offset:])
+    download_stock_codes = sorted(stock_codes)[download_offset:]
 
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")

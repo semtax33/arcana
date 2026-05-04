@@ -9,6 +9,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -89,6 +90,7 @@ def normalize_name(v: Any) -> str:
     s = re.sub(r"\(주\s*\d+(?:\s*,\s*\d+)*\)", "", s)
     s = re.sub(r"\(단위\s*[:：]\s*[^)]*\)", "", s)
     s = s.replace("(", "").replace(")", "")
+    s = s.replace("（", "").replace("）", "")
     s = s.replace("\u3000", "")
     s = re.sub(r"\s+", "", s)
     s = s.replace("ㆍ", "").replace("·", "")
@@ -125,10 +127,14 @@ def load_config(path: str | Path) -> dict[str, Any]:
     return _load_config_cached(str(Path(path).resolve()))
 
 
-def write_json(path: str | Path, data: Any) -> None:
+def write_json(path: str | Path, data: Any, indent: int | None = 2) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    separators = (",", ":") if indent is None else None
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=indent, separators=separators),
+        encoding="utf-8",
+    )
 
 
 def load_csv_pair(
@@ -184,7 +190,38 @@ def load_csv_pair(
 # Rule expression evaluator
 # ============================================================
 
-def filter_rows(df: pd.DataFrame, spec: dict[str, Any]) -> pd.DataFrame:
+FilterCache = dict[tuple[int, str], pd.DataFrame]
+
+
+def filter_cache_key(spec: dict[str, Any]) -> str:
+    filter_keys = [
+        "statement_type",
+        "cid",
+        "canonical_id",
+        "canonical_id_not",
+        "canonical_id_in",
+        "name_exact_any",
+        "name_exclude_any",
+        "name_contains_any",
+        "name_contains_all",
+        "context_contains_any",
+        "context_contains_all",
+    ]
+    payload = {k: spec[k] for k in filter_keys if k in spec}
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def filter_rows(
+    df: pd.DataFrame,
+    spec: dict[str, Any],
+    filter_cache: FilterCache | None = None,
+) -> pd.DataFrame:
+    if filter_cache is not None:
+        key = (id(df), filter_cache_key(spec))
+        cached = filter_cache.get(key)
+        if cached is not None:
+            return cached
+
     out = df
 
     statement_type = spec.get("statement_type")
@@ -244,6 +281,9 @@ def filter_rows(df: pd.DataFrame, spec: dict[str, Any]) -> pd.DataFrame:
             if t:
                 out = out[out["context_all"].str.contains(re.escape(t), regex=True, na=False)]
 
+    if filter_cache is not None:
+        filter_cache[key] = out
+
     return out
 
 def run_formula_choice_check(
@@ -251,6 +291,7 @@ def run_formula_choice_check(
     normalized_df: pd.DataFrame,
     debug_df: pd.DataFrame,
     default_tol: float,
+    filter_cache: FilterCache | None = None,
 ) -> CheckResult:
     source = rule.get("source", "normalized")
     tolerance = float(rule.get("tolerance_abs", default_tol))
@@ -299,8 +340,8 @@ def run_formula_choice_check(
             )
             continue
 
-        expected = eval_expr(expected_expr, normalized_df, debug_df, source)
-        actual = eval_expr(actual_expr, normalized_df, debug_df, source)
+        expected = eval_expr(expected_expr, normalized_df, debug_df, source, filter_cache)
+        actual = eval_expr(actual_expr, normalized_df, debug_df, source, filter_cache)
 
         evaluated.append(
             check_equal(
@@ -351,6 +392,13 @@ def aggregate_amount(rows: pd.DataFrame, agg: str) -> float | None:
         return float(rows["amount_num"].iloc[0])
     if agg == "sum":
         return float(rows["amount_num"].sum())
+    if agg == "sum_unique":
+        dedupe_cols = [
+            col
+            for col in ["statement_type", "canonical_account_id", "name_norm", "amount_num"]
+            if col in rows.columns
+        ]
+        return float(rows.drop_duplicates(subset=dedupe_cols)["amount_num"].sum())
     if agg == "abs_sum":
         return float(rows["amount_num"].abs().sum())
     raise ValueError(f"unknown agg: {agg}")
@@ -361,6 +409,7 @@ def eval_expr(
     normalized_df: pd.DataFrame,
     debug_df: pd.DataFrame,
     default_source: str = "normalized",
+    filter_cache: FilterCache | None = None,
 ) -> float | None:
     if expr is None:
         return None
@@ -373,7 +422,7 @@ def eval_expr(
     if "sum" in expr:
         total = 0.0
         for child in expr["sum"]:
-            value = eval_expr(child, normalized_df, debug_df, default_source)
+            value = eval_expr(child, normalized_df, debug_df, default_source, filter_cache)
             if value is None:
                 if child.get("optional", False):
                     value = 0.0
@@ -388,13 +437,13 @@ def eval_expr(
         if len(items) < 2:
             raise ValueError("sub expects at least 2 items")
 
-        first = eval_expr(items[0], normalized_df, debug_df, default_source)
+        first = eval_expr(items[0], normalized_df, debug_df, default_source, filter_cache)
         if first is None:
             return None
 
         total = first
         for child in items[1:]:
-            value = eval_expr(child, normalized_df, debug_df, default_source)
+            value = eval_expr(child, normalized_df, debug_df, default_source, filter_cache)
             if value is None:
                 if child.get("optional", False):
                     value = 0.0
@@ -405,12 +454,12 @@ def eval_expr(
         return total
 
     if "neg" in expr:
-        value = eval_expr(expr["neg"], normalized_df, debug_df, default_source)
+        value = eval_expr(expr["neg"], normalized_df, debug_df, default_source, filter_cache)
         return None if value is None else -value
 
     source = expr.get("source", default_source)
     df = debug_df if source == "debug" else normalized_df
-    rows = filter_rows(df, expr)
+    rows = filter_rows(df, expr, filter_cache)
     value = aggregate_amount(rows, expr.get("agg", "first"))
 
     if value is None and expr.get("optional", False):
@@ -461,6 +510,7 @@ def run_single_formula_check(
     normalized_df: pd.DataFrame,
     debug_df: pd.DataFrame,
     default_tol: float,
+    filter_cache: FilterCache | None = None,
 ) -> CheckResult:
     source = rule.get("source", "normalized")
     tolerance = float(rule.get("tolerance_abs", default_tol))
@@ -471,6 +521,7 @@ def run_single_formula_check(
         normalized_df,
         debug_df,
         source,
+        filter_cache,
     )
 
     rhs = eval_expr(
@@ -478,6 +529,7 @@ def run_single_formula_check(
         normalized_df,
         debug_df,
         source,
+        filter_cache,
     )
 
     return check_equal(
@@ -494,6 +546,7 @@ def run_formula_checks(
     config: dict[str, Any],
 ) -> list[CheckResult]:
     checks: list[CheckResult] = []
+    filter_cache: FilterCache = {}
     default_tol = float(
         config.get("settings", {}).get("default_tolerance_abs", 10_000)
     )
@@ -509,6 +562,7 @@ def run_formula_checks(
                     normalized_df,
                     debug_df,
                     default_tol,
+                    filter_cache,
                 )
             )
         else:
@@ -518,6 +572,7 @@ def run_formula_checks(
                     normalized_df,
                     debug_df,
                     default_tol,
+                    filter_cache,
                 )
             )
 
@@ -528,6 +583,7 @@ def run_formula_checks(
                 normalized_df,
                 debug_df,
                 default_tol,
+                filter_cache,
             )
         )
 
@@ -731,6 +787,11 @@ def find_diff_matching_unmapped_candidates(
         & d["canonical_account_id"].eq("UNMAPPED")
     ].copy()
 
+    if "rule_id" in candidates.columns:
+        candidates = candidates[
+            candidates["rule_id"].fillna("").astype(str).isin(["", "default_unmapped"])
+        ]
+
     rows = []
 
     for _, row in candidates.iterrows():
@@ -833,22 +894,33 @@ def build_factor_snapshot(
     if not config.get("factor_snapshot", {}).get("enabled", True):
         return {}
 
-    revenue = first_amount(df, "REVENUE")
-    cogs = first_amount(df, "COGS")
-    gross_profit = first_amount(df, "GROSS_PROFIT")
-    op_income = first_amount(df, "OPERATING_INCOME")
-    net_income = first_amount(df, "NET_INCOME")
-    net_income_parent = first_amount(df, "NET_INCOME_PARENT")
+    grouped = df.groupby("canonical_account_id", sort=False)["amount_num"]
+    first_by_cid = grouped.first().to_dict()
+    sum_by_cid = grouped.sum().to_dict()
 
-    total_assets = first_amount(df, "TOTAL_ASSETS")
-    total_equity = first_amount(df, "TOTAL_EQUITY")
-    eaop = first_amount(df, "EAOP")
+    def first(cid: str) -> float | None:
+        value = first_by_cid.get(cid)
+        return None if value is None else float(value)
 
-    cfo = first_amount(df, "CFO")
-    capex_ppe = sum_amount(df, "CAPEX_PPE")
-    capex_intang = sum_amount(df, "CAPEX_INTANG")
-    ppe_disposal = sum_amount(df, "PPE_DISPOSAL_PROCEEDS")
-    intang_disposal = sum_amount(df, "INTANGIBLE_DISPOSAL_PROCEEDS")
+    def total(cid: str) -> float:
+        return float(sum_by_cid.get(cid, 0.0))
+
+    revenue = first("REVENUE")
+    cogs = first("COGS")
+    gross_profit = first("GROSS_PROFIT")
+    op_income = first("OPERATING_INCOME")
+    net_income = first("NET_INCOME")
+    net_income_parent = first("NET_INCOME_PARENT")
+
+    total_assets = first("TOTAL_ASSETS")
+    total_equity = first("TOTAL_EQUITY")
+    eaop = first("EAOP")
+
+    cfo = first("CFO")
+    capex_ppe = total("CAPEX_PPE")
+    capex_intang = total("CAPEX_INTANG")
+    ppe_disposal = total("PPE_DISPOSAL_PROCEEDS")
+    intang_disposal = total("INTANGIBLE_DISPOSAL_PROCEEDS")
 
     gross_capex = abs(capex_ppe) + abs(capex_intang)
     disposal = abs(ppe_disposal) + abs(intang_disposal)
@@ -857,16 +929,16 @@ def build_factor_snapshot(
     fcf = None if cfo is None else cfo - gross_capex
     fcf_after_disposal = None if cfo is None else cfo - net_capex
 
-    inventory = first_amount(df, "INVENTORIES")
-    receivables = first_amount(df, "TRADE_RECEIVABLES")
-    other_receivables = first_amount(df, "OTHER_RECEIVABLES")
+    inventory = first("INVENTORIES")
+    receivables = first("TRADE_RECEIVABLES")
+    other_receivables = first("OTHER_RECEIVABLES")
     receivable_proxy = receivables if receivables is not None else other_receivables
 
-    cash = first_amount(df, "CASH_AND_EQUIVALENTS")
-    short_fin_assets = first_amount(df, "SHORT_TERM_FINANCIAL_ASSETS")
-    short_debt = first_amount(df, "SHORT_TERM_DEBT")
-    long_debt = first_amount(df, "LONG_TERM_DEBT")
-    lease_liab = first_amount(df, "LEASE_LIABILITY")
+    cash = first("CASH_AND_EQUIVALENTS")
+    short_fin_assets = first("SHORT_TERM_FINANCIAL_ASSETS")
+    short_debt = first("SHORT_TERM_DEBT")
+    long_debt = first("LONG_TERM_DEBT")
+    lease_liab = first("LEASE_LIABILITY")
 
     interest_bearing_debt = sum(
         v for v in [short_debt, long_debt, lease_liab] if v is not None
@@ -3145,6 +3217,8 @@ def evaluate_stock_to_files(
     zai_dry_run: bool = False,
     stock_year_index: StockYearIndex | None = None,
     validation_config: dict[str, Any] | None = None,
+    report_mode: Literal["full", "json", "stock"] = "full",
+    json_indent: int | None = 2,
 ) -> dict[str, Any]:
     stock_out_dir = Path(out_dir) / stock_code
     stock_out_dir.mkdir(parents=True, exist_ok=True)
@@ -3215,8 +3289,10 @@ def evaluate_stock_to_files(
         year_json = stock_out_dir / f"{stock_code}_{year}.validation.json"
         year_md = stock_out_dir / f"{stock_code}_{year}.validation.md"
 
-        write_json(year_json, asdict(report))
-        write_markdown_report(report, year_md)
+        if report_mode in {"full", "json"}:
+            write_json(year_json, asdict(report), indent=json_indent)
+        if report_mode == "full":
+            write_markdown_report(report, year_md)
 
     factor_df = pd.DataFrame(factor_rows).sort_values("year") if factor_rows else pd.DataFrame()
 
@@ -3273,8 +3349,9 @@ def evaluate_stock_to_files(
     md_path = stock_out_dir / f"{base}.validation.md"
     factor_csv_path = stock_out_dir / f"{base}.factor_trend.csv"
 
-    write_json(json_path, stock_report)
-    write_stock_markdown_report(stock_report, md_path)
+    write_json(json_path, stock_report, indent=json_indent)
+    if report_mode == "full":
+        write_stock_markdown_report(stock_report, md_path)
 
     if not factor_df.empty:
         factor_df.to_csv(factor_csv_path, index=False, encoding="utf-8-sig")
@@ -3309,7 +3386,7 @@ def evaluate_stock_to_files(
         "zai_verdict": "" if zai_eval is None else safe_str(zai_eval.get("verdict")),
         "zai_score": "" if zai_eval is None else safe_str(zai_eval.get("score")),
         "json_path": str(json_path),
-        "md_path": str(md_path),
+        "md_path": str(md_path) if report_mode == "full" else "",
         "factor_csv_path": str(factor_csv_path),
     }
 
@@ -3394,6 +3471,9 @@ def evaluate_stock_batch_to_files(
     zai_dry_run: bool = False,
     resume: bool = False,
     summary_every: int = 50,
+    report_mode: Literal["full", "json", "stock"] = "full",
+    json_indent: int | None = 2,
+    workers: int = 1,
 ) -> pd.DataFrame:
     stock_year_index = build_stock_year_index(
         input_dir=input_dir,
@@ -3419,11 +3499,187 @@ def evaluate_stock_batch_to_files(
 
     batch_start = time.time()
     summary_every = max(1, int(summary_every or 1))
+    workers = max(1, int(workers or 1))
 
     print(f"[BATCH START] stocks={total}, years={start_year}-{end_year}, resume={resume}")
     print(f"[INPUT INDEX] indexed_stocks={len(stock_year_index)}")
+    print(f"[REPORT MODE] {report_mode}, json_indent={json_indent}")
+    print(f"[WORKERS] {workers}")
     print(f"[PROGRESS CSV] {progress_path}")
     print(f"[SUMMARY CSV]  {summary_path}")
+
+    def save_summary_if_needed(done_count: int) -> None:
+        if done_count % summary_every == 0 or done_count == total:
+            summary_rows = []
+            for row in rows:
+                clean = dict(row)
+                clean.pop("_idx", None)
+                summary_rows.append(clean)
+
+            pd.DataFrame(summary_rows).to_csv(
+                summary_path,
+                index=False,
+                encoding="utf-8-sig",
+            )
+
+    def print_batch_progress(done_count: int) -> None:
+        total_elapsed = time.time() - batch_start
+        avg_sec = total_elapsed / max(1, done_count)
+        remain = total - done_count
+        eta_sec = remain * avg_sec
+
+        print(
+            f"[PROGRESS] {done_count}/{total} "
+            f"avg={avg_sec:.1f}s/stock "
+            f"eta={eta_sec/60:.1f}min"
+        )
+
+    def run_stock_item(idx: int, stock_code: str) -> dict[str, Any]:
+        item_start = time.time()
+        result = evaluate_stock_to_files(
+            stock_code=stock_code,
+            input_dir=input_dir,
+            validation_rule_path=validation_rule_path,
+            out_dir=out_dir,
+            start_year=start_year,
+            end_year=end_year,
+            canonical_csv=canonical_csv,
+            zai_mode=zai_mode,
+            zai_config=zai_config,
+            zai_dry_run=zai_dry_run,
+            stock_year_index=stock_year_index,
+            validation_config=validation_config,
+            report_mode=report_mode,
+            json_indent=json_indent,
+        )
+        elapsed = time.time() - item_start
+        result["status"] = "DONE"
+        result["elapsed_sec"] = round(elapsed, 2)
+        result["_idx"] = idx
+        return result
+
+    if workers > 1:
+        futures = {}
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for idx, stock_code in enumerate(stock_codes, start=1):
+                if resume:
+                    completed = load_completed_stock_result(
+                        stock_code=stock_code,
+                        out_dir=out_dir,
+                        start_year=start_year,
+                        end_year=end_year,
+                    )
+
+                    if completed is not None:
+                        completed["status"] = "SKIPPED_RESUME"
+                        completed["elapsed_sec"] = 0.0
+                        completed["_idx"] = idx
+                        rows.append(completed)
+
+                        append_progress_csv(
+                            progress_path,
+                            {
+                                "timestamp": now_str(),
+                                "index": idx,
+                                "total": total,
+                                "stock_code": stock_code,
+                                "status": "SKIPPED_RESUME",
+                                "verdict": completed.get("verdict", ""),
+                                "score": completed.get("score", ""),
+                                "elapsed_sec": 0.0,
+                                "error": "",
+                                "json_path": completed.get("json_path", ""),
+                            },
+                        )
+
+                        print(
+                            f"[{idx}/{total}] SKIP stock_code={stock_code} "
+                            f"verdict={completed.get('verdict')} score={completed.get('score')}"
+                        )
+                        save_summary_if_needed(len(rows))
+                        print_batch_progress(len(rows))
+                        continue
+
+                print(f"[{idx}/{total}] START stock_code={stock_code}")
+                futures[executor.submit(run_stock_item, idx, stock_code)] = (idx, stock_code)
+
+            for future in as_completed(futures):
+                idx, stock_code = futures[future]
+
+                try:
+                    result = future.result()
+                    rows.append(result)
+
+                    append_progress_csv(
+                        progress_path,
+                        {
+                            "timestamp": now_str(),
+                            "index": idx,
+                            "total": total,
+                            "stock_code": stock_code,
+                            "status": "DONE",
+                            "verdict": result.get("verdict", ""),
+                            "score": result.get("score", ""),
+                            "elapsed_sec": result.get("elapsed_sec", ""),
+                            "error": "",
+                            "json_path": result.get("json_path", ""),
+                        },
+                    )
+
+                    print(
+                        f"[{idx}/{total}] DONE stock_code={stock_code} "
+                        f"verdict={result.get('verdict')} score={result.get('score')} "
+                        f"elapsed={float(result.get('elapsed_sec', 0)):.1f}s"
+                    )
+
+                except Exception as e:
+                    error_row = {
+                        "stock_code": stock_code,
+                        "start_year": start_year,
+                        "end_year": end_year,
+                        "verdict": "ERROR",
+                        "score": 0,
+                        "status": "ERROR",
+                        "elapsed_sec": "",
+                        "error": str(e),
+                        "_idx": idx,
+                    }
+                    rows.append(error_row)
+
+                    append_progress_csv(
+                        progress_path,
+                        {
+                            "timestamp": now_str(),
+                            "index": idx,
+                            "total": total,
+                            "stock_code": stock_code,
+                            "status": "ERROR",
+                            "verdict": "ERROR",
+                            "score": 0,
+                            "elapsed_sec": "",
+                            "error": str(e),
+                            "json_path": "",
+                        },
+                    )
+
+                    print(f"[{idx}/{total}] ERROR stock_code={stock_code} error={e}")
+
+                save_summary_if_needed(len(rows))
+                print_batch_progress(len(rows))
+
+        rows = sorted(rows, key=lambda r: int(r.get("_idx", 0) or 0))
+        for row in rows:
+            row.pop("_idx", None)
+
+        summary = pd.DataFrame(rows)
+        summary.to_csv(summary_path, index=False, encoding="utf-8-sig")
+
+        print(f"[BATCH DONE] elapsed={(time.time() - batch_start) / 60:.1f}min")
+        print(f"[SAVED] {summary_path}")
+        print(f"[SAVED] {progress_path}")
+
+        return summary
 
     for idx, stock_code in enumerate(stock_codes, start=1):
         item_start = time.time()
@@ -3488,6 +3744,8 @@ def evaluate_stock_batch_to_files(
                 zai_dry_run=zai_dry_run,
                 stock_year_index=stock_year_index,
                 validation_config=validation_config,
+                report_mode=report_mode,
+                json_indent=json_indent,
             )
 
             elapsed = time.time() - item_start
@@ -3663,6 +3921,23 @@ def main() -> None:
         default=50,
         help="write summary CSV every N stocks",
     )
+    stock_batch.add_argument(
+        "--report-mode",
+        choices=["full", "json", "stock"],
+        default="full",
+        help="full=all json/md files, json=no markdown, stock=stock-level json/csv only",
+    )
+    stock_batch.add_argument(
+        "--compact-json",
+        action="store_true",
+        help="write validation JSON without pretty indentation",
+    )
+    stock_batch.add_argument(
+        "--workers",
+        type=int,
+        default=7,
+        help="number of stock validations to run concurrently",
+    )
     add_zai_args(stock_batch)
 
     cluster = sub.add_parser("cluster-failures")
@@ -3742,6 +4017,9 @@ def main() -> None:
             zai_dry_run=args.zai_dry_run,
             resume=args.resume,
             summary_every=args.summary_every,
+            report_mode=args.report_mode,
+            json_indent=None if args.compact_json else 2,
+            workers=args.workers,
         )
         print(summary.to_string(index=False))
     

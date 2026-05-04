@@ -1,3 +1,5 @@
+import os
+from concurrent.futures import ProcessPoolExecutor
 from datetime import date
 from pathlib import Path
 
@@ -18,6 +20,13 @@ MAPPING_RULE_PATH = Path("./data-lake/meta/rules/mapping_common.yaml")
 SIGN_POLICY_PATH = Path("./data-lake/meta/rules/sign_policy_common.yaml")
 SAVE_DEBUG = True
 FORCE_REBUILD = False
+MAX_WORKERS = int(os.environ.get("NORMALIZE_MAX_WORKERS") or "0")
+if MAX_WORKERS <= 0:
+    MAX_WORKERS = max(1, min((os.cpu_count() or 2) - 1, 8))
+
+_WORKER_CANONICAL_DF = None
+_WORKER_CONTEXT_ENGINE = None
+_WORKER_MAPPING_ENGINE = None
 
 
 def output_is_fresh(
@@ -25,6 +34,7 @@ def output_is_fresh(
     output_path: Path,
     dependency_paths: list[Path],
     save_debug: bool,
+    newest_dependency_mtime: float | None = None,
 ) -> bool:
     if FORCE_REBUILD or not output_path.exists():
         return False
@@ -33,11 +43,64 @@ def output_is_fresh(
     if save_debug and not debug_path.exists():
         return False
 
-    newest_input_mtime = max([input_path.stat().st_mtime, *(p.stat().st_mtime for p in dependency_paths)])
+    if newest_dependency_mtime is None:
+        newest_dependency_mtime = max(p.stat().st_mtime for p in dependency_paths)
+
+    newest_input_mtime = max(input_path.stat().st_mtime, newest_dependency_mtime)
     if output_path.stat().st_mtime < newest_input_mtime:
         return False
 
     return not save_debug or debug_path.stat().st_mtime >= newest_input_mtime
+
+
+def _init_normalize_worker() -> None:
+    global _WORKER_CANONICAL_DF, _WORKER_CONTEXT_ENGINE, _WORKER_MAPPING_ENGINE
+
+    _WORKER_CANONICAL_DF = load_canonical_accounts(CANONICAL_CSV_PATH)
+    _WORKER_CONTEXT_ENGINE = ContextEngine.from_yaml(CONTEXT_RULE_PATH)
+    _WORKER_MAPPING_ENGINE = RuleEngine.from_files(
+        canonical_csv_path=CANONICAL_CSV_PATH,
+        rule_paths=[MAPPING_RULE_PATH],
+        sign_policy_path=SIGN_POLICY_PATH,
+    )
+
+
+def _normalize_one_statement(task: tuple[Path, str, str, Path]) -> tuple[str, str, str]:
+    global _WORKER_CANONICAL_DF, _WORKER_CONTEXT_ENGINE, _WORKER_MAPPING_ENGINE
+
+    if (
+        _WORKER_CANONICAL_DF is None
+        or _WORKER_CONTEXT_ENGINE is None
+        or _WORKER_MAPPING_ENGINE is None
+    ):
+        _init_normalize_worker()
+
+    input_html_path, stock_code, period, output_csv_path = task
+
+    try:
+        normalize_financial_statement_rule_based(
+            input_html_path=input_html_path,
+            company_name=stock_code,
+            period=period,
+            output_csv_path=output_csv_path,
+            canonical_csv_path=CANONICAL_CSV_PATH,
+            context_rule_path=CONTEXT_RULE_PATH,
+            mapping_rule_paths=[MAPPING_RULE_PATH],
+            sign_policy_path=SIGN_POLICY_PATH,
+            save_debug=SAVE_DEBUG,
+            context_engine=_WORKER_CONTEXT_ENGINE,
+            mapping_engine=_WORKER_MAPPING_ENGINE,
+            canonical_df=_WORKER_CANONICAL_DF,
+            verbose=False,
+        )
+    except FileNotFoundError as e:
+        return ("missing", str(input_html_path), str(e))
+    except KeyError as e:
+        return ("warning", str(input_html_path), str(e))
+    except Exception as e:
+        return ("failed", str(input_html_path), repr(e))
+
+    return ("processed", str(input_html_path), "")
 
 
 def main() -> None:
@@ -47,13 +110,6 @@ def main() -> None:
     end_year = today.year
     start_year = end_year - 10
 
-    canonical_df = load_canonical_accounts(CANONICAL_CSV_PATH)
-    context_engine = ContextEngine.from_yaml(CONTEXT_RULE_PATH)
-    mapping_engine = RuleEngine.from_files(
-        canonical_csv_path=CANONICAL_CSV_PATH,
-        rule_paths=[MAPPING_RULE_PATH],
-        sign_policy_path=SIGN_POLICY_PATH,
-    )
     dependency_paths = [
         Path("./canonical_rule_normalizer.py"),
         CANONICAL_CSV_PATH,
@@ -61,8 +117,9 @@ def main() -> None:
         MAPPING_RULE_PATH,
         SIGN_POLICY_PATH,
     ]
+    newest_dependency_mtime = max(p.stat().st_mtime for p in dependency_paths)
 
-    processed_count = 0
+    tasks: list[tuple[Path, str, str, Path]] = []
     skipped_count = 0
     missing_count = 0
 
@@ -70,7 +127,6 @@ def main() -> None:
         for year in range(start_year, end_year):
             for month in [3, 6, 9, 12]:
                 input_html_path = Path(f"./data-lake/bronze/dart/finance-statement/{stock_code}/finance_statement_({year}.{str(month).zfill(2)}).html")
-                company_name = str(stock_code)
                 period = f"{year}.{month}"
                 output_csv_path = Path(f"./data-lake/silver/dart/normalized/normalized_{stock_code}_{year}.{str(month).zfill(2)}.csv")
 
@@ -78,43 +134,79 @@ def main() -> None:
                     missing_count += 1
                     continue
 
-                if output_is_fresh(input_html_path, output_csv_path, dependency_paths, SAVE_DEBUG):
+                if output_is_fresh(
+                    input_html_path,
+                    output_csv_path,
+                    dependency_paths,
+                    SAVE_DEBUG,
+                    newest_dependency_mtime=newest_dependency_mtime,
+                ):
                     skipped_count += 1
                     continue
 
-                try:
-                    print(f"[START PROCESS] {input_html_path}")
-                    normalize_financial_statement_rule_based(
-                        input_html_path=input_html_path,
-                        company_name=stock_code,
-                        period=period,
-                        output_csv_path=output_csv_path,
-                        canonical_csv_path=CANONICAL_CSV_PATH,
-                        context_rule_path=CONTEXT_RULE_PATH,
-                        mapping_rule_paths=[MAPPING_RULE_PATH],
-                        sign_policy_path=SIGN_POLICY_PATH,
-                        save_debug=SAVE_DEBUG,
-                        context_engine=context_engine,
-                        mapping_engine=mapping_engine,
-                        canonical_df=canonical_df,
-                        verbose=False,
-                    )
+                tasks.append((input_html_path, stock_code, period, output_csv_path))
+
+    processed_count = 0
+    failed_count = 0
+
+    print(
+        f"[INFO] pending={len(tasks)}, workers={MAX_WORKERS}, "
+        f"skipped={skipped_count}, missing={missing_count}"
+    )
+
+    if MAX_WORKERS == 1:
+        _init_normalize_worker()
+        for task in tasks:
+            print(f"[START PROCESS] {task[0]}")
+            status, path, message = _normalize_one_statement(task)
+            if status == "processed":
+                processed_count += 1
+            elif status == "missing":
+                missing_count += 1
+                print("File not found : ", message)
+            elif status == "warning":
+                failed_count += 1
+                print("[WARNING] Unknown Key error exception is occured: ", message)
+            else:
+                failed_count += 1
+                print(f"[ERROR] {path}: {message}")
+
+            if processed_count and processed_count % 100 == 0:
+                print(
+                    f"[PROGRESS] processed={processed_count}, "
+                    f"skipped={skipped_count}, missing={missing_count}, failed={failed_count}"
+                )
+    elif tasks:
+        with ProcessPoolExecutor(
+            max_workers=MAX_WORKERS,
+            initializer=_init_normalize_worker,
+        ) as executor:
+            for status, path, message in executor.map(
+                _normalize_one_statement,
+                tasks,
+                chunksize=20,
+            ):
+                if status == "processed":
                     processed_count += 1
-                    if processed_count % 100 == 0:
-                        print(
-                            f"[PROGRESS] processed={processed_count}, "
-                            f"skipped={skipped_count}, missing={missing_count}"
-                        )
-                except FileNotFoundError as e:
-                    print("File not found : ", e)
-                    continue
-                except KeyError as e:
-                    print("[WARNING] Unknown Key error exception is occured: ", e)
-                    continue
+                elif status == "missing":
+                    missing_count += 1
+                    print("File not found : ", message)
+                elif status == "warning":
+                    failed_count += 1
+                    print("[WARNING] Unknown Key error exception is occured: ", message)
+                else:
+                    failed_count += 1
+                    print(f"[ERROR] {path}: {message}")
+
+                if processed_count and processed_count % 100 == 0:
+                    print(
+                        f"[PROGRESS] processed={processed_count}, "
+                        f"skipped={skipped_count}, missing={missing_count}, failed={failed_count}"
+                    )
 
     print(
         f"[DONE] processed={processed_count}, "
-        f"skipped={skipped_count}, missing={missing_count}"
+        f"skipped={skipped_count}, missing={missing_count}, failed={failed_count}"
     )
 
 
@@ -129,7 +221,7 @@ def download_all_statement_comments():
     corps_list = kospi_kosdaq_corp_list()
     stock_codes = corps_list["stock_code"].tolist()
     print(f"Total Length : {len(stock_codes)}")
-    download_statement_comments(stock_codes, 0)
+    download_statement_comments(stock_codes, 1269)
 
 if __name__ == "__main__":
     #download_all_statements()
