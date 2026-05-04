@@ -1361,6 +1361,18 @@ def dedupe_duplicate_subtotals(df: pd.DataFrame) -> pd.DataFrame:
         "NON_CURRENT_ASSETS",
         "CURRENT_LIABILITIES",
         "NON_CURRENT_LIABILITIES",
+        "CFO",
+        "CFI",
+        "CFF",
+        "REVENUE",
+        "COGS",
+        "GROSS_PROFIT",
+        "SGNA",
+        "OPERATING_INCOME",
+        "PBT",
+        "TAX_EXPENSE",
+        "NET_INCOME",
+        "NET_INCOME_PARENT",
     }
 
     for cid in duplicate_sensitive_ids:
