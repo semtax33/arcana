@@ -296,6 +296,7 @@ formula_checks:
               canonical_id: UNMAPPED
               name_contains_any:
                 - 지분법손익
+                - 지분법이익손실
                 - 관계기업과공동기업투자손익
               source: debug
               agg: sum_unique

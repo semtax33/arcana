@@ -216,6 +216,46 @@ def parse_node2_financial_comment_note(html_or_js: str) -> List[NodeMatch]:
     return matches
 
 
+def _node_length(node: NodeMatch) -> int:
+    try:
+        return int(node.length or 0)
+    except ValueError:
+        return 0
+
+
+def _is_valid_node(node: NodeMatch) -> bool:
+    return all([node.rcpNo, node.dcmNo, node.eleId, node.offset, node.length])
+
+
+def _is_statement_body_node(node: NodeMatch) -> bool:
+    return _node_length(node) > 1024 and "주석" not in node.text
+
+
+def select_financial_statement_position(html_or_js: str) -> Optional[NodeMatch]:
+    """
+    DART 목차 script에서 재무제표 본문 위치를 고른다.
+    연결재무제표가 있으면 우선 사용하고, 없거나 목차성 짧은 블록이면 개별 재무제표로 fallback한다.
+    """
+    consolidated_positions = [
+        node for node in parse_node2_financial_note(html_or_js)
+        if _is_valid_node(node)
+    ]
+    individual_positions = [
+        node for node in parse_node2_financial_individual_note(html_or_js)
+        if _is_valid_node(node)
+    ]
+
+    for node in consolidated_positions:
+        if _is_statement_body_node(node):
+            return node
+
+    for node in individual_positions:
+        if _is_statement_body_node(node):
+            return node
+
+    return None
+
+
 def _safe_title_from_anchor(a) -> str:
     # "보고서명" 텍스트가 통째로 붙는 경우가 많아서 strip 기반으로 안전하게
     txt = a.get_text(" ", strip=True)
@@ -489,20 +529,14 @@ def fetch_dart_search(ticker: str, save_dir: str, save_filename: str | None = No
 
             scripts = page_soup.find_all("script")
 
-            # 기존 함수 활용 (너가 이미 가진 함수라고 가정)
-            meta_scripts = [sc for sc in scripts if parse_node2_financial_note(sc.get_text()) != []]
-            if not meta_scripts:
-                continue
+            statement_position = None
+            for sc in scripts:
+                statement_position = select_financial_statement_position(sc.get_text())
+                if statement_position:
+                    break
 
-            statement_comment_positions = parse_node2_financial_note(meta_scripts[0].get_text())
-            statement_comment_individual_positions = parse_node2_financial_individual_note(meta_scripts[0].get_text())
-            if not statement_comment_positions:
+            if not statement_position:
                 continue
-            
-            if int(statement_comment_positions[0].length) <= 1024:
-                statement_position = statement_comment_individual_positions[0]
-            else:
-                statement_position = statement_comment_positions[0]
 
             params = {
                 "rcpNo": statement_position.rcpNo,

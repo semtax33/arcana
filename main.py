@@ -221,7 +221,7 @@ def download_all_statement_comments():
     corps_list = kospi_kosdaq_corp_list()
     stock_codes = corps_list["stock_code"].tolist()
     print(f"Total Length : {len(stock_codes)}")
-    download_statement_comments(stock_codes, 1269)
+    download_statement_comments(stock_codes, 1395)
 
 if __name__ == "__main__":
     #download_all_statements()
