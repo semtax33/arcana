@@ -347,14 +347,15 @@ def normalize_input_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def get_statement_type_from_text(text: str) -> str:
     t = safe_str(text)
+    normalized = normalize_account_name(t)
 
-    if "재무상태표" in t:
+    if "재무상태표" in normalized:
         return "BS"
 
-    if "현금흐름표" in t:
+    if "현금흐름표" in normalized:
         return "CF"
 
-    if "손익계산서" in t or "포괄손익계산서" in t:
+    if "손익계산서" in normalized or "포괄손익계산서" in normalized:
         return "IS"
 
     return "UNKNOWN"
@@ -364,17 +365,14 @@ def is_data_table(table) -> bool:
     return safe_str(table.get("border")) == "1"
 
 
-def is_header_table(table) -> bool:
-    if is_data_table(table):
-        return False
+def is_statement_header_text(text: str) -> bool:
+    normalized = normalize_account_name(text)
 
-    text = table.get_text(" ", strip=True)
-
-    if "첨부된 연결재무제표에 대한 주석" in text:
+    if "첨부된연결재무제표에대한주석" in normalized:
         return False
 
     return any(
-        keyword in text
+        keyword in normalized
         for keyword in [
             "재무상태표",
             "손익계산서",
@@ -385,25 +383,72 @@ def is_header_table(table) -> bool:
     )
 
 
+def is_header_table(table) -> bool:
+    if is_data_table(table):
+        return False
+
+    return is_statement_header_text(table.get_text(" ", strip=True))
+
+
+def is_header_paragraph(node: Tag) -> bool:
+    if node.name != "p" or node.find_parent("table") is not None:
+        return False
+
+    return is_statement_header_text(node.get_text(" ", strip=True))
+
+
+def is_header_node(node: Tag) -> bool:
+    if node.name == "table":
+        return is_header_table(node)
+
+    if node.name == "p":
+        return is_header_paragraph(node)
+
+    return False
+
+
 def find_next_data_table(header_table):
     node = header_table
+    supporting_text: list[str] = []
 
     while node is not None:
         node = node.find_next_sibling()
 
         if node is None:
-            return None
+            return None, ""
 
-        if getattr(node, "name", None) != "table":
+        if not isinstance(node, Tag):
             continue
 
-        if is_data_table(node):
-            return node
+        if node.name == "p":
+            if is_header_paragraph(node):
+                return None, " ".join(supporting_text)
+
+            text = node.get_text(" ", strip=True)
+            if text:
+                supporting_text.append(text)
+            continue
+
+        if node.name != "table":
+            continue
 
         if is_header_table(node):
-            return None
+            body_table, nested_text = find_next_data_table(node)
+            text = node.get_text(" ", strip=True)
+            if text:
+                supporting_text.append(text)
+            if nested_text:
+                supporting_text.append(nested_text)
+            return body_table, " ".join(supporting_text)
 
-    return None
+        if is_data_table(node):
+            return node, " ".join(supporting_text)
+
+        text = node.get_text(" ", strip=True)
+        if text:
+            supporting_text.append(text)
+
+    return None, " ".join(supporting_text)
 
 
 def extract_rows_from_dart_html(
@@ -421,27 +466,34 @@ def extract_rows_from_dart_html(
 
     rows: list[dict[str, Any]] = []
     table_index = 0
+    seen_body_tables: set[int] = set()
 
-    for header_table in soup.find_all("table"):
-        if not is_header_table(header_table):
+    for header_table in soup.find_all(["p", "table"]):
+        if not isinstance(header_table, Tag) or not is_header_node(header_table):
             continue
 
         header_text = header_table.get_text(" ", strip=True)
         fs_type = get_statement_type_from_text(header_text)
 
-        if "자본변동표" in header_text:
+        if "자본변동표" in normalize_account_name(header_text):
             continue
 
         if fs_type == "UNKNOWN":
             continue
 
-        body_table = find_next_data_table(header_table)
+        body_table, supporting_text = find_next_data_table(header_table)
 
         if body_table is None:
             print(f"[WARN] 본문 테이블을 찾지 못함: {header_text[:80]}")
             continue
 
-        unit_factor = parse_unit_factor(header_text)
+        body_table_key = id(body_table)
+        if body_table_key in seen_body_tables:
+            continue
+        seen_body_tables.add(body_table_key)
+
+        combined_header_text = f"{header_text} {supporting_text}".strip()
+        unit_factor = parse_unit_factor(combined_header_text)
 
         for row_index, tr in enumerate(body_table.find_all("tr")):
             tds = tr.find_all("td")
@@ -477,7 +529,7 @@ def extract_rows_from_dart_html(
                     "raw_amount": safe_str(raw_amount),
                     "amount_raw": amount_raw,
                     "unit_factor": safe_str(unit_factor),
-                    "table_title": header_text,
+                    "table_title": combined_header_text,
                 }
             )
 
@@ -504,6 +556,7 @@ def iter_section_tables(soup: BeautifulSoup, section_name: str):
 
     for header in section_headers:
         section_title = text_of(header)
+        unit_value = 1
 
         if section_name not in section_title:
             continue
@@ -562,7 +615,28 @@ def parse_number(value: str):
     return -num if is_negative else num
 
 
-def find_last_value_in_matched_row_by_regex(table: Tag, patterns: dict[str, str], unit: str):
+def compile_comment_target_patterns(patterns: dict[str, Any]) -> dict[str, list[re.Pattern]]:
+    compiled: dict[str, list[re.Pattern]] = {}
+
+    for key, value in patterns.items():
+        key = safe_str(key).strip()
+        if not key:
+            continue
+
+        values = value if isinstance(value, list) else [value]
+        compiled_patterns = [
+            re.compile(safe_str(pattern))
+            for pattern in values
+            if safe_str(pattern).strip()
+        ]
+
+        if compiled_patterns:
+            compiled[key] = compiled_patterns
+
+    return compiled
+
+
+def find_last_value_in_matched_row_by_regex(table: Tag, patterns: dict[str, Any], unit: str):
     """
     patterns 예:
     {
@@ -572,10 +646,7 @@ def find_last_value_in_matched_row_by_regex(table: Tag, patterns: dict[str, str]
     }
     """
 
-    compiled = {
-        key: re.compile(pattern)
-        for key, pattern in patterns.items()
-    }
+    compiled = compile_comment_target_patterns(patterns)
 
     results = []
 
@@ -594,8 +665,8 @@ def find_last_value_in_matched_row_by_regex(table: Tag, patterns: dict[str, str]
         value = parse_number(raw_value)
 
         for label in label_candidates:
-            for key, regex in compiled.items():
-                if regex.search(label):
+            for key, regexes in compiled.items():
+                if any(regex.search(label) for regex in regexes):
                     results.append({
                         "key": key,
                         "matched_label": label,
@@ -606,6 +677,37 @@ def find_last_value_in_matched_row_by_regex(table: Tag, patterns: dict[str, str]
                     })
 
     return results
+
+
+def extract_rows_from_dart_comment_soup(
+    soup: BeautifulSoup,
+    section_name: str,
+    target_patterns: dict[str, str],
+) -> list[dict[str, Any]]:
+    rows = []
+
+    for item in iter_section_tables(soup, section_name):
+        section_title = item["section_title"]
+        table = item["table"]
+
+        hits = find_last_value_in_matched_row_by_regex(table, target_patterns, item["unit"])
+
+        for hit in hits:
+            rows.append({
+                "section_title": section_title,
+                "key": hit["key"],
+                "label": hit["matched_label"],
+                "raw_value": hit["raw_value"],
+                "value": hit["value"],
+            })
+
+    unique_rows = {}
+    for row in rows:
+        if not row["key"] in unique_rows:
+            unique_rows[row["key"]] = row
+
+    return list(unique_rows.values())
+
 
 def extract_rows_from_dart_comment_html(
     html_path: str | Path,
@@ -628,32 +730,381 @@ def extract_rows_from_dart_comment_html(
     html = html_path.read_text(encoding="utf-8", errors="ignore")
     soup = BeautifulSoup(html, "lxml")
 
-    rows = []
-    
-    for item in iter_section_tables(soup, section_name):
-        section_title = item["section_title"]
-        table = item["table"]
+    return extract_rows_from_dart_comment_soup(
+        soup=soup,
+        section_name=section_name,
+        target_patterns=target_patterns,
+    )
 
-        hits = find_last_value_in_matched_row_by_regex(table, target_patterns, item["unit"])
 
-        for hit in hits:
-            rows.append({
-                "section_title": section_title,
-                "key": hit["key"],
-                "label": hit["matched_label"],
-                "raw_value": hit["raw_value"],
-                "value": hit["value"],
-            })
+def load_comment_extraction_rules(paths: list[str | Path] | None) -> list[dict[str, Any]]:
+    path_key = tuple(str(Path(path)) for path in (paths or []))
+    return [dict(rule) for rule in _load_comment_extraction_rules_cached(path_key)]
 
-    unique_rows = {}
-    for row in rows:
-        if not row["key"] in unique_rows:
-            unique_rows[row["key"]] = row
 
-    #for row in unique_rows.values():
-    #    print(row)
+@lru_cache(maxsize=128)
+def _load_comment_extraction_rules_cached(path_key: tuple[str, ...]) -> tuple[dict[str, Any], ...]:
+    if not path_key:
+        return tuple()
 
-    return unique_rows.values()
+    all_rules: list[dict[str, Any]] = []
+
+    for path in path_key:
+        path = Path(path)
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+        rules = data.get("comment_rules", [])
+
+        if not isinstance(rules, list):
+            raise ValueError(f"comment_rules must be a list: {path}")
+
+        for rule in rules:
+            if not isinstance(rule, dict):
+                raise ValueError(f"comment rule must be a mapping: {path}")
+
+            section_name = safe_str(rule.get("section_name")).strip()
+            target_patterns = rule.get("target_patterns", {})
+
+            if not section_name:
+                raise ValueError(f"comment rule missing section_name: {path}")
+
+            if not isinstance(target_patterns, dict) or not target_patterns:
+                raise ValueError(f"comment rule missing target_patterns: {path}")
+
+            item = dict(rule)
+            item["_source"] = str(path)
+            all_rules.append(item)
+
+    return tuple(all_rules)
+
+
+def infer_comment_html_path(
+    input_html_path: str | Path,
+    company_name: str,
+    period: str,
+) -> Path:
+    input_path = Path(input_html_path)
+    match = re.search(r"\((\d{4})\.(\d{2})\)", input_path.name)
+
+    if match:
+        year, month = match.groups()
+    else:
+        parts = safe_str(period).split(".")
+        year = parts[0] if parts else ""
+        month = parts[1].zfill(2) if len(parts) > 1 else ""
+
+    dart_root = input_path.parent.parent.parent
+    return (
+        dart_root
+        / "finance-comment"
+        / safe_str(company_name)
+        / f"finance_statement_comment_({year}.{month}).html"
+    )
+
+
+def extract_comment_hits_by_rule(
+    soup: BeautifulSoup,
+    comment_rules: list[dict[str, Any]],
+) -> dict[int, list[dict[str, Any]]]:
+    section_groups: dict[str, dict[str, Any]] = {}
+
+    for rule in comment_rules:
+        section_name = safe_str(rule.get("section_name"))
+        group = section_groups.setdefault(
+            section_name,
+            {
+                "target_patterns": {},
+                "rule_by_key": {},
+            },
+        )
+
+        for key, pattern in dict(rule.get("target_patterns", {})).items():
+            key = safe_str(key).strip()
+            if not key or key in group["target_patterns"]:
+                continue
+
+            group["target_patterns"][key] = pattern
+            group["rule_by_key"][key] = rule
+
+    hits_by_rule: dict[int, list[dict[str, Any]]] = {}
+
+    for section_name, group in section_groups.items():
+        unique_rows: dict[str, dict[str, Any]] = {}
+
+        for item in iter_section_tables(soup, section_name):
+            hits = find_last_value_in_matched_row_by_regex(
+                item["table"],
+                group["target_patterns"],
+                item["unit"],
+            )
+
+            for hit in hits:
+                key = hit["key"]
+                if key in unique_rows:
+                    continue
+
+                unique_rows[key] = {
+                    "section_title": item["section_title"],
+                    "key": key,
+                    "label": hit["matched_label"],
+                    "raw_value": hit["raw_value"],
+                    "value": hit["value"],
+                }
+
+        for row in unique_rows.values():
+            rule = group["rule_by_key"].get(row["key"])
+            if rule is None:
+                continue
+
+            hits_by_rule.setdefault(id(rule), []).append(row)
+
+    return hits_by_rule
+
+
+def _canonical_fs_type_by_id(canonical_df: pd.DataFrame) -> dict[str, str]:
+    if "canonical_id" not in canonical_df.columns or "fs_type" not in canonical_df.columns:
+        return {}
+
+    return dict(
+        zip(
+            canonical_df["canonical_id"].astype(str),
+            canonical_df["fs_type"].astype(str),
+        )
+    )
+
+
+def _map_comment_rule_hits_to_df(
+    hits: list[dict[str, Any]],
+    *,
+    rule: dict[str, Any],
+    company_name: str,
+    period: str,
+    mapping_engine: "RuleEngine",
+    canonical_df: pd.DataFrame,
+    include_debug_cols: bool,
+) -> pd.DataFrame:
+    fs_type_by_id = _canonical_fs_type_by_id(canonical_df)
+    output: list[dict[str, Any]] = []
+
+    for hit in hits:
+        requested_canonical_id = safe_str(hit.get("key")).strip()
+        canonical_id = requested_canonical_id
+
+        if not mapping_engine.has_canonical_id(canonical_id):
+            canonical_id = "UNMAPPED"
+
+        statement_type = normalize_statement_type(fs_type_by_id.get(canonical_id, "UNKNOWN"))
+        original_account_name = safe_str(hit.get("label"))
+        raw_amount = amount_to_int(hit.get("value"))
+
+        probe_row = normalize_input_row(
+            {
+                "company_name": company_name,
+                "statement_type": statement_type,
+                "period": period,
+                "table_index": 0,
+                "row_index": 0,
+                "raw_account_name": original_account_name,
+                "original_account_name": original_account_name,
+                "normalized_name": normalize_account_name(original_account_name),
+                "indent_level": 0,
+                "has_children": False,
+                "amount": safe_str(raw_amount),
+                "raw_amount": safe_str(raw_amount),
+                "amount_raw": safe_str(hit.get("raw_value")),
+                "unit_factor": "",
+                "table_title": safe_str(hit.get("section_title")),
+                "section_context": "주석",
+                "parent_context": safe_str(rule.get("section_name")),
+                "context_path": safe_str(hit.get("section_title")),
+            }
+        )
+
+        mapped_result = mapping_engine.map_row(probe_row)
+        if mapped_result.canonical_account_id == canonical_id:
+            rule_id = mapped_result.rule_id
+            reason = mapped_result.reason
+            amount_policy = mapped_result.amount_policy
+            cash_direction = mapped_result.cash_direction
+            canonical_name = mapped_result.canonical_account_name
+        else:
+            sign_decision = mapping_engine.sign_policy_engine.decide(
+                fs_type=statement_type,
+                canonical_id=canonical_id,
+                rule=rule,
+            )
+            rule_id = f"comment:{safe_str(rule.get('id'))}:{requested_canonical_id}"
+            reason = (
+                f"주석 rule '{safe_str(rule.get('id'))}' target_patterns "
+                f"매핑: {requested_canonical_id}"
+            )
+            amount_policy = sign_decision.amount_policy
+            cash_direction = sign_decision.cash_direction
+            canonical_name = mapping_engine.canonical_name(canonical_id)
+
+        normalized_amount = apply_amount_policy(raw_amount, amount_policy)
+        cash_effect_amount = apply_cash_direction(normalized_amount, cash_direction)
+
+        item = {
+            "canonical_account_id": canonical_id,
+            "canonical_account_name": canonical_name,
+            "original_account_name": original_account_name,
+            "statement_type": statement_type,
+            "period": safe_str(period),
+            "amount": safe_str(normalized_amount),
+            "raw_amount": safe_str(raw_amount),
+            "normalized_amount": safe_str(normalized_amount),
+            "cash_effect_amount": safe_str(cash_effect_amount),
+            "amount_policy": amount_policy,
+            "cash_direction": cash_direction,
+        }
+
+        if include_debug_cols:
+            item.update(
+                {
+                    "rule_id": rule_id,
+                    "reason": reason,
+                    "raw_account_name": original_account_name,
+                    "normalized_name": normalize_account_name(original_account_name),
+                    "indent_level": "0",
+                    "has_children": "False",
+                    "section_context": "주석",
+                    "parent_context": safe_str(rule.get("section_name")),
+                    "context_path": safe_str(hit.get("section_title")),
+                    "context_rule_id": safe_str(rule.get("id")),
+                    "context_reason": safe_str(rule.get("_source")),
+                    "amount_raw": safe_str(hit.get("raw_value")),
+                    "unit_factor": "",
+                }
+            )
+
+        output.append(item)
+
+    columns = EXPECTED_HEADER + DEBUG_COLUMNS if include_debug_cols else EXPECTED_HEADER
+    return pd.DataFrame(output, columns=columns)
+
+
+def extract_mapped_comment_rows(
+    comment_html_path: str | Path,
+    *,
+    company_name: str,
+    period: str,
+    comment_rules: list[dict[str, Any]],
+    mapping_engine: "RuleEngine",
+    canonical_df: pd.DataFrame,
+    include_debug_cols: bool,
+) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    html = Path(comment_html_path).read_text(encoding="utf-8", errors="ignore")
+    soup = BeautifulSoup(html, "lxml")
+    hits_by_rule = extract_comment_hits_by_rule(soup, comment_rules)
+
+    for rule in comment_rules:
+        hits = hits_by_rule.get(id(rule), [])
+
+        if not hits:
+            continue
+
+        frames.append(
+            _map_comment_rule_hits_to_df(
+                hits,
+                rule=rule,
+                company_name=company_name,
+                period=period,
+                mapping_engine=mapping_engine,
+                canonical_df=canonical_df,
+                include_debug_cols=include_debug_cols,
+            )
+        )
+
+    columns = EXPECTED_HEADER + DEBUG_COLUMNS if include_debug_cols else EXPECTED_HEADER
+
+    if not frames:
+        return pd.DataFrame(columns=columns)
+
+    return (
+        pd.concat(frames, ignore_index=True)
+        .drop_duplicates(
+            subset=["statement_type", "period", "canonical_account_id"],
+            keep="first",
+        )
+        .loc[:, columns]
+    )
+
+
+def merge_comment_rows(
+    mapped_df: pd.DataFrame,
+    comment_df: pd.DataFrame,
+    policy: str = "fill_missing",
+) -> pd.DataFrame:
+    if comment_df.empty:
+        return mapped_df
+
+    if policy == "append":
+        return pd.concat([mapped_df, comment_df], ignore_index=True).loc[:, mapped_df.columns]
+
+    if policy != "fill_missing":
+        raise ValueError(f"unknown comment_merge_policy: {policy}")
+
+    existing_keys = set(
+        zip(
+            mapped_df["statement_type"].astype(str),
+            mapped_df["period"].astype(str),
+            mapped_df["canonical_account_id"].astype(str),
+        )
+    )
+
+    comment_keys = list(
+        zip(
+            comment_df["statement_type"].astype(str),
+            comment_df["period"].astype(str),
+            comment_df["canonical_account_id"].astype(str),
+        )
+    )
+    keep_mask = [
+        canonical_id != "UNMAPPED" and key not in existing_keys
+        for key, canonical_id in zip(comment_keys, comment_df["canonical_account_id"].astype(str))
+    ]
+
+    if not any(keep_mask):
+        return mapped_df
+
+    filtered_comment_df = comment_df.loc[keep_mask, mapped_df.columns]
+    return pd.concat([mapped_df, filtered_comment_df], ignore_index=True).loc[:, mapped_df.columns]
+
+
+def filter_comment_rules_for_missing_targets(
+    comment_rules: list[dict[str, Any]],
+    mapped_df: pd.DataFrame,
+    canonical_df: pd.DataFrame,
+    period: str,
+) -> list[dict[str, Any]]:
+    fs_type_by_id = _canonical_fs_type_by_id(canonical_df)
+    existing_keys = set(
+        zip(
+            mapped_df["statement_type"].astype(str),
+            mapped_df["period"].astype(str),
+            mapped_df["canonical_account_id"].astype(str),
+        )
+    )
+    filtered_rules: list[dict[str, Any]] = []
+
+    for rule in comment_rules:
+        target_patterns = {}
+        for canonical_id, pattern in dict(rule.get("target_patterns", {})).items():
+            canonical_id = safe_str(canonical_id).strip()
+            statement_type = normalize_statement_type(fs_type_by_id.get(canonical_id, "UNKNOWN"))
+            key = (statement_type, safe_str(period), canonical_id)
+            if key not in existing_keys:
+                target_patterns[canonical_id] = pattern
+
+        if target_patterns:
+            item = dict(rule)
+            item["target_patterns"] = target_patterns
+            filtered_rules.append(item)
+
+    return filtered_rules
 
 
 
@@ -1271,7 +1722,8 @@ class RuleEngine:
 
             output.append(item)
 
-        return pd.DataFrame(output)
+        columns = EXPECTED_HEADER + DEBUG_COLUMNS if include_debug_cols else EXPECTED_HEADER
+        return pd.DataFrame(output, columns=columns)
 
     def _normalize_row_for_matching(self, row: dict[str, Any]) -> dict[str, str]:
         context_parts = [
@@ -1373,6 +1825,7 @@ def dedupe_duplicate_subtotals(df: pd.DataFrame) -> pd.DataFrame:
         "TAX_EXPENSE",
         "NET_INCOME",
         "NET_INCOME_PARENT",
+        "NET_INCOME_NCI",
     }
 
     for cid in duplicate_sensitive_ids:
@@ -1383,6 +1836,26 @@ def dedupe_duplicate_subtotals(df: pd.DataFrame) -> pd.DataFrame:
 
         # 같은 statement/period/canonical/amount가 중복이면 leaf 우선
         sub = df[mask].copy()
+
+        if "amount" in sub.columns:
+            amount_num = pd.to_numeric(sub["amount"], errors="coerce").fillna(0)
+            has_non_zero = (
+                sub.assign(_amount_num=amount_num)
+                .groupby(["statement_type", "period", "canonical_account_id"])["_amount_num"]
+                .transform(lambda s: s.abs().gt(0).any())
+            )
+            zero_idx = sub.index[has_non_zero & amount_num.eq(0)]
+            if len(zero_idx) > 0:
+                df.loc[zero_idx, "canonical_account_id"] = "UNMAPPED"
+                df.loc[zero_idx, "canonical_account_name"] = "미매핑"
+                df.loc[zero_idx, "rule_id"] = "post_zero_subtotal_unmapped"
+                df.loc[zero_idx, "reason"] = f"0원 subtotal 제거: {cid}"
+
+                mask = df["canonical_account_id"].eq(cid)
+                sub = df[mask].copy()
+
+                if sub.empty:
+                    continue
 
         if "has_children" in sub.columns:
             sub["_is_parent"] = sub["has_children"].astype(str).str.lower().eq("true")
@@ -1478,6 +1951,9 @@ def normalize_financial_statement_rule_based(
     mapping_engine: RuleEngine | None = None,
     canonical_df: pd.DataFrame | None = None,
     verbose: bool = True,
+    comment_rule_paths: list[str | Path] | None = None,
+    comment_html_path: str | Path | None = None,
+    comment_merge_policy: str = "fill_missing",
 ) -> pd.DataFrame:
     input_rows = extract_rows_from_dart_html(
         html_path=input_html_path,
@@ -1504,6 +1980,53 @@ def normalize_financial_statement_rule_based(
 
     if canonical_df is None:
         canonical_df = mapping_engine.canonical_df if mapping_engine is not None else load_canonical_accounts(canonical_csv_path)
+
+    resolved_comment_html_path = (
+        Path(comment_html_path)
+        if comment_html_path is not None
+        else infer_comment_html_path(
+            input_html_path=input_html_path,
+            company_name=company_name,
+            period=period,
+        )
+    )
+
+    try:
+        comment_rules = load_comment_extraction_rules(comment_rule_paths)
+        if comment_rules:
+            effective_comment_rules = comment_rules
+            if comment_merge_policy == "fill_missing":
+                effective_comment_rules = filter_comment_rules_for_missing_targets(
+                    comment_rules=comment_rules,
+                    mapped_df=mapped_df,
+                    canonical_df=canonical_df,
+                    period=period,
+                )
+
+            if not effective_comment_rules:
+                pass
+            elif resolved_comment_html_path.exists():
+                comment_df = extract_mapped_comment_rows(
+                    comment_html_path=resolved_comment_html_path,
+                    company_name=company_name,
+                    period=period,
+                    comment_rules=effective_comment_rules,
+                    mapping_engine=mapping_engine,
+                    canonical_df=canonical_df,
+                    include_debug_cols=save_debug,
+                )
+                mapped_df = merge_comment_rows(
+                    mapped_df,
+                    comment_df,
+                    policy=comment_merge_policy,
+                )
+            elif verbose:
+                print(f"[WARN] 주석 HTML 파일을 찾을 수 없습니다: {resolved_comment_html_path}")
+    except Exception as e:
+        print(
+            "[WARN] 주석 HTML 파싱/정규화 실패로 주석 결과를 건너뜁니다: "
+            f"{resolved_comment_html_path} ({type(e).__name__}: {e})"
+        )
 
     errors = validate_mapped_df(mapped_df, canonical_df)
 

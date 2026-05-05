@@ -37,6 +37,7 @@ dangerous_duplicate_ids:
   - TAX_EXPENSE
   - NET_INCOME
   - NET_INCOME_PARENT
+  - NET_INCOME_NCI
   - EAOP
   - NEAOP
 
@@ -84,6 +85,20 @@ formula_checks:
               agg: first
             - statement_type: BS
               cid: ASSETS_HELD_FOR_SALE
+              agg: sum_unique
+              optional: true
+      - mode: CURRENT_PLUS_NON_CURRENT_PLUS_FINANCIAL_BUSINESS
+        formula: CURRENT_ASSETS + NON_CURRENT_ASSETS + FINANCIAL_BUSINESS_ASSETS = TOTAL_ASSETS
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_ASSETS
+              agg: first
+            - statement_type: BS
+              cid: NON_CURRENT_ASSETS
+              agg: first
+            - statement_type: BS
+              cid: FINANCIAL_BUSINESS_ASSETS
               agg: sum_unique
               optional: true
       - mode: CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE_PLUS_FINANCIAL_BUSINESS
@@ -137,6 +152,20 @@ formula_checks:
             - statement_type: BS
               cid: LIABILITIES_HELD_FOR_SALE
               agg: sum_unique
+              optional: true
+      - mode: CURRENT_PLUS_NON_CURRENT_PLUS_FINANCIAL_BUSINESS
+        formula: CURRENT_LIABILITIES + NON_CURRENT_LIABILITIES + FINANCIAL_BUSINESS_LIABILITIES = TOTAL_LIABILITIES
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_LIABILITIES
+              agg: first
+            - statement_type: BS
+              cid: NON_CURRENT_LIABILITIES
+              agg: first
+            - statement_type: BS
+              cid: FINANCIAL_BUSINESS_LIABILITIES
+              agg: first
               optional: true
       - mode: CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE_PLUS_FINANCIAL_BUSINESS
         formula:
@@ -277,6 +306,147 @@ formula_checks:
               cid: OTHER_OPERATING_INCOME
               agg: sum
               optional: true
+      - mode: WITH_UNMAPPED_OPERATING_EXPENSE_COMPONENTS
+        formula:
+          GROSS_PROFIT - SGNA(optional) - RND - mapped operating expenses - unmapped SG&A/operating expense components +
+          operating income/reversal items = OPERATING_INCOME
+        expected:
+          sum:
+            - sub:
+                - statement_type: IS
+                  cid: GROSS_PROFIT
+                  agg: first
+                - statement_type: IS
+                  cid: SGNA
+                  agg: first
+                  optional: true
+                - statement_type: IS
+                  cid: RND
+                  agg: sum
+                  optional: true
+                - statement_type: IS
+                  cid: BAD_DEBT_EXPENSE
+                  agg: sum
+                  optional: true
+                - statement_type: IS
+                  cid: LOGISTICS_COST
+                  agg: sum
+                  optional: true
+                - statement_type: IS
+                  cid: OTHER_OPERATING_EXPENSES
+                  agg: sum
+                  optional: true
+                - statement_type: IS
+                  canonical_id: UNMAPPED
+                  name_contains_any:
+                    - 판매비
+                    - 판매및유통비
+                    - 기타의판매비
+                    - 영업비용
+                    - 상품구입비용
+                    - 대손상각비조정
+                    - 대손상각비
+                    - 매출채권및기타금융자산손상손실
+                    - 매출채권등금융자산손상차손
+                  name_exclude_any:
+                    - 주당
+                    - 법인세
+                    - 환입
+                  context_exclude_any:
+                    - 금융손익
+                    - 기타손익
+                    - 기타포괄손익
+                    - 중단영업
+                    - 법인세
+                  source: debug
+                  agg: sum_unique
+                  optional: true
+                - statement_type: IS
+                  canonical_id: UNMAPPED
+                  name_contains_any:
+                    - 관리비
+                    - 일반관리비
+                  name_exclude_any:
+                    - 주당
+                    - 법인세
+                    - 환입
+                    - 금융손익
+                    - 기타포괄손익
+                    - 중단영업
+                  context_exclude_any:
+                    - 금융손익
+                    - 기타손익
+                    - 기타포괄손익
+                    - 중단영업
+                    - 법인세
+                  source: debug
+                  agg: sum_unique
+                  optional: true
+                - statement_type: IS
+                  canonical_id: UNMAPPED
+                  name_contains_any:
+                    - 지급수수료
+                    - 손상차손
+                    - 손상손실
+                    - 금융자산손상차손
+                  name_exclude_any:
+                    - 주당
+                    - 법인세
+                    - 환입
+                    - 무형자산
+                    - 유형자산
+                    - 투자부동산
+                    - 관계기업
+                    - 종속기업
+                    - 공동기업
+                    - 지분법
+                  context_contains_any:
+                    - 판매비와관리비
+                    - 영업비용
+                  context_exclude_any:
+                    - 금융손익
+                    - 기타손익
+                    - 기타포괄손익
+                    - 중단영업
+                    - 법인세
+                  source: debug
+                  agg: sum_unique
+                  optional: true
+            - statement_type: IS
+              cid: BAD_DEBT_REVERSAL
+              agg: sum
+              optional: true
+            - statement_type: IS
+              canonical_id: UNMAPPED
+              name_contains_any:
+                - 대손상각비환입
+                - 대손충당금환입
+                - 손상차손환입
+                - 금융자산손상차손환입
+              name_exclude_any:
+                - 무형자산
+                - 유형자산
+                - 투자부동산
+                - 관계기업
+                - 종속기업
+                - 공동기업
+                - 지분법
+              context_contains_any:
+                - 판매비와관리비
+                - 영업비용
+              context_exclude_any:
+                - 금융손익
+                - 기타손익
+                - 기타포괄손익
+                - 중단영업
+                - 법인세
+              source: debug
+              agg: sum_unique
+              optional: true
+            - statement_type: IS
+              cid: OTHER_OPERATING_INCOME
+              agg: sum
+              optional: true
       - mode: WITH_UNMAPPED_EQUITY_METHOD_OPERATING_ITEM
         formula: GROSS_PROFIT - SGNA - RND + unmapped equity method operating item = OPERATING_INCOME
         expected:
@@ -296,8 +466,12 @@ formula_checks:
               canonical_id: UNMAPPED
               name_contains_any:
                 - 지분법손익
+                - 지분법손실
+                - 지분법이익
+                - 투자자산에대한지분법이익
                 - 지분법이익손실
                 - 관계기업과공동기업투자손익
+                - 관계기업및공동기업투자손익
               source: debug
               agg: sum_unique
               optional: true
@@ -366,7 +540,6 @@ formula_checks:
               name_exclude_any:
                 - 주당
                 - 포괄
-                - 귀속
               source: debug
               agg: first
               optional: true
@@ -403,7 +576,6 @@ formula_checks:
               name_exclude_any:
                 - 주당
                 - 포괄
-                - 귀속
               source: debug
               agg: first
               optional: true
@@ -426,6 +598,17 @@ formula_checks:
             - statement_type: IS
               cid: NET_INCOME_NCI
               agg: first
+              optional: true
+      - mode: NET_INCOME_ATTRIBUTION_SUM_UNIQUE
+        formula: sum_unique(NET_INCOME_PARENT) + sum_unique(NET_INCOME_NCI) = NET_INCOME
+        expected:
+          sum:
+            - statement_type: IS
+              cid: NET_INCOME_PARENT
+              agg: sum_unique
+            - statement_type: IS
+              cid: NET_INCOME_NCI
+              agg: sum_unique
               optional: true
       - mode: ATTRIBUTION_MINUS_UNMAPPED_OCI
         formula: NET_INCOME_PARENT + NET_INCOME_NCI - unmapped OCI = NET_INCOME
@@ -467,6 +650,22 @@ formula_checks:
               cid: OTHER_COMPREHENSIVE_INCOME
               agg: first
               optional: true
+      - mode: ATTRIBUTION_SUM_UNIQUE_MINUS_OCI
+        formula: sum_unique(NET_INCOME_PARENT) + sum_unique(NET_INCOME_NCI) - OTHER_COMPREHENSIVE_INCOME = NET_INCOME
+        expected:
+          sub:
+            - sum:
+                - statement_type: IS
+                  cid: NET_INCOME_PARENT
+                  agg: sum_unique
+                - statement_type: IS
+                  cid: NET_INCOME_NCI
+                  agg: sum_unique
+                  optional: true
+            - statement_type: IS
+              cid: OTHER_COMPREHENSIVE_INCOME
+              agg: sum_unique
+              optional: true
   - name: "CF: CFO + CFI + CFF = 현금증가 후보식"
     statement_type: CF
     source: normalized
@@ -504,10 +703,12 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              before_cid: CF_CASH_CHANGE
               agg: sum
               optional: true
             - statement_type: CF
               cid: SPECIAL_CASH_CHANGE
+              before_cid: CF_CASH_CHANGE
               agg: sum
               optional: true
         actual:
@@ -529,6 +730,7 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              before_cid: CF_CASH_CHANGE
               agg: sum
               optional: true
         actual:
@@ -550,14 +752,17 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              before_cid: CF_CASH_CHANGE
               agg: sum
               optional: true
             - statement_type: CF
               cid: SPECIAL_CASH_CHANGE
+              before_cid: CF_CASH_CHANGE
               agg: sum
               optional: true
             - statement_type: CF
               cid: CF_TRANSLATION_DIFFERENCE
+              before_cid: CF_CASH_CHANGE
               agg: sum
               optional: true
         actual:
@@ -579,10 +784,12 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              before_cid: CF_CASH_CHANGE
               agg: sum
               optional: true
             - statement_type: CF
               cid: CF_TRANSLATION_DIFFERENCE
+              before_cid: CF_CASH_CHANGE
               agg: sum
               optional: true
         actual:
@@ -604,10 +811,12 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              before_cid: CF_CASH_CHANGE
               agg: sum
               optional: true
             - statement_type: CF
               canonical_id: UNMAPPED
+              before_cid: CF_CASH_CHANGE
               name_contains_all:
                 - 현금
                 - 환율
@@ -616,6 +825,7 @@ formula_checks:
               optional: true
             - statement_type: CF
               canonical_id: UNMAPPED
+              before_cid: CF_CASH_CHANGE
               name_contains_all:
                 - 현금
                 - 외화환산
@@ -624,33 +834,59 @@ formula_checks:
               optional: true
             - statement_type: CF
               cid: SPECIAL_CASH_CHANGE
+              before_cid: CF_CASH_CHANGE
               agg: sum
               optional: true
             - statement_type: CF
               canonical_id: UNMAPPED
+              before_cid: CF_CASH_CHANGE
               name_contains_any:
                 - 매각예정
                 - 처분자산집단
                 - 연결범위
+                - 연결대상범위
+                - 연결변동
+                - 연결실체변동
+                - 연결기업
+                - 연결범위변경
                 - 소유주분배예정
                 - 합병
                 - 사업결합
+                - 기업결합
+                - 종속기업
+                - 종속회사
                 - 분할
                 - 중단영업
+                - 중단사업
                 - 연결자본거래
+                - 기타현금
+                - 현금및현금성자산의기타변동
               source: debug
               agg: sum_unique
               optional: true
             - statement_type: CF
               cid: CF_TRANSLATION_DIFFERENCE
+              before_cid: CF_CASH_CHANGE
               agg: sum
               optional: true
             - statement_type: CF
               canonical_id: UNMAPPED
+              before_cid: CF_CASH_CHANGE
               name_contains_any:
                 - 외화환산차이
+                - 외화환산으로인한현금
+                - 외화환산으로인한증감
+                - 외화표시현금
+                - 외화현금
+                - 외환표시현금
                 - 환율변동차이
                 - 재무제표환산
+                - 해외사업장환산
+                - 표시통화
+                - 외화예금
+                - 외화표시현금
+                - 보유현금
+                - 보유중인외화
               source: debug
               agg: sum
               optional: true
@@ -690,6 +926,7 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: CF_TRANSLATION_DIFFERENCE
+              before_cid: CF_CASH_CHANGE_BEFORE_FX
               agg: sum
               optional: true
         actual:
@@ -728,6 +965,8 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
       - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_FX_PLUS_TRANSLATION
@@ -742,10 +981,14 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
             - statement_type: CF
               cid: CF_TRANSLATION_DIFFERENCE
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
       - mode: BEGIN_PLUS_BEFORE_FX_PLUS_FX
@@ -760,6 +1003,8 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              after_cid: CF_CASH_CHANGE_BEFORE_FX
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
       - mode: BEGIN_PLUS_BEFORE_FX_PLUS_FX_PLUS_TRANSLATION
@@ -774,10 +1019,14 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              after_cid: CF_CASH_CHANGE_BEFORE_FX
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
             - statement_type: CF
               cid: CF_TRANSLATION_DIFFERENCE
+              after_cid: CF_CASH_CHANGE_BEFORE_FX
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
       - mode: BEGIN_PLUS_BEFORE_FX_PLUS_FX_PLUS_SPECIAL
@@ -792,10 +1041,14 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              after_cid: CF_CASH_CHANGE_BEFORE_FX
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
             - statement_type: CF
               cid: SPECIAL_CASH_CHANGE
+              after_cid: CF_CASH_CHANGE_BEFORE_FX
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
       - mode: BEGIN_PLUS_BEFORE_FX_PLUS_FX_PLUS_SPECIAL_TRANSLATION
@@ -810,14 +1063,20 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              after_cid: CF_CASH_CHANGE_BEFORE_FX
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
             - statement_type: CF
               cid: SPECIAL_CASH_CHANGE
+              after_cid: CF_CASH_CHANGE_BEFORE_FX
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
             - statement_type: CF
               cid: CF_TRANSLATION_DIFFERENCE
+              after_cid: CF_CASH_CHANGE_BEFORE_FX
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
       - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_SPECIAL
@@ -832,6 +1091,8 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: SPECIAL_CASH_CHANGE
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
       - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_FX_PLUS_SPECIAL
@@ -846,10 +1107,14 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
             - statement_type: CF
               cid: SPECIAL_CASH_CHANGE
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
       - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_FX_PLUS_SPECIAL_TRANSLATION
@@ -864,14 +1129,20 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
             - statement_type: CF
               cid: SPECIAL_CASH_CHANGE
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
             - statement_type: CF
               cid: CF_TRANSLATION_DIFFERENCE
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
       - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_DEBUG_FALLBACKS
@@ -886,10 +1157,14 @@ formula_checks:
               agg: first
             - statement_type: CF
               cid: FX_EFFECT_CASH
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
             - statement_type: CF
               canonical_id: UNMAPPED
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               name_contains_all:
                 - 현금
                 - 환율
@@ -898,6 +1173,8 @@ formula_checks:
               optional: true
             - statement_type: CF
               canonical_id: UNMAPPED
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               name_contains_all:
                 - 현금
                 - 외화환산
@@ -906,33 +1183,63 @@ formula_checks:
               optional: true
             - statement_type: CF
               cid: SPECIAL_CASH_CHANGE
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
             - statement_type: CF
               canonical_id: UNMAPPED
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               name_contains_any:
                 - 매각예정
                 - 처분자산집단
                 - 연결범위
+                - 연결대상범위
+                - 연결변동
+                - 연결실체변동
+                - 연결기업
+                - 연결범위변경
                 - 소유주분배예정
                 - 합병
                 - 사업결합
+                - 기업결합
+                - 종속기업
+                - 종속회사
                 - 분할
                 - 중단영업
+                - 중단사업
                 - 연결자본거래
+                - 기타현금
+                - 현금및현금성자산의기타변동
               source: debug
               agg: sum_unique
               optional: true
             - statement_type: CF
               cid: CF_TRANSLATION_DIFFERENCE
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               agg: sum
               optional: true
             - statement_type: CF
               canonical_id: UNMAPPED
+              after_cid: CF_CASH_CHANGE
+              before_cid: CF_CASH_END
               name_contains_any:
                 - 외화환산차이
+                - 외화환산으로인한현금
+                - 외화환산으로인한증감
+                - 외화표시현금
+                - 외화현금
+                - 외환표시현금
                 - 환율변동차이
                 - 재무제표환산
+                - 해외사업장환산
+                - 표시통화
+                - 외화예금
+                - 외화표시현금
+                - 보유현금
+                - 보유중인외화
               source: debug
               agg: sum
               optional: true
@@ -950,6 +1257,7 @@ warning_rules:
         - 주당손익
         - 당기순이익의귀속
         - 당기순손익의귀속
+        - 당기순이익손실의귀속
         - 총포괄이익의귀속
         - 총포괄손익의귀속
       canonical_id_not: UNMAPPED

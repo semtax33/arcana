@@ -59,6 +59,11 @@ context_rules:
       - 당기순손익귀속
       - 당기순이익손실의귀속
       - 당기순이익손실귀속
+      - 계속영업당기순이익손실의귀속
+      - 계속영업순이익손실의귀속
+      - 중단영업당기순이익의귀속
+      - 중단영업당기순이익손실의귀속
+      - 중단영업손익의귀속
     action:
       type: PUSH_CONTEXT
       context_label: 당기순이익의귀속
@@ -89,6 +94,68 @@ context_rules:
       type: PUSH_CONTEXT
       context_label: 주당손익
     reason: 주당손익 section
+
+  - id: is_sgna_section
+    priority: 780
+    fs_type: IS
+    exact_any:
+      - 판매비와관리비
+      - 판매비및관리비
+      - 판매관리비
+      - 판매비
+      - 관리비
+    conditions:
+      has_children: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: 판매비와관리비
+    reason: 금액이 있는 판관비 subtotal도 하위 항목의 문맥으로 사용
+
+  - id: is_operating_expense_section
+    priority: 770
+    fs_type: IS
+    exact_any:
+      - 영업비용
+      - 영업비용합계
+      - 비용의성격별분류
+      - 성격별비용
+      - 비용성격별분류
+    conditions:
+      has_children: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: 영업비용
+    reason: 성격별 비용/영업비용 section에서 애매한 비용 항목을 판별
+
+  - id: is_finance_income_expense_section
+    priority: 760
+    fs_type: IS
+    exact_any:
+      - 금융수익
+      - 금융비용
+      - 금융원가
+      - 금융손익
+    conditions:
+      has_children: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: 금융손익
+    reason: 금융손익 section의 손상/환입 항목을 영업비용으로 오인하지 않도록 구분
+
+  - id: is_other_income_expense_section
+    priority: 760
+    fs_type: IS
+    exact_any:
+      - 기타수익
+      - 기타비용
+      - 기타영업외수익
+      - 기타영업외비용
+    conditions:
+      has_children: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: 기타손익
+    reason: 기타손익 section의 손상/환입 항목을 영업비용으로 오인하지 않도록 구분
 
   - id: is_oci_reclass_section
     priority: 700

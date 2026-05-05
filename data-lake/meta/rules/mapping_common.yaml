@@ -19,6 +19,7 @@ rules:
     exact_any:
       - 당기순이익의귀속
       - 당기순손익의귀속
+      - 당기순이익손실의귀속
       - 총포괄이익의귀속
       - 총포괄손익의귀속
       - 주당손익
@@ -126,10 +127,16 @@ rules:
       - 연결범위변동
       - 연결범위의변동
       - 연결실체의변동
+      - 연결변동으로인한유출입
+      - 연결대상범위변동으로인한증가감소
+      - 연결대상범위변동으로인한현금변동
       - 연결실체변동으로인한현금의증가
       - 연결실체변동에의한기초현금및현금성자산의증감
+      - 연결실체변동으로인한순현금흐름
       - 연결대상범위의변동
+      - 연결재무제표작성대상의변동
       - 연결범위변동으로인한효과
+      - 연결범뷔변동에따른현금재분류효과
       - 연결실체의변동으로인한현금의증감
       - 매각예정으로분류된현금및현금성자산
       - 매각예정자산에포함된현금및현금성자산
@@ -142,6 +149,7 @@ rules:
       - 매각예정비유동자산의분류효과
       - 매각예정자산대체
       - 매각예정자산대체로인한현금의감소
+      - 매각예정비유동자산대체
       - 매각예정의일부로분류된현금및현금성자산
       - 매각예정자산집단에포함된현금및현금성자산
       - 매각예정처분자산집단에포함된현금및현금성자산
@@ -157,6 +165,7 @@ rules:
       - 매각예정처분자산집단대체
       - 매각예정비유동자산의대체
       - 매각예정자산으로의대체
+      - 매각예정자산으로부터의대체
       - 매각예정자산의순현금변동
       - 기초의매각예정집단에포함된현금및현금성자산
       - 기초매각예정자산에서분류된현금및현금성자산
@@ -167,10 +176,20 @@ rules:
       - 합병으로인한증가
       - 합병으로인한현금흐름
       - 사업결합으로인한현금의증가
+      - 사업결합으로인한현금의순증감
+      - 사업결합으로인한현금의증감
+      - 사업결합으로인한현금유입
+      - 사업결합으로인한현금유출
+      - 사업결합으로인한현금및현금성자산의증가
+      - 사업결합으로인한현금및현금성자산효과
+      - 사업결합증가감소
+      - 기업결합으로인한현금의증가
+      - 기업결합으로인한현금증감
       - 분할로인한감소
       - 분할로인한현금의감소
       - 분할로인한현금및현금성자산의감소
       - 인적분할로인한변동
+      - 분할로인한변동
       - 중단영업현금흐름
       - 중단영업으로인한현금의감소
       - 중단사업으로인한현금흐름
@@ -181,13 +200,26 @@ rules:
       - 매각예정비유동자산으로대체
       - 매각예정자산집단으로분류된현금의감소
       - 매각예정비유동자산에포함된현금및현금성자산
+      - 매각예정자산내현금및현금성자산의감소증가
       - 매각예정종속기업투자로분류된현금의증감
       - 매각예정처분자산집단으로분류된현금및현금성자산
+      - 매각예정처분자산집단으로인한변동
       - 종속기업과기타사업의지배력상실에따른현금흐름
       - 종속기업변동에따른현금및현금성자산의변동
       - 종속기업취득에따른기초현금
+      - 종속기업취득으로인한현금증가
+      - 종속기업매각에따른변동
+      - 종속회사취득및처분으로인한현금증가감소
+      - 종속회사취득으로인한현금증가
+      - 연결기업의변동
+      - 연결범위변경에의한현금흐름
+      - 연결대상범위변동으로인한현금의증가감소
       - 중단영업으로인한현금흐름
       - 중단영업현금및현금성자산
+      - 중단사업현금흐름
+      - 현금및현금성자산의기타변동
+      - 기타현금의증가
+      - 기타현금의증가합병으로인한승계
     canonical_id: SPECIAL_CASH_CHANGE
     amount_policy: as_reported
     reason: 연결범위/매각예정/처분자산집단으로 인한 특수 현금및현금성자산 변동
@@ -205,6 +237,8 @@ rules:
       - 재무제표환산으로인한조정
       - 재무제표환환산으로인한조정
       - 재무제표환산으로인한현금의감소
+      - 재무제표환산으로인한조정액
+      - 연결재무제표환산으로인한조정
       - 현금흐름의외화환산차이
       - 현금및현금성자산의외화환산차이
       - 환율변동차이현금및현금성자산등
@@ -218,10 +252,18 @@ rules:
       - 해외종속회사환율변동효과
       - 해외사업장외화환산
       - 해외사업장환산차이
+      - 해외사업장환산
+      - 해외사업장환산조정
+      - 해외사업장환산손익
       - 해외사업환산으로인한현금의변동
       - 해외사업환산에따른현금변동
+      - 해외사업환산조정
+      - 해외사업환산에따른환율변동효과
+      - 표시통화로전환에대한환율변동효과
       - 환율차이로인한해외사업환산손익
+      - 환율차이에인한변동
       - 외화재무제표환산으로인한현금의변동
+      - 외화재무제표환산으로인한현금의변동액
       - 연결재무제표환산으로인한현금및현금성자산의증가감소
     canonical_id: CF_TRANSLATION_DIFFERENCE
     amount_policy: as_reported
@@ -324,6 +366,7 @@ rules:
     priority: 850
     exact_any:
       - 리스부채의상환
+      - 리스부채의원금상환
       - 리스부채상환
       - 리스부채의감소
       - 리스부채감소
@@ -367,7 +410,9 @@ rules:
       - 외화표시현금환율변동효과
       - 외화표시현금등의환율변동효과
       - 외화표시현금및현금성자산등의환율변동효과
+      - 외화표시현금성자산의환율변동효과등
       - 현금및현금성자산등에대한환율변동효과
+      - 현금및현금성자산에대한환율변동으로인한효과
       - 현금및현금성자산의환산으로인한증감
       - 현금및현금성자산의환산으로인한증가
       - 현금및현금성자산에서발생한환산손익
@@ -375,9 +420,13 @@ rules:
       - 현금성자산환율변동효과
       - 현금성자산의환산손익
       - 외화환산으로인한현금증감
+      - 외화환산으로인한현금의증감
+      - 외화환산으로인한현금의증가감소
       - 외화환산으로인한현금의변동
+      - 외화환산으로인한현금의변동액
       - 외화환산으로인한현금변동
       - 외화환산으로인한현금및현금성자산의변동
+      - 외화환산으로인한현금및현금성자산의변동액
       - 외화환산으로인한변동
       - 외화환산으로인한변동효과
       - 외화환산으로인한효과
@@ -395,6 +444,39 @@ rules:
       - 환율변동으로인한증감
       - 환율변동으로인한증가
       - 환율변동으로인한현금의변동
+      - 환율변동으로인한현금및현금성자산의증가
+      - 환율변동으로인한현금및현금성자산의증가감소
+      - 환율변동으로인한영향
+      - 환율변동으로인한증가감소
+      - 횐율변동으로인한증가
+      - 현금및현금성자산의환율변둉효과
+      - 현금및현금자산에대한환율변동효과
+      - 외화예금환율변동효과
+      - 보유중인외화예금의환율변동효과
+      - 보유현금및현금성자산환산효과
+      - 외화표시현금현금성자산에대한환율변동
+      - 외화표시현금및현금자산성의환율변동효과
+      - 외화표시현금및현금성자산의환율변동으로인한효과
+      - 외화표시현금성자산환율변동효과
+      - 외화표시현금성자산의환율변동
+      - 외화현금의환율변동효과
+      - 외화현금및현금성자산에대한환율변동효과
+      - 외화로표시된현금및현금성자산의환율변동효과
+      - 현금과현금성자산에대한환율변동효과
+      - 현금및현금성자산대한환율변동효과
+      - 현금및현금성자산에대한환율변동효
+      - 현금및현금성자산외환율변동효과
+      - 현금및현금성자산의외화환산손익
+      - 현금및현금성자산의외화환산이익
+      - 현금및현금성자산의외화환산이익손실
+      - 현금및현금성자산의환율변동효과로인한증가감소
+      - 현금성자산의환율변동
+      - 현금성자산에대한환율효과
+      - 현금의외화환산효과
+      - 현금환율변동효과
+      - 환율변동효과등
+      - 환율차이등으로인한변동
+      - 외환표시현금및현금성자산에대한환율변동효과
       - 기타환율변동효과
       - 기타의증감환율변동효과
       - 외화표시환율변동효과
@@ -423,16 +505,51 @@ rules:
     amount_policy: as_reported
     reason: 현금흐름표 기말 현금
 
+  - id: cf_fx_effect_cash_generic_cash_fx
+    fs_type: CF
+    priority: 845
+    include_any:
+      - 현금
+      - 현금성자산
+      - 현금자산
+    include_any_2:
+      - 환율
+      - 외화환산
+      - 외환
+      - 환산
+    exclude_any:
+      - 기초
+      - 기말
+      - 효과전
+      - 차입
+      - 사채
+    canonical_id: FX_EFFECT_CASH
+    amount_policy: as_reported
+    reason: 현금/현금성자산 관련 환율·외화환산효과 generic alias
+
   - id: cf_capex_ppe
     fs_type: CF
     priority: 800
     exact_any:
       - 유형자산의취득
       - 유형자산취득
+      - 유형자산의 취득
     canonical_id: CAPEX_PPE
     amount_policy: abs
     cash_direction: outflow
     reason: 유형자산 취득 지출
+
+  - id: cf_capex_ppe_in
+    fs_type: CF
+    priority: 800
+    exact_any:
+      - 유형자산의 처분
+      - 유형자산의처분
+      - 유형자산처분
+    canonical_id: CAPEX_PPE
+    amount_policy: abs
+    cash_direction: inflow
+    reason: 유형자산 처분 수입
 
   - id: cf_capex_intang
     fs_type: CF
@@ -444,6 +561,18 @@ rules:
     amount_policy: abs
     cash_direction: outflow
     reason: 무형자산 취득 지출
+
+  - id: cf_capex_intang_in
+    fs_type: CF
+    priority: 800
+    exact_any:
+      - 무형자산의 처분
+      - 무형자산의처분
+      - 무형자산처분
+    canonical_id: CAPEX_INTANG
+    amount_policy: abs
+    cash_direction: inflow
+    reason: 무형자산 처분 수익
 
   - id: cf_depreciation_expense
     fs_type: CF
@@ -567,6 +696,10 @@ rules:
     priority: 700
     exact_any:
       - 비유동부채
+      - 비유동부채 합계
+      - 비유동부채합계
+      - 비유동부채 계
+      - 비유동부채총계
     canonical_id: NON_CURRENT_LIABILITIES
     fallback_if_missing: UNMAPPED
 
@@ -604,7 +737,9 @@ rules:
     include_any:
       - 매각예정비유동자산
       - 매각예정자산
+      - 매각예정집단의자산
       - 매각예정으로분류된비유동자산
+      - 매각예정으로재분류된투자주식
       - 매각예정으로분류된처분집단의자산
       - 매각예정또는소유주에대한분배예정으로분류된비유동자산이나처분자산집단
       - 처분자산집단의자산
@@ -629,8 +764,11 @@ rules:
       - 매각예정비유동부채
       - 매각예정부채
       - 매각예정으로분류된처분집단의부채
+      - 매각예정집단의부채
+      - 매각예정처분부채집단
       - 매각예정으로분류된처분자산집단에포함된부채
       - 매각예정비유동자산과직접관련된부채
+      - 매각예정비유동자산관련부채
       - 처분자산집단의부채
       - 처분자산집단과직접관련된부채
       - 매각예정자산관련부채
@@ -649,13 +787,24 @@ rules:
       - 증권업자산
       - 창업투자자산
       - 창업투자자
-      - 투자실적자산
       - 사모투자자산
+      - 사모투자자
       - 금융채권
       - 금융자산
     canonical_id: FINANCIAL_BUSINESS_ASSETS
     amount_policy: as_reported
     reason: 일부 지주/복합기업에서 금융업 자산이 별도 subtotal로 표시됨
+
+  - id: bs_financial_business_assets_leaf_details
+    fs_type: BS
+    priority: 755
+    exact_any:
+      - 투자실적자산
+    conditions:
+      has_children: false
+    canonical_id: FINANCIAL_BUSINESS_ASSETS
+    amount_policy: as_reported
+    reason: 금융업/창업투자 자산 leaf detail. 부모 subtotal이 있으면 과대합산 방지를 위해 매핑하지 않음
 
   - id: bs_financial_business_liabilities
     fs_type: BS
@@ -699,6 +848,7 @@ rules:
       - 자본과부채총계
       - 자본및부채총계
       - 자본과부채합계
+      - 부채및자본의총계
     canonical_id: UNMAPPED
     reason: 자산총계와 중복되는 보조 총계
 
@@ -735,6 +885,7 @@ rules:
       - 유동자산합계
       - 유동자산 계
       - 유동자산(금융업)
+      - 유동자산총계
     canonical_id: CURRENT_ASSETS
 
   - id: bs_non_current_assets
@@ -747,6 +898,7 @@ rules:
       - 비유동자산합계
       - 비유동자산 계
       - 비유동자산(금융업)
+      - 비유동자산총계
     canonical_id: NON_CURRENT_ASSETS
 
   - id: bs_current_liabilities
@@ -754,6 +906,10 @@ rules:
     priority: 700
     exact_any:
       - 유동부채
+      - 유동부채 합계
+      - 유동부채합계
+      - 유동부채 계
+      - 유동부채총계
     canonical_id: CURRENT_LIABILITIES
 
   - id: bs_other_current_assets
@@ -950,9 +1106,31 @@ rules:
       - 지배기업의소유주에게귀속되는자본
     conditions:
       has_children: false
+      amount_is_zero_or_blank: false
     canonical_id: EAOP
     amount_policy: as_reported
     reason: 지배주주지분 leaf row만 매핑
+
+  - id: bs_parent_equity_subtotal
+    fs_type: BS
+    priority: 805
+    exact_any:
+      - 지배기업의소유지분
+      - 지배기업소유지분
+      - 지배기업의소유주지분
+      - 지배기업소유주지분
+      - 지배기업주주지분
+      - 지배주주지분
+      - 지배기업소유주에게귀속되는자본
+      - 지배기업의소유주에게귀속되는자본
+    context_include_any:
+      - 자본
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: false
+    canonical_id: EAOP
+    amount_policy: as_reported
+    reason: 자본 section의 지배주주지분 subtotal
 
   - id: bs_nci_equity
     fs_type: BS
@@ -963,6 +1141,7 @@ rules:
       - 비지배주주 지분
     conditions:
       has_children: false
+      amount_is_zero_or_blank: false
     canonical_id: NEAOP
     amount_policy: as_reported
     reason: 비지배주주지분 leaf row만 매핑
@@ -1076,14 +1255,29 @@ rules:
       - 매출채권및기타채권등손상차손
       - 매출채권등금융자산손상차손
       - 기타의대손상각비
-      - 손상차손
     exclude_any:
       - 환입
-      - 금융자산
-      - 금융상품
     canonical_id: BAD_DEBT_EXPENSE
     amount_policy: abs
     reason: 매출총이익 이후 별도 표시되는 대손/매출채권 손상 관련 영업비용
+
+  - id: is_bad_debt_expense_contextual_impairment
+    fs_type: IS
+    priority: 812
+    exact_any:
+      - 금융자산손상차손
+      - 손상차손
+      - 손상손실
+    context_include_any:
+      - 판매비와관리비
+      - 판매비및관리비
+      - 판매관리비
+      - 영업비용
+    exclude_any:
+      - 환입
+    canonical_id: BAD_DEBT_EXPENSE
+    amount_policy: abs
+    reason: 넓은 손상 표현은 영업비용/판관비 문맥에서만 대손성 비용으로 매핑
 
   - id: is_bad_debt_reversal
     fs_type: IS
@@ -1097,11 +1291,26 @@ rules:
       - 대손상각비대손충당금환입
       - 대손상각비환입손상차손
     exclude_any:
-      - 금융자산
       - 금융상품
     canonical_id: BAD_DEBT_REVERSAL
     amount_policy: abs
     reason: 대손상각비/손상차손 환입. 영업이익 rollup에서 가산
+
+  - id: is_bad_debt_reversal_contextual_financial_asset
+    fs_type: IS
+    priority: 812
+    include_any:
+      - 금융자산손상차손환입
+    context_include_any:
+      - 판매비와관리비
+      - 판매비및관리비
+      - 판매관리비
+      - 영업비용
+    exclude_any:
+      - 금융상품
+    canonical_id: BAD_DEBT_REVERSAL
+    amount_policy: abs
+    reason: 금융자산 손상 환입은 영업비용/판관비 문맥에서만 대손 환입으로 매핑
 
   - id: is_logistics_cost
     fs_type: IS
@@ -1180,6 +1389,7 @@ rules:
     priority: 700
     exact_any:
       - 매출총이익
+      - 매출총이익손실
     canonical_id: GROSS_PROFIT
 
   - id: is_sgna
@@ -1189,6 +1399,10 @@ rules:
       - 판매비와관리비
       - 판매비및관리비
       - 판매관리비
+      - 판매및일반관리비
+      - 판매비와일반관리비
+      - 판매리와관리비
+      - 판배비와관리비
     canonical_id: SGNA
 
   - id: is_rnd
@@ -1261,6 +1475,12 @@ rules:
       - 지배기업소유주지분순이익손실
       - 지배기업의소유주에게귀속되는당기순이익손실
       - 지배기업소유주귀속당기순이익
+      - 지배기업소유주에귀속될당기순이익
+      - 지배기업의소유주에귀속될당기순이익
+      - 지배기업의소유주에게귀속될당기순이익
+      - 지배기업의소유주에게귀속되는중단영업손실
+      - 지배기업의소유주에게귀속될중단영업손익
+      - 중단영업지배기업의소유주주지분
     context_include_any:
       - 당기순이익의귀속
       - 당기순손익의귀속
@@ -1297,8 +1517,17 @@ rules:
       - 비지배지분에귀속되는당기순이익손실
       - 비지배지분순이익손실
       - 비지배지분귀속당기순이익
+      - 비지배지분귀속
+      - 비지배지분소유주지분
       - 비지배지분에배분된당기순손익
+      - 비지배지분에배분된순손익
+      - 비지배지분에귀속되는순이익손실
+      - 비지배지분귀속당기순이익손실
+      - 비지배주주지분순이익
+      - 비지배지분손익
+      - 비지배지분지분
       - 비지배기업소유주지분
+      - 비지배기업소유지분
       - 비지배기업의소유주에게귀속되는당기순이익손실
       - 비지배지분에귀속되는당기순이익
     context_include_any:

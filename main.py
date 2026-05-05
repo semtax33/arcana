@@ -7,6 +7,7 @@ from canonical_rule_normalizer import (
     ContextEngine,
     RuleEngine,
     extract_rows_from_dart_comment_html,
+    infer_comment_html_path,
     load_canonical_accounts,
     normalize_financial_statement_rule_based,
 )
@@ -17,6 +18,7 @@ from statements import download_recent_statement_comments, download_statement_co
 CANONICAL_CSV_PATH = Path("./data-lake/meta/CanonicalAccount.csv")
 CONTEXT_RULE_PATH = Path("./data-lake/meta/rules/context_common.yaml")
 MAPPING_RULE_PATH = Path("./data-lake/meta/rules/mapping_common.yaml")
+COMMENT_RULE_PATH = Path("./data-lake/meta/rules/comment_common.yaml")
 SIGN_POLICY_PATH = Path("./data-lake/meta/rules/sign_policy_common.yaml")
 SAVE_DEBUG = True
 FORCE_REBUILD = False
@@ -35,6 +37,7 @@ def output_is_fresh(
     dependency_paths: list[Path],
     save_debug: bool,
     newest_dependency_mtime: float | None = None,
+    extra_input_paths: list[Path] | None = None,
 ) -> bool:
     if FORCE_REBUILD or not output_path.exists():
         return False
@@ -46,7 +49,11 @@ def output_is_fresh(
     if newest_dependency_mtime is None:
         newest_dependency_mtime = max(p.stat().st_mtime for p in dependency_paths)
 
-    newest_input_mtime = max(input_path.stat().st_mtime, newest_dependency_mtime)
+    input_paths = [input_path, *(extra_input_paths or [])]
+    newest_input_mtime = max(
+        max(p.stat().st_mtime for p in input_paths if p.exists()),
+        newest_dependency_mtime,
+    )
     if output_path.stat().st_mtime < newest_input_mtime:
         return False
 
@@ -65,7 +72,7 @@ def _init_normalize_worker() -> None:
     )
 
 
-def _normalize_one_statement(task: tuple[Path, str, str, Path]) -> tuple[str, str, str]:
+def _normalize_one_statement(task: tuple[Path, str, str, Path, Path | None]) -> tuple[str, str, str, str]:
     global _WORKER_CANONICAL_DF, _WORKER_CONTEXT_ENGINE, _WORKER_MAPPING_ENGINE
 
     if (
@@ -75,7 +82,7 @@ def _normalize_one_statement(task: tuple[Path, str, str, Path]) -> tuple[str, st
     ):
         _init_normalize_worker()
 
-    input_html_path, stock_code, period, output_csv_path = task
+    input_html_path, stock_code, period, output_csv_path, comment_html_path = task
 
     try:
         normalize_financial_statement_rule_based(
@@ -92,15 +99,17 @@ def _normalize_one_statement(task: tuple[Path, str, str, Path]) -> tuple[str, st
             mapping_engine=_WORKER_MAPPING_ENGINE,
             canonical_df=_WORKER_CANONICAL_DF,
             verbose=False,
+            comment_rule_paths=[COMMENT_RULE_PATH],
+            comment_html_path=comment_html_path,
         )
     except FileNotFoundError as e:
-        return ("missing", str(input_html_path), str(e))
+        return ("missing", str(input_html_path), str(e), stock_code)
     except KeyError as e:
-        return ("warning", str(input_html_path), str(e))
+        return ("warning", str(input_html_path), str(e), stock_code)
     except Exception as e:
-        return ("failed", str(input_html_path), repr(e))
+        return ("failed", str(input_html_path), repr(e), stock_code)
 
-    return ("processed", str(input_html_path), "")
+    return ("processed", str(input_html_path), "", stock_code)
 
 
 def main() -> None:
@@ -115,11 +124,12 @@ def main() -> None:
         CANONICAL_CSV_PATH,
         CONTEXT_RULE_PATH,
         MAPPING_RULE_PATH,
+        COMMENT_RULE_PATH,
         SIGN_POLICY_PATH,
     ]
     newest_dependency_mtime = max(p.stat().st_mtime for p in dependency_paths)
 
-    tasks: list[tuple[Path, str, str, Path]] = []
+    tasks: list[tuple[Path, str, str, Path, Path | None]] = []
     skipped_count = 0
     missing_count = 0
 
@@ -129,6 +139,12 @@ def main() -> None:
                 input_html_path = Path(f"./data-lake/bronze/dart/finance-statement/{stock_code}/finance_statement_({year}.{str(month).zfill(2)}).html")
                 period = f"{year}.{month}"
                 output_csv_path = Path(f"./data-lake/silver/dart/normalized/normalized_{stock_code}_{year}.{str(month).zfill(2)}.csv")
+                comment_html_path = infer_comment_html_path(
+                    input_html_path=input_html_path,
+                    company_name=stock_code,
+                    period=period,
+                )
+                existing_comment_paths = [comment_html_path] if comment_html_path.exists() else []
 
                 if not input_html_path.exists():
                     missing_count += 1
@@ -140,11 +156,18 @@ def main() -> None:
                     dependency_paths,
                     SAVE_DEBUG,
                     newest_dependency_mtime=newest_dependency_mtime,
+                    extra_input_paths=existing_comment_paths,
                 ):
                     skipped_count += 1
                     continue
 
-                tasks.append((input_html_path, stock_code, period, output_csv_path))
+                tasks.append((
+                    input_html_path,
+                    stock_code,
+                    period,
+                    output_csv_path,
+                    comment_html_path if comment_html_path.exists() else None,
+                ))
 
     processed_count = 0
     failed_count = 0
@@ -158,7 +181,7 @@ def main() -> None:
         _init_normalize_worker()
         for task in tasks:
             print(f"[START PROCESS] {task[0]}")
-            status, path, message = _normalize_one_statement(task)
+            status, path, message, stock_code = _normalize_one_statement(task)
             if status == "processed":
                 processed_count += 1
             elif status == "missing":
@@ -166,7 +189,7 @@ def main() -> None:
                 print("File not found : ", message)
             elif status == "warning":
                 failed_count += 1
-                print("[WARNING] Unknown Key error exception is occured: ", message)
+                print("[WARNING] Unknown Key error exception is occured: ", message, stock_code)
             else:
                 failed_count += 1
                 print(f"[ERROR] {path}: {message}")
@@ -181,7 +204,7 @@ def main() -> None:
             max_workers=MAX_WORKERS,
             initializer=_init_normalize_worker,
         ) as executor:
-            for status, path, message in executor.map(
+            for status, path, message, stock_code in executor.map(
                 _normalize_one_statement,
                 tasks,
                 chunksize=20,
@@ -193,7 +216,7 @@ def main() -> None:
                     print("File not found : ", message)
                 elif status == "warning":
                     failed_count += 1
-                    print("[WARNING] Unknown Key error exception is occured: ", message)
+                    print("[WARNING] Unknown Key error exception is occured: ", message, stock_code)
                 else:
                     failed_count += 1
                     print(f"[ERROR] {path}: {message}")

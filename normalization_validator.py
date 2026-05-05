@@ -87,14 +87,31 @@ def safe_str(v: Any) -> str:
 
 def normalize_name(v: Any) -> str:
     s = safe_str(v)
+    prefix_patterns = [
+        r"^\s*\(\s*\d+\s*\)\s*",
+        r"^\s*\(?\s*\d+\s*[.)．、]\s*",
+        r"^\s*\(?[IVXLCDMivxlcdmⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+\)?\s*[.)．、]\s*",
+        r"^\s*[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]\s*",
+        r"^\s*(?:\([가-힣]\)|[가-힣][.)．、])\s*",
+        r"^\s*(?:\([A-Za-z]\)|[A-Za-z][.)．、])\s*",
+    ]
+    changed = True
+    while changed:
+        before = s
+        for pattern in prefix_patterns:
+            s = re.sub(pattern, "", s)
+        changed = before != s
     s = re.sub(r"\(주\s*\d+(?:\s*,\s*\d+)*\)", "", s)
+    s = re.sub(r"\(주석\s*[^)]*\)", "", s)
+    s = re.sub(r"\(\s*\d+(?:\s*[,\.]\s*\d+)*\s*\)", "", s)
     s = re.sub(r"\(단위\s*[:：]\s*[^)]*\)", "", s)
     s = s.replace("(", "").replace(")", "")
     s = s.replace("（", "").replace("）", "")
     s = s.replace("\u3000", "")
     s = re.sub(r"\s+", "", s)
     s = s.replace("ㆍ", "").replace("·", "")
-    s = s.replace("/", "").replace("-", "")
+    s = s.replace("/", "").replace("-", "").replace(",", "").replace("，", "")
+    s = re.sub(r"[.．。]+$", "", s)
     return s.strip()
 
 
@@ -160,6 +177,7 @@ def load_csv_pair(
             raise ValueError(f"debug csv missing column: {col}")
 
     for df in [n, d]:
+        df["__row_idx"] = range(len(df))
         df["amount_num"] = to_number_series(df["amount"])
         df["name_norm"] = df["original_account_name"].map(normalize_name)
 
@@ -206,6 +224,9 @@ def filter_cache_key(spec: dict[str, Any]) -> str:
         "name_contains_all",
         "context_contains_any",
         "context_contains_all",
+        "context_exclude_any",
+        "after_cid",
+        "before_cid",
     ]
     payload = {k: spec[k] for k in filter_keys if k in spec}
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
@@ -227,6 +248,28 @@ def filter_rows(
     statement_type = spec.get("statement_type")
     if statement_type:
         out = out[out["statement_type"].eq(statement_type)]
+
+    if "after_cid" in spec:
+        anchor = safe_str(spec.get("after_cid"))
+        if "__row_idx" not in out.columns or not anchor:
+            out = out.iloc[0:0]
+        else:
+            anchor_rows = out[out["canonical_account_id"].eq(anchor)]
+            if anchor_rows.empty:
+                out = out.iloc[0:0]
+            else:
+                out = out[out["__row_idx"].gt(anchor_rows["__row_idx"].max())]
+
+    if "before_cid" in spec:
+        anchor = safe_str(spec.get("before_cid"))
+        if "__row_idx" not in out.columns or not anchor:
+            out = out.iloc[0:0]
+        else:
+            anchor_rows = out[out["canonical_account_id"].eq(anchor)]
+            if anchor_rows.empty:
+                out = out.iloc[0:0]
+            else:
+                out = out[out["__row_idx"].lt(anchor_rows["__row_idx"].min())]
 
     if "cid" in spec:
         out = out[out["canonical_account_id"].eq(spec["cid"])]
@@ -280,6 +323,15 @@ def filter_rows(
             t = normalize_name(token)
             if t:
                 out = out[out["context_all"].str.contains(re.escape(t), regex=True, na=False)]
+
+    if "context_exclude_any" in spec:
+        if "context_all" not in out.columns:
+            return out.iloc[0:0]
+        tokens = [normalize_name(x) for x in spec["context_exclude_any"]]
+        tokens = [t for t in tokens if t]
+        if tokens:
+            pattern = "|".join(re.escape(t) for t in tokens)
+            out = out[~out["context_all"].str.contains(pattern, regex=True, na=False)]
 
     if filter_cache is not None:
         filter_cache[key] = out
@@ -395,9 +447,15 @@ def aggregate_amount(rows: pd.DataFrame, agg: str) -> float | None:
     if agg == "sum_unique":
         dedupe_cols = [
             col
-            for col in ["statement_type", "canonical_account_id", "name_norm", "amount_num"]
+            for col in ["statement_type", "canonical_account_id", "amount_num"]
             if col in rows.columns
         ]
+        if (
+            "canonical_account_id" in rows.columns
+            and rows["canonical_account_id"].eq("UNMAPPED").any()
+            and "name_norm" in rows.columns
+        ):
+            dedupe_cols.append("name_norm")
         return float(rows.drop_duplicates(subset=dedupe_cols)["amount_num"].sum())
     if agg == "abs_sum":
         return float(rows["amount_num"].abs().sum())

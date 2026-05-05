@@ -1,0 +1,17 @@
+comment_rules:
+  - id: cash_flow_note_common
+    section_name: 현금흐름
+    target_patterns:
+      DEPRECIATION_EXPENSE: "^감가상각비$"
+      AMORTIZATION: "^무형자산상각비$"
+      BAD_DEBT_EXPENSE: "^대손상각비$"
+      TRADE_RECEIVABLES: "^매출채권$"
+
+  - id: intangible_assets_note_common
+    section_name: 무형자산
+    target_patterns:
+      RND:
+        - "^연구개발비$"
+        - "^연구와 개발 비용$"
+        - "^경상개발비$"
+        - "^연구 및 개발비$"
