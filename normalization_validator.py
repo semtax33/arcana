@@ -6,6 +6,7 @@ from datetime import datetime
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import time
@@ -945,11 +946,142 @@ def pct(v: float | None) -> float | None:
     return round(v * 100, 4)
 
 
+FACTOR_COVERAGE_FIELDS = [
+    "revenue",
+    "gross_profit",
+    "operating_income",
+    "pbt",
+    "tax_expense",
+    "net_income",
+    "net_income_parent",
+    "total_assets",
+    "total_equity",
+    "parent_equity",
+    "cfo",
+    "gross_capex",
+    "net_capex",
+    "fcf",
+    "depreciation_and_amortization",
+    "ebitda",
+    "nopat",
+    "invested_capital",
+    "roa_pct",
+    "roe_pct",
+    "roe_parent_pct",
+    "roic_pct",
+    "interest_bearing_debt",
+    "net_debt_cash_only",
+]
+
+
+def has_factor_value(v: Any) -> bool:
+    if v is None:
+        return False
+    if isinstance(v, str):
+        return v.strip() != ""
+    try:
+        if pd.isna(v):
+            return False
+    except Exception:
+        pass
+    if isinstance(v, float) and not math.isfinite(v):
+        return False
+    return True
+
+
+def build_factor_coverage(
+    factor_snapshot: dict[str, Any],
+    fields: list[str] | None = None,
+) -> dict[str, Any]:
+    fields = fields or FACTOR_COVERAGE_FIELDS
+    present = [field for field in fields if has_factor_value(factor_snapshot.get(field))]
+    missing = [field for field in fields if field not in present]
+    total = len(fields)
+    covered = len(present)
+
+    return {
+        "factor_coverage_count": covered,
+        "factor_coverage_total": total,
+        "factor_coverage_ratio": round(covered / total, 4) if total else 0.0,
+        "factor_coverage_pct": round(covered * 100 / total, 2) if total else 0.0,
+        "factor_coverage_missing": missing,
+    }
+
+
+def factor_coverage_row(factor_snapshot: dict[str, Any]) -> dict[str, Any]:
+    coverage = build_factor_coverage(factor_snapshot)
+    return {
+        "factor_coverage_count": coverage["factor_coverage_count"],
+        "factor_coverage_total": coverage["factor_coverage_total"],
+        "factor_coverage_ratio": coverage["factor_coverage_ratio"],
+        "factor_coverage_pct": coverage["factor_coverage_pct"],
+        "factor_coverage_missing": json.dumps(
+            coverage["factor_coverage_missing"],
+            ensure_ascii=False,
+        ),
+    }
+
+
+def summarize_factor_coverage_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rows:
+        return {
+            "factor_coverage_avg_pct": 0.0,
+            "factor_coverage_min_pct": 0.0,
+            "factor_coverage_full_year_count": 0,
+            "factor_coverage_missing_top": "[]",
+        }
+
+    df = pd.DataFrame(rows)
+    pct_series = df["factor_coverage_pct"] if "factor_coverage_pct" in df.columns else pd.Series(dtype=float)
+    count_series = df["factor_coverage_count"] if "factor_coverage_count" in df.columns else pd.Series(dtype=float)
+    total_series = df["factor_coverage_total"] if "factor_coverage_total" in df.columns else pd.Series(dtype=float)
+    pct_values = pd.to_numeric(pct_series, errors="coerce").dropna()
+    count_values = pd.to_numeric(count_series, errors="coerce")
+    total_values = pd.to_numeric(total_series, errors="coerce")
+
+    missing_counts: dict[str, int] = {}
+    if "factor_coverage_missing" in df.columns:
+        for raw in df["factor_coverage_missing"]:
+            if isinstance(raw, list):
+                missing = raw
+            else:
+                try:
+                    missing = json.loads(safe_str(raw)) if safe_str(raw) else []
+                except Exception:
+                    missing = []
+            for field in missing:
+                missing_counts[safe_str(field)] = missing_counts.get(safe_str(field), 0) + 1
+
+    missing_top = [
+        {"field": field, "missing_year_count": count}
+        for field, count in sorted(
+            missing_counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:10]
+    ]
+
+    full_year_count = int(
+        (
+            count_values.notna()
+            & total_values.notna()
+            & count_values.eq(total_values)
+        ).sum()
+    )
+
+    return {
+        "factor_coverage_avg_pct": round(float(pct_values.mean()), 2) if not pct_values.empty else 0.0,
+        "factor_coverage_min_pct": round(float(pct_values.min()), 2) if not pct_values.empty else 0.0,
+        "factor_coverage_full_year_count": full_year_count,
+        "factor_coverage_missing_top": json.dumps(missing_top, ensure_ascii=False),
+    }
+
+
 def build_factor_snapshot(
     df: pd.DataFrame,
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    if not config.get("factor_snapshot", {}).get("enabled", True):
+    factor_config = config.get("factor_snapshot", {}) or {}
+    if not factor_config.get("enabled", True):
         return {}
 
     grouped = df.groupby("canonical_account_id", sort=False)["amount_num"]
@@ -963,10 +1095,35 @@ def build_factor_snapshot(
     def total(cid: str) -> float:
         return float(sum_by_cid.get(cid, 0.0))
 
+    def has(cid: str) -> bool:
+        return cid in sum_by_cid
+
+    def abs_total_if_present(cid: str) -> float | None:
+        if not has(cid):
+            return None
+        return abs(total(cid))
+
+    def first_valid_rate(
+        candidates: list[tuple[str, float | None]],
+    ) -> tuple[float | None, str]:
+        min_rate = float(factor_config.get("effective_tax_rate_min", 0.0))
+        max_rate = float(factor_config.get("effective_tax_rate_max", 1.0))
+
+        for source, value in candidates:
+            if value is None or not math.isfinite(value):
+                continue
+            if min_rate <= value <= max_rate:
+                return float(value), source
+
+        return None, ""
+
     revenue = first("REVENUE")
     cogs = first("COGS")
     gross_profit = first("GROSS_PROFIT")
     op_income = first("OPERATING_INCOME")
+    reported_ebitda = first("EBITDA")
+    pbt = first("PBT")
+    tax_expense = first("TAX_EXPENSE")
     net_income = first("NET_INCOME")
     net_income_parent = first("NET_INCOME_PARENT")
 
@@ -1008,11 +1165,77 @@ def build_factor_snapshot(
     if cash is not None and short_fin_assets is not None:
         net_debt_with_short_fin_assets = interest_bearing_debt - cash - short_fin_assets
 
+    dna_is = abs_total_if_present("DNA_IS")
+    depreciation_cf = abs_total_if_present("DEPRECIATION_EXPENSE")
+    amortization_cf = abs_total_if_present("AMORTIZATION")
+
+    cf_da_parts = [v for v in [depreciation_cf, amortization_cf] if v is not None]
+    cf_da = sum(cf_da_parts) if cf_da_parts else None
+
+    depreciation_and_amortization = None
+    da_source = ""
+    if dna_is is not None and cf_da is not None:
+        depreciation_and_amortization = max(dna_is, cf_da)
+        da_source = "DNA_IS" if dna_is >= cf_da else "DEPRECIATION_EXPENSE+AMORTIZATION"
+    elif dna_is is not None:
+        depreciation_and_amortization = dna_is
+        da_source = "DNA_IS"
+    elif cf_da is not None:
+        depreciation_and_amortization = cf_da
+        da_source = "DEPRECIATION_EXPENSE+AMORTIZATION"
+
+    ebitda_calculated = None
+    if op_income is not None and depreciation_and_amortization is not None:
+        ebitda_calculated = op_income + depreciation_and_amortization
+    ebitda = reported_ebitda if reported_ebitda is not None else ebitda_calculated
+
+    tax_rate_candidates: list[tuple[str, float | None]] = []
+    if pbt not in (None, 0):
+        if tax_expense is not None:
+            tax_rate_candidates.append(("TAX_EXPENSE/PBT", tax_expense / pbt))
+            tax_rate_candidates.append(("-TAX_EXPENSE/PBT", -tax_expense / pbt))
+        if net_income is not None:
+            tax_rate_candidates.append(
+                ("(PBT-NET_INCOME)/PBT", (pbt - net_income) / pbt)
+            )
+
+    effective_tax_rate, effective_tax_rate_source = first_valid_rate(tax_rate_candidates)
+    nopat = None
+    if op_income is not None and effective_tax_rate is not None:
+        nopat = op_income * (1 - effective_tax_rate)
+
+    invested_capital_cash_only = None
+    if total_equity is not None and cash is not None:
+        invested_capital_cash_only = total_equity + interest_bearing_debt - cash
+
+    invested_capital_with_short_fin_assets = None
+    if total_equity is not None and cash is not None and short_fin_assets is not None:
+        invested_capital_with_short_fin_assets = (
+            total_equity + interest_bearing_debt - cash - short_fin_assets
+        )
+
+    invested_capital_mode = safe_str(
+        factor_config.get(
+            "invested_capital_mode",
+            "with_short_financial_assets_if_available",
+        )
+    )
+    if invested_capital_mode == "cash_only":
+        invested_capital = invested_capital_cash_only
+    else:
+        invested_capital = (
+            invested_capital_with_short_fin_assets
+            if invested_capital_with_short_fin_assets is not None
+            else invested_capital_cash_only
+        )
+
     return {
         "revenue": revenue,
         "cogs": cogs,
         "gross_profit": gross_profit,
         "operating_income": op_income,
+        "pbt": pbt,
+        "tax_expense": tax_expense,
         "net_income": net_income,
         "net_income_parent": net_income_parent,
         "total_assets": total_assets,
@@ -1023,13 +1246,35 @@ def build_factor_snapshot(
         "net_capex": net_capex,
         "fcf": fcf,
         "fcf_after_disposal": fcf_after_disposal,
+        "dna_is": dna_is,
+        "depreciation_expense_cf": depreciation_cf,
+        "amortization_cf": amortization_cf,
+        "depreciation_and_amortization": depreciation_and_amortization,
+        "depreciation_and_amortization_source": da_source,
+        "ebitda_reported": reported_ebitda,
+        "ebitda_calculated": ebitda_calculated,
+        "ebitda": ebitda,
         "gross_margin_pct": pct(safe_div(gross_profit, revenue)),
         "operating_margin_pct": pct(safe_div(op_income, revenue)),
+        "ebitda_margin_pct": pct(safe_div(ebitda, revenue)),
         "net_margin_pct": pct(safe_div(net_income, revenue)),
         "fcf_margin_pct": pct(safe_div(fcf, revenue)),
         "roa_pct": pct(safe_div(net_income, total_assets)),
         "roe_pct": pct(safe_div(net_income, total_equity)),
         "roe_parent_pct": pct(safe_div(net_income_parent, eaop)),
+        "effective_tax_rate_pct": pct(effective_tax_rate),
+        "effective_tax_rate_source": effective_tax_rate_source,
+        "nopat": nopat,
+        "invested_capital_cash_only": invested_capital_cash_only,
+        "invested_capital_with_short_financial_assets": (
+            invested_capital_with_short_fin_assets
+        ),
+        "invested_capital": invested_capital,
+        "roic_cash_only_pct": pct(safe_div(nopat, invested_capital_cash_only)),
+        "roic_with_short_financial_assets_pct": pct(
+            safe_div(nopat, invested_capital_with_short_fin_assets)
+        ),
+        "roic_pct": pct(safe_div(nopat, invested_capital)),
         "inventory_turnover": safe_div(cogs, inventory),
         "receivables_turnover_proxy": safe_div(revenue, receivable_proxy),
         "interest_bearing_debt": interest_bearing_debt,
@@ -1201,6 +1446,12 @@ def write_markdown_report(report: ValidationReport, path: str | Path) -> None:
     lines.append(f"- mapped_rows: `{report.mapped_rows}`")
     lines.append(f"- unmapped_rows: `{report.unmapped_rows}`")
     lines.append(f"- mapped_ratio: `{report.mapped_ratio}`")
+    coverage = build_factor_coverage(report.factor_snapshot)
+    lines.append(f"- factor_coverage_pct: `{coverage['factor_coverage_pct']}`")
+    lines.append(
+        f"- factor_coverage_count: "
+        f"`{coverage['factor_coverage_count']}/{coverage['factor_coverage_total']}`"
+    )
     lines.append("")
 
     lines.append("## 1. 검산")
@@ -2408,6 +2659,7 @@ def collect_failure_cases(validation_root: str | Path) -> pd.DataFrame:
             continue
 
         stock_code, period = extract_stock_period_from_report_file(report)
+        coverage = factor_coverage_row(report.get("factor_snapshot", {}) or {})
 
         for err in report.get("errors", []):
             if err.get("id") != "formula_check_failed":
@@ -2430,6 +2682,7 @@ def collect_failure_cases(validation_root: str | Path) -> pd.DataFrame:
                         "candidate_amount": None,
                         "matched_sign": "",
                         "json_path": str(path),
+                        **coverage,
                     }
                 )
                 continue
@@ -2449,6 +2702,7 @@ def collect_failure_cases(validation_root: str | Path) -> pd.DataFrame:
                         "candidate_amount": c.get("amount"),
                         "matched_sign": c.get("matched_sign", ""),
                         "json_path": str(path),
+                        **coverage,
                     }
                 )
 
@@ -2459,19 +2713,36 @@ def summarize_failure_clusters(cases: pd.DataFrame) -> pd.DataFrame:
     if cases.empty:
         return cases
 
+    agg_spec = {
+        "candidate_name": ("candidate_name", "first"),
+        "case_count": ("json_path", "count"),
+        "stock_count": ("stock_code", "nunique"),
+        "period_count": ("period", "nunique"),
+        "avg_abs_diff": (
+            "diff",
+            lambda s: pd.to_numeric(s, errors="coerce").abs().mean(),
+        ),
+        "examples": ("json_path", lambda s: " | ".join(list(dict.fromkeys(s))[:5])),
+    }
+    if "factor_coverage_pct" in cases.columns:
+        agg_spec["avg_factor_coverage_pct"] = (
+            "factor_coverage_pct",
+            lambda s: pd.to_numeric(s, errors="coerce").mean(),
+        )
+        agg_spec["min_factor_coverage_pct"] = (
+            "factor_coverage_pct",
+            lambda s: pd.to_numeric(s, errors="coerce").min(),
+        )
+
     grouped = (
         cases.groupby(["check_name", "candidate_name_norm"], dropna=False)
-        .agg(
-            candidate_name=("candidate_name", "first"),
-            case_count=("json_path", "count"),
-            stock_count=("stock_code", "nunique"),
-            period_count=("period", "nunique"),
-            avg_abs_diff=("diff", lambda s: pd.to_numeric(s, errors="coerce").abs().mean()),
-            examples=("json_path", lambda s: " | ".join(list(dict.fromkeys(s))[:5])),
-        )
+        .agg(**agg_spec)
         .reset_index()
         .sort_values(["stock_count", "case_count"], ascending=False)
     )
+    for col in ["avg_factor_coverage_pct", "min_factor_coverage_pct"]:
+        if col in grouped.columns:
+            grouped[col] = pd.to_numeric(grouped[col], errors="coerce").round(2)
 
     suggested = grouped.apply(
         lambda r: suggest_action_for_failure_cluster(
@@ -2607,6 +2878,7 @@ def evaluate_one_to_files(
         "mapped_rows": report.mapped_rows,
         "unmapped_rows": report.unmapped_rows,
         "mapped_ratio": report.mapped_ratio,
+        **factor_coverage_row(report.factor_snapshot),
         "warning_count": len(report.warnings),
         "error_count": len(report.errors),
         "zai_called": should_call_zai(report.verdict, zai_mode),
@@ -2848,6 +3120,8 @@ def build_stock_year_factor_row(
         "error_count": len(report.errors),
         "row_counts": json.dumps(report.row_counts, ensure_ascii=False),
     }
+
+    row.update(factor_coverage_row(report.factor_snapshot))
 
     for k, v in report.factor_snapshot.items():
         row[k] = v
@@ -3172,12 +3446,13 @@ def write_stock_markdown_report(
 
     lines.append("## 2. 연도별 평가")
     lines.append("")
-    lines.append("| year | verdict | score | mapped_ratio | warnings | errors |")
-    lines.append("|---:|---:|---:|---:|---:|---:|")
+    lines.append("| year | verdict | score | mapped_ratio | factor_coverage_pct | warnings | errors |")
+    lines.append("|---:|---:|---:|---:|---:|---:|---:|")
     for r in report["yearly_summary"]:
         lines.append(
             f"| {r['year']} | {r['verdict']} | {r['score']} | "
-            f"{r['mapped_ratio']} | {r['warning_count']} | {r['error_count']} |"
+            f"{r['mapped_ratio']} | {r.get('factor_coverage_pct', '')} | "
+            f"{r['warning_count']} | {r['error_count']} |"
         )
 
     lines.append("")
@@ -3365,6 +3640,11 @@ def evaluate_stock_to_files(
             "mapped_rows",
             "unmapped_rows",
             "mapped_ratio",
+            "factor_coverage_count",
+            "factor_coverage_total",
+            "factor_coverage_ratio",
+            "factor_coverage_pct",
+            "factor_coverage_missing",
             "warning_count",
             "error_count",
         ]
@@ -3376,6 +3656,9 @@ def evaluate_stock_to_files(
 
     found_years = sorted(debug_paths_by_year.keys())
     missing_years = [y for y in expected_years if y not in found_years]
+    stock_factor_coverage = summarize_factor_coverage_rows(
+        factor_df.to_dict("records") if not factor_df.empty else []
+    )
 
     verdict, score, messages = build_stock_verdict(
         yearly_summary=yearly_summary,
@@ -3395,6 +3678,7 @@ def evaluate_stock_to_files(
         "verdict": verdict,
         "score": score,
         "messages": messages,
+        "factor_coverage": stock_factor_coverage,
         "yearly_summary": yearly_summary.to_dict("records") if not yearly_summary.empty else [],
         "factor_trend": factor_df.to_dict("records") if not factor_df.empty else [],
         "recurring_unmapped": recurring_unmapped,
@@ -3437,6 +3721,7 @@ def evaluate_stock_to_files(
         "missing_years": json.dumps(missing_years, ensure_ascii=False),
         "year_count": len(found_years),
         "message_count": len(messages),
+        **stock_factor_coverage,
         "recurring_unmapped_count": len(recurring_unmapped),
         "mapping_inconsistency_count": len(mapping_inconsistency),
         "time_series_anomaly_count": len(time_series_anomalies),
@@ -3497,6 +3782,12 @@ def load_completed_stock_result(
     except Exception:
         return None
 
+    stock_factor_coverage = data.get("factor_coverage")
+    if not isinstance(stock_factor_coverage, dict):
+        stock_factor_coverage = summarize_factor_coverage_rows(
+            data.get("factor_trend", []) or []
+        )
+
     return {
         "stock_code": stock_code,
         "start_year": start_year,
@@ -3507,6 +3798,7 @@ def load_completed_stock_result(
         "missing_years": json.dumps(data.get("missing_years", []), ensure_ascii=False),
         "year_count": len(data.get("found_years", [])),
         "message_count": len(data.get("messages", [])),
+        **stock_factor_coverage,
         "recurring_unmapped_count": len(data.get("recurring_unmapped", [])),
         "mapping_inconsistency_count": len(data.get("mapping_inconsistency", [])),
         "time_series_anomaly_count": len(data.get("time_series_anomalies", [])),

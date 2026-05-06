@@ -232,6 +232,16 @@ formula_checks:
             - statement_type: IS
               cid: RND
               agg: sum
+      - mode: OPERATING_EXPENSES_TOTAL
+        formula: GROSS_PROFIT - OPERATING_EXPENSES_TOTAL = OPERATING_INCOME
+        expected:
+          sub:
+            - statement_type: IS
+              cid: GROSS_PROFIT
+              agg: first
+            - statement_type: IS
+              cid: OPERATING_EXPENSES_TOTAL
+              agg: first
       - mode: WITH_OPERATING_ITEMS
         formula:
           GROSS_PROFIT - SGNA - RND - BAD_DEBT_EXPENSE + BAD_DEBT_REVERSAL - LOGISTICS_COST + OTHER_OPERATING_INCOME -
@@ -737,6 +747,27 @@ formula_checks:
           statement_type: CF
           cid: CF_CASH_CHANGE
           agg: first
+      - mode: CASH_CHANGE_WITH_FX_ANY_POSITION
+        formula: CFO + CFI + CFF + FX_EFFECT_CASH = CF_CASH_CHANGE
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CFO
+              agg: first
+            - statement_type: CF
+              cid: CFI
+              agg: first
+            - statement_type: CF
+              cid: CFF
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
+              agg: sum
+              optional: true
+        actual:
+          statement_type: CF
+          cid: CF_CASH_CHANGE
+          agg: first
       - mode: CASH_CHANGE_AFTER_FX_WITH_TRANSLATION_DIFFERENCE
         formula: CFO + CFI + CFF + FX_EFFECT_CASH + SPECIAL_CASH_CHANGE + CF_TRANSLATION_DIFFERENCE = CF_CASH_CHANGE
         expected:
@@ -967,6 +998,20 @@ formula_checks:
               cid: FX_EFFECT_CASH
               after_cid: CF_CASH_CHANGE
               before_cid: CF_CASH_END
+              agg: sum
+              optional: true
+      - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_FX_ANY_POSITION
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE + FX_EFFECT_CASH = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE
+              agg: first
+            - statement_type: CF
+              cid: FX_EFFECT_CASH
               agg: sum
               optional: true
       - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_FX_PLUS_TRANSLATION
@@ -1303,3 +1348,6 @@ warning_rules:
 
 factor_snapshot:
   enabled: true
+  effective_tax_rate_min: 0.0
+  effective_tax_rate_max: 1.0
+  invested_capital_mode: with_short_financial_assets_if_available

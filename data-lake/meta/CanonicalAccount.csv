@@ -78,6 +78,7 @@ CONTINUING_OPERATIONS_INCOME,계속영업손익,IS,FALSE,,계속영업이익(손
 BAD_DEBT_EXPENSE,대손상각비,IS,FALSE,,대손상각비/매출채권 손상차손 등 별도 영업비용,영업이익 rollup에서 차감
 BAD_DEBT_REVERSAL,대손상각비환입,IS,FALSE,,대손상각비 환입/손상차손 환입 등 별도 영업수익성 차감비용 환입,영업이익 rollup에서 가산
 LOGISTICS_COST,물류원가,IS,FALSE,,물류원가/물류비가 매출총이익 이후 별도 표시되는 영업비용,영업이익 rollup에서 차감
+OPERATING_EXPENSES_TOTAL,영업비용총계,IS,FALSE,,매출총이익에서 차감해 영업이익으로 이어지는 영업비용 subtotal,SGNA/R&D 개별 구성요소와 중복 집계하지 않도록 별도 subtotal로 사용
 OTHER_OPERATING_INCOME,기타영업수익,IS,FALSE,,영업이익 계산에 포함되는 기타영업수익,영업이익 rollup에서 가산
 OTHER_OPERATING_EXPENSES,기타영업비용,IS,FALSE,,영업이익 계산에 포함되는 기타영업비용/기타영업손실,영업이익 rollup에서 차감
 OTHER_CURRENT_ASSETS,기타유동자산,BS,FALSE,,주요 유동자산 외 기타 유동자산,

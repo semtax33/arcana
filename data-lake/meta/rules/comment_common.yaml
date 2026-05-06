@@ -3,7 +3,11 @@ comment_rules:
     section_name: 현금흐름
     target_patterns:
       DEPRECIATION_EXPENSE: "^감가상각비$"
-      AMORTIZATION: "^무형자산상각비$"
+      AMORTIZATION:
+        - "^무형자산\\s*상각비$"
+        - "^무형자산\\s*상각비에\\s*대한\\s*조정$"
+        - "^무형자산\\s*상각비의\\s*조정$"
+        - "^무형자산\\s*상각$"
       BAD_DEBT_EXPENSE: "^대손상각비$"
       TRADE_RECEIVABLES: "^매출채권$"
 

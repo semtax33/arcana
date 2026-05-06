@@ -200,17 +200,27 @@ def normalize_statement_type(value: Any) -> str:
     }:
         return "CF"
 
+    # 중요: 포괄손익계산서를 손익계산서보다 먼저 판정해야 함
+    if s in {
+        "포괄손익계산서",
+        "연결포괄손익계산서",
+        "별도포괄손익계산서",
+    } or lower in {
+        "cis",
+        "comprehensive_income_statement",
+        "statement_of_comprehensive_income",
+    }:
+        return "CIS"
+
     if s in {
         "손익계산서",
-        "포괄손익계산서",
         "연결손익계산서",
-        "연결포괄손익계산서",
         "별도손익계산서",
-        "별도포괄손익계산서",
     } or lower in {
         "is",
         "income_statement",
-        "comprehensive_income_statement",
+        "statement_of_income",
+        "profit_or_loss",
     }:
         return "IS"
 
@@ -218,7 +228,7 @@ def normalize_statement_type(value: Any) -> str:
 
 
 def statement_sort_key(fs_type: str) -> int:
-    return {"CF": 0, "BS": 1, "IS": 2}.get(fs_type, 99)
+    return {"CF": 0, "BS": 1, "IS": 2, "CIS": 3}.get(fs_type, 99)
 
 
 def parse_unit_factor(text: str) -> int:
@@ -355,7 +365,11 @@ def get_statement_type_from_text(text: str) -> str:
     if "현금흐름표" in normalized:
         return "CF"
 
-    if "손익계산서" in normalized or "포괄손익계산서" in normalized:
+    # 중요: 포괄손익계산서를 먼저 검사
+    if "포괄손익계산서" in normalized:
+        return "CIS"
+
+    if "손익계산서" in normalized:
         return "IS"
 
     return "UNKNOWN"
@@ -1295,7 +1309,7 @@ class ContextEngine:
     def _match_rule(self, row: dict[str, Any], rule: dict[str, Any]) -> bool:
         fs_type = safe_str(rule.get("_fs_type") or rule.get("fs_type", "ANY")).strip()
 
-        if fs_type not in {"", "ANY"} and fs_type != row["fs_type"]:
+        if not is_fs_type_compatible(fs_type, row["fs_type"]):
             return False
 
         name = row["name"]
@@ -1463,6 +1477,22 @@ def _match_include_any_groups(text: str, rule: dict[str, Any], prefix: str) -> b
 
     return True
 
+def is_fs_type_compatible(rule_fs_type: str, row_fs_type: str) -> bool:
+    rule_fs_type = safe_str(rule_fs_type).strip()
+    row_fs_type = safe_str(row_fs_type).strip()
+
+    if rule_fs_type in {"", "ANY"}:
+        return True
+
+    if rule_fs_type == row_fs_type:
+        return True
+
+    # CIS 안에는 일반 IS 항목이 같이 들어오는 경우가 많으므로
+    # CIS row는 기존 IS mapping rule도 사용할 수 있게 한다.
+    if row_fs_type == "CIS" and rule_fs_type == "IS":
+        return True
+
+    return False
 
 def compile_rule_for_matching(rule: dict[str, Any]) -> dict[str, Any]:
     """
@@ -1504,7 +1534,7 @@ def load_mapping_rules(paths: list[str | Path]) -> list[dict[str, Any]]:
 
 class RuleEngine:
     _CACHE_MAX_SIZE = 200_000
-    _KNOWN_FS_TYPES = ("BS", "CF", "IS", "UNKNOWN")
+    _KNOWN_FS_TYPES = ("BS", "CF", "IS", "CIS", "UNKNOWN")
 
     def __init__(
         self,
@@ -1631,7 +1661,7 @@ class RuleEngine:
             rule["_match_order"] = order
             rule_fs_type = safe_str(rule.get("_fs_type") or rule.get("fs_type", "")).strip()
 
-            if rule_fs_type and rule_fs_type != "ANY" and rule_fs_type != fs_type:
+            if not is_fs_type_compatible(rule_fs_type, fs_type):
                 continue
 
             exact_any = rule.get("_exact_any", frozenset())
@@ -1750,7 +1780,7 @@ class RuleEngine:
     ) -> bool:
         fs_type = safe_str(rule.get("_fs_type") or rule.get("fs_type", "")).strip()
 
-        if fs_type and fs_type != "ANY" and fs_type != row["fs_type"]:
+        if not is_fs_type_compatible(fs_type, row["fs_type"]):
             return False
 
         name = row["name"]
@@ -1881,6 +1911,126 @@ def dedupe_duplicate_subtotals(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+INCOME_STATEMENT_FALLBACK_IDS = {
+    "REVENUE",
+    "COGS",
+    "GROSS_PROFIT",
+    "SGNA",
+    "OPERATING_INCOME",
+    "PBT",
+    "TAX_EXPENSE",
+    "NET_INCOME",
+    "NET_INCOME_PARENT",
+    "NET_INCOME_NCI",
+}
+
+CIS_ONLY_IDS = {
+    "OTHER_COMPREHENSIVE_INCOME",
+    "TOTAL_COMPREHENSIVE_INCOME",
+    "COMPREHENSIVE_INCOME_PARENT",
+    "COMPREHENSIVE_INCOME_NCI",
+}
+
+
+def _mark_unmapped(
+    df: pd.DataFrame,
+    mask: pd.Series,
+    *,
+    rule_id: str,
+    reason: str,
+) -> pd.DataFrame:
+    if not mask.any():
+        return df
+
+    df.loc[mask, "canonical_account_id"] = "UNMAPPED"
+    df.loc[mask, "canonical_account_name"] = "미매핑"
+
+    if "rule_id" in df.columns:
+        df.loc[mask, "rule_id"] = rule_id
+
+    if "reason" in df.columns:
+        df.loc[mask, "reason"] = reason
+
+    return df
+
+
+def apply_is_cis_priority(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    일반 손익 항목:
+      - IS 값이 있으면 IS 유지, CIS 중복 제거
+      - IS 값이 없고 CIS에만 있으면 CIS를 IS fallback으로 채택
+
+    CIS 전용 항목:
+      - OCI / 총포괄손익은 CIS에서만 유지
+    """
+    if df.empty:
+        return df
+
+    df = df.copy()
+
+    cid = df["canonical_account_id"].astype(str)
+    st = df["statement_type"].astype(str)
+
+    income_mask = cid.isin(INCOME_STATEMENT_FALLBACK_IDS)
+
+    is_keys = set(
+        zip(
+            df.loc[income_mask & st.eq("IS"), "period"].astype(str),
+            df.loc[income_mask & st.eq("IS"), "canonical_account_id"].astype(str),
+        )
+    )
+
+    cis_income_mask = income_mask & st.eq("CIS")
+
+    cis_duplicate_mask = cis_income_mask & [
+        (period, canonical_id) in is_keys
+        for period, canonical_id in zip(
+            df["period"].astype(str),
+            df["canonical_account_id"].astype(str),
+        )
+    ]
+
+    df = _mark_unmapped(
+        df,
+        pd.Series(cis_duplicate_mask, index=df.index),
+        rule_id="post_is_priority_over_cis",
+        reason="IS에 동일 손익 항목이 존재하여 CIS 중복 항목 제거",
+    )
+
+    # IS가 없어서 CIS를 fallback으로 쓰는 일반 손익 항목은
+    # 팩터 계산 편의를 위해 statement_type을 IS로 승격한다.
+    cid = df["canonical_account_id"].astype(str)
+    st = df["statement_type"].astype(str)
+
+    fallback_mask = (
+        cid.isin(INCOME_STATEMENT_FALLBACK_IDS)
+        & st.eq("CIS")
+        & cid.ne("UNMAPPED")
+    )
+
+    if fallback_mask.any():
+        df.loc[fallback_mask, "statement_type"] = "IS"
+
+        if "reason" in df.columns:
+            df.loc[fallback_mask, "reason"] = (
+                df.loc[fallback_mask, "reason"].astype(str)
+                + " / CIS를 IS fallback으로 채택"
+            )
+
+    # OCI / 총포괄손익은 CIS에서만 인정
+    cid = df["canonical_account_id"].astype(str)
+    st = df["statement_type"].astype(str)
+
+    wrong_cis_only_mask = cid.isin(CIS_ONLY_IDS) & ~st.eq("CIS")
+
+    df = _mark_unmapped(
+        df,
+        wrong_cis_only_mask,
+        rule_id="post_cis_only_source_guard",
+        reason="OCI/총포괄손익 항목은 CIS에서만 허용",
+    )
+
+    return df
 
 def validate_mapped_df(
     mapped_df: pd.DataFrame,
@@ -1977,6 +2127,7 @@ def normalize_financial_statement_rule_based(
     )
 
     mapped_df = dedupe_duplicate_subtotals(mapped_df)
+    mapped_df = apply_is_cis_priority(mapped_df)
 
     if canonical_df is None:
         canonical_df = mapping_engine.canonical_df if mapping_engine is not None else load_canonical_accounts(canonical_csv_path)
@@ -2020,6 +2171,7 @@ def normalize_financial_statement_rule_based(
                     comment_df,
                     policy=comment_merge_policy,
                 )
+                mapped_df = apply_is_cis_priority(mapped_df)
             elif verbose:
                 print(f"[WARN] 주석 HTML 파일을 찾을 수 없습니다: {resolved_comment_html_path}")
     except Exception as e:
@@ -2038,7 +2190,7 @@ def normalize_financial_statement_rule_based(
     output_path = Path(output_csv_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    statement_order = {"CF": 0, "BS": 1, "IS": 2}
+    statement_order = {"CF": 0, "BS": 1, "IS": 2, "CIS": 3}
 
     final_df = (
         mapped_df

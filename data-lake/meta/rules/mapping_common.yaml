@@ -27,6 +27,19 @@ rules:
     canonical_id: UNMAPPED
     reason: 손익계산서 섹션 헤더
 
+  - id: is_net_income_zero_attribution_header
+    fs_type: IS
+    priority: 995
+    exact_any:
+      - 당기순이익
+      - 당기순이익손실
+      - 당기순이익(손실)
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
+    canonical_id: UNMAPPED
+    reason: 금액 0인 당기순이익 attribution section header
+
   - id: cf_cfo_section_header_unmapped
     fs_type: CF
     priority: 1000
@@ -586,7 +599,12 @@ rules:
     fs_type: CF
     priority: 800
     exact_any:
+      - 무형자산 상각비
       - 무형자산상각비
+      - 무형자산상각비에대한조정
+      - 무형자산상각비의조정
+      - 무형자산상각
+      - 무형자산 상각
     canonical_id: AMORTIZATION
     reason: 무형자산 상각비
 
@@ -639,6 +657,7 @@ rules:
     fs_type: CF
     priority: 800
     exact_any:
+      - 배당금의 지급
       - 배당금의지급
       - 배당의지급
       - 배당
@@ -875,6 +894,20 @@ rules:
       - 자본총계
       - 자본합계
     canonical_id: TOTAL_EQUITY
+
+  - id: bs_current_non_current_zero_section_headers
+    fs_type: BS
+    priority: 790
+    exact_any:
+      - 유동자산
+      - 비유동자산
+      - 유동부채
+      - 비유동부채
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
+    canonical_id: UNMAPPED
+    reason: 금액 0인 유동/비유동 분류 parent는 subtotal이 아니라 section header
 
   - id: bs_current_assets
     fs_type: BS
@@ -1169,6 +1202,29 @@ rules:
     canonical_id: NET_INCOME_PARENT
     reason: 명시적 지배주주순이익
 
+  - id: is_net_income_parent_zero_detail_header_unmapped
+    fs_type: IS
+    priority: 960
+    exact_any:
+      - 지배기업의소유주지분
+      - 지배기업소유주지분
+      - 지배주주지분
+      - 지배기업소유주지분순이익손실
+      - 지배기업의소유주에게귀속되는당기순이익손실
+      - 지배기업소유주귀속당기순이익
+      - 지배기업소유주에귀속될당기순이익
+      - 지배기업의소유주에귀속될당기순이익
+      - 지배기업의소유주에게귀속될당기순이익
+    context_include_any:
+      - 당기순이익의귀속
+      - 당기순손익의귀속
+      - 당기순이익손실의귀속
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
+    canonical_id: UNMAPPED
+    reason: 계속/중단영업 세부행을 가진 지배주주순이익 0원 header
+
   - id: is_net_income_nci_explicit
     fs_type: IS
     priority: 950
@@ -1189,6 +1245,28 @@ rules:
     canonical_id: NET_INCOME_NCI
     reason: 명시적 비지배지분순이익
 
+  - id: is_net_income_nci_zero_detail_header_unmapped
+    fs_type: IS
+    priority: 960
+    exact_any:
+      - 비지배지분
+      - 비지배주주지분
+      - 비지배지분에귀속되는당기순이익손실
+      - 비지배지분에귀속될당기순이익
+      - 비지배지분귀속당기순이익손실
+      - 비지배기업의소유주에귀속될당기순이익
+      - 비지배기업의소유주에게귀속되는당기순이익손실
+      - 비지배지분에귀속되는당기순이익
+    context_include_any:
+      - 당기순이익의귀속
+      - 당기순손익의귀속
+      - 당기순이익손실의귀속
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
+    canonical_id: UNMAPPED
+    reason: 계속/중단영업 세부행을 가진 비지배지분순이익 0원 header
+
   - id: is_continuing_operations_income
     fs_type: IS
     priority: 850
@@ -1200,6 +1278,9 @@ rules:
       - 계속영업당기순이익손실
       - 계속영업당기순이익
       - 계속영업당기순손실
+      - 계속영업순이익손실
+      - 계속영업순이익
+      - 계속영업순손실
     canonical_id: CONTINUING_OPERATIONS_INCOME
     amount_policy: as_reported
     reason: 계속영업손익
@@ -1318,9 +1399,22 @@ rules:
     exact_any:
       - 물류원가
       - 물류비
+      - 판매및물류비
+      - 판매물류비
     canonical_id: LOGISTICS_COST
     amount_policy: abs
     reason: 매출총이익 이후 별도 표시되는 물류 관련 영업비용
+
+  - id: is_operating_expenses_total
+    fs_type: IS
+    priority: 790
+    exact_any:
+      - 영업비용
+      - 영업비용합계
+      - 영업비용총계
+    canonical_id: OPERATING_EXPENSES_TOTAL
+    amount_policy: abs
+    reason: SGNA/R&D 구성요소가 아니라 매출총이익에서 바로 차감되는 영업비용 subtotal
 
   - id: is_other_operating_income
     fs_type: IS
@@ -1401,6 +1495,11 @@ rules:
       - 판매관리비
       - 판매및일반관리비
       - 판매비와일반관리비
+      - 판매비와관리비영업비용
+      - 판매비와관리비(영업비용)
+      - 판매비및일반관리비총계
+      - 판매비와관리비및물류비
+      - 기타판매비와관리비
       - 판매리와관리비
       - 판배비와관리비
     canonical_id: SGNA
@@ -1443,6 +1542,9 @@ rules:
     exact_any:
       - 법인세비용
       - 법인세비용수익
+      - 법인세비용이익
+      - 법인세비용손실
+      - 법인세수익비용
     canonical_id: TAX_EXPENSE
 
   - id: is_net_income
@@ -1472,6 +1574,7 @@ rules:
       - 지배주주지분
       - 지배주주순이익
       - 지배주주귀속순이익
+      - 지배기업의소유주
       - 지배기업소유주지분순이익손실
       - 지배기업의소유주에게귀속되는당기순이익손실
       - 지배기업소유주귀속당기순이익
@@ -1522,10 +1625,12 @@ rules:
       - 비지배지분에배분된당기순손익
       - 비지배지분에배분된순손익
       - 비지배지분에귀속되는순이익손실
+      - 비지배지분에귀속될당기순이익
       - 비지배지분귀속당기순이익손실
       - 비지배주주지분순이익
       - 비지배지분손익
       - 비지배지분지분
+      - 비지배기업의소유주에귀속될당기순이익
       - 비지배기업소유주지분
       - 비지배기업소유지분
       - 비지배기업의소유주에게귀속되는당기순이익손실

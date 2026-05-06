@@ -49,6 +49,42 @@ context_rules:
   # IS context
   # =========================
 
+  - id: is_profit_attribution_parent_header
+    priority: 1005
+    fs_type: IS
+    exact_any:
+      - 당기순이익
+      - 당기순이익손실
+      - 당기순이익(손실)
+      - 당기순손익
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: 당기순이익의귀속
+    reason: 금액 0인 당기순이익 parent 아래의 지배/비지배 귀속 행 판별
+
+  - id: is_comprehensive_attribution_parent_header
+    priority: 1005
+    fs_type: IS
+    exact_any:
+      - 총포괄이익
+      - 총포괄손익
+      - 총포괄이익손실
+      - 총포괄이익(손실)
+      - 당기총포괄손익
+      - 당기총포괄이익손실
+      - 당기총포괄이익(손실)
+      - 세후총포괄손익
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: 총포괄이익의귀속
+    reason: 금액 0인 총포괄손익 parent 아래의 지배/비지배 귀속 행 판별
+
   - id: is_profit_attribution_section
     priority: 900
     fs_type: IS
