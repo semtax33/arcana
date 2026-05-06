@@ -10,6 +10,7 @@ TRADE_RECEIVABLES,매출채권,BS,FALSE,,매출 채권,"커버리지가 낮아�
 CASH_AND_EQUIVALENTS,현금및현금성자산,BS,FALSE,,현금 및 현금성자산,
 PPE,유형자산,BS,FALSE,,유형자산,
 INTANGIBLE_ASSETS,무형자산,BS,FALSE,,무형자산,
+GOODWILL,영업권,BS,FALSE,,사업결합 등에서 인식한 영업권 장부가치,
 TRADE_PAYABLES,매입채무,BS,FALSE,,매입채무,"커버리지가 낮아서, HTML 이나 XBRL 로 데이터 보충 및 추가 매핑이 필요함"
 SHORT_TERM_DEBT,단기차입금/유동성장기부채,BS,FALSE,,단기차입금/유동성장기부채,매핑룰 재산정 필요(불필요한게 많이 들어간듯함)
 LONG_TERM_DEBT,장기차입금/사채,BS,FALSE,,장기차입금/사채,
@@ -69,6 +70,8 @@ TAX_EXPENSE,법인세비용,IS,FALSE,,법인세비용,
 PBT,법인세비용차감전순이익,IS,FALSE,,법인세비용차감전순이익,
 EBITDA,상각전영업이익,IS,FALSE,,상각전영업이익,
 NET_INCOME_NCI,비지배지분순이익,IS,FALSE,,비지배지분 귀속 당기순이익,
+BASIC_EPS,기본주당이익,IS,FALSE,,보통주 기본 EPS. 정규화 금액은 항상 원/주 단위,
+DILUTED_EPS,희석주당이익,IS,FALSE,,희석 EPS. 정규화 금액은 항상 원/주 단위,
 OTHER_COMPREHENSIVE_INCOME,기타포괄손익,IS,FALSE,,기타포괄손익,
 TOTAL_COMPREHENSIVE_INCOME,당기총포괄손익,IS,FALSE,,당기 총포괄손익,
 COMPREHENSIVE_INCOME_PARENT,지배주주총포괄이익,IS,FALSE,,지배주주 귀속 총포괄이익,

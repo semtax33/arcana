@@ -330,23 +330,23 @@ formula_checks:
                   cid: SGNA
                   agg: first
                   optional: true
-                - statement_type: IS
+                - statement_type_in: [IS, CIS]
                   cid: RND
                   agg: sum
                   optional: true
-                - statement_type: IS
+                - statement_type_in: [IS, CIS]
                   cid: BAD_DEBT_EXPENSE
                   agg: sum
                   optional: true
-                - statement_type: IS
+                - statement_type_in: [IS, CIS]
                   cid: LOGISTICS_COST
                   agg: sum
                   optional: true
-                - statement_type: IS
+                - statement_type_in: [IS, CIS]
                   cid: OTHER_OPERATING_EXPENSES
                   agg: sum
                   optional: true
-                - statement_type: IS
+                - statement_type_in: [IS, CIS]
                   canonical_id: UNMAPPED
                   name_contains_any:
                     - 판매비
@@ -371,7 +371,7 @@ formula_checks:
                   source: debug
                   agg: sum_unique
                   optional: true
-                - statement_type: IS
+                - statement_type_in: [IS, CIS]
                   canonical_id: UNMAPPED
                   name_contains_any:
                     - 관리비
@@ -392,7 +392,7 @@ formula_checks:
                   source: debug
                   agg: sum_unique
                   optional: true
-                - statement_type: IS
+                - statement_type_in: [IS, CIS]
                   canonical_id: UNMAPPED
                   name_contains_any:
                     - 지급수수료
@@ -422,11 +422,11 @@ formula_checks:
                   source: debug
                   agg: sum_unique
                   optional: true
-            - statement_type: IS
+            - statement_type_in: [IS, CIS]
               cid: BAD_DEBT_REVERSAL
               agg: sum
               optional: true
-            - statement_type: IS
+            - statement_type_in: [IS, CIS]
               canonical_id: UNMAPPED
               name_contains_any:
                 - 대손상각비환입
@@ -453,7 +453,7 @@ formula_checks:
               source: debug
               agg: sum_unique
               optional: true
-            - statement_type: IS
+            - statement_type_in: [IS, CIS]
               cid: OTHER_OPERATING_INCOME
               agg: sum
               optional: true
@@ -472,7 +472,7 @@ formula_checks:
                   cid: RND
                   agg: sum
                   optional: true
-            - statement_type: IS
+            - statement_type_in: [IS, CIS]
               canonical_id: UNMAPPED
               name_contains_any:
                 - 지분법손익
@@ -526,8 +526,7 @@ formula_checks:
                 - statement_type: IS
                   cid: TAX_EXPENSE
                   agg: first
-            - statement_type: IS
-              cid: DISCONTINUED_OPERATIONS_INCOME
+            - cid: DISCONTINUED_OPERATIONS_INCOME
               agg: first
               optional: true
       - mode: WITH_UNMAPPED_DISCONTINUED_OPERATIONS_TAX_AS_EXPENSE
@@ -563,8 +562,7 @@ formula_checks:
             - statement_type: IS
               cid: TAX_EXPENSE
               agg: first
-            - statement_type: IS
-              cid: DISCONTINUED_OPERATIONS_INCOME
+            - cid: DISCONTINUED_OPERATIONS_INCOME
               agg: first
               optional: true
       - mode: WITH_UNMAPPED_DISCONTINUED_OPERATIONS_TAX_AS_BENEFIT
@@ -656,7 +654,7 @@ formula_checks:
                   cid: NET_INCOME_NCI
                   agg: first
                   optional: true
-            - statement_type: IS
+            - statement_type: CIS
               cid: OTHER_COMPREHENSIVE_INCOME
               agg: first
               optional: true
@@ -672,7 +670,7 @@ formula_checks:
                   cid: NET_INCOME_NCI
                   agg: sum_unique
                   optional: true
-            - statement_type: IS
+            - statement_type: CIS
               cid: OTHER_COMPREHENSIVE_INCOME
               agg: sum_unique
               optional: true
@@ -764,6 +762,28 @@ formula_checks:
               cid: FX_EFFECT_CASH
               agg: sum
               optional: true
+        actual:
+          statement_type: CF
+          cid: CF_CASH_CHANGE
+          agg: first
+      - mode: CASH_CHANGE_MINUS_FX_ANY_POSITION
+        formula: CFO + CFI + CFF - FX_EFFECT_CASH = CF_CASH_CHANGE
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CFO
+              agg: first
+            - statement_type: CF
+              cid: CFI
+              agg: first
+            - statement_type: CF
+              cid: CFF
+              agg: first
+            - neg:
+                statement_type: CF
+                cid: FX_EFFECT_CASH
+                agg: sum
+                optional: true
         actual:
           statement_type: CF
           cid: CF_CASH_CHANGE
@@ -1014,6 +1034,21 @@ formula_checks:
               cid: FX_EFFECT_CASH
               agg: sum
               optional: true
+      - mode: BEGIN_PLUS_CASH_CHANGE_MINUS_FX_ANY_POSITION
+        formula: CF_CASH_BEGIN + CF_CASH_CHANGE - FX_EFFECT_CASH = CF_CASH_END
+        expected:
+          sum:
+            - statement_type: CF
+              cid: CF_CASH_BEGIN
+              agg: first
+            - statement_type: CF
+              cid: CF_CASH_CHANGE
+              agg: first
+            - neg:
+                statement_type: CF
+                cid: FX_EFFECT_CASH
+                agg: sum
+                optional: true
       - mode: BEGIN_PLUS_CASH_CHANGE_PLUS_FX_PLUS_TRANSLATION
         formula: CF_CASH_BEGIN + CF_CASH_CHANGE + FX_EFFECT_CASH + CF_TRANSLATION_DIFFERENCE = CF_CASH_END
         expected:

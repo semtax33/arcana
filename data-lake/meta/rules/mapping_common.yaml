@@ -20,12 +20,22 @@ rules:
       - 당기순이익의귀속
       - 당기순손익의귀속
       - 당기순이익손실의귀속
-      - 총포괄이익의귀속
-      - 총포괄손익의귀속
+      - 당기손익의귀속
       - 주당손익
       - 지배기업의소유주지분에대한주당이익
     canonical_id: UNMAPPED
     reason: 손익계산서 섹션 헤더
+
+  - id: cis_section_headers
+    fs_type: CIS
+    priority: 1000
+    exact_any:
+      - 총포괄이익의귀속
+      - 총포괄손익의귀속
+      - 총포괄이익손실의귀속
+      - 총포괄손익손실의귀속
+    canonical_id: UNMAPPED
+    reason: 포괄손익계산서 섹션 헤더
 
   - id: is_net_income_zero_attribution_header
     fs_type: IS
@@ -358,6 +368,9 @@ rules:
       - 현금성외화자산부채의환율변동
       - 외화예금에대한환율변동효과
       - 외화표시예금으로인한환율변동효과
+      - 외화표시예금의환율변동효과
+      - 외화자산의환율변동효과
+      - 외환자산부채의환율변동효과
       - 기타환율변동으로인한현금흐름
       - 자산부채환율변동효과
     canonical_id: FX_EFFECT_CASH
@@ -470,6 +483,7 @@ rules:
       - 외화표시현금현금성자산에대한환율변동
       - 외화표시현금및현금자산성의환율변동효과
       - 외화표시현금및현금성자산의환율변동으로인한효과
+      - 외화표시현금및현금성자산효과
       - 외화표시현금성자산환율변동효과
       - 외화표시현금성자산의환율변동
       - 외화현금의환율변동효과
@@ -489,6 +503,10 @@ rules:
       - 현금환율변동효과
       - 환율변동효과등
       - 환율차이등으로인한변동
+      - 연결환율변동
+      - 해외사업의환율변동효과
+      - 해외사업장외화환산으로인한조정
+      - 해외사업장환율변동효과
       - 외환표시현금및현금성자산에대한환율변동효과
       - 기타환율변동효과
       - 기타의증감환율변동효과
@@ -605,6 +623,8 @@ rules:
       - 무형자산상각비의조정
       - 무형자산상각
       - 무형자산 상각
+      - 영업권이외의무형자산상각비
+      - 영업권 이외의 무형자산상각비
     canonical_id: AMORTIZATION
     reason: 무형자산 상각비
 
@@ -1031,7 +1051,31 @@ rules:
     priority: 700
     exact_any:
       - 무형자산
+      - 영업권및무형자산
+      - 영업권및기타무형자산
+      - 영업권과무형자산
+      - 영업권과기타무형자산
     canonical_id: INTANGIBLE_ASSETS
+
+  - id: bs_goodwill
+    fs_type: BS
+    priority: 760
+    exact_any:
+      - 영업권
+      - 연결영업권
+      - 사업결합영업권
+      - 합병영업권
+    exclude_any:
+      - 이외
+      - 제외
+      - 손상
+      - 상각
+      - 처분
+      - 취득
+      - 무형자산
+    canonical_id: GOODWILL
+    amount_policy: as_reported
+    reason: 재무상태표 영업권 장부가치
 
   - id: bs_contract_assets
     fs_type: BS
@@ -1189,6 +1233,52 @@ rules:
   # =========================
   # 3. 손익계산서 IS
   # =========================
+  - id: is_basic_eps
+    fs_type: IS
+    priority: 970
+    exact_any:
+      - 기본주당이익
+      - 기본주당손익
+      - 기본주당순이익
+      - 기본주당순손익
+      - 기본주당이익손실
+      - 기본주당순이익손실
+      - 보통주기본주당이익
+      - 보통주기본주당손익
+      - 보통주기본주당순이익
+      - 보통주기본주당순손익
+      - 보통주기본주당이익손실
+      - 보통주기본주당순이익손실
+    exclude_any:
+      - 계속영업
+      - 중단영업
+    canonical_id: BASIC_EPS
+    amount_policy: as_reported
+    reason: 기본 EPS. 추출 단계에서 원/주 단위로 강제 정규화
+
+  - id: is_diluted_eps
+    fs_type: IS
+    priority: 970
+    exact_any:
+      - 희석주당이익
+      - 희석주당손익
+      - 희석주당순이익
+      - 희석주당순손익
+      - 희석주당이익손실
+      - 희석주당순이익손실
+      - 보통주희석주당이익
+      - 보통주희석주당손익
+      - 보통주희석주당순이익
+      - 보통주희석주당순손익
+      - 보통주희석주당이익손실
+      - 보통주희석주당순이익손실
+    exclude_any:
+      - 계속영업
+      - 중단영업
+    canonical_id: DILUTED_EPS
+    amount_policy: as_reported
+    reason: 희석 EPS. 추출 단계에서 원/주 단위로 강제 정규화
+
   - id: is_net_income_parent_explicit
     fs_type: IS
     priority: 950
@@ -1502,6 +1592,7 @@ rules:
       - 기타판매비와관리비
       - 판매리와관리비
       - 판배비와관리비
+      - 판매비및관리비등
     canonical_id: SGNA
 
   - id: is_rnd
@@ -1517,7 +1608,20 @@ rules:
       - 연구와개발비용
       - 연구개발비
       - 기술개발비
+      - 경상개발비판관비
     canonical_id: RND
+
+  - id: is_amortization
+    fs_type: IS
+    priority: 710
+    exact_any:
+      - 무형자산상각비
+      - 무형자산 상각비
+      - 영업권이외의무형자산상각비
+      - 영업권 이외의 무형자산상각비
+    canonical_id: DNA_IS
+    amount_policy: abs
+    reason: 손익계산서 무형자산상각비
 
   - id: is_operating_income
     fs_type: IS
@@ -1592,20 +1696,6 @@ rules:
     canonical_id: NET_INCOME_PARENT
     reason: 당기순이익 귀속 중 지배주주순이익
 
-  - id: is_comprehensive_income_parent_attribution
-    fs_type: IS
-    priority: 900
-    exact_any:
-      - 지배기업의소유주지분
-      - 지배기업소유주지분
-      - 지배주주지분
-    context_include_any:
-      - 총포괄이익의귀속
-      - 총포괄손익의귀속
-      - 총포괄이익손실의귀속
-    canonical_id: COMPREHENSIVE_INCOME_PARENT
-    reason: 총포괄손익 귀속 중 지배주주총포괄이익
-
   - id: is_net_income_nci
     fs_type: IS
     priority: 900
@@ -1627,6 +1717,8 @@ rules:
       - 비지배지분에귀속되는순이익손실
       - 비지배지분에귀속될당기순이익
       - 비지배지분귀속당기순이익손실
+      - 비지배지분에귀속되는당기순손실
+      - 비지배지분에귀속분기순손익
       - 비지배주주지분순이익
       - 비지배지분손익
       - 비지배지분지분
@@ -1643,57 +1735,12 @@ rules:
     canonical_id: NET_INCOME_NCI
     reason: CanonicalAccount에 비지배지분순이익 계정이 있으므로 UNMAPPED 대신 매핑
 
-  - id: is_comprehensive_income_nci
-    fs_type: IS
-    priority: 900
-    exact_any:
-      - 비지배분
-      - 비지배지분
-      - 비지배주주지분
-    context_include_any:
-      - 총포괄이익의귀속
-      - 총포괄손익의귀속
-      - 총포괄이익손실의귀속
-    canonical_id: COMPREHENSIVE_INCOME_NCI
-    reason: 총포괄손익 귀속 중 비지배지분총포괄이익
+  # =========================
+  # 3-B. 포괄손익계산서 CIS 전용
+  # =========================
 
-  - id: is_other_comprehensive_income
-    fs_type: IS
-    priority: 760
-    exact_any:
-      - 기타포괄손익
-      - 기타포괄이익손실
-      - 기타포괄손익합계
-      - 세후기타포괄손익
-      - 당기손익으로재분류되지않는항목세후기타포괄손익
-      - 당기손익으로재분류될수있는항목세후기타포괄손익
-      - 확정급여제도의재측정손익세후기타포괄손익
-      - 확정급여제도의재측정요소
-      - 확정급여제도의재측정손익
-      - 순확정급여부채의재측정요소
-      - 순확정급여부채자산의재측정요소
-      - 기타포괄손익공정가치측정금융자산평가손익
-      - 해외사업환산손익
-    canonical_id: OTHER_COMPREHENSIVE_INCOME
-    amount_policy: as_reported
-    reason: 순이익 검증식에 들어가지 않는 기타포괄손익
-
-  - id: is_total_comprehensive_income
-    fs_type: IS
-    priority: 760
-    exact_any:
-      - 총포괄손익
-      - 총포괄이익
-      - 총포괄이익손실
-      - 당기총포괄손익
-      - 당기총포괄이익
-      - 당기총포괄이익손실
-    canonical_id: TOTAL_COMPREHENSIVE_INCOME
-    amount_policy: as_reported
-    reason: 순이익과 별도로 표시되는 당기 총포괄손익
-
-  - id: is_comprehensive_income_parent_explicit
-    fs_type: IS
+  - id: cis_comprehensive_income_parent_explicit
+    fs_type: CIS
     priority: 950
     exact_any:
       - 지배기업소유주지분총포괄손익
@@ -1702,10 +1749,10 @@ rules:
       - 총포괄손익지배기업의소유주에게귀속되는지분
       - 포괄손익지배기업의소유주에게귀속되는지분
     canonical_id: COMPREHENSIVE_INCOME_PARENT
-    reason: 명시적 지배주주총포괄이익
+    reason: 명시적 지배주주총포괄손익
 
-  - id: is_comprehensive_income_nci_explicit
-    fs_type: IS
+  - id: cis_comprehensive_income_nci_explicit
+    fs_type: CIS
     priority: 950
     exact_any:
       - 비지배지분총포괄손익
@@ -1714,10 +1761,10 @@ rules:
       - 포괄손익비지배지분
       - 비지배지분에배분된총포괄손익
     canonical_id: COMPREHENSIVE_INCOME_NCI
-    reason: 명시적 비지배지분총포괄이익
+    reason: 명시적 비지배지분총포괄손익
 
-  - id: is_comprehensive_income_parent
-    fs_type: IS
+  - id: cis_comprehensive_income_parent_attribution
+    fs_type: CIS
     priority: 900
     exact_any:
       - 지배기업의소유주지분
@@ -1727,5 +1774,67 @@ rules:
       - 총포괄이익의귀속
       - 총포괄손익의귀속
       - 총포괄이익손실의귀속
+      - 총포괄손익손실의귀속
     canonical_id: COMPREHENSIVE_INCOME_PARENT
-    reason: CanonicalAccount에 지배주주총포괄이익 계정이 있으므로 UNMAPPED 대신 매핑
+    reason: 총포괄손익 귀속 중 지배주주총포괄손익
+
+  - id: cis_comprehensive_income_nci_attribution
+    fs_type: CIS
+    priority: 900
+    exact_any:
+      - 비지배분
+      - 비지배지분
+      - 비지배주주지분
+    context_include_any:
+      - 총포괄이익의귀속
+      - 총포괄손익의귀속
+      - 총포괄이익손실의귀속
+      - 총포괄손익손실의귀속
+    canonical_id: COMPREHENSIVE_INCOME_NCI
+    reason: 총포괄손익 귀속 중 비지배지분총포괄손익
+
+  - id: cis_total_comprehensive_income
+    fs_type: CIS
+    priority: 880
+    exact_any:
+      - 총포괄손익
+      - 총포괄이익
+      - 총포괄이익손실
+      - 당기총포괄손익
+      - 당기총포괄이익
+      - 당기총포괄이익손실
+    conditions:
+      amount_is_zero_or_blank: false
+    canonical_id: TOTAL_COMPREHENSIVE_INCOME
+    amount_policy: as_reported
+    reason: 당기 총포괄손익
+
+  - id: cis_other_comprehensive_income_total
+    fs_type: CIS
+    priority: 870
+    exact_any:
+      - 기타포괄손익
+      - 기타포괄이익손실
+      - 기타포괄손익합계
+      - 세후기타포괄손익
+      - 당기손익으로재분류되지않는항목세후기타포괄손익
+      - 당기손익으로재분류될수있는항목세후기타포괄손익
+    conditions:
+      amount_is_zero_or_blank: false
+    canonical_id: OTHER_COMPREHENSIVE_INCOME
+    amount_policy: as_reported
+    reason: 기타포괄손익 subtotal
+
+  - id: cis_oci_component_unmapped
+    fs_type: CIS
+    priority: 860
+    exact_any:
+      - 확정급여제도의재측정손익세후기타포괄손익
+      - 확정급여제도의재측정요소
+      - 확정급여제도의재측정손익
+      - 순확정급여부채의재측정요소
+      - 순확정급여부채자산의재측정요소
+      - 기타포괄손익공정가치측정금융자산평가손익
+      - 해외사업환산손익
+    canonical_id: UNMAPPED
+    reason: OCI 세부 구성요소는 OTHER_COMPREHENSIVE_INCOME subtotal과 중복될 수 있으므로 기본 미매핑

@@ -58,6 +58,7 @@ UNITS = {
 
 VALID_AMOUNT_POLICIES = {"as_reported", "abs", "neg_abs"}
 VALID_CASH_DIRECTIONS = {"", "inflow", "outflow"}
+EPS_CANONICAL_IDS = {"BASIC_EPS", "DILUTED_EPS"}
 
 
 def safe_str(value: Any) -> str:
@@ -237,6 +238,18 @@ def parse_unit_factor(text: str) -> int:
         if unit in t:
             return factor
     return 1
+
+
+def is_eps_account_name(value: Any) -> bool:
+    name = normalize_account_name(value)
+
+    if "주당" not in name:
+        return False
+
+    if not any(token in name for token in ("이익", "손익", "손실")):
+        return False
+
+    return any(token in name for token in ("기본", "희석"))
 
 
 @lru_cache(maxsize=100_000)
@@ -526,7 +539,8 @@ def extract_rows_from_dart_html(
 
             td_style = safe_str(account_td.get("style", ""))
             amount_raw = amount_td.get_text(" ", strip=True)
-            raw_amount = parse_amount(amount_raw, unit_factor)
+            row_unit_factor = 1 if is_eps_account_name(original_account_name) else unit_factor
+            raw_amount = parse_amount(amount_raw, row_unit_factor)
 
             rows.append(
                 {
@@ -542,7 +556,7 @@ def extract_rows_from_dart_html(
                     "amount": safe_str(raw_amount),
                     "raw_amount": safe_str(raw_amount),
                     "amount_raw": amount_raw,
-                    "unit_factor": safe_str(unit_factor),
+                    "unit_factor": safe_str(row_unit_factor),
                     "table_title": combined_header_text,
                 }
             )
@@ -564,21 +578,54 @@ def extract_rows_from_dart_html(
 def text_of(tag: Tag) -> str:
     return " ".join(tag.get_text(" ", strip=True).split())
 
-def iter_section_tables(soup: BeautifulSoup, section_name: str):
-    section_headers = soup.select("p.table-group-xbrl")
-    unit_re = re.compile(r"\(\s*단위\s*:\s*[^)]+?원\s*\)")
+def looks_like_comment_section_header(tag: Tag) -> bool:
+    if tag.name != "p":
+        return False
 
-    for header in section_headers:
+    classes = tag.get("class", [])
+    if "table-group-xbrl" in classes:
+        return True
+
+    text = text_of(tag)
+    if not text or len(text) > 300:
+        return False
+
+    return bool(re.match(r"^\s*\d+\.\s+", text))
+
+
+def iter_comment_section_headers(soup: BeautifulSoup):
+    seen: set[int] = set()
+
+    for header in soup.select("p.table-group-xbrl"):
+        seen.add(id(header))
+        yield header
+
+    for header in soup.find_all("p"):
+        if id(header) in seen:
+            continue
+        if looks_like_comment_section_header(header):
+            yield header
+
+
+def iter_section_tables(soup: BeautifulSoup, section_name: str):
+    unit_re = re.compile(r"\(\s*단위\s*:\s*[^)]+?원\s*\)")
+    scan_all_sections = safe_str(section_name).strip() in {"*", "__all__", "ALL"}
+
+    for header in iter_comment_section_headers(soup):
         section_title = text_of(header)
         unit_value = 1
 
-        if section_name not in section_title:
+        if (
+            not scan_all_sections
+            and section_name not in section_title
+            and normalize_account_name(section_name) not in normalize_account_name(section_title)
+        ):
             continue
 
         node = header.find_next_sibling()
         while node:
             # 다음 주석/섹션 제목 만나면 현재 섹션 종료
-            if isinstance(node, Tag) and node.name == "p" and "table-group-xbrl" in node.get("class", []):
+            if isinstance(node, Tag) and looks_like_comment_section_header(node):
                 break
             
             if isinstance(node, Tag) and node.name == "table":
@@ -629,6 +676,16 @@ def parse_number(value: str):
     return -num if is_negative else num
 
 
+def first_value_after_label(cell_texts: list[str], label_idx: int) -> tuple[str, Any]:
+    for candidate in cell_texts[label_idx + 1:]:
+        value = parse_number(candidate)
+        if value is not None:
+            return candidate, value
+
+    raw_value = cell_texts[-1] if cell_texts else ""
+    return raw_value, parse_number(raw_value)
+
+
 def compile_comment_target_patterns(patterns: dict[str, Any]) -> dict[str, list[re.Pattern]]:
     compiled: dict[str, list[re.Pattern]] = {}
 
@@ -673,14 +730,15 @@ def find_last_value_in_matched_row_by_regex(table: Tag, patterns: dict[str, Any]
         cell_texts = [clean_text(cell) for cell in cells]
         row_text = " ".join(cell_texts)
 
-        # 보통 첫 번째 또는 두 번째 셀이 계정명이고 마지막 셀이 값
+        # 보통 첫 번째 또는 두 번째 셀이 계정명이고 오른쪽 숫자 셀이 당기 값
         label_candidates = cell_texts[:-1]
-        raw_value = cell_texts[-1]
-        value = parse_number(raw_value)
-
-        for label in label_candidates:
+        for label_idx, label in enumerate(label_candidates):
             for key, regexes in compiled.items():
                 if any(regex.search(label) for regex in regexes):
+                    raw_value, value = first_value_after_label(cell_texts, label_idx)
+                    if value is None:
+                        continue
+
                     results.append({
                         "key": key,
                         "matched_label": label,
@@ -1713,6 +1771,8 @@ class RuleEngine:
             result = self.map_row(row)
 
             raw_amount = amount_to_int(row.get("raw_amount", row.get("amount")))
+            if result.canonical_account_id in EPS_CANONICAL_IDS and safe_str(row.get("amount_raw")):
+                raw_amount = parse_amount(row.get("amount_raw"), 1)
             normalized_amount = apply_amount_policy(raw_amount, result.amount_policy)
             cash_effect_amount = apply_cash_direction(normalized_amount, result.cash_direction)
 
@@ -1746,7 +1806,7 @@ class RuleEngine:
                         "context_rule_id": safe_str(row.get("context_rule_id")),
                         "context_reason": safe_str(row.get("context_reason")),
                         "amount_raw": safe_str(row.get("amount_raw")),
-                        "unit_factor": safe_str(row.get("unit_factor")),
+                        "unit_factor": "1" if result.canonical_account_id in EPS_CANONICAL_IDS else safe_str(row.get("unit_factor")),
                     }
                 )
 
@@ -1841,6 +1901,7 @@ def dedupe_duplicate_subtotals(df: pd.DataFrame) -> pd.DataFrame:
         "TOTAL_LIABILITIES",
         "CURRENT_ASSETS",
         "NON_CURRENT_ASSETS",
+        "GOODWILL",
         "CURRENT_LIABILITIES",
         "NON_CURRENT_LIABILITIES",
         "CFO",
@@ -1856,6 +1917,8 @@ def dedupe_duplicate_subtotals(df: pd.DataFrame) -> pd.DataFrame:
         "NET_INCOME",
         "NET_INCOME_PARENT",
         "NET_INCOME_NCI",
+        "BASIC_EPS",
+        "DILUTED_EPS",
     }
 
     for cid in duplicate_sensitive_ids:
@@ -1916,12 +1979,26 @@ INCOME_STATEMENT_FALLBACK_IDS = {
     "COGS",
     "GROSS_PROFIT",
     "SGNA",
+    "RND",
+    "DNA_IS",
+    "BAD_DEBT_EXPENSE",
+    "BAD_DEBT_REVERSAL",
+    "LOGISTICS_COST",
+    "OPERATING_EXPENSES_TOTAL",
+    "OTHER_OPERATING_INCOME",
+    "OTHER_OPERATING_EXPENSES",
+    "OTHER_NON_OPERATING_INCOME",
+    "OTHER_NON_OPERATING_EXPENSES",
     "OPERATING_INCOME",
     "PBT",
     "TAX_EXPENSE",
+    "CONTINUING_OPERATIONS_INCOME",
+    "DISCONTINUED_OPERATIONS_INCOME",
     "NET_INCOME",
     "NET_INCOME_PARENT",
     "NET_INCOME_NCI",
+    "BASIC_EPS",
+    "DILUTED_EPS",
 }
 
 CIS_ONLY_IDS = {
@@ -1973,6 +2050,7 @@ def apply_is_cis_priority(df: pd.DataFrame) -> pd.DataFrame:
 
     income_mask = cid.isin(INCOME_STATEMENT_FALLBACK_IDS)
 
+    # IS에 이미 존재하는 일반 손익 항목 key
     is_keys = set(
         zip(
             df.loc[income_mask & st.eq("IS"), "period"].astype(str),
@@ -1980,25 +2058,33 @@ def apply_is_cis_priority(df: pd.DataFrame) -> pd.DataFrame:
         )
     )
 
+    # 모든 row의 (period, canonical_id) key를 Series로 생성
+    row_keys = pd.Series(
+        list(
+            zip(
+                df["period"].astype(str),
+                df["canonical_account_id"].astype(str),
+            )
+        ),
+        index=df.index,
+    )
+
+    has_is_counterpart = row_keys.isin(is_keys)
+
     cis_income_mask = income_mask & st.eq("CIS")
 
-    cis_duplicate_mask = cis_income_mask & [
-        (period, canonical_id) in is_keys
-        for period, canonical_id in zip(
-            df["period"].astype(str),
-            df["canonical_account_id"].astype(str),
-        )
-    ]
+    # 여기서 list가 아니라 Series끼리 연산해야 FutureWarning이 안 난다.
+    cis_duplicate_mask = cis_income_mask & has_is_counterpart
 
     df = _mark_unmapped(
         df,
-        pd.Series(cis_duplicate_mask, index=df.index),
+        cis_duplicate_mask,
         rule_id="post_is_priority_over_cis",
         reason="IS에 동일 손익 항목이 존재하여 CIS 중복 항목 제거",
     )
 
     # IS가 없어서 CIS를 fallback으로 쓰는 일반 손익 항목은
-    # 팩터 계산 편의를 위해 statement_type을 IS로 승격한다.
+    # 팩터 계산 편의를 위해 statement_type을 IS로 승격
     cid = df["canonical_account_id"].astype(str)
     st = df["statement_type"].astype(str)
 

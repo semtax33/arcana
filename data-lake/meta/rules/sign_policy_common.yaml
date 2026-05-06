@@ -26,6 +26,12 @@ defaults:
 
 canonical_policies:
   # =========================
+  # BS: 자산/부채/자본 항목
+  # =========================
+  GOODWILL:
+    amount_policy: as_reported
+
+  # =========================
   # IS: 수익/비용성 항목
   # =========================
   REVENUE:
@@ -59,6 +65,10 @@ canonical_policies:
   NET_INCOME_PARENT:
     amount_policy: as_reported
   NET_INCOME_NCI:
+    amount_policy: as_reported
+  BASIC_EPS:
+    amount_policy: as_reported
+  DILUTED_EPS:
     amount_policy: as_reported
   COMPREHENSIVE_INCOME_PARENT:
     amount_policy: as_reported

@@ -215,6 +215,7 @@ FilterCache = dict[tuple[int, str], pd.DataFrame]
 def filter_cache_key(spec: dict[str, Any]) -> str:
     filter_keys = [
         "statement_type",
+        "statement_type_in",
         "cid",
         "canonical_id",
         "canonical_id_not",
@@ -249,6 +250,12 @@ def filter_rows(
     statement_type = spec.get("statement_type")
     if statement_type:
         out = out[out["statement_type"].eq(statement_type)]
+
+    statement_type_in = spec.get("statement_type_in")
+    if statement_type_in:
+        allowed_statement_types = [safe_str(x) for x in statement_type_in if safe_str(x)]
+        if allowed_statement_types:
+            out = out[out["statement_type"].isin(allowed_statement_types)]
 
     if "after_cid" in spec:
         anchor = safe_str(spec.get("after_cid"))
