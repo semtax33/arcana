@@ -38,6 +38,7 @@ class CheckResult:
     mode: str = ""
     formula: str = ""
     matched_unmapped_candidates: list[dict[str, Any]] | None = None
+    severity: str = "ERROR"
 
 
 @dataclass
@@ -128,11 +129,42 @@ def read_csv_flexible(path: str | Path) -> pd.DataFrame:
 
 def to_number_series(s: pd.Series) -> pd.Series:
     return pd.to_numeric(
-        s.astype(str)
+        text_series(s)
         .str.replace(",", "", regex=False)
         .str.replace(" ", "", regex=False),
         errors="coerce",
     ).fillna(0.0)
+
+
+def is_blank_amount_text(v: Any) -> bool:
+    s = (
+        safe_str(v)
+        .replace(",", "")
+        .replace(" ", "")
+        .replace("\u00a0", "")
+        .replace("\u3000", "")
+        .strip()
+    )
+    return s == ""
+
+
+def truthy_series(s: pd.Series) -> pd.Series:
+    return text_series(s).str.strip().str.lower().isin({"1", "true", "t", "yes", "y"})
+
+
+def text_series(values: pd.Series | pd.DataFrame) -> pd.Series:
+    if isinstance(values, pd.DataFrame):
+        values = values.iloc[:, 0]
+    return values.astype("string").fillna("").astype(str)
+
+
+def series_contains(
+    values: pd.Series | pd.DataFrame,
+    pattern: str,
+    *,
+    regex: bool = True,
+) -> pd.Series:
+    return text_series(values).str.contains(pattern, regex=regex, na=False)
 
 
 @lru_cache(maxsize=32)
@@ -181,6 +213,14 @@ def load_csv_pair(
         df["__row_idx"] = range(len(df))
         df["amount_num"] = to_number_series(df["amount"])
         df["name_norm"] = df["original_account_name"].map(normalize_name)
+        source_amount_col = (
+            "amount_raw"
+            if "amount_raw" in df.columns
+            else "raw_amount"
+            if "raw_amount" in df.columns
+            else "amount"
+        )
+        df["amount_is_blank"] = text_series(df[source_amount_col]).map(is_blank_amount_text)
 
     for col in [
         "section_context",
@@ -201,6 +241,50 @@ def load_csv_pair(
         + " "
         + d["context_path"].astype(str)
     ).map(normalize_name)
+
+    context_cols = [
+        "section_context",
+        "parent_context",
+        "context_path",
+        "rule_id",
+        "reason",
+        "context_rule_id",
+        "context_reason",
+        "context_all",
+        "amount_is_blank",
+    ]
+    key_cols = [
+        "statement_type",
+        "period",
+        "canonical_account_id",
+        "original_account_name",
+        "amount",
+    ]
+    if all(col in n.columns and col in d.columns for col in key_cols):
+        sep = "\x1f"
+
+        def make_row_keys(df: pd.DataFrame) -> pd.Series:
+            key_parts = []
+            for col in key_cols:
+                values = df[col]
+                if isinstance(values, pd.DataFrame):
+                    values = values.iloc[:, 0]
+                key_parts.append(values.astype(str))
+
+            base = pd.Series(
+                (sep.join(parts) for parts in zip(*key_parts)),
+                index=df.index,
+                dtype="object",
+            )
+            ordinals = base.groupby(base.to_numpy(), sort=False).cumcount().astype(str)
+            return base + sep + ordinals
+
+        n_keys = make_row_keys(n)
+        d_keys = make_row_keys(d)
+        for col in context_cols:
+            if col in d.columns:
+                mapped = n_keys.map(dict(zip(d_keys, d[col].astype(str))))
+                n[col] = mapped.fillna("")
 
     return n, d
 
@@ -300,20 +384,20 @@ def filter_rows(
         tokens = [t for t in tokens if t]
         if tokens:
             pattern = "|".join(re.escape(t) for t in tokens)
-            out = out[~out["name_norm"].str.contains(pattern, regex=True, na=False)]
+            out = out[~series_contains(out["name_norm"], pattern, regex=True)]
 
     if "name_contains_any" in spec:
         tokens = [normalize_name(x) for x in spec["name_contains_any"]]
         tokens = [t for t in tokens if t]
         if tokens:
             pattern = "|".join(re.escape(t) for t in tokens)
-            out = out[out["name_norm"].str.contains(pattern, regex=True, na=False)]
+            out = out[series_contains(out["name_norm"], pattern, regex=True)]
 
     if "name_contains_all" in spec:
         for token in spec["name_contains_all"]:
             t = normalize_name(token)
             if t:
-                out = out[out["name_norm"].str.contains(re.escape(t), regex=True, na=False)]
+                out = out[series_contains(out["name_norm"], re.escape(t), regex=True)]
 
     if "context_contains_any" in spec:
         if "context_all" not in out.columns:
@@ -322,7 +406,7 @@ def filter_rows(
         tokens = [t for t in tokens if t]
         if tokens:
             pattern = "|".join(re.escape(t) for t in tokens)
-            out = out[out["context_all"].str.contains(pattern, regex=True, na=False)]
+            out = out[series_contains(out["context_all"], pattern, regex=True)]
 
     if "context_contains_all" in spec:
         if "context_all" not in out.columns:
@@ -330,7 +414,7 @@ def filter_rows(
         for token in spec["context_contains_all"]:
             t = normalize_name(token)
             if t:
-                out = out[out["context_all"].str.contains(re.escape(t), regex=True, na=False)]
+                out = out[series_contains(out["context_all"], re.escape(t), regex=True)]
 
     if "context_exclude_any" in spec:
         if "context_all" not in out.columns:
@@ -339,7 +423,7 @@ def filter_rows(
         tokens = [t for t in tokens if t]
         if tokens:
             pattern = "|".join(re.escape(t) for t in tokens)
-            out = out[~out["context_all"].str.contains(pattern, regex=True, na=False)]
+            out = out[~series_contains(out["context_all"], pattern, regex=True)]
 
     if filter_cache is not None:
         filter_cache[key] = out
@@ -355,7 +439,10 @@ def run_formula_choice_check(
 ) -> CheckResult:
     source = rule.get("source", "normalized")
     tolerance = float(rule.get("tolerance_abs", default_tol))
+    tolerance_rel = float(rule.get("tolerance_rel", 0.0) or 0.0)
     skip_if_missing = bool(rule.get("skip_if_missing", True))
+    severity = safe_str(rule.get("severity", "ERROR")).upper() or "ERROR"
+    failure_status = "WARN" if severity == "WARN" else "FAIL"
 
     candidates = rule.get("candidates", []) or []
     evaluated: list[CheckResult] = []
@@ -410,8 +497,11 @@ def run_formula_choice_check(
                 rhs=actual,
                 tolerance=tolerance,
                 skip_if_missing=skip_if_missing,
+                tolerance_rel=tolerance_rel,
                 mode=mode,
                 formula=formula,
+                failure_status=failure_status,
+                severity=severity,
             )
         )
 
@@ -419,19 +509,20 @@ def run_formula_choice_check(
     if passed:
         return min(passed, key=lambda r: abs(r.diff or 0.0))
 
-    failed = [r for r in evaluated if r.status == "FAIL"]
+    failed = [r for r in evaluated if r.status in {"FAIL", "WARN"}]
     if failed:
         best = min(failed, key=lambda r: abs(r.diff or float("inf")))
         return CheckResult(
             name=safe_str(rule.get("name", "formula_choice_check")),
-            status="FAIL",
+            status=failure_status,
             lhs=best.lhs,
             rhs=best.rhs,
             diff=best.diff,
-            tolerance=tolerance,
+            tolerance=best.tolerance,
             message=f"모든 후보식 실패; best={best.mode}; diff={best.diff:,.0f}",
             mode=best.mode,
             formula=best.formula,
+            severity=severity,
         )
 
     # 전부 SKIP이면, 어떤 후보가 왜 SKIP됐는지 일부라도 보여주는 게 좋음
@@ -446,10 +537,14 @@ def run_formula_choice_check(
     )
 
 def aggregate_amount(rows: pd.DataFrame, agg: str) -> float | None:
+    if "amount_is_blank" in rows.columns:
+        rows = rows[~truthy_series(rows["amount_is_blank"])]
     if rows.empty:
         return None
     if agg == "first":
         return float(rows["amount_num"].iloc[0])
+    if agg == "last":
+        return float(rows["amount_num"].iloc[-1])
     if agg == "sum":
         return float(rows["amount_num"].sum())
     if agg == "sum_unique":
@@ -526,6 +621,8 @@ def eval_expr(
     source = expr.get("source", default_source)
     df = debug_df if source == "debug" else normalized_df
     rows = filter_rows(df, expr, filter_cache)
+    if not expr.get("include_comment_rows", False) and "context_all" in rows.columns:
+        rows = rows[~series_contains(rows["context_all"], "주석", regex=False)]
     value = aggregate_amount(rows, expr.get("agg", "first"))
 
     if value is None and expr.get("optional", False):
@@ -540,8 +637,11 @@ def check_equal(
     rhs: float | None,
     tolerance: float,
     skip_if_missing: bool,
+    tolerance_rel: float = 0.0,
     mode: str = "",
     formula: str = "",
+    failure_status: str = "FAIL",
+    severity: str = "ERROR",
 ) -> CheckResult:
     if lhs is None or rhs is None:
         return CheckResult(
@@ -557,7 +657,8 @@ def check_equal(
         )
 
     diff = lhs - rhs
-    status = "PASS" if abs(diff) <= tolerance else "FAIL"
+    effective_tolerance = max(tolerance, max(abs(lhs), abs(rhs)) * tolerance_rel)
+    status = "PASS" if abs(diff) <= effective_tolerance else failure_status
 
     return CheckResult(
         name=name,
@@ -565,10 +666,11 @@ def check_equal(
         lhs=lhs,
         rhs=rhs,
         diff=diff,
-        tolerance=tolerance,
+        tolerance=effective_tolerance,
         message="" if status == "PASS" else f"차이 {diff:,.0f}",
         mode=mode,
         formula=formula,
+        severity=severity,
     )
 
 def run_single_formula_check(
@@ -580,7 +682,10 @@ def run_single_formula_check(
 ) -> CheckResult:
     source = rule.get("source", "normalized")
     tolerance = float(rule.get("tolerance_abs", default_tol))
+    tolerance_rel = float(rule.get("tolerance_rel", 0.0) or 0.0)
     skip_if_missing = bool(rule.get("skip_if_missing", True))
+    severity = safe_str(rule.get("severity", "ERROR")).upper() or "ERROR"
+    failure_status = "WARN" if severity == "WARN" else "FAIL"
 
     lhs = eval_expr(
         rule["lhs"],
@@ -604,6 +709,9 @@ def run_single_formula_check(
         rhs=rhs,
         tolerance=tolerance,
         skip_if_missing=skip_if_missing,
+        tolerance_rel=tolerance_rel,
+        failure_status=failure_status,
+        severity=severity,
     )
 
 def run_formula_checks(
@@ -1091,6 +1199,9 @@ def build_factor_snapshot(
     if not factor_config.get("enabled", True):
         return {}
 
+    if "amount_is_blank" in df.columns:
+        df = df[~truthy_series(df["amount_is_blank"])]
+
     grouped = df.groupby("canonical_account_id", sort=False)["amount_num"]
     first_by_cid = grouped.first().to_dict()
     sum_by_cid = grouped.sum().to_dict()
@@ -1300,8 +1411,9 @@ def decide_verdict(
     errors: list[dict[str, Any]],
     duplicate_risks: list[dict[str, Any]],
     missing_core_ids: dict[str, list[str]],
-) -> tuple[str, int, list[dict[str, Any]]]:
+) -> tuple[str, int, list[dict[str, Any]], list[dict[str, Any]]]:
     final_errors = list(errors)
+    final_warnings = list(warnings)
 
     fail_checks = [c for c in checks if c.status == "FAIL"]
     for c in fail_checks:
@@ -1309,6 +1421,20 @@ def decide_verdict(
             {
                 "id": "formula_check_failed",
                 "severity": "ERROR",
+                "description": c.name,
+                "diff": c.diff,
+                "mode": c.mode,
+                "formula": c.formula,
+                "matched_unmapped_candidates": c.matched_unmapped_candidates or [],
+            }
+        )
+
+    warn_checks = [c for c in checks if c.status == "WARN"]
+    for c in warn_checks:
+        final_warnings.append(
+            {
+                "id": "formula_check_warning",
+                "severity": "WARN",
                 "description": c.name,
                 "diff": c.diff,
                 "mode": c.mode,
@@ -1343,18 +1469,18 @@ def decide_verdict(
 
     score = 100
     score -= len(final_errors) * 20
-    score -= len(warnings) * 5
+    score -= len(final_warnings) * 5
     score -= len(missing_core_ids) * 5
     score = max(0, min(100, score))
 
     if final_errors:
         verdict = "FAIL"
-    elif warnings or missing_core_ids:
+    elif final_warnings or missing_core_ids:
         verdict = "WARN"
     else:
         verdict = "PASS"
 
-    return verdict, score, final_errors
+    return verdict, score, final_errors, final_warnings
 
 
 # ============================================================
@@ -1390,7 +1516,7 @@ def build_validation_report_from_frames(
     unmapped_candidates = collect_unmapped_candidates(d, config)
     factor_snapshot = build_factor_snapshot(n, config)
 
-    verdict, score, final_errors = decide_verdict(
+    verdict, score, final_errors, final_warnings = decide_verdict(
         checks=checks,
         warnings=warnings,
         errors=rule_errors,
@@ -1408,7 +1534,7 @@ def build_validation_report_from_frames(
         unmapped_rows=unmapped_rows,
         mapped_ratio=mapped_ratio,
         checks=[asdict(c) for c in checks],
-        warnings=warnings,
+        warnings=final_warnings,
         errors=final_errors,
         missing_core_ids=missing_core_ids,
         duplicate_risks=duplicate_risks,
@@ -1683,15 +1809,15 @@ def build_suspicious_rows_from_debug(
     )
 
     masks.append(
-        df["original_account_name"].astype(str).str.contains(
+        series_contains(
+            df["original_account_name"],
             "순차입|순상환|지배기업|비지배|총포괄|당기순이익",
             regex=True,
-            na=False,
         )
     )
 
     if "rule_id" in df.columns:
-        masks.append(df["rule_id"].astype(str).str.startswith("post_", na=False))
+        masks.append(text_series(df["rule_id"]).str.startswith("post_", na=False))
 
     mask = masks[0]
     for m in masks[1:]:

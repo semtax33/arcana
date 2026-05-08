@@ -272,7 +272,6 @@ comment_rules:
         - '^매출채권\s*손상차손$'
       BAD_DEBT_REVERSAL:
         - '^대손상각비환입$'
-        - '^손상차손환입$'
       LOGISTICS_COST:
         - '^물류원가$'
         - '^물류비$'

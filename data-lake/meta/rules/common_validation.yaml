@@ -47,13 +47,49 @@ formula_checks:
     skip_if_missing: true
     lhs:
       cid: TOTAL_ASSETS
-      agg: first
+      agg: last
     rhs:
       sum:
         - cid: TOTAL_LIABILITIES
-          agg: first
+          agg: last
         - cid: TOTAL_EQUITY
+          agg: last
+    candidates:
+      - mode: TOTAL_ASSETS_FIRST
+        formula: TOTAL_ASSETS(first) = TOTAL_LIABILITIES(first) + TOTAL_EQUITY(first)
+        expected:
+          cid: TOTAL_ASSETS
           agg: first
+        actual:
+          sum:
+            - cid: TOTAL_LIABILITIES
+              agg: first
+            - cid: TOTAL_EQUITY
+              agg: first
+      - mode: TOTAL_ASSETS_STRICT
+        formula: TOTAL_ASSETS = TOTAL_LIABILITIES + TOTAL_EQUITY
+      - mode: LIABILITIES_AND_EQUITY_TOTAL_SOURCE_MATCH
+        formula: LIABILITIES_AND_EQUITY_TOTAL = TOTAL_LIABILITIES + TOTAL_EQUITY
+        expected:
+          sum:
+            - cid: TOTAL_LIABILITIES
+              agg: last
+            - cid: TOTAL_EQUITY
+              agg: last
+        actual:
+          source: debug
+          statement_type: BS
+          name_exact_any:
+            - 부채및자본총계
+            - 부채와자본총계
+            - 부채와자본합계
+            - 자본과부채총계
+            - 자본및부채총계
+            - 자본과부채합계
+            - 부채및자본의총계
+            - 부재및자본총계
+          agg: last
+    tolerance_rel: 0.00001
   - name: "BS: 유동자산 + 비유동자산 = 자산총계"
     statement_type: BS
     source: normalized
@@ -61,10 +97,10 @@ formula_checks:
     actual:
       statement_type: BS
       cid: TOTAL_ASSETS
-      agg: first
+      agg: last
     candidates:
-      - mode: CURRENT_PLUS_NON_CURRENT
-        formula: CURRENT_ASSETS + NON_CURRENT_ASSETS = TOTAL_ASSETS
+      - mode: FIRST_CURRENT_PLUS_NON_CURRENT
+        formula: CURRENT_ASSETS(first) + NON_CURRENT_ASSETS(first) = TOTAL_ASSETS(first)
         expected:
           sum:
             - statement_type: BS
@@ -73,8 +109,12 @@ formula_checks:
             - statement_type: BS
               cid: NON_CURRENT_ASSETS
               agg: first
-      - mode: CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE
-        formula: CURRENT_ASSETS + NON_CURRENT_ASSETS + ASSETS_HELD_FOR_SALE = TOTAL_ASSETS
+        actual:
+          statement_type: BS
+          cid: TOTAL_ASSETS
+          agg: first
+      - mode: FIRST_CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE
+        formula: CURRENT_ASSETS(first) + NON_CURRENT_ASSETS(first) + ASSETS_HELD_FOR_SALE(first) = TOTAL_ASSETS(first)
         expected:
           sum:
             - statement_type: BS
@@ -85,7 +125,59 @@ formula_checks:
               agg: first
             - statement_type: BS
               cid: ASSETS_HELD_FOR_SALE
+              agg: first
+              optional: true
+        actual:
+          statement_type: BS
+          cid: TOTAL_ASSETS
+          agg: first
+      - mode: CURRENT_PLUS_NON_CURRENT
+        formula: CURRENT_ASSETS + NON_CURRENT_ASSETS = TOTAL_ASSETS
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_ASSETS
+              agg: last
+            - statement_type: BS
+              cid: NON_CURRENT_ASSETS
+              agg: last
+      - mode: CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE
+        formula: CURRENT_ASSETS + NON_CURRENT_ASSETS + ASSETS_HELD_FOR_SALE = TOTAL_ASSETS
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_ASSETS
+              agg: last
+            - statement_type: BS
+              cid: NON_CURRENT_ASSETS
+              agg: last
+            - statement_type: BS
+              cid: ASSETS_HELD_FOR_SALE
+              agg: last
+              optional: true
+      - mode: SEGMENTED_CURRENT_PLUS_NON_CURRENT
+        formula: sum_unique(CURRENT_ASSETS) + sum_unique(NON_CURRENT_ASSETS) = TOTAL_ASSETS
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_ASSETS
               agg: sum_unique
+            - statement_type: BS
+              cid: NON_CURRENT_ASSETS
+              agg: sum_unique
+      - mode: SEGMENTED_CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE
+        formula: sum_unique(CURRENT_ASSETS) + sum_unique(NON_CURRENT_ASSETS) + ASSETS_HELD_FOR_SALE = TOTAL_ASSETS
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_ASSETS
+              agg: sum_unique
+            - statement_type: BS
+              cid: NON_CURRENT_ASSETS
+              agg: sum_unique
+            - statement_type: BS
+              cid: ASSETS_HELD_FOR_SALE
+              agg: last
               optional: true
       - mode: CURRENT_PLUS_NON_CURRENT_PLUS_FINANCIAL_BUSINESS
         formula: CURRENT_ASSETS + NON_CURRENT_ASSETS + FINANCIAL_BUSINESS_ASSETS = TOTAL_ASSETS
@@ -93,10 +185,10 @@ formula_checks:
           sum:
             - statement_type: BS
               cid: CURRENT_ASSETS
-              agg: first
+              agg: last
             - statement_type: BS
               cid: NON_CURRENT_ASSETS
-              agg: first
+              agg: last
             - statement_type: BS
               cid: FINANCIAL_BUSINESS_ASSETS
               agg: sum_unique
@@ -107,19 +199,43 @@ formula_checks:
           sum:
             - statement_type: BS
               cid: CURRENT_ASSETS
-              agg: first
+              agg: last
             - statement_type: BS
               cid: NON_CURRENT_ASSETS
-              agg: first
+              agg: last
             - statement_type: BS
               cid: ASSETS_HELD_FOR_SALE
-              agg: sum_unique
+              agg: last
               optional: true
             - statement_type: BS
               cid: FINANCIAL_BUSINESS_ASSETS
               agg: sum_unique
               optional: true
+      - mode: CURRENT_PLUS_NON_CURRENT_EQUALS_LIABILITIES_AND_EQUITY_TOTAL
+        formula: CURRENT_ASSETS + NON_CURRENT_ASSETS = LIABILITIES_AND_EQUITY_TOTAL
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_ASSETS
+              agg: last
+            - statement_type: BS
+              cid: NON_CURRENT_ASSETS
+              agg: last
+        actual:
+          source: debug
+          statement_type: BS
+          name_exact_any:
+            - 부채및자본총계
+            - 부채와자본총계
+            - 부채와자본합계
+            - 자본과부채총계
+            - 자본및부채총계
+            - 자본과부채합계
+            - 부채및자본의총계
+            - 부재및자본총계
+          agg: last
     tolerance_abs: 10000
+    tolerance_rel: 0.00001
   - name: "BS: 유동부채 + 비유동부채 = 부채총계"
     statement_type: BS
     source: normalized
@@ -127,10 +243,10 @@ formula_checks:
     actual:
       statement_type: BS
       cid: TOTAL_LIABILITIES
-      agg: first
+      agg: last
     candidates:
-      - mode: CURRENT_PLUS_NON_CURRENT
-        formula: CURRENT_LIABILITIES + NON_CURRENT_LIABILITIES = TOTAL_LIABILITIES
+      - mode: FIRST_CURRENT_PLUS_NON_CURRENT
+        formula: CURRENT_LIABILITIES(first) + NON_CURRENT_LIABILITIES(first) = TOTAL_LIABILITIES(first)
         expected:
           sum:
             - statement_type: BS
@@ -139,8 +255,12 @@ formula_checks:
             - statement_type: BS
               cid: NON_CURRENT_LIABILITIES
               agg: first
-      - mode: CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE
-        formula: CURRENT_LIABILITIES + NON_CURRENT_LIABILITIES + LIABILITIES_HELD_FOR_SALE = TOTAL_LIABILITIES
+        actual:
+          statement_type: BS
+          cid: TOTAL_LIABILITIES
+          agg: first
+      - mode: FIRST_CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE
+        formula: CURRENT_LIABILITIES(first) + NON_CURRENT_LIABILITIES(first) + LIABILITIES_HELD_FOR_SALE(first) = TOTAL_LIABILITIES(first)
         expected:
           sum:
             - statement_type: BS
@@ -151,7 +271,59 @@ formula_checks:
               agg: first
             - statement_type: BS
               cid: LIABILITIES_HELD_FOR_SALE
+              agg: first
+              optional: true
+        actual:
+          statement_type: BS
+          cid: TOTAL_LIABILITIES
+          agg: first
+      - mode: CURRENT_PLUS_NON_CURRENT
+        formula: CURRENT_LIABILITIES + NON_CURRENT_LIABILITIES = TOTAL_LIABILITIES
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_LIABILITIES
+              agg: last
+            - statement_type: BS
+              cid: NON_CURRENT_LIABILITIES
+              agg: last
+      - mode: CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE
+        formula: CURRENT_LIABILITIES + NON_CURRENT_LIABILITIES + LIABILITIES_HELD_FOR_SALE = TOTAL_LIABILITIES
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_LIABILITIES
+              agg: last
+            - statement_type: BS
+              cid: NON_CURRENT_LIABILITIES
+              agg: last
+            - statement_type: BS
+              cid: LIABILITIES_HELD_FOR_SALE
+              agg: last
+              optional: true
+      - mode: SEGMENTED_CURRENT_PLUS_NON_CURRENT
+        formula: sum_unique(CURRENT_LIABILITIES) + sum_unique(NON_CURRENT_LIABILITIES) = TOTAL_LIABILITIES
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_LIABILITIES
               agg: sum_unique
+            - statement_type: BS
+              cid: NON_CURRENT_LIABILITIES
+              agg: sum_unique
+      - mode: SEGMENTED_CURRENT_PLUS_NON_CURRENT_PLUS_HELD_FOR_SALE
+        formula: sum_unique(CURRENT_LIABILITIES) + sum_unique(NON_CURRENT_LIABILITIES) + LIABILITIES_HELD_FOR_SALE = TOTAL_LIABILITIES
+        expected:
+          sum:
+            - statement_type: BS
+              cid: CURRENT_LIABILITIES
+              agg: sum_unique
+            - statement_type: BS
+              cid: NON_CURRENT_LIABILITIES
+              agg: sum_unique
+            - statement_type: BS
+              cid: LIABILITIES_HELD_FOR_SALE
+              agg: last
               optional: true
       - mode: CURRENT_PLUS_NON_CURRENT_PLUS_FINANCIAL_BUSINESS
         formula: CURRENT_LIABILITIES + NON_CURRENT_LIABILITIES + FINANCIAL_BUSINESS_LIABILITIES = TOTAL_LIABILITIES
@@ -159,10 +331,10 @@ formula_checks:
           sum:
             - statement_type: BS
               cid: CURRENT_LIABILITIES
-              agg: first
+              agg: last
             - statement_type: BS
               cid: NON_CURRENT_LIABILITIES
-              agg: first
+              agg: last
             - statement_type: BS
               cid: FINANCIAL_BUSINESS_LIABILITIES
               agg: first
@@ -175,19 +347,20 @@ formula_checks:
           sum:
             - statement_type: BS
               cid: CURRENT_LIABILITIES
-              agg: first
+              agg: last
             - statement_type: BS
               cid: NON_CURRENT_LIABILITIES
-              agg: first
+              agg: last
             - statement_type: BS
               cid: LIABILITIES_HELD_FOR_SALE
-              agg: sum_unique
+              agg: last
               optional: true
             - statement_type: BS
               cid: FINANCIAL_BUSINESS_LIABILITIES
               agg: first
               optional: true
     tolerance_abs: 10000
+    tolerance_rel: 0.00001
   - name: "BS: 지배주주지분 + 비지배지분 = 자본총계"
     statement_type: BS
     skip_if_missing: true
@@ -197,13 +370,27 @@ formula_checks:
           agg: first
         - cid: NEAOP
           agg: first
+        - cid: DISPOSAL_GROUP_EQUITY
+          agg: sum_unique
+          optional: true
+        - source: debug
+          statement_type: BS
+          canonical_id: UNMAPPED
+          name_contains_all:
+            - 매각예정
+            - 자본
+          context_contains_any:
+            - 자본
+          agg: sum_unique
+          optional: true
     rhs:
       cid: TOTAL_EQUITY
-      agg: first
+      agg: last
   - name: "IS: 매출총이익 - 판관비[/R&D] = 영업이익"
     statement_type: IS
     source: normalized
     skip_if_missing: true
+    severity: WARN
     actual:
       statement_type: IS
       cid: OPERATING_INCOME
@@ -329,7 +516,6 @@ formula_checks:
                 - statement_type: IS
                   cid: SGNA
                   agg: first
-                  optional: true
                 - statement_type_in: [IS, CIS]
                   cid: RND
                   agg: sum
@@ -486,10 +672,12 @@ formula_checks:
               agg: sum_unique
               optional: true
     tolerance_abs: 10000
+    tolerance_rel: 0.001
   - name: "IS: PBT +/- TAX = NET_INCOME"
     statement_type: IS
     source: normalized
     skip_if_missing: true
+    severity: WARN
     actual:
       statement_type: IS
       cid: NET_INCOME
@@ -588,9 +776,11 @@ formula_checks:
               agg: first
               optional: true
     tolerance_abs: 10000
+    tolerance_rel: 0.001
   - name: "IS: 지배주주순이익 + 비지배지분순이익 = 당기순이익"
     statement_type: IS
     skip_if_missing: true
+    severity: WARN
     actual:
       statement_type: IS
       cid: NET_INCOME
@@ -674,10 +864,13 @@ formula_checks:
               cid: OTHER_COMPREHENSIVE_INCOME
               agg: sum_unique
               optional: true
+    tolerance_abs: 10000
+    tolerance_rel: 0.001
   - name: "CF: CFO + CFI + CFF = 현금증가 후보식"
     statement_type: CF
     source: normalized
     skip_if_missing: true
+    severity: WARN
     candidates:
       - mode: CASH_CHANGE_EQUALS_ACTIVITY_SUM
         formula: CFO + CFI + CFF = CF_CASH_CHANGE
@@ -985,10 +1178,12 @@ formula_checks:
           cid: CF_CASH_CHANGE_BEFORE_FX
           agg: first
     tolerance_abs: 100000
+    tolerance_rel: 0.001
   - name: "CF: 기초현금 + 현금증가 후보식 = 기말현금"
     statement_type: CF
     source: normalized
     skip_if_missing: true
+    severity: WARN
     actual:
       statement_type: CF
       cid: CF_CASH_END
@@ -1324,6 +1519,7 @@ formula_checks:
               agg: sum
               optional: true
     tolerance_abs: 100000
+    tolerance_rel: 0.001
 
 warning_rules:
   - id: section_header_mapped

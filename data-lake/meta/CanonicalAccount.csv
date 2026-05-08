@@ -29,6 +29,7 @@ TRADE_AND_OTHER_RECEIVABLES,매출채권및기타채권,BS,FALSE,,매출채권�
 TRADE_AND_OTHER_PAYABLES,매입채무및기타채무,BS,FALSE,,매입채무와 기타채무 합산,
 ASSETS_HELD_FOR_SALE,매각예정비유동자산,BS,FALSE,,매각예정으로 분류된 비유동자산 또는 처분자산집단,BS 유동자산+비유동자산 검증식 후보에 포함
 LIABILITIES_HELD_FOR_SALE,매각예정비유동부채,BS,FALSE,,매각예정으로 분류된 처분자산집단 관련 부채,BS 유동부채+비유동부채 검증식 후보에 포함
+DISPOSAL_GROUP_EQUITY,매각예정처분집단관련자본,BS,FALSE,,매각예정자산/처분집단과 관련된 별도 자본 구성요소,BS 지배주주지분+비지배지분 검증식 후보에 포함
 FINANCIAL_BUSINESS_ASSETS,금융업자산,BS,FALSE,,일반기업 내 금융업/금융부문 자산 subtotal,금융업자산이 자산총계 안에서 별도 표시되는 경우 후보식에 포함
 FINANCIAL_BUSINESS_LIABILITIES,금융업부채,BS,FALSE,,일반기업 내 금융업/금융부문 부채 subtotal,금융업부채가 부채총계 안에서 별도 표시되는 경우 후보식에 포함
 CFO,영업활동현금흐름,CF,FALSE,,영업활동현금흐름,

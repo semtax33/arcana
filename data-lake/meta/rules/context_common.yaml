@@ -95,15 +95,10 @@ context_rules:
       - 당기순손익귀속
       - 당기순이익손실의귀속
       - 당기순이익손실귀속
-      - 계속영업당기순이익손실의귀속
-      - 계속영업순이익손실의귀속
-      - 중단영업당기순이익의귀속
-      - 중단영업당기순이익손실의귀속
-      - 중단영업손익의귀속
     action:
       type: PUSH_CONTEXT
       context_label: 당기순이익의귀속
-    reason: 지배주주순이익/비지배지분순이익 구분용 section
+    reason: 전체 당기순이익 귀속 section만 지배/비지배 귀속 컨텍스트로 사용
 
   - id: is_comprehensive_attribution_section
     priority: 900

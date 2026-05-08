@@ -792,8 +792,12 @@ rules:
       - 부채
       - 자본
       - 현금및현금성자산
+    context_exclude_any:
+      - 유동자산
+      - 비유동자산
+      - 자본
     canonical_id: ASSETS_HELD_FOR_SALE
-    amount_policy: as_reported
+    amount_policy: abs
     reason: 자산총계 검증에서 유동자산+비유동자산 외 별도 표시되는 매각예정자산
 
   - id: bs_liabilities_held_for_sale
@@ -812,6 +816,9 @@ rules:
       - 처분자산집단과직접관련된부채
       - 매각예정자산관련부채
       - 소유주분배예정부채집단
+    context_exclude_any:
+      - 유동부채
+      - 비유동부채
     canonical_id: LIABILITIES_HELD_FOR_SALE
     amount_policy: as_reported
     reason: 부채총계 검증에서 유동부채+비유동부채 외 별도 표시되는 매각예정부채
@@ -828,11 +835,21 @@ rules:
       - 창업투자자
       - 사모투자자산
       - 사모투자자
-      - 금융채권
-      - 금융자산
     canonical_id: FINANCIAL_BUSINESS_ASSETS
     amount_policy: as_reported
     reason: 일부 지주/복합기업에서 금융업 자산이 별도 subtotal로 표시됨
+
+  - id: bs_financial_business_assets_generic_parent
+    fs_type: BS
+    priority: 758
+    exact_any:
+      - 금융채권
+      - 금융자산
+    conditions:
+      has_children: true
+    canonical_id: FINANCIAL_BUSINESS_ASSETS
+    amount_policy: as_reported
+    reason: 금융업 자산 generic parent subtotal. 하위 leaf 금융자산은 과대합산 방지를 위해 매핑하지 않음
 
   - id: bs_financial_business_assets_leaf_details
     fs_type: BS
@@ -841,9 +858,9 @@ rules:
       - 투자실적자산
     conditions:
       has_children: false
-    canonical_id: FINANCIAL_BUSINESS_ASSETS
+    canonical_id: UNMAPPED
     amount_policy: as_reported
-    reason: 금융업/창업투자 자산 leaf detail. 부모 subtotal이 있으면 과대합산 방지를 위해 매핑하지 않음
+    reason: 금융업/창업투자 자산 leaf detail. 부모 subtotal과 과대합산되지 않도록 미매핑
 
   - id: bs_financial_business_liabilities
     fs_type: BS
@@ -897,6 +914,8 @@ rules:
     exact_any:
       - 자산총계
       - 자산합계
+    conditions:
+      amount_is_zero_or_blank: false
     canonical_id: TOTAL_ASSETS
 
   - id: bs_total_liabilities
@@ -905,6 +924,8 @@ rules:
     exact_any:
       - 부채총계
       - 부채합계
+    conditions:
+      amount_is_zero_or_blank: false
     canonical_id: TOTAL_LIABILITIES
 
   - id: bs_total_equity
@@ -913,6 +934,8 @@ rules:
     exact_any:
       - 자본총계
       - 자본합계
+    conditions:
+      amount_is_zero_or_blank: false
     canonical_id: TOTAL_EQUITY
 
   - id: bs_current_non_current_zero_section_headers
@@ -1216,12 +1239,30 @@ rules:
       - 비지배지분
       - 비지배주주지분
       - 비지배주주 지분
+    context_exclude_any:
+      - 부채
     conditions:
       has_children: false
       amount_is_zero_or_blank: false
     canonical_id: NEAOP
     amount_policy: as_reported
     reason: 비지배주주지분 leaf row만 매핑
+
+  - id: bs_disposal_group_equity
+    fs_type: BS
+    priority: 790
+    exact_any:
+      - 매각예정자산처분집단관련자본
+      - 매각예정자산처분집단관련 자본
+      - 매각예정자산처분집단 관련 자본
+      - 처분자산집단관련자본
+      - 처분자산집단관련 자본
+      - 처분자산집단 관련 자본
+    context_include_any:
+      - 자본
+    canonical_id: DISPOSAL_GROUP_EQUITY
+    amount_policy: as_reported
+    reason: 자본총계에 별도 포함되는 매각예정/처분집단 관련 자본
 
   - id: bs_retained_earnings
     fs_type: BS
@@ -1456,7 +1497,6 @@ rules:
     include_any:
       - 대손상각비환입
       - 대손충당금환입
-      - 손상차손환입
       - 매출채권손상차손환입
       - 매출채권및기타채권손상차손환입
       - 대손상각비대손충당금환입
@@ -1466,6 +1506,20 @@ rules:
     canonical_id: BAD_DEBT_REVERSAL
     amount_policy: abs
     reason: 대손상각비/손상차손 환입. 영업이익 rollup에서 가산
+
+  - id: is_bad_debt_reversal_contextual_impairment
+    fs_type: IS
+    priority: 813
+    exact_any:
+      - 손상차손환입
+    context_include_any:
+      - 판매비와관리비
+      - 판매비및관리비
+      - 판매관리비
+      - 영업비용
+    canonical_id: BAD_DEBT_REVERSAL
+    amount_policy: abs
+    reason: 일반 손상차손환입은 판관비/영업비용 문맥에서만 대손 환입으로 매핑
 
   - id: is_bad_debt_reversal_contextual_financial_asset
     fs_type: IS
@@ -1576,6 +1630,18 @@ rules:
       - 매출총이익손실
     canonical_id: GROSS_PROFIT
 
+  - id: is_sgna_component_other_unmapped
+    fs_type: IS
+    priority: 705
+    exact_any:
+      - 기타판매비와관리비
+    context_include_any:
+      - 판매비와관리비
+      - 판매비및관리비
+      - 판매관리비
+    canonical_id: UNMAPPED
+    reason: 판관비 총액 아래의 기타판매비와관리비 구성요소를 SGNA 총액으로 중복 매핑하지 않음
+
   - id: is_sgna
     fs_type: IS
     priority: 700
@@ -1629,6 +1695,7 @@ rules:
     exact_any:
       - 영업이익
       - 영업이익손실
+      - 영업손익
     canonical_id: OPERATING_INCOME
 
   - id: is_pbt
@@ -1637,6 +1704,9 @@ rules:
     exact_any:
       - 법인세비용차감전순이익
       - 법인세비용차감전순이익손실
+      - 법인세비용차감전순손익
+      - 법인세차감전순이익
+      - 법인세차감전순손익
       - 세전이익
     canonical_id: PBT
 
@@ -1650,6 +1720,29 @@ rules:
       - 법인세비용손실
       - 법인세수익비용
     canonical_id: TAX_EXPENSE
+
+  - id: cis_operating_income_fallback
+    fs_type: CIS
+    priority: 700
+    exact_any:
+      - 영업이익
+      - 영업이익손실
+      - 영업손익
+    canonical_id: OPERATING_INCOME
+    reason: 포괄손익계산서형 본문에 표시된 영업손익은 IS fallback으로 승격
+
+  - id: cis_pbt_fallback
+    fs_type: CIS
+    priority: 700
+    exact_any:
+      - 법인세비용차감전순이익
+      - 법인세비용차감전순이익손실
+      - 법인세비용차감전순손익
+      - 법인세차감전순이익
+      - 법인세차감전순손익
+      - 세전이익
+    canonical_id: PBT
+    reason: 포괄손익계산서형 본문에 표시된 세전손익은 IS fallback으로 승격
 
   - id: is_net_income
     fs_type: IS
@@ -1685,14 +1778,10 @@ rules:
       - 지배기업소유주에귀속될당기순이익
       - 지배기업의소유주에귀속될당기순이익
       - 지배기업의소유주에게귀속될당기순이익
-      - 지배기업의소유주에게귀속되는중단영업손실
-      - 지배기업의소유주에게귀속될중단영업손익
-      - 중단영업지배기업의소유주주지분
     context_include_any:
       - 당기순이익의귀속
       - 당기순손익의귀속
       - 당기순이익손실의귀속
-      - 중단영업당기순이익손실의귀속
     canonical_id: NET_INCOME_PARENT
     reason: 당기순이익 귀속 중 지배주주순이익
 
