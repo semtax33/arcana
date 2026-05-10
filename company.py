@@ -1,5 +1,7 @@
+import io
+from pathlib import Path
+from typing import Any
 import zipfile
-from io import BytesIO
 
 import pandas as pd
 import requests
@@ -18,7 +20,7 @@ def fetch_corp_list():
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
 
-    zip_data = BytesIO(r.content)
+    zip_data = io.BytesIO(r.content)
 
     with zipfile.ZipFile(zip_data) as zf:
         xml_file_name = zf.namelist()[0]
@@ -101,3 +103,30 @@ def kospi_kosdaq_corp_list(date=None):
     )
 
     return result.reset_index(drop=True)
+
+
+def fetch_sector() -> pd.DataFrame:
+    url = "http://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13"
+
+    r = requests.get(
+        url,
+        headers={
+            "User-Agent": "Chrome/78.0.3904.87 Safari/537.36",
+            "Referer": "http://data.krx.co.kr/",
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+
+    df = pd.read_html(io.StringIO(r.text), header=0)[0]
+
+    if "종목코드" in df.columns:
+        df["종목코드"] = df["종목코드"].astype(str).str.strip()
+
+        # 숫자 종목코드만 6자리 보정.
+        # 0129K0 같은 SPAC 코드는 그대로 둠.
+        df["종목코드"] = df["종목코드"].map(
+            lambda x: x.zfill(6) if x.isdigit() else x
+        )
+
+    return df

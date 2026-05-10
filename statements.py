@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs
 import re
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlencode
 
 
@@ -76,7 +76,7 @@ def _safe_filename(name: str) -> str:
     return name or "output.html"
 
 
-def _write_html_text(content: str, save_dir: str, filename: str) -> Path:
+def _write_text(content: str, save_dir: str, filename: str) -> Path:
     out_path = Path(save_dir) / _safe_filename(filename)
     out_path.parent.mkdir(parents=True, exist_ok=True)  # 폴더 없으면 생성
     out_path.write_text(content, encoding="utf-8")      # HTML은 보통 utf-8로 저장하면 무난
@@ -261,6 +261,7 @@ def _safe_title_from_anchor(a) -> str:
     txt = a.get_text(" ", strip=True)
     return txt if txt else "untitled"
 
+
 def fetch_dart_comment_search(ticker: str, save_dir: str, comment_prop_name: str | None = ""):
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
@@ -358,7 +359,7 @@ def fetch_dart_comment_search(ticker: str, save_dir: str, comment_prop_name: str
                 safe_title_line = safe_title #진원생명과학 말고는 다른 케이스 없음으로 보임 
             out_name = f"finance_statement_comment_{safe_title_line}.html"
 
-            _write_html_text(statement_content, save_dir, out_name)
+            _write_text(statement_content, save_dir, out_name)
 
 def fetch_dart_recent_comment_search(ticker: str, save_dir: str, comment_prop_name: str | None = ""):
     url = "https://dart.fss.or.kr/dsab001/search.ax"
@@ -401,8 +402,6 @@ def fetch_dart_recent_comment_search(ticker: str, save_dir: str, comment_prop_na
 
         # ✅ anchor↔href 매칭 깨짐 방지: anchor를 그대로 순회하면서 href 중복만 skip
         seen_hrefs: set[str] = set()
-
-        print(anchors)
 
         for a in anchors:
             href = a.get("href")
@@ -460,7 +459,7 @@ def fetch_dart_recent_comment_search(ticker: str, save_dir: str, comment_prop_na
             
             out_name = f"finance_statement_comment_{safe_title_line}.html"
 
-            _write_html_text(statement_content, save_dir, out_name)
+            _write_text(statement_content, save_dir, out_name)
             
             if not "기재정정" in safe_title_line:
                 return
@@ -564,7 +563,250 @@ def fetch_dart_search(ticker: str, save_dir: str, save_filename: str | None = No
                 safe_title_line = safe_title #진원생명과학 말고는 다른 케이스 없음으로 보임 
             out_name = f"finance_statement_{safe_title_line}.html"
 
-            _write_html_text(statement_content, save_dir, out_name)
+            _write_text(statement_content, save_dir, out_name)
+
+
+def _ensure_text(html: Union[str, bytes]) -> str:
+    """DART HTML은 euc-kr인 경우가 있어 bytes면 디코딩 시도."""
+    if isinstance(html, str):
+        return html
+    for enc in ("euc-kr", "cp949", "utf-8"):
+        try:
+            return html.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return html.decode("utf-8", errors="ignore")
+
+
+def _clean_text(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _extract_unit(label_text: str) -> Optional[str]:
+    """
+    '배당금총액(원)' 같은 라벨에서 괄호 단위 추출 -> '원'
+    """
+    m = re.search(r"\(([^)]+)\)", label_text)
+    return m.group(1).strip() if m else None
+
+
+def _add_unit(value: str, unit: Optional[str]) -> str:
+    value = _clean_text(value)
+    if not unit or value == "-" or value == "":
+        return value
+    # 이미 value에 단위가 붙어 있으면 중복 방지
+    if unit in value:
+        return value
+    return f"{value} {unit}"
+
+
+def _find_main_table(soup: BeautifulSoup):
+    """
+    페이지에 테이블이 여러 개(종류주식 상세표 등) 있으니,
+    '배당구분' + '배당금총액' 같은 키워드가 같이 있는 테이블을 메인으로 본다.
+    """
+    for tbl in soup.find_all("table"):
+        t = tbl.get_text(" ", strip=True)
+        if ("배당구분" in t) and ("배당금총액" in t) and ("배당기준일" in t):
+            return tbl
+    return None
+
+
+def _find_value_by_label(table, label_keyword: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    메인 테이블에서 특정 라벨(예: '배당구분', '배당금총액')이 있는 행을 찾아,
+    같은 행의 '오른쪽 셀' 값을 반환한다. + 라벨 괄호 단위도 같이 반환.
+    """
+    for tr in table.find_all("tr"):
+        tds = tr.find_all("td")
+        for i, td in enumerate(tds):
+            label_text = _clean_text(td.get_text(" ", strip=True))
+            if label_keyword in label_text:
+                unit = _extract_unit(label_text)
+                # 보통 라벨 다음 td가 값
+                if i + 1 < len(tds):
+                    val_td = tds[i + 1]
+                    val_text = _clean_text(val_td.get_text(" ", strip=True))
+                    return val_text, unit
+    return None, None
+
+
+def _extract_dps_common_and_preferred(table) -> Dict[str, str]:
+    """
+    '3. 1주당 배당금(원)' 블록에서
+    보통주식 / 종류주식 DPS를 각각 뽑는다.
+    """
+    trs = table.find_all("tr")
+    for idx, tr in enumerate(trs):
+        row_text = tr.get_text(" ", strip=True)
+        if "1주당 배당금" not in row_text:
+            continue
+
+        # 첫 td가 라벨(대개 rowspan=2)이라 단위는 여기서 뽑는 게 제일 안정적
+        first_td = tr.find("td")
+        unit = _extract_unit(first_td.get_text(" ", strip=True)) if first_td else None
+
+        dps: Dict[str, str] = {}
+        # 현재 행 + 다음 행까지 훑어서 보통주/종류주를 채움(대개 2행)
+        for j in range(idx, min(idx + 4, len(trs))):
+            tds = trs[j].find_all("td")
+            if not tds:
+                continue
+            cells = [_clean_text(td.get_text(" ", strip=True)) for td in tds]
+
+            kind = None
+            for c in cells:
+                if "보통주식" in c:
+                    kind = "보통주식"
+                    break
+                if "종류주식" in c:
+                    kind = "종류주식"
+                    break
+
+            if kind:
+                value = cells[-1]  # 값은 보통 오른쪽 끝 셀
+                dps[kind] = _add_unit(value, unit)
+
+            if ("보통주식" in dps) and ("종류주식" in dps):
+                return dps
+
+        # 둘 중 하나만 있어도 반환
+        if dps:
+            return dps
+
+    return {}
+
+
+def parse_dividend_decision_html(html: Union[str, bytes], report_date: str) -> Dict[str, Any]:
+    html_text = _ensure_text(html)
+    soup = BeautifulSoup(html_text, "lxml")  # lxml 없으면 "html.parser"로 바꿔도 됨
+
+    table = _find_main_table(soup)
+    if table is None:
+        raise ValueError("메인 배당결정 테이블을 찾지 못했습니다. (배당구분/배당금총액/배당기준일 키워드 기준)")
+
+    dividend_class, _ = _find_value_by_label(table, "배당구분")
+
+    total_raw, total_unit = _find_value_by_label(table, "배당금총액")
+    total_with_unit = _add_unit(total_raw or "", total_unit)
+
+    record_date, _ = _find_value_by_label(table, "배당기준일")
+
+    # 문서마다 라벨이 살짝 달라질 수 있어 '배당금지급'으로 먼저 찾고,
+    # 실패하면 '지급 예정일자' 변형도 한 번 더 시도
+    pay_date, _ = _find_value_by_label(table, "배당금지급")
+    if not pay_date:
+        pay_date, _ = _find_value_by_label(table, "지급 예정일자")
+
+    dps = _extract_dps_common_and_preferred(table)
+
+    return {
+        "배당구분": dividend_class,
+        "1주당배당금": {
+            "보통주식": dps.get("보통주식"),
+            "종류주식": dps.get("종류주식"),
+        },
+        "배당금총액": total_with_unit if total_with_unit else None,
+        "배당기준일": record_date,
+        "배당지급일": pay_date,  # = 배당금지급 예정일자
+        "배당공시일": report_date 
+    }
+
+def fetch_dart_dividend_search(ticker: str, save_dir: str, save_filename: str | None = None):
+    url = "https://dart.fss.or.kr/dsab007/detailSearch.ax"
+
+    headers = {
+        "Accept": "text/html, */*; q=0.01",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7,ar-IQ;q=0.6,ar-JO;q=0.5,ar;q=0.4,ja-JP;q=0.3,ja;q=0.2",
+        "Connection": "keep-alive",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "User-Agent": "Mozilla/8.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/137.36",
+    }
+
+    data = [
+        ("currentPage", "1"),
+        ("maxResults", "100"),
+        ("maxLinks", "10"),
+        ("sort", "date"),
+        ("series", "desc"),
+        ("pageGubun", "corp"),
+        ("attachDocNmPopYn", ""),
+        ("textCrpNm", ticker),
+        ("startDate", (datetime.now() - timedelta(1)*3650).strftime("%Y%m%d")),
+        ("endDate", datetime.now().strftime("%Y%m%d")),
+        ("autoSearch", "N"),
+        ("autoSearchCorp", "Y"),
+        ("option", "corp"),
+        ("decadeType", ""),
+        ("businessCode", "all"),
+        ("businessNm", "전체"),
+        ("corporationType", "all"),
+        ("closingAccountsMonth", "all"),
+        ("reportName", "현금ㆍ현물배당결정"),
+        ("reportName2", "현금ㆍ현물배당결정"),
+        ("tocSrch2", "")
+    ]
+
+    PAT_VIEWDOC = re.compile(r"""
+        viewDoc\(\s*
+            (?P<q1>['"])(?P<rcept_no>\d{14})(?P=q1)   # 1) 접수번호
+            \s*,\s*
+            (?P<q2>['"])(?P<doc_no>\d+)(?P=q2)        # 2) 문서번호
+            (?:\s*,\s*(?:'[^']*'|"[^"]*"))*           # 나머지 인자들(전부 문자열이라고 가정) 무시
+        \s*\)\s*;?
+    """, re.VERBOSE)
+
+    with requests.Session() as s:
+        # 1) 검색 POST (재시도 적용)
+        resp = request_with_retry(s, "POST", url, headers=headers, data=data, timeout=30)
+        resp.encoding = resp.apparent_encoding
+        html = resp.text
+
+        soup = BeautifulSoup(html, "lxml")
+        anchors = soup.find_all("a", href=True)
+
+        # ✅ anchor↔href 매칭 깨짐 방지: anchor를 그대로 순회하면서 href 중복만 skip
+        seen_hrefs: set[str] = set()
+
+        for a in anchors:
+            href = a.get("href")
+            text = a.get_text()
+            
+            if not href:
+                continue
+            if href in seen_hrefs:
+                continue
+            if not "dsaf001" in href:
+                continue
+            if not "현금ㆍ현물배당결정" in text:
+                continue
+
+            seen_hrefs.add(href)
+
+            title = _safe_title_from_anchor(a)
+            page_url = f"https://dart.fss.or.kr{href}"
+
+            # 2) 공시 페이지 GET
+            page_resp = request_with_retry(s, "GET", page_url, timeout=30)
+            page_resp.encoding = page_resp.apparent_encoding
+            content = page_resp.text
+
+            # 사용 예시:
+            m = PAT_VIEWDOC.search(content)
+            rcept_no = m.group("rcept_no")
+            doc_no = m.group("doc_no")
+
+            dividend_frame_url = f"https://dart.fss.or.kr/report/viewer.do?rcpNo={rcept_no}&dcmNo={doc_no}&dtd=HTML"
+            dividend_page_resp = request_with_retry(s, "GET", dividend_frame_url, timeout=30)
+            dividend_page_resp.encoding = dividend_page_resp.apparent_encoding
+
+            report_date = f"{rcept_no[0:4]}-{rcept_no[4:6]}-{rcept_no[6:8]}"
+            safe_title = f"dividend_{report_date}.json".strip()
+            out_name = f"finance_statement_{safe_title}.json"
+
+            data = parse_dividend_decision_html(dividend_page_resp.content, report_date)
+            _write_text(data, save_dir, out_name)
+
 
 def download_statements(stock_codes, download_offset):
     download_stock_codes = stock_codes[download_offset:]
@@ -592,3 +834,12 @@ def download_recent_statement_comments(stock_codes, download_offset):
         ticker = stock_code
         dir = f"./data-lake/bronze/dart/finance-comment/{ticker}"
         fetch_dart_recent_comment_search(ticker, dir)
+
+def download_dividend_histories(stock_codes, download_offset):
+    download_stock_codes = stock_codes[download_offset:]
+
+    for offset, stock_code in enumerate(download_stock_codes):
+        print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
+        ticker = stock_code
+        dir = f"./data-lake/bronze/dart/dividend/{ticker}"
+        fetch_dart_dividend_search(ticker, dir)

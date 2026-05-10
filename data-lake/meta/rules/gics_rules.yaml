@@ -1,0 +1,473 @@
+sectors:
+  "10": Energy
+  "15": Materials
+  "20": Industrials
+  "25": Consumer Discretionary
+  "30": Consumer Staples
+  "35": Health Care
+  "40": Financials
+  "45": Information Technology
+  "50": Communication Services
+  "55": Utilities
+  "60": Real Estate
+weights:
+  industry: 3.0
+  product: 1.5
+  confidence_denominator: 6.0
+sector_priority:
+  - "45"
+  - "50"
+  - "35"
+  - "40"
+  - "20"
+  - "15"
+  - "25"
+  - "30"
+  - "55"
+  - "60"
+  - "10"
+sector_rules:
+  "10":
+    industry_patterns:
+      - 석유\s*정제
+      - 석유제품
+      - 코크스|연탄
+      - 원유|천연가스|LNG|LPG
+      - 석탄
+      - 유전|시추
+      - 정유
+    product_patterns:
+      - 휘발유|경유|등유|윤활유
+      - LNG|LPG|천연가스
+      - 원유|석탄
+      - 유전|시추
+      - 액화석유가스|LPG|석유류\s*도소매|석유류|가스기기\s*판매|수입,저장
+  "15":
+    industry_patterns:
+      - 화학
+      - 기초\s*화학
+      - 특수\s*화학
+      - 비료|농약
+      - 산업용\s*가스
+      - 플라스틱
+      - 고무
+      - 유리
+      - 시멘트|레미콘|석회
+      - 비금속\s*광물
+      - 철강|제강|제철
+      - 비철금속|금속\s*가공
+      - 알루미늄|구리|동\s*제품
+      - 제지|펄프|종이
+      - 포장재|용기
+      - 목재
+      - 합성수지|합성고무
+      - 내화,\s*비내화\s*요업제품\s*제조업
+      - 금속\s*주조업
+      - 나무제품\s*제조업
+      - 인쇄\s*및\s*인쇄관련\s*산업
+    product_patterns:
+      - 양극재|음극재|전해질|전해액|분리막
+      - 배터리\s*소재|이차전지\s*소재|2차전지\s*소재
+      - 화학제품|화학소재|첨가제|수지|필름
+      - 플라스틱|고무|타이어
+      - 철강|강관|후판|스테인리스
+      - 알루미늄|구리|동박
+      - 시멘트|레미콘
+      - 유리|세라믹
+      - 종이|제지|골판지|포장재
+      - 수소가스|고순도\s*수소가스|산업용\s*가스
+      - 화공약품|표면처리약품|도금
+      - 비철금속|황동|빌레트|인코트|재생원료
+      - 내화|요업|내화벽돌|내화몰탈|단열벽돌|스라이딩노즐
+      - PB|MDF|목재|온돌마루|창호|도어
+      - 마닐라판지|판지|제지
+      - 필터\(정수기\)|정수기\s*필터|양전하필터
+      - 화학|MMA|BAM|PC|PP|실란트
+  "20":
+    industry_patterns:
+      - 기계
+      - 특수\s*목적용\s*기계
+      - 일반\s*목적용\s*기계
+      - 장비
+      - 전동기|발전기|전기\s*변환|전기\s*공급\s*제어\s*장치
+      - 전기장비
+      - 건설|엔지니어링
+      - 건축
+      - 조선|선박
+      - 항공|우주|방위|방산
+      - 운송|물류|창고|해운|항공\s*운송|육상\s*운송
+      - 폐기물|환경\s*서비스
+      - 상업서비스|시설관리|보안서비스
+      - 구조용\s*금속제품,\s*탱크\s*및\s*증기발생기\s*제조업
+      - 기반조성\s*및\s*시설물\s*축조관련\s*전문공사업
+      - 전기\s*및\s*통신\s*공사업
+      - 절연선\s*및\s*케이블\s*제조업
+      - 전구\s*및\s*조명장치\s*제조업
+      - 기타\s*사업지원\s*서비스업
+      - 기타\s*전문\s*서비스업
+      - 시장조사\s*및\s*여론조사업
+      - 경비,\s*경호\s*및\s*탐정업
+      - 사업시설\s*유지·관리\s*서비스업
+      - 상품\s*종합\s*도매업
+      - 상품\s*중개업
+      - 기타\s*전문\s*도매업
+      - 기타\s*과학기술\s*서비스업
+    product_patterns:
+      - 이차전지\s*장비|2차전지\s*장비
+      - 반도체\s*장비|디스플레이\s*장비
+      - 공작기계|산업기계|자동화\s*장비
+      - 전기차\s*충전기|충전\s*인프라|충전\s*서비스
+      - 전동기|모터|발전기|변압기|배전반
+      - 엘리베이터|공조|냉난방
+      - 선박|조선|엔진
+      - 항공기|드론|방산|무기
+      - 건설|플랜트|토목|엔지니어링
+      - 물류|택배|운송|창고
+      - 열교환기|화공기기|저장용\s*탱크|압력용기|보일러|온수보일러|버너
+      - 데크플레이트|DECK\s*PLATE|샌드위치\s*패널|건축용|강구조물|교량|가드레일|도로안전시설물|토공사|준설공사|수중공사
+      - Wind\-?Tower|송배전용자재|전력선|초고압케이블|에나멜동선|각동선|CTC|전선|케이블|백열전구|형광등|LED조명|조명장치|경관조명|변환장치
+      - 설비|전기공사|전기,강구조물|철물
+      - 컨벤션|전시주최|행사\s*대행|리서치|시장조사|여론조사|탄소배출권|컨설팅|기술검사서비스|인증서비스
+      - 부가통신\s*서비스\(경비\)|안전관리용역|CCTV
+      - 토공사|시설물
+      - 기업소모성자재|구매대행|B2B\s*전자상거래|기업간전자상거래|도소매|FLC
+      - 원전용계측기|전자전시스템|가스/Chemical\s*공급\s*장치|줄자|냉간압연|전자동\s*도금설비
+      - 모터|MOTOR|TIMER
+  "25":
+    industry_patterns:
+      - 자동차
+      - 자동차\s*부품
+      - 트레일러
+      - 가구
+      - 의복|의류|봉제|신발
+      - 섬유제품
+      - 호텔|숙박
+      - 여행|레저|카지노
+      - 교육\s*서비스
+      - 소매업|백화점|면세점
+      - 전자상거래
+      - 내구\s*소비재
+      - 가정용\s*기기\s*제조업
+      - 가죽,\s*가방\s*및\s*유사제품\s*제조업
+      - 운동\s*및\s*경기용구\s*제조업
+      - 스포츠\s*서비스업
+      - 전문디자인업
+      - 방적\s*및\s*가공사\s*제조업
+      - 직물직조\s*및\s*직물제품\s*제조업
+      - 음식점업
+    product_patterns:
+      - 자동차|차량|전기차|EV
+      - 자동차\s*부품|차량용
+      - 타이어
+      - 의류|패션|신발|가방|쥬얼리|주얼리
+      - 가구|인테리어
+      - 호텔|리조트|여행|레저|카지노
+      - 교육|학원
+      - 면세점|백화점|쇼핑몰|커머스
+      - 프랜차이즈|외식|음식점|단체급식
+      - 로봇청소기|청소기|조리기|레인지후드|빌트인\s*기기|에어컨|석유스토브|가정용|정수기|비데|청정기|필터교환|렌탈\s*서비스
+      - 핸드백|지갑|피혁|가방|의류|피복류|봉제품|모피|스포츠웨어|운동화|장갑|섬유|면사|직물|침구|다이어리|Jayjun|Nerdy
+      - 골프장|골프공|골프용\s*거리측정기|골프시뮬레이터
+      - 미술품|경매|캐릭터디자인|캐릭터완구|박물관|전시관|엑스포|특수영상
+      - 전기\s*및\s*온수매트|전기매트|온수매트
+  "30":
+    industry_patterns:
+      - 식료품
+      - 음료
+      - 담배
+      - 농업|축산|수산
+      - 생활용품
+      - 화장품
+      - 개인\s*관리|퍼스널\s*케어
+      - 대형마트|식품\s*유통
+      - 곡물가공품,\s*전분\s*및\s*전분제품\s*제조업
+      - 과실,\s*채소\s*가공\s*및\s*저장\s*처리업
+      - 기타\s*식품\s*제조업
+      - 동물용\s*사료\s*및\s*조제식품\s*제조업
+      - 도축,\s*육류\s*가공\s*및\s*저장\s*처리업
+      - 동·식물성\s*유지\s*및\s*낙농제품\s*제조업
+      - 떡,\s*빵\s*및\s*과자류\s*제조업
+      - 작물\s*재배업
+      - 어로\s*어업
+    product_patterns:
+      - 식품|음식료|음료|주류|라면|과자|제과|제빵
+      - 육가공|유제품|건강기능식품
+      - 담배
+      - 화장품|스킨케어|샴푸|세제|생활용품
+      - 농산물|축산물|수산물
+      - 마트|편의점|식품\s*유통
+      - 토마토|종자|고추|수박|참외|오이|호박|무|배추|농산물
+      - 시리얼|시리얼바|소맥분|밀가루|프리믹스|제분|전분|파스타
+      - 배합사료|사료|조제동물사료|양계|양돈|육계|육류|오리|도축|양돈업|삼계|참치|명태|연육|명란|새우
+      - 껌|캔디|초코|비스킷|스낵|빙과|간장|설탕|빵|마아가린|휘핑크림|이스트|크림치즈|견과류|건조과일|아이스크림|우유|분유|발효유|치즈
+      - 건강기능|다이어트\s*제품|콜라겐|유산균
+  "35":
+    industry_patterns:
+      - 의약품
+      - 제약
+      - 바이오
+      - 생명공학
+      - 의료
+      - 의료기기
+      - 진단
+      - 병원
+      - 치과
+      - 자연과학\s*및\s*공학\s*연구개발업
+      - 기초\s*의약물질\s*제조업
+    product_patterns:
+      - 신약|의약품|원료의약품|API
+      - 바이오|항체|백신|세포치료제|유전자치료제
+      - 진단키트|체외진단|의료기기|임플란트
+      - 병원|의료서비스
+      - 헬스케어
+      - ADC|항암제|면역항암제|치료제|표적치료제|혈관질환|대사성질환|알레르기|탈모|급성골수성백혈병|난소암|골관절염|혈우병|폐섬유증|자궁내막증|발기부전|전립선비대증
+      - 진단|암패널|희귀패널|G\-?NIPT|아이캔서치|알파리퀴드|검체|생동성시험|시판후조사|비임상|임상|CRO|안전성평가|유효성평가|피부인체적용시험
+      - Genelix|Genext|Geneka|펠리노|오토택신|아목사실린|아바텍|DNA|Sequencing|Microarray|Genetically\s*Engineered\s*Mouse|핵산|RNAi|타겟캡처키트|BAC\s*DNA\s*CHIP
+      - 세포배양배지|CellCor|세포|실험동물|연구용피부|연구용세포|시약|생명과학연구기기
+      - 램시마|트룩시마|허쥬마|보툴리눔|톡신|필러|원료의약|아토르바스타틴|세프티족심|세프트리약손|NK\s*Vue|SuperNK
+      - 바이오|약리물질|의약|유효물질|닥터쥬크르|백수오|여성호르몬|아셀렉스|산업용\s*효소
+  "40":
+    industry_patterns:
+      - 금융
+      - 은행
+      - 보험
+      - 증권
+      - 카드
+      - 캐피탈
+      - 자산운용
+      - 투자
+      - 신탁
+      - 기타\s*금융
+      - 금융\s*지원
+      - 스팩|SPAC
+      - 회사\s*본부\s*및\s*경영\s*컨설팅\s*서비스업
+    product_patterns:
+      - 기업\s*인수\s*합병
+      - 금융\s*지원
+      - 은행|보험|증권|카드|캐피탈
+      - 투자|자산운용|펀드|신탁
+      - 스팩|SPAC
+      - 지주회사|지주사업|비금융지주회사|회사본부|경영자문
+      - 신용조회|신용조사|채권추심|신용평가|기업신용|권리조사|개인\s*및\s*기업정보|페이먼트서비스|CD\-?VAN|ATM관리
+  "45":
+    industry_patterns:
+      - 반도체
+      - 전자부품
+      - 컴퓨터
+      - 주변장치
+      - 통신장비
+      - 소프트웨어
+      - 정보서비스
+      - IT\s*서비스
+      - 시스템\s*통합
+      - 데이터베이스
+      - 보안\s*소프트웨어
+      - 기타\s*정보\s*서비스업
+      - 마그네틱\s*및\s*광학\s*매체\s*제조업
+      - 측정,\s*시험,\s*항해,\s*제어\s*및\s*기타\s*정밀기기\s*제조업;\s*광학기기\s*제외
+    product_patterns:
+      - 반도체|칩|파운드리|팹리스|메모리
+      - PCB|인쇄회로기판|전자부품|센서|커넥터
+      - 디스플레이\s*부품|OLED\s*소재|LCD
+      - 소프트웨어|SaaS|클라우드|ERP|보안솔루션
+      - IT서비스|SI|시스템통합|데이터센터
+      - 서버|스토리지|네트워크\s*장비|통신장비
+      - AI\s*솔루션|인공지능\s*솔루션
+      - 광트랜시버|광다중화장치|광섬유|디지털\s*셋톱박스|셋톱박스|그룹웨어|자료관리시스템|전산기기|정보통신공사
+      - 통합보안관리솔루션|보안관제서비스|데이터서비스|Cloud|클라우드|CDN|GUI\s*미들웨어|FXUI|모바일\s*IT응용제품|휴대폰액세서리|모듈|퍼스널\s*모빌리티기기|Magnet|Shield\s*Magnet
+      - 주사전자현미경|SEM|4D이미징레이다|레이다|무선도청탐지기|모니터링\s*시스템|OLED\s*패널검사기|OLED\s*Test|Probe\s*Card|Test\s*Interface|Test\s*Socket|원자현미경|POS|금전등록기
+      - LED용\s*실리콘렌즈|전자식전력량계|원격검침시스템
+      - 전기전자규격\s*인증서비스|기술검사서비스|BAC\s*DNA\s*CHIP
+  "50":
+    industry_patterns:
+      - 통신업
+      - 전기통신
+      - 방송
+      - 영상
+      - 오디오
+      - 출판
+      - 광고
+      - 미디어
+      - 엔터테인먼트
+      - 게임
+      - 콘텐츠
+      - 포털
+      - 인터넷
+      - 기록매체\s*복제업
+      - 창작\s*및\s*예술관련\s*서비스업
+    product_patterns:
+      - 통신서비스|이동통신|인터넷서비스
+      - 방송|미디어|광고
+      - 영화|드라마|음악|음원|웹툰|웹소설
+      - 게임|모바일게임|온라인게임|콘솔게임
+      - 엔터테인먼트|매니지먼트|콘텐츠
+      - 플랫폼|포털|SNS|커뮤니티
+      - 전화번호안내|전화번호검색|콜센터|고객센터|휴대폰부가서비스|VoIP|위성DMB|WLL|GPS|통신서비스
+      - 일반출판|CD\s*·?DVD\s*복제|엔터테인먼트|매니지먼트
+  "55":
+    industry_patterns:
+      - 전기\s*공급업
+      - 가스\s*공급업
+      - 수도
+      - 증기\s*공급
+      - 공기조절\s*공급
+      - 발전업
+      - 전력
+      - 도시가스
+      - 전기업
+    product_patterns:
+      - 전력\s*판매|전력\s*공급|발전
+      - 태양광\s*발전|풍력\s*발전
+      - 도시가스|가스\s*공급
+      - 상수도|수도
+      - 지역난방|증기\s*공급
+      - 증기,\s*전기|REC|전기\s*판매|전기\s*공급|도시가스|가스\s*배관|배관공급
+  "60":
+    industry_patterns:
+      - 부동산
+      - 리츠|REIT
+      - 임대
+      - 부동산\s*개발
+      - 부동산\s*관리
+    product_patterns:
+      - 부동산|리츠|REIT
+      - 임대|분양|개발|자산관리
+      - 오피스|물류센터|상업시설
+score_overrides:
+  - name: SPAC -> Financials
+    conditions:
+      company_any:
+        - 스팩|SPAC
+    add_scores:
+      "40": 5.0
+  - name: EV charging equipment/service -> Industrials
+    conditions:
+      industry_any:
+        - 기계|장비|전동기|전기\s*변환|전기\s*공급\s*제어
+      product_any:
+        - 전기차\s*충전|충전기|충전\s*인프라|충전\s*서비스
+    add_scores:
+      "20": 4.0
+  - name: Battery equipment -> Industrials
+    conditions:
+      any_text_any:
+        - 이차전지|2차전지|배터리
+        - 장비|기계|자동화
+    add_scores:
+      "20": 3.0
+  - name: Battery materials -> Materials
+    conditions:
+      any_text_any:
+        - 이차전지|2차전지|배터리
+        - 양극재|음극재|전해질|전해액|분리막|소재
+    add_scores:
+      "15": 3.0
+  - name: Game/content -> Communication Services
+    conditions:
+      any_text_any:
+        - 게임|콘텐츠|웹툰|웹소설|엔터테인먼트
+    add_scores:
+      "50": 3.0
+  - name: IT hardware/software/data -> Information Technology
+    conditions:
+      any_text_any:
+        - GUI\s*미들웨어|FXUI|디지털\s*셋톱박스|셋톱박스|그룹웨어|자료관리시스템|광섬유|광트랜시버|POS|금전등록기|모바일\s*IT응용제품|휴대폰액세서리|Cloud|클라우드|CDN|보안관제|통합보안|전산기기|정보통신공사
+    add_scores:
+      "45": 6.0
+  - name: apparel/art/leisure/home -> Consumer Discretionary
+    conditions:
+      any_text_any:
+        - 모피|핸드백|지갑|피혁|피복류|봉제품|의류|스포츠웨어|면사|직물|다이어리|전기\s*및\s*온수매트|온수매트|전기매트|미술품|경매|골프|렌탈\s*서비스|정수기|비데|청정기
+    add_scores:
+      "25": 6.0
+  - name: veterinary/pharma -> Health Care
+    conditions:
+      any_text_any:
+        - 아바텍|아목사실린|씨트리시메티딘|로자틴|동물약품
+    add_scores:
+      "35": 6.0
+  - name: industrial instruments/equipment -> Industrials
+    conditions:
+      any_text_any:
+        - 원전용계측기|전자전시스템|가스/Chemical\s*공급\s*장치|줄자|냉간압연|전자동\s*도금설비|LED조명|백열전구|형광등|조명장치|경관조명|기술검사서비스|인증서비스
+    add_scores:
+      "20": 6.0
+  - name: paper/chemical materials -> Materials
+    conditions:
+      any_text_any:
+        - 마닐라판지|판지|화공약품|표면처리약품|MMA|BAM|PC|PP|실란트|비철금속|황동
+    add_scores:
+      "15": 4.5
+  - name: consumer products/rental -> Consumer Discretionary
+    conditions:
+      any_text_any:
+        - 정수기|비데|청정기|렌탈\s*서비스|Jayjun|Nerdy|프랜차이즈|미술품|경매|골프
+    add_scores:
+      "25": 4.5
+  - name: LPG/석유류 -> Energy
+    conditions:
+      any_text_any:
+        - 액화석유가스|LPG|석유류\s*도소매|석유류
+    add_scores:
+      "10": 6.0
+  - name: 수소가스 -> Materials
+    conditions:
+      any_text_any:
+        - 수소가스|고순도\s*수소
+    add_scores:
+      "15": 6.0
+  - name: 전기업 -> Utilities
+    conditions:
+      industry_any:
+        - 전기업
+    add_scores:
+      "55": 6.0
+  - name: 통신서비스 -> Communication Services
+    conditions:
+      any_text_any:
+        - 전화번호안내|전화번호검색|콜센터|고객센터|휴대폰부가서비스|VoIP|위성DMB|WLL
+    add_scores:
+      "50": 6.0
+  - name: credit/payment/data -> Financials
+    conditions:
+      any_text_any:
+        - 신용조회|신용조사|채권추심|신용평가|기업신용|권리조사|페이먼트서비스|CD\-?VAN|ATM관리|개인\s*및\s*기업정보
+    add_scores:
+      "40": 6.0
+  - name: holding company -> Financials
+    conditions:
+      any_text_any:
+        - 지주회사|지주사업|비금융지주회사|경영자문
+    add_scores:
+      "40": 4.5
+  - name: biotech/diagnostics -> Health Care
+    conditions:
+      any_text_any:
+        - ADC|항암제|치료제|진단|임상|CRO|비임상|세포|DNA|Sequencing|원료의약|바이오|보툴리눔|톡신|필러|의약
+    add_scores:
+      "35": 6.0
+  - name: food/feed -> Consumer Staples
+    conditions:
+      industry_any:
+        - 식품|사료|곡물|도축|육류|낙농|어로|작물|과실|채소|떡|빵|과자
+    add_scores:
+      "30": 3.0
+  - name: home/leisure/apparel -> Consumer Discretionary
+    conditions:
+      industry_any:
+        - 가정용|가죽|가방|스포츠|전문디자인|방적|직물|음식점
+    add_scores:
+      "25": 3.0
+
+# 종목코드 기준 강제 매핑
+# 여기는 사람이 검토한 뒤 하나씩 쌓으면 됨
+manual_overrides:
+  # "0001A0":
+  #   sector_code: "10"
+  #   sector_name: "Energy"
+  #   reason: "manual override"
+
+  # "000660":
+  #   sector_code: "45"
+  #   sector_name: "Information Technology"
+  #   reason: "manual override"

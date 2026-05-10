@@ -16,6 +16,7 @@ from canonical_rule_normalizer import (
 from company import kospi_kosdaq_corp_list
 from dividend import fetch_all_stock_dividends_async
 from dividend_normalizer import normalize_dividends
+from market_snapshot_normalizer import normalize_price, normalize_shares
 from price import fetch_all_prices, fetch_all_shares
 from statements import download_recent_statement_comments, download_statement_comments, download_statements
 
@@ -287,7 +288,9 @@ if __name__ == "__main__":
     #download_all_statements()
     #download_all_statement_comments()
     #main()
-    normalize_dividends()
+    normalize_price("./data-lake/bronze/krx/price/*")
+    normalize_shares("./data-lake/bronze/krx/shares/*")
+    #normalize_dividends()
 
 '''
 #download_all_statements()
