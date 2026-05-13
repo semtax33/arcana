@@ -520,22 +520,25 @@ def add_daily_market_valuation_factors(daily_df):
     df["mcap_mil"] = df["market_cap"] / 1_000_000
     df["trading_value"] = df["close"] * df["volume"]
     df["csho"] = df["shares"]
-    df["eps"] = df["eps"].fillna(df["ni_parent"] / df["shares"])
-    df["bps"] = df["ceq"] / df["shares"]
-    df["sps"] = df["sale"] / df["shares"]
-    df["cps"] = df["oancf"] / df["shares"]
+    df["eps"] = numeric_column(df, "eps").fillna(df["ni_parent"] / df["shares"])
+    df["bps"] = (df["ceq"] / df["shares"]).fillna(0)
+    df["sps"] = (df["sale"] / df["shares"]).fillna(0)
+    df["cps"] = (df["oancf"] / df["shares"]).fillna(0)
+    df["fcff"] = numeric_column(df, "fcff").fillna(0)
+    df["fcfe"] = numeric_column(df, "fcfe").fillna(0)
 
     if "altman_z_score" in df.columns:
         df["altman_z_score"] = df["altman_z_score"] + 0.6 * (
             df["market_cap"] / (numeric_column(df, "TOTAL_LIABILITIES"))
         )
 
-    df["epr"] = df["ni_parent"] / df["market_cap"]
-    df["bpr"] = df["ceq"] / df["market_cap"]
+    eps_for_ratio = df["eps"].replace(0, math.nan)
+    df["epr"] = eps_for_ratio / df["close"]
+    df["bpr"] = df["bps"] / df["close"]
     df["tpr"] = df["ppent"] / df["market_cap"]
-    df["spr"] = df["sale"] / df["market_cap"]
-    df["cpr"] = df["oancf"] / df["market_cap"]
-    df["fcfpr"] = df["fcf"] / df["market_cap"]
+    df["spr"] = df["sps"] / df["close"]
+    df["cpr"] = df["cps"] / df["close"]
+    df["fcfpr"] = df["fcfe"] / df["market_cap"]
     df["npr"] = (df["che"] - df["debt"]) / df["market_cap"]
     df["rpr"] = df["xrd"] / df["market_cap"]
     df["enterprise_value"] = df["market_cap"] + df["debt"].fillna(0) - df["che"].fillna(0)
@@ -544,10 +547,10 @@ def add_daily_market_valuation_factors(daily_df):
     df["ev_to_nopat"] = df["enterprise_value"] / df["nopat"]
     df["net_debt_to_ocf"] = df["net_debt"] / df["oancf"]
 
-    df["per"] = df["market_cap"] / df["ni_parent"]
-    df["pbr"] = df["market_cap"] / df["ceq"]
-    df["pcr"] = df["market_cap"] / df["oancf"]
-    df["psr"] = df["market_cap"] / df["sale"]
+    df["per"] = df["close"] / eps_for_ratio
+    df["pbr"] = df["close"] / df["bps"]
+    df["pcr"] = df["close"] / df["cps"]
+    df["psr"] = df["close"] / df["sps"]
     df["roce"] = df["oiadp"] / (df["at"] - df["lct"])
     df["total_interest_coverage"] = df["interest_coverage"]
     df["debt_ratio"] = df["debt"] / df["at"]
