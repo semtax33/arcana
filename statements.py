@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlencode
+import json
 
 
 RETRY_STATUS = {429, 500, 502, 503, 504}
@@ -795,17 +796,23 @@ def fetch_dart_dividend_search(ticker: str, save_dir: str, save_filename: str | 
             m = PAT_VIEWDOC.search(content)
             rcept_no = m.group("rcept_no")
             doc_no = m.group("doc_no")
+            time.sleep(0.3)
 
             dividend_frame_url = f"https://dart.fss.or.kr/report/viewer.do?rcpNo={rcept_no}&dcmNo={doc_no}&dtd=HTML"
             dividend_page_resp = request_with_retry(s, "GET", dividend_frame_url, timeout=30)
             dividend_page_resp.encoding = dividend_page_resp.apparent_encoding
 
             report_date = f"{rcept_no[0:4]}-{rcept_no[4:6]}-{rcept_no[6:8]}"
-            safe_title = f"dividend_{report_date}.json".strip()
+            safe_title = f"dividend_{report_date}".strip()
             out_name = f"finance_statement_{safe_title}.json"
 
-            data = parse_dividend_decision_html(dividend_page_resp.content, report_date)
-            _write_text(data, save_dir, out_name)
+            try:
+                data = parse_dividend_decision_html(dividend_page_resp.content, report_date)
+                json_data = json.dumps(data, ensure_ascii=False)
+                _write_text(json_data, save_dir, out_name)
+                time.sleep(0.3)
+            except ValueError as e:
+                print("[WARN] 배당 내역이 존재하지 않는 문서입니다.", e)
 
 
 def download_statements(stock_codes, download_offset):
@@ -827,7 +834,7 @@ def download_statement_comments(stock_codes, download_offset):
         fetch_dart_comment_search(ticker, dir)
 
 def download_recent_statement_comments(stock_codes, download_offset):
-    download_stock_codes = stock_codes[download_offset:]
+    download_stock_codes = sorted(stock_codes)[download_offset:]
 
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
@@ -836,7 +843,7 @@ def download_recent_statement_comments(stock_codes, download_offset):
         fetch_dart_recent_comment_search(ticker, dir)
 
 def download_dividend_histories(stock_codes, download_offset):
-    download_stock_codes = stock_codes[download_offset:]
+    download_stock_codes = sorted(stock_codes)[download_offset:]
 
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")

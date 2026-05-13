@@ -15,10 +15,9 @@ from canonical_rule_normalizer import (
 )
 from company import kospi_kosdaq_corp_list
 from dividend import fetch_all_stock_dividends_async
-from dividend_normalizer import normalize_dividends
 from market_snapshot_normalizer import normalize_price, normalize_shares
 from price import fetch_all_prices, fetch_all_shares
-from statements import download_recent_statement_comments, download_statement_comments, download_statements
+from statements import download_dividend_histories, download_recent_statement_comments, download_statement_comments, download_statements
 
 
 CANONICAL_CSV_PATH = Path("./data-lake/meta/CanonicalAccount.csv")
@@ -265,20 +264,10 @@ def download_all_shares():
     fetch_all_shares(stock_codes, 0, "20100101", date.today().strftime("%Y%m%d"))
 
 def download_all_dividend():
-    stocks_df = kospi_kosdaq_corp_list()
-    fetch_all_stock_dividends_async(
-        stocks_df=stocks_df,
-        download_offset=0,
-        start_year=2015,
-        end_year=2025,
-        out_root="./data-lake/bronze/dart/dividend",
-        skip_existing=True,
-        sleep_sec=0.25,
-        max_workers=4,
-
-        # None이면 020 발생 key는 이번 실행 중 재사용 안 함
-        key_cooldown_sec=None,
-    )
+    corps_list = kospi_kosdaq_corp_list()
+    stock_codes = corps_list["stock_code"].tolist()
+    print(f"Total Length : {len(stock_codes)}")
+    download_dividend_histories(stock_codes, 2625)
 
 
 if __name__ == "__main__":
@@ -287,9 +276,10 @@ if __name__ == "__main__":
     #download_all_shares()
     #download_all_statements()
     #download_all_statement_comments()
-    #main()
-    normalize_price("./data-lake/bronze/krx/price/*")
-    normalize_shares("./data-lake/bronze/krx/shares/*")
+    #download_all_dividend()
+    main()
+    #normalize_price("./data-lake/bronze/krx/price/*")
+    #normalize_shares("./data-lake/bronze/krx/shares/*")
     #normalize_dividends()
 
 '''
