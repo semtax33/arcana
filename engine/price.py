@@ -21,7 +21,7 @@ def fetch_all_prices(stock_codes: list[str], download_offset: int, start_date: s
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
-        dir = f"./data-lake/bronze/krx/price"
+        dir = f"../data-lake/bronze/krx/price"
 
         prices = _with_date_column(fetch_price(ticker, start_date, end_date))
         out_path = Path(dir) / _safe_filename(ticker)
@@ -35,7 +35,7 @@ def fetch_all_shares(stock_codes: list[str], download_offset: int, start_date: s
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
-        dir = f"./data-lake/bronze/krx/shares"
+        dir = f"../data-lake/bronze/krx/shares"
 
         shares = _with_date_column(fetch_share(ticker, start_date, end_date))
         out_path = Path(dir) / _safe_filename(ticker)

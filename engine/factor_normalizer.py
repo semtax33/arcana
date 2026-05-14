@@ -14,7 +14,7 @@ from engine.dividend_normalizer import (
 from engine.statement_periodizer import quarterly_financial_frame, ttm_financial_frame
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FINANCIAL_DIR = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "normalized"
 PRICE_PATH = PROJECT_ROOT / "data-lake" / "silver" / "price" / "normalized_price.csv"
 KRX_PRICE_PATH = PROJECT_ROOT / "data-lake" / "silver" / "krx" / "price" / "normalized_price.csv"

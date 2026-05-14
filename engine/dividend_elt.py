@@ -13,7 +13,7 @@ def insert_dividends():
     )
 
     normalized_stock_dividends_df = create_all_stock_dividend_dataframe()
-    normalized_stock_dividends_df.to_csv('./data-lake/silver/dart/dividend/dividend_normalized.csv')
+    normalized_stock_dividends_df.to_csv('../data-lake/silver/dart/dividend/dividend_normalized.csv')
     
     normalized_stock_dividends_df["_partition"] = normalized_stock_dividends_df["trade_date"].dt.strftime("%Y%m")
 

@@ -12,7 +12,7 @@ def insert_price():
     )
 
     
-    normalized_price_df = normalize_price("./data-lake/bronze/krx/price/*")
+    normalized_price_df = normalize_price("../data-lake/bronze/krx/price/*")
     
     normalized_price_df["_partition"] = normalized_price_df["trade_date"].dt.strftime("%Y%m")
 
@@ -39,7 +39,7 @@ def insert_shares():
         database="arcana",
     )
 
-    normalized_shares_df = normalize_shares("./data-lake/bronze/krx/shares/*")
+    normalized_shares_df = normalize_shares("../data-lake/bronze/krx/shares/*")
 
     normalized_shares_df["_partition"] = normalized_shares_df["trade_date"].dt.strftime("%Y%m")
 

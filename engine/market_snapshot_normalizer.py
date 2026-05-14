@@ -31,7 +31,7 @@ def normalize_price(path: str):
 
     df = df.drop(columns=["날짜", "시가", "고가", "저가", "종가", "거래량", "stock_code", "등락률"])
 
-    df.to_csv('./data-lake/silver/krx/price/normalized_price.csv')
+    df.to_csv('../data-lake/silver/krx/price/normalized_price.csv')
 
     return df
 
@@ -56,6 +56,6 @@ def normalize_shares(path: str):
 
     df = df.drop(columns=["날짜", "상장주식수", "시가총액", "거래량", "거래대금", "상장주식수", "stock_code"])
 
-    df.to_csv('./data-lake/silver/krx/shares/normalized_shares.csv')
+    df.to_csv('../data-lake/silver/krx/shares/normalized_shares.csv')
 
     return df

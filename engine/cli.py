@@ -20,11 +20,11 @@ from engine.price import fetch_all_prices, fetch_all_shares
 from engine.statements import download_dividend_histories, download_recent_statement_comments, download_statement_comments, download_statements
 
 
-CANONICAL_CSV_PATH = Path("./data-lake/meta/CanonicalAccount.csv")
-CONTEXT_RULE_PATH = Path("./data-lake/meta/rules/context_common.yaml")
-MAPPING_RULE_PATH = Path("./data-lake/meta/rules/mapping_common.yaml")
-COMMENT_RULE_PATH = Path("./data-lake/meta/rules/comment_common.yaml")
-SIGN_POLICY_PATH = Path("./data-lake/meta/rules/sign_policy_common.yaml")
+CANONICAL_CSV_PATH = Path("../data-lake/meta/CanonicalAccount.csv")
+CONTEXT_RULE_PATH = Path("../data-lake/meta/rules/context_common.yaml")
+MAPPING_RULE_PATH = Path("../data-lake/meta/rules/mapping_common.yaml")
+COMMENT_RULE_PATH = Path("../data-lake/meta/rules/comment_common.yaml")
+SIGN_POLICY_PATH = Path("../data-lake/meta/rules/sign_policy_common.yaml")
 SAVE_DEBUG = True
 FORCE_REBUILD = False
 MAX_WORKERS = int(os.environ.get("NORMALIZE_MAX_WORKERS") or "0")
@@ -141,9 +141,9 @@ def main() -> None:
     for stock_code in stock_codes:
         for year in range(start_year, end_year):
             for month in [3, 6, 9, 12]:
-                input_html_path = Path(f"./data-lake/bronze/dart/finance-statement/{stock_code}/finance_statement_({year}.{str(month).zfill(2)}).html")
+                input_html_path = Path(f"../data-lake/bronze/dart/finance-statement/{stock_code}/finance_statement_({year}.{str(month).zfill(2)}).html")
                 period = f"{year}.{month}"
-                output_csv_path = Path(f"./data-lake/silver/dart/normalized/normalized_{stock_code}_{year}.{str(month).zfill(2)}.csv")
+                output_csv_path = Path(f"../data-lake/silver/dart/normalized/normalized_{stock_code}_{year}.{str(month).zfill(2)}.csv")
                 comment_html_path = infer_comment_html_path(
                     input_html_path=input_html_path,
                     company_name=stock_code,

@@ -328,7 +328,7 @@ def make_stock_dividend_dir(
     - 폴더명은 stock_code만 사용
 
     예:
-    ./data-lake/bronze/dart/dividend/005930/
+    ../data-lake/bronze/dart/dividend/005930/
     """
 
     stock_code = str(stock_code).zfill(6)
@@ -579,8 +579,8 @@ def download_dividends_by_year_and_report_type(
     보고서 타입별로 순회하면서 JSON 다운로드 후 파일 저장.
 
     저장 예:
-    ./data-lake/bronze/dart/dividend/005930/2024/11011_annual.json
-    ./data-lake/bronze/dart/dividend/005930/2024/11012_half.json
+    ../data-lake/bronze/dart/dividend/005930/2024/11011_annual.json
+    ../data-lake/bronze/dart/dividend/005930/2024/11012_half.json
     """
 
     result_rows: list[dict[str, Any]] = []
@@ -684,7 +684,7 @@ def download_dividends_for_one_stock(
     download_offset: int | None = None,
     start_year: int = 2015,
     end_year: int | None = None,
-    out_root: str | Path = "./data-lake/bronze/dart/dividend",
+    out_root: str | Path = "../data-lake/bronze/dart/dividend",
     report_codes: dict[str, str] = REPORT_CODES,
     skip_existing: bool = True,
     sleep_sec: float = 0.1,
@@ -879,7 +879,7 @@ def fetch_all_stock_dividends_async(
     download_offset: int = 0,
     start_year: int = 2015,
     end_year: int | None = None,
-    out_root: str | Path = "./data-lake/bronze/dart/dividend",
+    out_root: str | Path = "../data-lake/bronze/dart/dividend",
     report_codes: dict[str, str] = REPORT_CODES,
     skip_existing: bool = True,
     sleep_sec: float = 0.1,

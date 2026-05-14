@@ -821,7 +821,7 @@ def download_statements(stock_codes, download_offset):
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
-        dir = f"./data-lake/bronze/dart/finance-statement/{ticker}"
+        dir = f"../data-lake/bronze/dart/finance-statement/{ticker}"
         fetch_dart_search(ticker, dir)
 
 def download_statement_comments(stock_codes, download_offset):
@@ -830,7 +830,7 @@ def download_statement_comments(stock_codes, download_offset):
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
-        dir = f"./data-lake/bronze/dart/finance-comment/{ticker}"
+        dir = f"../data-lake/bronze/dart/finance-comment/{ticker}"
         fetch_dart_comment_search(ticker, dir)
 
 def download_recent_statement_comments(stock_codes, download_offset):
@@ -839,7 +839,7 @@ def download_recent_statement_comments(stock_codes, download_offset):
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
-        dir = f"./data-lake/bronze/dart/finance-comment/{ticker}"
+        dir = f"../data-lake/bronze/dart/finance-comment/{ticker}"
         fetch_dart_recent_comment_search(ticker, dir)
 
 def download_dividend_histories(stock_codes, download_offset):
@@ -848,5 +848,5 @@ def download_dividend_histories(stock_codes, download_offset):
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
-        dir = f"./data-lake/bronze/dart/dividend/{ticker}"
+        dir = f"../data-lake/bronze/dart/dividend/{ticker}"
         fetch_dart_dividend_search(ticker, dir)

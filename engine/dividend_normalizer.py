@@ -6,7 +6,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 import pandas as pd
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 base_dir = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "normalized"
 dividend_base_dir = PROJECT_ROOT / "data-lake" / "bronze" / "dart" / "dividend"
 price_file_path = PROJECT_ROOT / "data-lake" / "silver" / "krx" / "price" / "normalized_price.csv"

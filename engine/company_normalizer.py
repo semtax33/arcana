@@ -330,7 +330,7 @@ def extract_review_targets(
     ].copy()
 
 def get_normalized_sector_and_issuer():
-    config = load_gics_config("./data-lake/meta/rules/gics_rules.yaml")
+    config = load_gics_config("../data-lake/meta/rules/gics_rules.yaml")
 
     df = fetch_sector()
 
@@ -364,7 +364,7 @@ def get_normalized_sector_and_issuer():
 
 
 def get_normalized_sector_and_issuer():
-    config = load_gics_config("./data-lake/meta/rules/gics_rules.yaml")
+    config = load_gics_config("../data-lake/meta/rules/gics_rules.yaml")
 
     df = fetch_sector()
     market_df = kospi_kosdaq_corp_list()
@@ -405,7 +405,7 @@ def get_normalized_sector_and_issuer():
     ]
 
 def get_normalized_security_master():
-    config = load_gics_config("./data-lake/meta/rules/gics_rules.yaml")
+    config = load_gics_config("../data-lake/meta/rules/gics_rules.yaml")
 
     df = fetch_sector()
 
@@ -434,7 +434,7 @@ def get_normalized_security_master():
     ]
 
 def get_normalized_identifier():
-    config = load_gics_config("./data-lake/meta/rules/gics_rules.yaml")
+    config = load_gics_config("../data-lake/meta/rules/gics_rules.yaml")
 
     df = fetch_sector()
     market_df = kospi_kosdaq_corp_list()
