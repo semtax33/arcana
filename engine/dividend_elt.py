@@ -1,6 +1,6 @@
 import clickhouse_connect
 
-from dividend_normalizer import create_all_stock_dividend_dataframe
+from engine.dividend_normalizer import create_all_stock_dividend_dataframe
 
 
 def insert_dividends():

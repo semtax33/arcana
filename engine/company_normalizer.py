@@ -7,7 +7,7 @@ import pandas as pd
 import requests
 import yaml
 
-from company import fetch_sector, kospi_kosdaq_corp_list
+from engine.company import fetch_sector, kospi_kosdaq_corp_list
 
 
 # ------------------------------------------------------------

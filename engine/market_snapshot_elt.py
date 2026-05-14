@@ -1,6 +1,6 @@
 import clickhouse_connect
 
-from market_snapshot_normalizer import normalize_price, normalize_shares
+from engine.market_snapshot_normalizer import normalize_price, normalize_shares
 
 def insert_price():
     client = clickhouse_connect.get_client(
