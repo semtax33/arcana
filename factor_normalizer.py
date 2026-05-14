@@ -11,6 +11,7 @@ from dividend_normalizer import (
     calculate_total_dividend_amount,
     calculate_total_dividend_per_share_with_fallback,
 )
+from statement_periodizer import quarterly_financial_frame, ttm_financial_frame
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -260,15 +261,38 @@ def read_annual_financials(stock_code):
         return pd.DataFrame()
 
     financial_df = pd.DataFrame(rows).sort_values("financial_period").reset_index(drop=True)
-    return add_annual_financial_factors(financial_df)
+    return add_annual_financial_factors(financial_df, periods_per_year=1)
 
 
-def yoy_pct(series):
-    return (series / series.shift(1) - 1) * 100
+def read_ttm_financials(stock_code, cumulative_statement_types=None):
+    financial_df = ttm_financial_frame(
+        stock_code,
+        FINANCIAL_DIR,
+        cumulative_statement_types=cumulative_statement_types,
+    )
+    if financial_df.empty:
+        return financial_df
+    return add_annual_financial_factors(financial_df, periods_per_year=4)
 
 
-def add_annual_financial_factors(financial_df):
+def read_quarterly_financials(stock_code, cumulative_statement_types=None):
+    financial_df = quarterly_financial_frame(
+        stock_code,
+        FINANCIAL_DIR,
+        cumulative_statement_types=cumulative_statement_types,
+    )
+    if financial_df.empty:
+        return financial_df
+    return add_annual_financial_factors(financial_df, periods_per_year=4)
+
+
+def yoy_pct(series, periods=1):
+    return (series / series.shift(periods) - 1) * 100
+
+
+def add_annual_financial_factors(financial_df, periods_per_year=1):
     df = financial_df.copy()
+    lag = max(int(periods_per_year), 1)
 
     df["at"] = numeric_column(df, "TOTAL_ASSETS")
     df["seq"] = numeric_column(df, "TOTAL_EQUITY")
@@ -317,11 +341,11 @@ def add_annual_financial_factors(financial_df):
     df["debt_issue"] = numeric_column(df, "DEBT_ISSUE")
     df["debt_repay"] = numeric_column(df, "DEBT_REPAY")
 
-    df["avg_assets"] = (df["at"] + df["at"].shift(1)) / 2
-    df["avg_equity"] = (df["seq"] + df["seq"].shift(1)) / 2
-    df["avg_inventory"] = (df["invt"] + df["invt"].shift(1)) / 2
-    df["avg_receivables"] = (df["rect"] + df["rect"].shift(1)) / 2
-    df["avg_payables"] = (df["ap"] + df["ap"].shift(1)) / 2
+    df["avg_assets"] = (df["at"] + df["at"].shift(lag)) / 2
+    df["avg_equity"] = (df["seq"] + df["seq"].shift(lag)) / 2
+    df["avg_inventory"] = (df["invt"] + df["invt"].shift(lag)) / 2
+    df["avg_receivables"] = (df["rect"] + df["rect"].shift(lag)) / 2
+    df["avg_payables"] = (df["ap"] + df["ap"].shift(lag)) / 2
 
     df["gpm"] = df["gross_profit"] / df["sale"]
     df["opm"] = df["oiadp"] / df["sale"]
@@ -331,7 +355,7 @@ def add_annual_financial_factors(financial_df):
     df.loc[(df["tax_rate"] < 0) | (df["tax_rate"] > 1), "tax_rate"] = math.nan
     df["nopat"] = df["oiadp"] * (1 - df["tax_rate"])
 
-    df["avg_parent_equity"] = (df["ceq"] + df["ceq"].shift(1)) / 2
+    df["avg_parent_equity"] = (df["ceq"] + df["ceq"].shift(lag)) / 2
     df["roe"] = df["ni_parent"] / df["avg_parent_equity"]
     df["roa"] = df["ni"] / df["avg_assets"]
     df["iroe"] = (
@@ -347,8 +371,8 @@ def add_annual_financial_factors(financial_df):
         + df["ppent"].fillna(0)
         + numeric_column(df, "INTANGIBLE_ASSETS", 0).fillna(0)
     )
-    df["avg_ic_financial"] = (df["invested_capital_financial"] + df["invested_capital_financial"].shift(1)) / 2
-    df["avg_ic_operational"] = (df["invested_capital_operational"] + df["invested_capital_operational"].shift(1)) / 2
+    df["avg_ic_financial"] = (df["invested_capital_financial"] + df["invested_capital_financial"].shift(lag)) / 2
+    df["avg_ic_operational"] = (df["invested_capital_operational"] + df["invested_capital_operational"].shift(lag)) / 2
     df["roic_financial"] = df["nopat"] / df["avg_ic_financial"]
     df["roic_operational"] = df["nopat"] / df["avg_ic_operational"]
 
@@ -366,7 +390,7 @@ def add_annual_financial_factors(financial_df):
         df["nopat"]
         + df["dp"].fillna(0)
         - df["capx"].fillna(0)
-        - (df["working_capital"] - df["working_capital"].shift(1)).fillna(0)
+        - (df["working_capital"] - df["working_capital"].shift(lag)).fillna(0)
     )
     df["fcfe"] = (
         df["fcf"]
@@ -376,18 +400,18 @@ def add_annual_financial_factors(financial_df):
         - df["prstkc"].fillna(0)
     )
 
-    df["sales_yoy_pct"] = yoy_pct(df["sale"])
-    df["op_yoy_pct"] = yoy_pct(df["oiadp"])
-    df["sales_change_mil"] = (df["sale"] - df["sale"].shift(1)) / 1_000_000
-    df["op_change_mil"] = (df["oiadp"] - df["oiadp"].shift(1)) / 1_000_000
+    df["sales_yoy_pct"] = yoy_pct(df["sale"], periods=lag)
+    df["op_yoy_pct"] = yoy_pct(df["oiadp"], periods=lag)
+    df["sales_change_mil"] = (df["sale"] - df["sale"].shift(lag)) / 1_000_000
+    df["op_change_mil"] = (df["oiadp"] - df["oiadp"].shift(lag)) / 1_000_000
     df["rdsr_pct"] = df["xrd"] / df["sale"] * 100
     df["eps"] = first_value_frame(df, "BASIC_EPS", "DILUTED_EPS")
     df["eps"] = df["eps"].fillna(df["ni_parent"] / numeric_column(df, "shares"))
-    df["eps_yoy_pct"] = yoy_pct(df["eps"])
-    df["asset_yoy_pct"] = yoy_pct(df["at"])
-    df["cfo_yoy_pct"] = yoy_pct(df["oancf"])
-    df["fcf_yoy_pct"] = yoy_pct(df["fcf"])
-    df["ffo_yoy_pct"] = yoy_pct(df["ffo"])
+    df["eps_yoy_pct"] = yoy_pct(df["eps"], periods=lag)
+    df["asset_yoy_pct"] = yoy_pct(df["at"], periods=lag)
+    df["cfo_yoy_pct"] = yoy_pct(df["oancf"], periods=lag)
+    df["fcf_yoy_pct"] = yoy_pct(df["fcf"], periods=lag)
+    df["ffo_yoy_pct"] = yoy_pct(df["ffo"], periods=lag)
 
     df["net_debt_to_ebitda"] = df["net_debt"] / df["oibdp"]
     df["fc_to_ndr"] = df["fcf"] / df["net_debt"]
@@ -408,28 +432,28 @@ def add_annual_financial_factors(financial_df):
         + 3.3 * (df["oiadp"] / df["at"])
         + 1.0 * (df["sale"] / df["at"])
     )
-    df["beneish_m_score"] = calculate_beneish_m_score(df)
-    df["f_score"] = calculate_piotroski_f_score(df)
+    df["beneish_m_score"] = calculate_beneish_m_score(df, periods=lag)
+    df["f_score"] = calculate_piotroski_f_score(df, periods=lag)
 
     return df
 
 
-def calculate_beneish_m_score(df):
-    dsri = (df["rect"] / df["sale"]) / (df["rect"].shift(1) / df["sale"].shift(1))
-    gmi = ((df["sale"].shift(1) - df["cogs"].shift(1)) / df["sale"].shift(1)) / (
+def calculate_beneish_m_score(df, periods=1):
+    dsri = (df["rect"] / df["sale"]) / (df["rect"].shift(periods) / df["sale"].shift(periods))
+    gmi = ((df["sale"].shift(periods) - df["cogs"].shift(periods)) / df["sale"].shift(periods)) / (
         (df["sale"] - df["cogs"]) / df["sale"]
     )
     aqi = (1 - (df["act"] + df["ppent"]) / df["at"]) / (
-        1 - (df["act"].shift(1) + df["ppent"].shift(1)) / df["at"].shift(1)
+        1 - (df["act"].shift(periods) + df["ppent"].shift(periods)) / df["at"].shift(periods)
     )
-    sgi = df["sale"] / df["sale"].shift(1)
-    depi = (df["dp"].shift(1) / (df["ppent"].shift(1) + df["dp"].shift(1))) / (
+    sgi = df["sale"] / df["sale"].shift(periods)
+    depi = (df["dp"].shift(periods) / (df["ppent"].shift(periods) + df["dp"].shift(periods))) / (
         df["dp"] / (df["ppent"] + df["dp"])
     )
     sgna = numeric_column(df, "SGNA")
-    sgai = (sgna / df["sale"]) / (sgna.shift(1) / df["sale"].shift(1))
+    sgai = (sgna / df["sale"]) / (sgna.shift(periods) / df["sale"].shift(periods))
     lvgi = ((df["dltt"] + df["dlc"]) / df["at"]) / (
-        (df["dltt"].shift(1) + df["dlc"].shift(1)) / df["at"].shift(1)
+        (df["dltt"].shift(periods) + df["dlc"].shift(periods)) / df["at"].shift(periods)
     )
     tata = (df["ni"] - df["oancf"]) / df["at"]
 
@@ -446,17 +470,17 @@ def calculate_beneish_m_score(df):
     )
 
 
-def calculate_piotroski_f_score(df):
+def calculate_piotroski_f_score(df, periods=1):
     score = pd.Series(0, index=df.index, dtype="int64")
     score += (df["roa"] > 0).fillna(False).astype(int)
     score += (df["oancf"] > 0).fillna(False).astype(int)
-    score += (df["roa"] > df["roa"].shift(1)).fillna(False).astype(int)
+    score += (df["roa"] > df["roa"].shift(periods)).fillna(False).astype(int)
     score += (df["oancf"] > df["ni"]).fillna(False).astype(int)
-    score += (df["debt_to_equity"] < df["debt_to_equity"].shift(1)).fillna(False).astype(int)
-    score += (df["current_ratio"] > df["current_ratio"].shift(1)).fillna(False).astype(int)
+    score += (df["debt_to_equity"] < df["debt_to_equity"].shift(periods)).fillna(False).astype(int)
+    score += (df["current_ratio"] > df["current_ratio"].shift(periods)).fillna(False).astype(int)
     score += (df["sstk"].fillna(0) <= 0).astype(int)
-    score += (df["gpm"] > df["gpm"].shift(1)).fillna(False).astype(int)
-    score += (df["asset_turnover"] > df["asset_turnover"].shift(1)).fillna(False).astype(int)
+    score += (df["gpm"] > df["gpm"].shift(periods)).fillna(False).astype(int)
+    score += (df["asset_turnover"] > df["asset_turnover"].shift(periods)).fillna(False).astype(int)
     return score
 
 
@@ -517,51 +541,77 @@ def add_price_momentum_factors(daily_df):
 
 def add_daily_market_valuation_factors(daily_df):
     df = daily_df.copy()
-    df["mcap_mil"] = df["market_cap"] / 1_000_000
-    df["trading_value"] = df["close"] * df["volume"]
-    df["csho"] = df["shares"]
-    df["eps"] = numeric_column(df, "eps").fillna(df["ni_parent"] / df["shares"])
-    df["bps"] = (df["ceq"] / df["shares"]).fillna(0)
-    df["sps"] = (df["sale"] / df["shares"]).fillna(0)
-    df["cps"] = (df["oancf"] / df["shares"]).fillna(0)
+
+    close = numeric_column(df, "close")
+    volume = numeric_column(df, "volume")
+    shares = numeric_column(df, "shares")
+    market_cap = numeric_column(df, "market_cap")
+    ni_parent = numeric_column(df, "ni_parent")
+    ceq = numeric_column(df, "ceq")
+    sale = numeric_column(df, "sale")
+    oancf = numeric_column(df, "oancf")
+    ppent = numeric_column(df, "ppent")
+    che = numeric_column(df, "che")
+    debt = numeric_column(df, "debt")
+    xrd = numeric_column(df, "xrd")
+    oibdp = numeric_column(df, "oibdp")
+    nopat = numeric_column(df, "nopat")
+    net_debt = numeric_column(df, "net_debt")
+    oiadp = numeric_column(df, "oiadp")
+    at = numeric_column(df, "at")
+    lct = numeric_column(df, "lct")
+    interest_coverage = numeric_column(df, "interest_coverage")
+    tdpr = numeric_column(df, "tdpr")
+    eps_yoy_pct = numeric_column(df, "eps_yoy_pct")
+    prstkc = numeric_column(df, "prstkc")
+    sstk = numeric_column(df, "sstk")
+    sharehold_div_yield = numeric_column(df, "sharehold_div_yield")
+
+    df["mcap_mil"] = market_cap / 1_000_000
+    df["trading_value"] = close * volume
+    df["csho"] = shares
+    df["eps"] = numeric_column(df, "eps").fillna(ni_parent / shares)
+    df["bps"] = (ceq / shares).fillna(0)
+    df["sps"] = (sale / shares).fillna(0)
+    df["cps"] = (oancf / shares).fillna(0)
     df["fcff"] = numeric_column(df, "fcff").fillna(0)
     df["fcfe"] = numeric_column(df, "fcfe").fillna(0)
 
     if "altman_z_score" in df.columns:
         df["altman_z_score"] = df["altman_z_score"] + 0.6 * (
-            df["market_cap"] / (numeric_column(df, "TOTAL_LIABILITIES"))
+            market_cap / (numeric_column(df, "TOTAL_LIABILITIES"))
         )
 
     eps_for_ratio = df["eps"].replace(0, math.nan)
-    df["epr"] = eps_for_ratio / df["close"]
-    df["bpr"] = df["bps"] / df["close"]
-    df["tpr"] = df["ppent"] / df["market_cap"]
-    df["spr"] = df["sps"] / df["close"]
-    df["cpr"] = df["cps"] / df["close"]
-    df["fcfpr"] = df["fcfe"] / df["market_cap"]
-    df["npr"] = (df["che"] - df["debt"]) / df["market_cap"]
-    df["rpr"] = df["xrd"] / df["market_cap"]
-    df["enterprise_value"] = df["market_cap"] + df["debt"].fillna(0) - df["che"].fillna(0)
-    df["ebitda_to_ev"] = df["oibdp"] / df["enterprise_value"]
-    df["ev_to_ebitda"] = df["enterprise_value"] / df["oibdp"]
-    df["ev_to_nopat"] = df["enterprise_value"] / df["nopat"]
-    df["net_debt_to_ocf"] = df["net_debt"] / df["oancf"]
+    df["epr"] = eps_for_ratio / close
+    df["bpr"] = df["bps"] / close
+    df["tpr"] = ppent / market_cap
+    df["spr"] = df["sps"] / close
+    df["cpr"] = df["cps"] / close
+    df["fcfpr"] = df["fcfe"] / market_cap
+    df["npr"] = (che - debt) / market_cap
+    df["rpr"] = xrd / market_cap
+    df["enterprise_value"] = market_cap + debt.fillna(0) - che.fillna(0)
+    df["ebitda_to_ev"] = oibdp / df["enterprise_value"]
+    df["ev_to_ebitda"] = df["enterprise_value"] / oibdp
+    df["ev_to_nopat"] = df["enterprise_value"] / nopat
+    df["net_debt_to_ocf"] = net_debt / oancf
 
-    df["per"] = df["close"] / eps_for_ratio
-    df["pbr"] = df["close"] / df["bps"]
-    df["pcr"] = df["close"] / df["cps"]
-    df["psr"] = df["close"] / df["sps"]
-    df["roce"] = df["oiadp"] / (df["at"] - df["lct"])
-    df["total_interest_coverage"] = df["interest_coverage"]
-    df["debt_ratio"] = df["debt"] / df["at"]
-    df["dividend_yield"] = df["sharehold_div_yield"]
-    df["payout_ratio"] = df["tdpr"]
-    df["peg"] = df["per"] / df["eps_yoy_pct"]
-    df.loc[df["eps_yoy_pct"] <= 0, "peg"] = math.nan
+    df["per"] = close / eps_for_ratio
+    df["pbr"] = close / df["bps"]
+    df["pcr"] = close / df["cps"]
+    df["psr"] = close / df["sps"]
+    df["roce"] = oiadp / (at - lct)
+    df["total_interest_coverage"] = interest_coverage
+    df["debt_ratio"] = debt / at
+    df["dividend_yield"] = sharehold_div_yield
+    df["payout_ratio"] = tdpr
+    df["peg"] = df["per"] / eps_yoy_pct
+    df.loc[eps_yoy_pct <= 0, "peg"] = math.nan
     df["sharehold_net_buyback_yield"] = (
-        (df["prstkc"].fillna(0) - df["sstk"].fillna(0)) / df["market_cap"] * 100
+        (prstkc.fillna(0) - sstk.fillna(0)) / market_cap * 100
     )
-    df["sharehold_return"] = df["sharehold_div_yield"].fillna(0) + df["sharehold_net_buyback_yield"].fillna(0)
+    df["sharehold_return"] = sharehold_div_yield.fillna(0) + df["sharehold_net_buyback_yield"].fillna(0)
 
     return df
 
@@ -572,13 +622,28 @@ def create_stock_factor_dataframe(
     end_date=None,
     price_path=None,
     shares_path=SHARES_PATH,
+    financial_basis="annual",
+    cumulative_statement_types=None,
 ):
     stock_code = normalize_stock_code(stock_code)
     output_start_date = pd.Timestamp(start_date) if start_date is not None else None
     output_end_date = pd.Timestamp(end_date) if end_date is not None else None
     price_df = read_stock_prices(stock_code, price_path)
     shares_df = read_stock_shares(stock_code, shares_path)
-    financial_df = read_annual_financials(stock_code)
+    if financial_basis == "quarterly":
+        financial_df = read_quarterly_financials(
+            stock_code,
+            cumulative_statement_types=cumulative_statement_types,
+        )
+    elif financial_basis == "ttm":
+        financial_df = read_ttm_financials(
+            stock_code,
+            cumulative_statement_types=cumulative_statement_types,
+        )
+    elif financial_basis == "annual":
+        financial_df = read_annual_financials(stock_code)
+    else:
+        raise ValueError("financial_basis must be 'annual', 'ttm', or 'quarterly'")
 
     if price_df.empty:
         return pd.DataFrame()
