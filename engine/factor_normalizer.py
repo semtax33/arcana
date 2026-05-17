@@ -6,12 +6,12 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from engine.dividend_normalizer import (
+from dividend_normalizer import (
     calculate_payout_ratio_with_fallback,
     calculate_total_dividend_amount,
     calculate_total_dividend_per_share_with_fallback,
 )
-from engine.statement_periodizer import quarterly_financial_frame, ttm_financial_frame
+from statement_periodizer import quarterly_financial_frame, ttm_financial_frame
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -828,15 +828,24 @@ def order_factor_columns(df):
 
 def create_all_stock_factor_dataframe(stock_codes=None, **kwargs):
     if stock_codes is None:
-        from engine.company import kospi_kosdaq_corp_list
+        from company import kospi_kosdaq_corp_list
 
         corps_list = kospi_kosdaq_corp_list()
         stock_codes = sorted(corps_list["stock_code"].dropna().map(normalize_stock_code).unique())
 
     frames = []
+    keep_empty_columns = set(BASE_COLUMNS)
     for stock_code in stock_codes:
         factor_df = create_stock_factor_dataframe(stock_code, **kwargs)
         if not factor_df.empty:
+            factor_df = factor_df.loc[
+                :,
+                [
+                    column
+                    for column in factor_df.columns
+                    if column in keep_empty_columns or not factor_df[column].isna().all()
+                ],
+            ]
             frames.append(factor_df)
 
     if not frames:

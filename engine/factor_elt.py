@@ -6,9 +6,10 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from engine.factor_normalizer import (
-    create_all_stock_factor_dataframe,
+from factor_normalizer import (
+    create_stock_factor_dataframe,
     factor_columns,
+    normalize_stock_code,
     preferred_factor_columns,
 )
 
@@ -248,6 +249,7 @@ def prepare_daily_factor_rows(
     *,
     financial_basis: str = "annual",
     factor_ids: list[str] | None = None,
+    sort_rows: bool = True,
 ) -> pd.DataFrame:
     if wide_df.empty:
         return empty_daily_factor_rows()
@@ -273,17 +275,23 @@ def prepare_daily_factor_rows(
     if not value_columns:
         return empty_daily_factor_rows()
 
-    long_df = wide_df.melt(
-        id_vars=id_columns,
-        value_vars=value_columns,
-        var_name="factor_id",
-        value_name="factor_value",
-    )
-    long_df["factor_value"] = pd.to_numeric(long_df["factor_value"], errors="coerce")
-    long_df = long_df.loc[long_df["factor_value"].notna()].copy()
-    if long_df.empty:
+    long_parts = []
+    id_frame = wide_df[id_columns]
+    for factor_id in value_columns:
+        factor_value = pd.to_numeric(wide_df[factor_id], errors="coerce")
+        valid_mask = factor_value.notna()
+        if not valid_mask.any():
+            continue
+
+        part = id_frame.loc[valid_mask].copy()
+        part["factor_id"] = factor_id
+        part["factor_value"] = factor_value.loc[valid_mask].to_numpy()
+        long_parts.append(part)
+
+    if not long_parts:
         return empty_daily_factor_rows()
 
+    long_df = pd.concat(long_parts, ignore_index=True)
     long_df["financial_basis"] = financial_basis
     long_df["trade_date"] = _as_clickhouse_date(long_df["trade_date"])
     long_df["financial_period"] = _as_clickhouse_date(long_df["financial_period"])
@@ -295,9 +303,12 @@ def prepare_daily_factor_rows(
         datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
     )
 
-    return long_df[FACT_DAILY_FACTOR_COLUMNS].sort_values(
-        ["trade_date", "factor_id", "financial_basis", "security_id"]
-    ).reset_index(drop=True)
+    long_df = long_df[FACT_DAILY_FACTOR_COLUMNS]
+    if sort_rows:
+        long_df = long_df.sort_values(
+            ["trade_date", "factor_id", "financial_basis", "security_id"]
+        )
+    return long_df.reset_index(drop=True)
 
 
 def create_daily_factor_rows(
@@ -308,14 +319,75 @@ def create_daily_factor_rows(
     end_date: str | None = None,
     **kwargs,
 ) -> pd.DataFrame:
-    wide_df = create_all_stock_factor_dataframe(
-        stock_codes=stock_codes,
-        financial_basis=financial_basis,
-        start_date=start_date,
-        end_date=end_date,
-        **kwargs,
+    frames = []
+    for stock_code in _resolve_stock_codes(stock_codes):
+        wide_df = create_stock_factor_dataframe(
+            stock_code,
+            financial_basis=financial_basis,
+            start_date=start_date,
+            end_date=end_date,
+            **kwargs,
+        )
+        factor_df = prepare_daily_factor_rows(
+            wide_df,
+            financial_basis=financial_basis,
+        )
+        if not factor_df.empty:
+            frames.append(factor_df)
+
+    if not frames:
+        return empty_daily_factor_rows()
+
+    return pd.concat(frames, ignore_index=True).sort_values(
+        ["trade_date", "factor_id", "financial_basis", "security_id"]
+    ).reset_index(drop=True)
+
+
+def _resolve_stock_codes(stock_codes: list[str] | None) -> list[str]:
+    if stock_codes is not None:
+        return [normalize_stock_code(stock_code) for stock_code in stock_codes]
+
+    from company import kospi_kosdaq_corp_list
+
+    corps_list = kospi_kosdaq_corp_list()
+    return sorted(corps_list["stock_code"].dropna().map(normalize_stock_code).unique())
+
+
+def _insert_daily_factor_rows_by_partition(client, factor_df: pd.DataFrame) -> int:
+    if factor_df.empty:
+        return 0
+
+    inserted_count = 0
+    factor_df = factor_df.copy()
+    factor_df["_partition"] = pd.to_datetime(factor_df["trade_date"]).dt.strftime("%Y%m")
+    for partition, chunk in factor_df.groupby("_partition", sort=True):
+        chunk = chunk.drop(columns=["_partition"]).copy()
+        client.insert_df(
+            "fact_daily_factors",
+            chunk,
+            column_names=list(chunk.columns),
+        )
+        inserted_count += len(chunk)
+        print(f"inserted partition={partition}, rows={len(chunk):,}")
+
+    return inserted_count
+
+
+def _flush_daily_factor_batch(
+    client,
+    batch_frames: list[pd.DataFrame],
+    *,
+    batch_index: int,
+) -> int:
+    if not batch_frames:
+        return 0
+
+    batch_df = pd.concat(batch_frames, ignore_index=True)
+    print(
+        f"flushing batch={batch_index}, "
+        f"stocks={len(batch_frames):,}, rows={len(batch_df):,}"
     )
-    return prepare_daily_factor_rows(wide_df, financial_basis=financial_basis)
+    return _insert_daily_factor_rows_by_partition(client, batch_df)
 
 
 def create_factor_catalog_dataframe(factor_ids: list[str] | None = None) -> pd.DataFrame:
@@ -442,36 +514,82 @@ def insert_daily_factors(
     insert_catalog: bool = True,
     dry_run: bool = False,
     client=None,
+    insert_batch_size: int = 25,
+    insert_max_rows: int = 2_000_000,
     **kwargs,
 ) -> pd.DataFrame:
-    factor_df = create_daily_factor_rows(
-        stock_codes=stock_codes,
-        financial_basis=financial_basis,
-        start_date=start_date,
-        end_date=end_date,
-        **kwargs,
-    )
-    if factor_df.empty or dry_run:
+    if dry_run:
+        factor_df = create_daily_factor_rows(
+            stock_codes=stock_codes,
+            financial_basis=financial_basis,
+            start_date=start_date,
+            end_date=end_date,
+            **kwargs,
+        )
         return factor_df
 
     owns_client = client is None
     client = client or get_clickhouse_client()
-    if insert_catalog:
-        insert_factor_catalog(client, factor_ids=sorted(factor_df["factor_id"].unique()))
 
-    factor_df["_partition"] = pd.to_datetime(factor_df["trade_date"]).dt.strftime("%Y%m")
-    for partition, chunk in factor_df.groupby("_partition", sort=True):
-        chunk = chunk.drop(columns=["_partition"]).copy()
-        client.insert_df(
-            "fact_daily_factors",
-            chunk,
-            column_names=list(chunk.columns),
-        )
-        print(f"inserted partition={partition}, rows={len(chunk):,}")
+    inserted_count = 0
+    seen_factor_ids: set[str] = set()
+    batch_frames: list[pd.DataFrame] = []
+    batch_rows = 0
+    batch_index = 1
+    try:
+        if insert_catalog:
+            insert_factor_catalog(client, factor_ids=preferred_factor_columns())
 
-    if owns_client:
-        client.close()
-    return factor_df.drop(columns=["_partition"], errors="ignore")
+        resolved_stock_codes = _resolve_stock_codes(stock_codes)
+        for stock_index, stock_code in enumerate(resolved_stock_codes, start=1):
+            wide_df = create_stock_factor_dataframe(
+                stock_code,
+                financial_basis=financial_basis,
+                start_date=start_date,
+                end_date=end_date,
+                **kwargs,
+            )
+            factor_df = prepare_daily_factor_rows(
+                wide_df,
+                financial_basis=financial_basis,
+                sort_rows=False,
+            )
+            if factor_df.empty:
+                continue
+
+            seen_factor_ids.update(factor_df["factor_id"].unique())
+            batch_frames.append(factor_df)
+            batch_rows += len(factor_df)
+
+            should_flush = (
+                len(batch_frames) >= insert_batch_size
+                or batch_rows >= insert_max_rows
+                or stock_index == len(resolved_stock_codes)
+            )
+            if should_flush:
+                inserted_count += _flush_daily_factor_batch(
+                    client,
+                    batch_frames,
+                    batch_index=batch_index,
+                )
+                batch_frames = []
+                batch_rows = 0
+                batch_index += 1
+
+        if batch_frames:
+            inserted_count += _flush_daily_factor_batch(
+                client,
+                batch_frames,
+                batch_index=batch_index,
+            )
+    finally:
+        if owns_client:
+            client.close()
+
+    result = empty_daily_factor_rows()
+    result.attrs["inserted_rows"] = inserted_count
+    result.attrs["factor_count"] = len(seen_factor_ids)
+    return result
 
 
 def _parse_stock_codes(value: str | None) -> list[str] | None:
@@ -488,6 +606,8 @@ def main() -> None:
     parser.add_argument("--end-date")
     parser.add_argument("--skip-catalog", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--insert-batch-size", type=int, default=25)
+    parser.add_argument("--insert-max-rows", type=int, default=2_000_000)
     args = parser.parse_args()
 
     factor_df = insert_daily_factors(
@@ -497,11 +617,13 @@ def main() -> None:
         end_date=args.end_date,
         insert_catalog=not args.skip_catalog,
         dry_run=args.dry_run,
+        insert_batch_size=args.insert_batch_size,
+        insert_max_rows=args.insert_max_rows,
     )
     print(
         "prepared rows="
-        f"{len(factor_df):,}, factors="
-        f"{factor_df['factor_id'].nunique() if not factor_df.empty else 0:,}"
+        f"{factor_df.attrs.get('inserted_rows', len(factor_df)):,}, factors="
+        f"{factor_df.attrs.get('factor_count', factor_df['factor_id'].nunique() if not factor_df.empty else 0):,}"
     )
 
 

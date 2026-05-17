@@ -342,7 +342,7 @@ def create_all_stock_dividend_dataframe(
     share_type="보통주식",
     price_column="close",
 ):
-    from engine.company import kospi_kosdaq_corp_list
+    from company import kospi_kosdaq_corp_list
 
     schema_columns = [
         "security_id",

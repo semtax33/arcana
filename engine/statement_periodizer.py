@@ -216,30 +216,36 @@ def add_quarter_and_ttm_amounts(
         if column not in metadata_columns and pd.api.types.is_numeric_dtype(df[column])
     ]
 
+    derived_columns: dict[str, pd.Series] = {}
     for column in value_columns:
         statement_type = statement_type_by_id.get(column, "")
         source = pd.to_numeric(df[column], errors="coerce")
 
         if statement_type in BALANCE_STATEMENT_TYPES:
-            df[f"{column}_quarter"] = source
-            df[f"{column}_ttm"] = source
+            quarter_amount = source
+            ttm_amount = source
+            derived_columns[f"{column}_quarter"] = quarter_amount
+            derived_columns[f"{column}_ttm"] = ttm_amount
             continue
 
         if statement_type in cumulative_statement_types:
             previous_ytd = source.groupby(df["fiscal_year"]).shift(1)
-            df[f"{column}_quarter"] = source.where(df["fiscal_month"] == 3, source - previous_ytd)
+            quarter_amount = source.where(df["fiscal_month"] == 3, source - previous_ytd)
         else:
             quarter = source.copy()
             annual_mask = df["fiscal_month"] == 12
             prior_quarters = quarter.where(df["fiscal_month"].isin([3, 6, 9])).groupby(df["fiscal_year"]).cumsum()
-            df.loc[annual_mask, f"{column}_quarter"] = source.loc[annual_mask] - prior_quarters.shift(1).loc[annual_mask]
-            df.loc[~annual_mask, f"{column}_quarter"] = quarter.loc[~annual_mask]
+            quarter_amount = quarter.copy()
+            quarter_amount.loc[annual_mask] = source.loc[annual_mask] - prior_quarters.shift(1).loc[annual_mask]
 
-        df[f"{column}_ttm"] = (
-            pd.to_numeric(df[f"{column}_quarter"], errors="coerce")
-            .rolling(window=4, min_periods=4)
-            .sum()
-        )
+        derived_columns[f"{column}_quarter"] = quarter_amount
+        derived_columns[f"{column}_ttm"] = pd.to_numeric(
+            quarter_amount,
+            errors="coerce",
+        ).rolling(window=4, min_periods=4).sum()
+
+    if derived_columns:
+        df = pd.concat([df, pd.DataFrame(derived_columns, index=df.index)], axis=1).copy()
 
     return df.drop(columns=["_fs_type_by_id"], errors="ignore")
 
@@ -256,10 +262,15 @@ def ttm_financial_frame(
     if periodized.empty:
         return periodized
 
-    output = periodized[["stock_code", "security_id", "fiscal_year", "fiscal_month", "financial_period"]].copy()
-    for column in periodized.columns:
-        if column.endswith("_ttm"):
-            output[column[:-4]] = periodized[column]
+    base_columns = ["stock_code", "security_id", "fiscal_year", "fiscal_month", "financial_period"]
+    value_columns = {
+        column[:-4]: periodized[column]
+        for column in periodized.columns
+        if column.endswith("_ttm")
+    }
+    output = periodized[base_columns].copy()
+    if value_columns:
+        output = pd.concat([output, pd.DataFrame(value_columns, index=periodized.index)], axis=1)
 
     return output
 
@@ -276,9 +287,14 @@ def quarterly_financial_frame(
     if periodized.empty:
         return periodized
 
-    output = periodized[["stock_code", "security_id", "fiscal_year", "fiscal_month", "financial_period"]].copy()
-    for column in periodized.columns:
-        if column.endswith("_quarter"):
-            output[column[:-8]] = periodized[column]
+    base_columns = ["stock_code", "security_id", "fiscal_year", "fiscal_month", "financial_period"]
+    value_columns = {
+        column[:-8]: periodized[column]
+        for column in periodized.columns
+        if column.endswith("_quarter")
+    }
+    output = periodized[base_columns].copy()
+    if value_columns:
+        output = pd.concat([output, pd.DataFrame(value_columns, index=periodized.index)], axis=1)
 
     return output

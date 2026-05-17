@@ -1,6 +1,6 @@
 import clickhouse_connect
 
-from engine.company_normalizer import get_normalized_identifier, get_normalized_sector_and_issuer, get_normalized_security_master
+from company_normalizer import get_normalized_identifier, get_normalized_sector_and_issuer, get_normalized_security_master
 
 def insert_issuer():
     client = clickhouse_connect.get_client(

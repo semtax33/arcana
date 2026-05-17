@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from engine.canonical_rule_normalizer import (
+from canonical_rule_normalizer import (
     ContextEngine,
     RuleEngine,
     extract_rows_from_dart_comment_html,
@@ -13,11 +13,11 @@ from engine.canonical_rule_normalizer import (
     load_canonical_accounts,
     normalize_financial_statement_rule_based,
 )
-from engine.company import kospi_kosdaq_corp_list
-from engine.dividend import fetch_all_stock_dividends_async
-from engine.market_snapshot_normalizer import normalize_price, normalize_shares
-from engine.price import fetch_all_prices, fetch_all_shares
-from engine.statements import download_dividend_histories, download_recent_statement_comments, download_statement_comments, download_statements
+from company import kospi_kosdaq_corp_list
+from dividend import fetch_all_stock_dividends_async
+from market_snapshot_normalizer import normalize_price, normalize_shares
+from price import fetch_all_prices, fetch_all_shares
+from statements import download_dividend_histories, download_recent_statement_comments, download_statement_comments, download_statements
 
 
 CANONICAL_CSV_PATH = Path("../data-lake/meta/CanonicalAccount.csv")
