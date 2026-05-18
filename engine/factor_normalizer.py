@@ -46,6 +46,14 @@ NON_FACTOR_COLUMNS = set(BASE_COLUMNS) | {
     "security_id_fin",
     "stock_code_fin",
 }
+PERCENT_RATIO_FACTOR_COLUMNS = {
+    "gpm",
+    "opm",
+    "ebitda_margin",
+    "npm",
+    "tax_rate",
+    "roe",
+}
 
 
 def normalize_stock_code(stock_code):
@@ -78,11 +86,68 @@ def numeric_column(df, column, default=math.nan):
     return pd.Series(default, index=df.index, dtype="float64")
 
 
+def convert_ratio_columns_to_percent(df, columns):
+    for column in columns:
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce") * 100
+    return df
+
+
 def first_value_frame(df, *columns):
     result = pd.Series(math.nan, index=df.index, dtype="float64")
     for column in columns:
         if column in df.columns:
             result = result.fillna(pd.to_numeric(df[column], errors="coerce"))
+    return result
+
+
+def bound_by_reference(series, reference, max_abs_multiple):
+    values = pd.to_numeric(series, errors="coerce")
+    bounds = pd.to_numeric(reference, errors="coerce").abs() * max_abs_multiple
+    valid = values.notna() & (bounds.isna() | (bounds == 0) | (values.abs() <= bounds))
+    return values.where(valid)
+
+
+def first_bounded_value_frame(df, reference, *columns, max_abs_multiple=1.5):
+    result = pd.Series(math.nan, index=df.index, dtype="float64")
+    for column in columns:
+        if column not in df.columns:
+            continue
+        values = bound_by_reference(df[column], reference, max_abs_multiple)
+        result = result.fillna(values)
+    return result
+
+
+def sanitize_temporal_amount_outliers(df, max_neighbor_multiple=100):
+    result = df.copy()
+    metadata_columns = {
+        "stock_code",
+        "security_id",
+        "fiscal_year",
+        "fiscal_month",
+        "financial_period",
+    }
+    value_columns = [
+        column
+        for column in result.columns
+        if column not in metadata_columns and pd.api.types.is_numeric_dtype(result[column])
+    ]
+
+    for column in value_columns:
+        values = pd.to_numeric(result[column], errors="coerce")
+        prev_abs = values.shift(1).abs()
+        next_abs = values.shift(-1).abs()
+        neighbor_abs = pd.concat([prev_abs, next_abs], axis=1).max(axis=1)
+        outlier_mask = (
+            values.notna()
+            & prev_abs.notna()
+            & next_abs.notna()
+            & (neighbor_abs > 0)
+            & (values.abs() > neighbor_abs * max_neighbor_multiple)
+        )
+        if outlier_mask.any():
+            result.loc[outlier_mask, column] = math.nan
+
     return result
 
 
@@ -291,21 +356,40 @@ def yoy_pct(series, periods=1):
 
 
 def add_annual_financial_factors(financial_df, periods_per_year=1):
-    df = financial_df.copy()
+    df = sanitize_temporal_amount_outliers(financial_df)
     lag = max(int(periods_per_year), 1)
 
     df["at"] = numeric_column(df, "TOTAL_ASSETS")
-    df["seq"] = numeric_column(df, "TOTAL_EQUITY")
-    df["ceq"] = first_value_frame(df, "EAOP", "TOTAL_EQUITY")
-    df["ppent"] = numeric_column(df, "PPE")
-    df["act"] = numeric_column(df, "CURRENT_ASSETS")
-    df["lct"] = numeric_column(df, "CURRENT_LIABILITIES")
-    df["invt"] = numeric_column(df, "INVENTORIES")
-    df["rect"] = first_value_frame(df, "TRADE_RECEIVABLES", "TRADE_AND_OTHER_RECEIVABLES", "OTHER_RECEIVABLES")
-    df["ap"] = first_value_frame(df, "TRADE_PAYABLES", "TRADE_AND_OTHER_PAYABLES", "OTHER_PAYABLES")
+    df["seq"] = bound_by_reference(numeric_column(df, "TOTAL_EQUITY"), df["at"], 2)
+    df["ceq"] = first_bounded_value_frame(df, df["at"], "EAOP", "TOTAL_EQUITY", max_abs_multiple=2)
+    df["ppent"] = bound_by_reference(numeric_column(df, "PPE"), df["at"], 1.5)
+    df["act"] = bound_by_reference(numeric_column(df, "CURRENT_ASSETS"), df["at"], 1.5)
+    df["lct"] = bound_by_reference(numeric_column(df, "CURRENT_LIABILITIES"), df["at"], 2)
+    df["invt"] = bound_by_reference(numeric_column(df, "INVENTORIES"), df["at"], 1.5)
+    df["rect"] = first_bounded_value_frame(
+        df,
+        df["at"],
+        "TRADE_RECEIVABLES",
+        "TRADE_AND_OTHER_RECEIVABLES",
+        "OTHER_RECEIVABLES",
+        max_abs_multiple=1.5,
+    )
+    df["ap"] = first_bounded_value_frame(
+        df,
+        df["at"],
+        "TRADE_PAYABLES",
+        "TRADE_AND_OTHER_PAYABLES",
+        "OTHER_PAYABLES",
+        max_abs_multiple=1.5,
+    )
     df["dltt"] = first_value_frame(df, "LONG_TERM_DEBT", "LONG_TERM_DEBT_FALLBACK")
     df["dlc"] = numeric_column(df, "SHORT_TERM_DEBT")
-    df["che"] = numeric_column(df, "CASH_AND_EQUIVALENTS", 0).fillna(0) + numeric_column(df, "SHORT_TERM_FINANCIAL_ASSETS", 0).fillna(0)
+    df["che"] = bound_by_reference(
+        numeric_column(df, "CASH_AND_EQUIVALENTS", 0).fillna(0)
+        + numeric_column(df, "SHORT_TERM_FINANCIAL_ASSETS", 0).fillna(0),
+        df["at"],
+        1.5,
+    )
 
     df["sale"] = numeric_column(df, "REVENUE")
     df["ni"] = numeric_column(df, "NET_INCOME")
@@ -435,6 +519,7 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["beneish_m_score"] = calculate_beneish_m_score(df, periods=lag)
     df["f_score"] = calculate_piotroski_f_score(df, periods=lag)
 
+    df = convert_ratio_columns_to_percent(df, PERCENT_RATIO_FACTOR_COLUMNS)
     return df
 
 
@@ -503,7 +588,14 @@ def add_dividend_factors(daily_df, stock_code):
     df["dvpsx"] = df["trade_date"].dt.year.map(dividend_by_year)
     df["dvpsp"] = math.nan
     df["sharehold_div_yield"] = df["dvpsx"] / df["close"] * 100
-    df["tdpr"] = df["trade_date"].dt.year.map(payout_by_year)
+    df["tdpr"] = (
+        pd.to_numeric(df["trade_date"].dt.year.map(payout_by_year), errors="coerce") * 100
+    )
+    df.loc[df["tdpr"] < 0, "tdpr"] = math.nan
+    df.loc[
+        (df["sharehold_div_yield"] < 0) | (df["sharehold_div_yield"] > 100),
+        "sharehold_div_yield",
+    ] = math.nan
     df["total_dividend_amount"] = df["trade_date"].dt.year.map(total_dividend_amount_by_year)
 
     return df
@@ -530,8 +622,9 @@ def add_price_momentum_factors(daily_df):
     df["high52w_gap_pct"] = (close / close.rolling(252, min_periods=20).max() - 1) * 100
     df["vol_12_1_ann"] = ret.shift(21).rolling(231, min_periods=60).std() * math.sqrt(252)
     df["risk_adj_mom"] = df["tr_12_1"] / df["vol_12_1_ann"]
-    cumulative = (1 + ret.shift(21)).rolling(231, min_periods=60)
-    df["mdd1yr_12_1_pct"] = cumulative.apply(max_drawdown, raw=False) * 100
+    df["mdd1yr_12_1_pct"] = (
+        ret.shift(21).rolling(231, min_periods=60).apply(max_drawdown, raw=False) * 100
+    )
     df["adturn_pct_12_1"] = (
         (df["volume"] / df["shares"] * 100).shift(21).rolling(231, min_periods=60).mean()
     )
@@ -562,10 +655,14 @@ def add_daily_market_valuation_factors(daily_df):
     lct = numeric_column(df, "lct")
     interest_coverage = numeric_column(df, "interest_coverage")
     tdpr = numeric_column(df, "tdpr")
+    tdpr = tdpr.where(tdpr >= 0)
     eps_yoy_pct = numeric_column(df, "eps_yoy_pct")
     prstkc = numeric_column(df, "prstkc")
     sstk = numeric_column(df, "sstk")
     sharehold_div_yield = numeric_column(df, "sharehold_div_yield")
+    sharehold_div_yield = sharehold_div_yield.where(
+        (sharehold_div_yield >= 0) & (sharehold_div_yield <= 100)
+    )
 
     df["mcap_mil"] = market_cap / 1_000_000
     df["trading_value"] = close * volume
@@ -691,6 +788,7 @@ def create_stock_factor_dataframe(
     if output_end_date is not None:
         daily_df = daily_df.loc[daily_df["trade_date"] <= output_end_date].copy()
 
+    daily_df = daily_df.replace([math.inf, -math.inf], math.nan)
     return order_factor_columns(daily_df)
 
 

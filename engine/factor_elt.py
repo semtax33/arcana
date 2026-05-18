@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+import math
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -279,7 +280,7 @@ def prepare_daily_factor_rows(
     id_frame = wide_df[id_columns]
     for factor_id in value_columns:
         factor_value = pd.to_numeric(wide_df[factor_id], errors="coerce")
-        valid_mask = factor_value.notna()
+        valid_mask = factor_value.notna() & factor_value.map(math.isfinite)
         if not valid_mask.any():
             continue
 
@@ -450,6 +451,7 @@ def infer_factor_unit(factor_id: str) -> str:
         "ebitda_margin",
         "npm",
         "tax_rate",
+        "roe",
         "sharehold_div_yield",
         "sharehold_net_buyback_yield",
         "sharehold_return",

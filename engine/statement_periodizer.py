@@ -13,7 +13,7 @@ FINANCIAL_DIR = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "normalized"
 
 FLOW_STATEMENT_TYPES = {"IS", "CIS", "CF"}
 BALANCE_STATEMENT_TYPES = {"BS"}
-DEFAULT_CUMULATIVE_STATEMENT_TYPES = {"CF"}
+DEFAULT_CUMULATIVE_STATEMENT_TYPES = set(FLOW_STATEMENT_TYPES)
 
 
 def normalize_stock_code(stock_code: Any) -> str:

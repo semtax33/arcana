@@ -42,15 +42,22 @@ def normalize_dividend_amount(amount):
     if amount is None:
         return 0
 
+    if isinstance(amount, float) and math.isnan(amount):
+        return 0
+
     amount_text = str(amount).strip()
     if not amount_text or amount_text == "-":
         return 0
 
-    normalized = re.sub(r"[^0-9]", "", amount_text)
-    if not normalized:
+    match = re.search(r"-?\d[\d,]*(?:\.\d+)?", amount_text)
+    if not match:
         return 0
 
-    return int(normalized)
+    normalized = match.group(0).replace(",", "")
+    value = float(normalized)
+    if not math.isfinite(value):
+        return 0
+    return int(value) if value.is_integer() else value
 
 
 def normalize_numeric_amount(amount):
@@ -79,22 +86,10 @@ def calculate_total_dividend_amount(stock_code, year):
         print(f"[SKIP] 파일 없음: {stock_dividend_dir}")
         return None
 
-    total_dividend_amount = 0
-    target_year = str(year)
-
-    for file_path in stock_dividend_dir.glob("finance_statement_dividend_*.json"):
-        with file_path.open("r", encoding="utf-8") as f:
-            dividend_data = json.load(f)
-
-        dividend_base_date = str(dividend_data.get("배당기준일", ""))
-        if not dividend_base_date.startswith(target_year):
-            continue
-
-        total_dividend_amount += normalize_dividend_amount(
-            dividend_data.get("배당금총액")
-        )
-
-    return total_dividend_amount
+    return sum(
+        record["total_dividend_amount"]
+        for record in get_dividend_records(stock_code, year)
+    )
 
 
 def calculate_payout_ratio(stock_code, year):
@@ -104,13 +99,48 @@ def calculate_payout_ratio(stock_code, year):
     if total_dividend_amount is None or net_income is None:
         return None
 
-    if net_income == 0:
+    if net_income is None or net_income <= 0:
         return None
 
-    return total_dividend_amount / net_income
+    payout_ratio = total_dividend_amount / net_income
+    if payout_ratio < 0:
+        return None
+
+    return payout_ratio
 
 
-def get_dividend_per_share_records(stock_code, year, share_type="보통주식"):
+def _dividend_record_sort_value(record):
+    return (
+        str(record.get("dividend_disclosure_date") or ""),
+        str(record.get("source_file") or ""),
+    )
+
+
+def deduplicate_dividend_records(records):
+    latest_by_event = {}
+    for record in records:
+        key = (
+            str(record.get("dividend_base_date") or ""),
+            str(record.get("dividend_type") or ""),
+        )
+        if not key[0]:
+            key = (*key, str(record.get("source_file") or ""))
+
+        previous = latest_by_event.get(key)
+        if previous is None or _dividend_record_sort_value(record) >= _dividend_record_sort_value(previous):
+            latest_by_event[key] = record
+
+    return sorted(
+        latest_by_event.values(),
+        key=lambda record: (
+            str(record.get("dividend_base_date") or ""),
+            str(record.get("dividend_disclosure_date") or ""),
+            str(record.get("source_file") or ""),
+        ),
+    )
+
+
+def get_dividend_records(stock_code, year, share_type="보통주식"):
     stock_code = normalize_stock_code(stock_code)
     stock_dividend_dir = dividend_base_dir / stock_code
 
@@ -140,6 +170,9 @@ def get_dividend_per_share_records(stock_code, year, share_type="보통주식"):
                 "stock_code": stock_code,
                 "dividend_type": dividend_data.get("배당구분"),
                 "dividend_per_share": normalize_dividend_amount(dividend_per_share),
+                "total_dividend_amount": normalize_dividend_amount(
+                    dividend_data.get("배당금총액")
+                ),
                 "dividend_base_date": dividend_base_date,
                 "dividend_payment_date": dividend_data.get("배당지급일"),
                 "dividend_disclosure_date": dividend_data.get("배당공시일"),
@@ -147,7 +180,11 @@ def get_dividend_per_share_records(stock_code, year, share_type="보통주식"):
             }
         )
 
-    return records
+    return deduplicate_dividend_records(records)
+
+
+def get_dividend_per_share_records(stock_code, year, share_type="보통주식"):
+    return get_dividend_records(stock_code, year, share_type)
 
 
 def calculate_total_dividend_per_share(stock_code, year, share_type="보통주식"):

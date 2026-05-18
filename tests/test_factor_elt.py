@@ -64,6 +64,7 @@ class FactorEltTest(unittest.TestCase):
 
         row_by_id = catalog_df.set_index("factor_id")
         self.assertEqual(row_by_id.loc["roe", "factor_type"], "quality")
+        self.assertEqual(row_by_id.loc["roe", "unit"], "percent")
         self.assertEqual(row_by_id.loc["na_20", "factor_type"], "technical")
         self.assertEqual(row_by_id.loc["na_20", "factor_group"], "trend")
 

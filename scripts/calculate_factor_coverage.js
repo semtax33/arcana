@@ -365,8 +365,10 @@ function normalizeDividendAmount(value) {
   if (value === null || value === undefined) return 0;
   const text = String(value).trim();
   if (!text || text === "-") return 0;
-  const normalized = text.replace(/[^0-9]/g, "");
-  return normalized ? Number(normalized) : 0;
+  const match = text.match(/-?\d[\d,]*(?:\.\d+)?/);
+  if (!match) return 0;
+  const n = Number(match[0].replace(/,/g, ""));
+  return Number.isNaN(n) ? 0 : n;
 }
 
 function normalizeNumericAmount(value) {
@@ -381,8 +383,8 @@ function normalizeNumericAmount(value) {
 
 function loadDividendCache(stockCode) {
   const dir = path.join(DIVIDEND_DIR, stockCode);
-  const byYear = new Map();
-  if (!fs.existsSync(dir)) return byYear;
+  const recordsByYear = new Map();
+  if (!fs.existsSync(dir)) return new Map();
   for (const name of fs.readdirSync(dir)) {
     if (!name.startsWith("finance_statement_dividend_") || !name.endsWith(".json")) continue;
     try {
@@ -392,14 +394,35 @@ function loadDividendCache(stockCode) {
       if (!year) continue;
       const dpsData = data["1주당배당금"];
       const dps = typeof dpsData === "object" && dpsData !== null ? dpsData["보통주식"] : dpsData;
-      if (!byYear.has(year)) byYear.set(year, { records: 0, dps: 0, amount: 0 });
-      const row = byYear.get(year);
-      row.records += 1;
-      row.dps += normalizeDividendAmount(dps);
-      row.amount += normalizeDividendAmount(data["배당금총액"]);
+      if (!recordsByYear.has(year)) recordsByYear.set(year, []);
+      recordsByYear.get(year).push({
+        type: String(data["배당구분"] ?? ""),
+        baseDate,
+        disclosureDate: String(data["배당공시일"] ?? ""),
+        sourceFile: name,
+        dps: normalizeDividendAmount(dps),
+        amount: normalizeDividendAmount(data["배당금총액"]),
+      });
     } catch (_) {
       continue;
     }
+  }
+  const byYear = new Map();
+  for (const [year, records] of recordsByYear.entries()) {
+    const latest = new Map();
+    for (const record of records) {
+      const key = `${record.baseDate}|${record.type || record.sourceFile}`;
+      const prev = latest.get(key);
+      if (!prev || `${record.disclosureDate}|${record.sourceFile}` >= `${prev.disclosureDate}|${prev.sourceFile}`) {
+        latest.set(key, record);
+      }
+    }
+    const deduped = [...latest.values()];
+    byYear.set(year, {
+      records: deduped.length,
+      dps: deduped.reduce((sum, row) => sum + row.dps, 0),
+      amount: deduped.reduce((sum, row) => sum + row.amount, 0),
+    });
   }
   return byYear;
 }
@@ -442,8 +465,11 @@ function dividendMaps(financialByStock, stockCode, years) {
       if (!row || row.records === 0) continue;
       const ni = getNetIncomeForPayout(financialByStock, stockCode, y);
       if (isCovered(row.amount) && isCovered(ni) && ni !== 0) {
-        payout = row.amount / ni;
-        break;
+        const candidate = row.amount / ni;
+        if (candidate >= 0) {
+          payout = candidate;
+          break;
+        }
       }
     }
     tdpr.set(year, payout);
@@ -639,6 +665,9 @@ function mergeStockRows(stockCode, priceRows, sharesRows, financialRows, financi
     row.dvpsx = dvpsx.get(year) ?? 0;
     row.dvpsp = null;
     row.sharehold_div_yield = mul(div(row.dvpsx, row.close), 100);
+    if (isCovered(row.sharehold_div_yield) && (row.sharehold_div_yield < 0 || row.sharehold_div_yield > 100)) {
+      row.sharehold_div_yield = null;
+    }
     row.tdpr = tdpr.get(year) ?? null;
     rows.push(row);
   }
