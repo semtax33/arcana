@@ -5,6 +5,7 @@ import pandas as pd
 
 from engine.factor_normalizer import (
     add_annual_financial_factors,
+    add_daily_market_valuation_factors,
     add_dividend_factors,
     add_price_momentum_factors,
 )
@@ -126,8 +127,10 @@ class FactorNormalizerTest(unittest.TestCase):
             ),
         ):
             result = add_dividend_factors(daily_df, "005930")
+            valued = add_daily_market_valuation_factors(result)
 
         self.assertEqual(result["tdpr"].iat[0], 25.0)
+        self.assertEqual(valued["payout_ratio"].iat[0], 25.0)
 
     def test_mdd_uses_returns_not_growth_multipliers(self):
         close = [100.0] * 21 + [100.0] * 80 + [50.0] * 80 + [75.0] * 180
