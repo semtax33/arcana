@@ -48,14 +48,14 @@ class FakeClickHouseClient:
         self.queries.append((query, parameters or {}))
         if "FROM security_master" in query:
             return FakeFrame(self.metadata_rows)
-        if "FROM fact_daily_factor\n" in query:
+        if "FROM fact_daily_factor AS f" in query:
             if self.fail_singular_factor_table:
                 raise RuntimeError("missing table")
-            if self.fail_factor_value_column and "argMax(factor_value" in query:
+            if self.fail_factor_value_column and "argMax(f.factor_value" in query:
                 raise RuntimeError("missing factor_value column")
             return FakeFrame(self.factor_rows)
-        if "FROM fact_daily_factors\n" in query:
-            if self.fail_factor_value_column and "argMax(factor_value" in query:
+        if "FROM fact_daily_factors AS f" in query:
+            if self.fail_factor_value_column and "argMax(f.factor_value" in query:
                 raise RuntimeError("missing factor_value column")
             return FakeFrame(self.plural_factor_rows)
         if "FROM stock_shares" in query:
@@ -129,6 +129,8 @@ class IntroductionServiceTest(unittest.TestCase):
         self.assertEqual(result.business_areas[0].sector_code, "45")
         self.assertEqual(result.business_areas[0].sector_name, "Information Technology")
         self.assertTrue(any("FROM fact_daily_factor" in query for query, _ in client.queries))
+        self.assertFalse(any("max(trade_date) AS trade_date" in query for query, _ in client.queries))
+        self.assertTrue(any("isFinite(f.factor_value)" in query for query, _ in client.queries))
         self.assertFalse(any("FROM stock_shares" in query for query, _ in client.queries))
         self.assertFalse(any("FROM stock_dividend" in query for query, _ in client.queries))
         self.assertTrue(client.closed)

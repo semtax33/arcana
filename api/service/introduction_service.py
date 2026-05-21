@@ -69,6 +69,7 @@ class IntroductionService:
         security_id = f"SEC_KR_{normalized_stock_code}"
         as_of_date = self._today_factory()
         start_date = as_of_date - timedelta(weeks=52)
+        factor_start_date = as_of_date - timedelta(days=400)
 
         client = self._client_factory()
         try:
@@ -77,6 +78,7 @@ class IntroductionService:
                 client,
                 security_id=security_id,
                 as_of_date=as_of_date,
+                start_date=factor_start_date,
             )
             price_row = self._load_52_week_price_row(
                 client,
@@ -158,6 +160,7 @@ GROUP BY sm.security_id
         *,
         security_id: str,
         as_of_date: date,
+        start_date: date,
     ) -> tuple[list[dict[str, Any]], str]:
         last_source = FACTOR_TABLE
         for table_name in FACTOR_TABLES:
@@ -166,6 +169,7 @@ GROUP BY sm.security_id
                 client,
                 security_id=security_id,
                 as_of_date=as_of_date,
+                start_date=start_date,
                 table_name=table_name,
             )
             if rows:
@@ -179,6 +183,7 @@ GROUP BY sm.security_id
         *,
         security_id: str,
         as_of_date: date,
+        start_date: date,
         table_name: str,
     ) -> list[dict[str, Any]]:
         for value_column in ["factor_value", "value"]:
@@ -189,6 +194,7 @@ GROUP BY sm.security_id
                         parameters={
                             "security_id": security_id,
                             "as_of_date": as_of_date.isoformat(),
+                            "start_date": start_date.isoformat(),
                             "factor_ids": METRIC_FACTOR_IDS,
                         },
                     )
@@ -303,16 +309,17 @@ def _build_metric_factor_query(table_name: str, *, value_column: str = "factor_v
 
     return f"""
 SELECT
-    factor_id,
-    argMax({value_column}, tuple(trade_date, updated_at)) AS factor_value,
-    max(trade_date) AS trade_date,
-    argMax(currency, tuple(trade_date, updated_at)) AS currency
-FROM {table_name}
-WHERE security_id = {{security_id:String}}
-    AND trade_date <= {{as_of_date:Date}}
-    AND has({{factor_ids:Array(String)}}, factor_id)
-    AND isFinite({value_column})
-GROUP BY factor_id
+    f.factor_id AS factor_id,
+    argMax(f.{value_column}, tuple(f.trade_date, f.updated_at)) AS factor_value,
+    max(f.trade_date) AS factor_trade_date,
+    argMax(f.currency, tuple(f.trade_date, f.updated_at)) AS currency
+FROM {table_name} AS f
+WHERE f.security_id = {{security_id:String}}
+    AND f.trade_date >= {{start_date:Date}}
+    AND f.trade_date <= {{as_of_date:Date}}
+    AND has({{factor_ids:Array(String)}}, f.factor_id)
+    AND isFinite(f.{value_column})
+GROUP BY f.factor_id
 """.strip()
 
 

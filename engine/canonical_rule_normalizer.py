@@ -59,6 +59,11 @@ UNITS = {
 VALID_AMOUNT_POLICIES = {"as_reported", "abs", "neg_abs"}
 VALID_CASH_DIRECTIONS = {"", "inflow", "outflow"}
 EPS_CANONICAL_IDS = {"BASIC_EPS", "DILUTED_EPS"}
+UNIT_SCALE_OUTLIER_FACTORS = (1_000, 1_000_000)
+UNIT_SCALE_OUTLIER_MIN_SUPPORT = 3
+UNIT_SCALE_OUTLIER_MULTIPLE = 100
+UNIT_SCALE_REPAIRED_MULTIPLE = 10
+NORMALIZED_OUTPUT_RE = re.compile(r"normalized_(?P<stock_code>\d{6})_(?P<year>\d{4})[.](?P<month>\d{2})[.]csv$")
 
 
 def safe_str(value: Any) -> str:
@@ -2118,6 +2123,141 @@ def apply_is_cis_priority(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+
+def _normalized_output_meta(path: str | Path) -> dict[str, int | str] | None:
+    match = NORMALIZED_OUTPUT_RE.match(Path(path).name)
+    if not match:
+        return None
+
+    return {
+        "stock_code": match.group("stock_code"),
+        "year": int(match.group("year")),
+        "month": int(match.group("month")),
+    }
+
+
+def _period_distance(left: dict[str, int | str], right: dict[str, int | str]) -> int:
+    return abs((int(left["year"]) * 12 + int(left["month"])) - (int(right["year"]) * 12 + int(right["month"])))
+
+
+def _reference_amounts_for_unit_repair(output_path: Path) -> dict[tuple[str, str], float]:
+    meta = _normalized_output_meta(output_path)
+    if meta is None or not output_path.parent.exists():
+        return {}
+
+    candidates: list[tuple[int, Path]] = []
+    for path in output_path.parent.glob(f"normalized_{meta['stock_code']}_*.csv"):
+        if ".debug" in path.name or path.name == output_path.name:
+            continue
+        candidate_meta = _normalized_output_meta(path)
+        if candidate_meta is None:
+            continue
+        candidates.append((_period_distance(meta, candidate_meta), path))
+
+    references: dict[tuple[str, str], float] = {}
+    for _, path in sorted(candidates, key=lambda item: item[0])[:8]:
+        try:
+            ref_df = pd.read_csv(path)
+        except Exception:
+            continue
+
+        if ref_df.empty or "canonical_account_id" not in ref_df.columns:
+            continue
+
+        amount_column = "normalized_amount" if "normalized_amount" in ref_df.columns else "amount"
+        if amount_column not in ref_df.columns:
+            continue
+
+        for row in ref_df.itertuples(index=False):
+            row_dict = row._asdict()
+            canonical_id = safe_str(row_dict.get("canonical_account_id")).strip().upper()
+            statement_type = safe_str(row_dict.get("statement_type")).strip().upper()
+            if not canonical_id or canonical_id == "UNMAPPED" or canonical_id in EPS_CANONICAL_IDS:
+                continue
+
+            value = pd.to_numeric(pd.Series([row_dict.get(amount_column)]), errors="coerce").iat[0]
+            if pd.isna(value) or value == 0:
+                continue
+
+            key = (statement_type, canonical_id)
+            current = references.get(key)
+            if current is None or abs(float(value)) > abs(current):
+                references[key] = float(value)
+
+    return references
+
+
+def repair_unit_scale_outliers_from_neighbor_reports(
+    mapped_df: pd.DataFrame,
+    output_csv_path: str | Path,
+) -> pd.DataFrame:
+    if mapped_df.empty:
+        return mapped_df
+
+    references = _reference_amounts_for_unit_repair(Path(output_csv_path))
+    if not references:
+        return mapped_df
+
+    df = mapped_df.copy()
+    scale_support: dict[float, int] = {}
+    comparable_count = 0
+
+    for row in df.itertuples(index=False):
+        row_dict = row._asdict()
+        canonical_id = safe_str(row_dict.get("canonical_account_id")).strip().upper()
+        statement_type = safe_str(row_dict.get("statement_type")).strip().upper()
+        if not canonical_id or canonical_id == "UNMAPPED" or canonical_id in EPS_CANONICAL_IDS:
+            continue
+
+        reference_value = references.get((statement_type, canonical_id))
+        current_value = pd.to_numeric(pd.Series([row_dict.get("normalized_amount")]), errors="coerce").iat[0]
+        if pd.isna(current_value) or reference_value is None:
+            continue
+
+        current_abs = abs(float(current_value))
+        reference_abs = abs(float(reference_value))
+        if current_abs == 0 or reference_abs == 0:
+            continue
+
+        comparable_count += 1
+        if current_abs <= reference_abs * UNIT_SCALE_OUTLIER_MULTIPLE:
+            continue
+
+        for scale_factor in UNIT_SCALE_OUTLIER_FACTORS:
+            repaired_abs = current_abs / scale_factor
+            if repaired_abs <= reference_abs * UNIT_SCALE_REPAIRED_MULTIPLE:
+                scale_support[float(scale_factor)] = scale_support.get(float(scale_factor), 0) + 1
+                break
+
+    if not scale_support:
+        return df
+
+    scale_factor, support_count = max(scale_support.items(), key=lambda item: (item[1], -item[0]))
+    if support_count < UNIT_SCALE_OUTLIER_MIN_SUPPORT:
+        return df
+    if comparable_count and support_count / comparable_count < 0.25:
+        return df
+
+    cid = df["canonical_account_id"].astype(str).str.upper()
+    repair_mask = ~cid.isin({"UNMAPPED", *EPS_CANONICAL_IDS})
+    for column in ["amount", "raw_amount", "normalized_amount", "cash_effect_amount"]:
+        if column in df.columns:
+            values = pd.to_numeric(df.loc[repair_mask, column], errors="coerce")
+            repaired = values / scale_factor
+            df.loc[repair_mask & values.notna(), column] = repaired.dropna().map(safe_str)
+
+    if "unit_factor" in df.columns:
+        unit_values = pd.to_numeric(df.loc[repair_mask, "unit_factor"], errors="coerce")
+        corrected_unit = unit_values / scale_factor
+        df.loc[repair_mask & unit_values.notna(), "unit_factor"] = corrected_unit.dropna().map(safe_str)
+
+    if "reason" in df.columns:
+        suffix = f" / report unit-scale repaired: divided by {safe_str(scale_factor)}"
+        df.loc[repair_mask, "reason"] = df.loc[repair_mask, "reason"].astype(str) + suffix
+
+    return df
+
+
 def validate_mapped_df(
     mapped_df: pd.DataFrame,
     canonical_df: pd.DataFrame,
@@ -2266,6 +2406,12 @@ def normalize_financial_statement_rule_based(
             f"{resolved_comment_html_path} ({type(e).__name__}: {e})"
         )
 
+    output_path = Path(output_csv_path)
+    mapped_df = repair_unit_scale_outliers_from_neighbor_reports(
+        mapped_df,
+        output_path,
+    )
+
     errors = validate_mapped_df(mapped_df, canonical_df)
 
     if verbose and errors:
@@ -2273,7 +2419,6 @@ def normalize_financial_statement_rule_based(
         for error in errors:
             print(" -", error)
 
-    output_path = Path(output_csv_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     statement_order = {"CF": 0, "BS": 1, "IS": 2, "CIS": 3}

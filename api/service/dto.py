@@ -111,6 +111,8 @@ class FactorScreenResponseDto(BaseModel):
 
 
 ChartRange = Literal["1M", "3M", "6M", "1Y", "5Y", "MAX"]
+FinancialStatementPeriod = Literal["annual", "quarter", "ttm"]
+FinancialStatementFilter = Literal["all", "IS", "BS", "CF"]
 
 
 class StockChartPointDto(BaseModel):
@@ -198,3 +200,80 @@ class StockIntroductionResponseDto(BaseModel):
     company: CompanyIntroductionDto
     business_areas: list[BusinessAreaBadgeDto] = Field(default_factory=list)
     factor_source: str = "fact_daily_factor"
+
+
+class FinancialStatementMetadataDto(BaseModel):
+    stock_code: str
+    security_id: str
+    stock_name: str | None = None
+    country: str | None = "KR"
+    currency: str | None = "KRW"
+
+
+class FinancialPeriodColumnDto(BaseModel):
+    key: str
+    label: str
+    fiscal_year: int
+    fiscal_month: int
+    period_end_date: date
+
+
+class FinancialStatementCellDto(BaseModel):
+    period_key: str
+    value: float | None = None
+    display_value: str = "N/A"
+    growth_rate: float | None = None
+    display_growth_rate: str = "N/A"
+
+
+class FinancialChartPointDto(BaseModel):
+    period_key: str
+    label: str
+    value: float | None = None
+
+
+class FinancialAccountStatisticsDto(BaseModel):
+    latest: float | None = None
+    maximum: float | None = None
+    minimum: float | None = None
+    average: float | None = None
+
+
+class FinancialAccountRowDto(BaseModel):
+    canonical_id: str
+    account_name: str
+    statement_type: str
+    is_derived: bool = False
+    formula: str | None = None
+    description: str | None = None
+    unit: str | None = None
+    currency: str | None = "KRW"
+    values: list[FinancialStatementCellDto] = Field(default_factory=list)
+    trend: list[FinancialChartPointDto] = Field(default_factory=list)
+    growth_chart: list[FinancialChartPointDto] = Field(default_factory=list)
+    statistics: FinancialAccountStatisticsDto = Field(default_factory=FinancialAccountStatisticsDto)
+
+
+class FinancialStatementSectionDto(BaseModel):
+    statement_type: str
+    title: str
+    title_en: str
+    accounts: list[FinancialAccountRowDto] = Field(default_factory=list)
+
+
+class FinancialStatementsResponseDto(BaseModel):
+    stock: FinancialStatementMetadataDto
+    period: FinancialStatementPeriod
+    statement: FinancialStatementFilter
+    columns: list[FinancialPeriodColumnDto]
+    sections: list[FinancialStatementSectionDto]
+    source: str = "fact_canonical_statements"
+
+
+class FinancialAccountDetailResponseDto(BaseModel):
+    stock: FinancialStatementMetadataDto
+    period: FinancialStatementPeriod
+    statement_type: str
+    account: FinancialAccountRowDto
+    columns: list[FinancialPeriodColumnDto]
+    source: str = "fact_canonical_statements"
