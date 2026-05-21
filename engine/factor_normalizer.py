@@ -609,11 +609,13 @@ def max_drawdown(returns):
 
 def add_price_momentum_factors(daily_df):
     df = daily_df.sort_values("trade_date").copy()
-    close = df["close"]
+    close = pd.to_numeric(df["close"], errors="coerce")
     ret = close.pct_change()
 
     for window in [5, 20, 50, 150, 200]:
         df[f"na_{window}"] = close.rolling(window, min_periods=1).mean()
+
+    add_technical_indicator_factors(df, close)
 
     df["tr_12_1"] = close.shift(21) / close.shift(252) - 1
     df["tr_6_1"] = close.shift(21) / close.shift(126) - 1
@@ -630,6 +632,40 @@ def add_price_momentum_factors(daily_df):
     )
 
     return df
+
+
+def add_technical_indicator_factors(df, close):
+    df["rsi_14"] = calculate_rsi(close, window=14)
+
+    ema_12 = close.ewm(span=12, adjust=False, min_periods=12).mean()
+    ema_26 = close.ewm(span=26, adjust=False, min_periods=26).mean()
+    df["macd"] = ema_12 - ema_26
+    df["macd_signal"] = df["macd"].ewm(span=9, adjust=False, min_periods=9).mean()
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
+
+    df["bb_middle"] = close.rolling(20, min_periods=20).mean()
+    bb_std = close.rolling(20, min_periods=20).std(ddof=0)
+    df["bb_upper"] = df["bb_middle"] + 2 * bb_std
+    df["bb_lower"] = df["bb_middle"] - 2 * bb_std
+    bb_band_range = df["bb_upper"] - df["bb_lower"]
+    df["bb_width_pct"] = bb_band_range / df["bb_middle"] * 100
+    df["bb_percent_b"] = (close - df["bb_lower"]) / bb_band_range
+
+    return df
+
+
+def calculate_rsi(close, window=14):
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
+    avg_loss = loss.ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
+
+    rs = avg_gain / avg_loss.replace(0, math.nan)
+    rsi = 100 - (100 / (1 + rs))
+    rsi = rsi.where(avg_loss != 0, 100)
+    rsi = rsi.where(~((avg_gain == 0) & (avg_loss == 0)), 50)
+    return rsi
 
 
 def add_daily_market_valuation_factors(daily_df):
@@ -881,6 +917,15 @@ def preferred_factor_columns():
         "na_50",
         "na_150",
         "na_200",
+        "rsi_14",
+        "macd",
+        "macd_signal",
+        "macd_hist",
+        "bb_upper",
+        "bb_middle",
+        "bb_lower",
+        "bb_width_pct",
+        "bb_percent_b",
         "tr_12_1",
         "tr_6_1",
         "tr_3_1",

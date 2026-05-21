@@ -147,6 +147,30 @@ class FactorNormalizerTest(unittest.TestCase):
 
         self.assertLess(result["mdd1yr_12_1_pct"].dropna().min(), -40)
 
+    def test_price_momentum_adds_standard_technical_indicators(self):
+        close = list(range(1, 41))
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.date_range("2025-01-01", periods=len(close), freq="D"),
+                "close": close,
+                "volume": 1_000,
+                "shares": 1_000_000,
+            }
+        )
+
+        result = add_price_momentum_factors(daily_df)
+        latest = result.iloc[-1]
+
+        self.assertAlmostEqual(latest["rsi_14"], 100.0)
+        self.assertTrue(pd.notna(latest["macd"]))
+        self.assertTrue(pd.notna(latest["macd_signal"]))
+        self.assertTrue(pd.notna(latest["macd_hist"]))
+        self.assertAlmostEqual(latest["bb_middle"], pd.Series(close[-20:]).mean())
+        self.assertGreater(latest["bb_upper"], latest["bb_middle"])
+        self.assertLess(latest["bb_lower"], latest["bb_middle"])
+        self.assertGreater(latest["bb_width_pct"], 0)
+        self.assertGreater(latest["bb_percent_b"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

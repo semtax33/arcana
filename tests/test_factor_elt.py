@@ -60,13 +60,21 @@ class FactorEltTest(unittest.TestCase):
         self.assertTrue(result.empty)
 
     def test_create_factor_catalog_dataframe_marks_technical_factors(self):
-        catalog_df = create_factor_catalog_dataframe(["roe", "na_20"])
+        catalog_df = create_factor_catalog_dataframe(["roe", "na_20", "rsi_14", "macd", "bb_upper"])
 
         row_by_id = catalog_df.set_index("factor_id")
         self.assertEqual(row_by_id.loc["roe", "factor_type"], "quality")
         self.assertEqual(row_by_id.loc["roe", "unit"], "percent")
         self.assertEqual(row_by_id.loc["na_20", "factor_type"], "technical")
         self.assertEqual(row_by_id.loc["na_20", "factor_group"], "trend")
+        self.assertEqual(row_by_id.loc["rsi_14", "factor_type"], "technical")
+        self.assertEqual(row_by_id.loc["rsi_14", "factor_group"], "momentum")
+        self.assertEqual(row_by_id.loc["rsi_14", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["rsi_14", "value_direction"], "NEUTRAL")
+        self.assertEqual(row_by_id.loc["macd", "factor_group"], "momentum")
+        self.assertEqual(row_by_id.loc["macd", "unit"], "krw")
+        self.assertEqual(row_by_id.loc["bb_upper", "factor_group"], "volatility")
+        self.assertEqual(row_by_id.loc["bb_upper", "unit"], "krw")
 
 
 if __name__ == "__main__":

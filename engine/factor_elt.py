@@ -54,6 +54,15 @@ TECHNICAL_FACTORS = {
     "na_50",
     "na_150",
     "na_200",
+    "rsi_14",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "bb_upper",
+    "bb_middle",
+    "bb_lower",
+    "bb_width_pct",
+    "bb_percent_b",
     "tr_12_1",
     "tr_6_1",
     "tr_3_1",
@@ -63,6 +72,18 @@ TECHNICAL_FACTORS = {
     "vol_12_1_ann",
     "mdd1yr_12_1_pct",
     "adturn_pct_12_1",
+}
+
+NEUTRAL_TECHNICAL_FACTORS = {
+    "rsi_14",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "bb_upper",
+    "bb_middle",
+    "bb_lower",
+    "bb_width_pct",
+    "bb_percent_b",
 }
 
 VALUATION_FACTORS = {
@@ -204,7 +225,7 @@ HIGHER_IS_BETTER = (
     | GROWTH_FACTORS
     | RISK_FACTORS
     | SHAREHOLDER_FACTORS
-    | TECHNICAL_FACTORS
+    | (TECHNICAL_FACTORS - NEUTRAL_TECHNICAL_FACTORS)
     | {
         "eps",
         "bps",
@@ -435,6 +456,10 @@ def infer_factor_group(factor_id: str) -> str:
     factor_type = infer_factor_type(factor_id)
     if factor_id in {"na_5", "na_20", "na_50", "na_150", "na_200"}:
         return "trend"
+    if factor_id in {"rsi_14", "macd", "macd_signal", "macd_hist"}:
+        return "momentum"
+    if factor_id.startswith("bb_"):
+        return "volatility"
     if factor_id in {"vol_12_1_ann", "mdd1yr_12_1_pct"}:
         return "risk"
     if factor_id == "adturn_pct_12_1":
@@ -458,6 +483,7 @@ def infer_factor_unit(factor_id: str) -> str:
         "dividend_yield",
         "payout_ratio",
         "tdpr",
+        "rsi_14",
     }:
         return "percent"
     if factor_id.endswith("_score") or factor_id == "f_score":
@@ -468,6 +494,8 @@ def infer_factor_unit(factor_id: str) -> str:
         return "shares"
     if factor_id in {"inv_days", "ar_days", "ap_days", "ccc"}:
         return "days"
+    if factor_id in {"bb_upper", "bb_middle", "bb_lower", "macd", "macd_signal", "macd_hist"}:
+        return "krw"
     if factor_id.startswith("na_") or factor_id in FUNDAMENTAL_AMOUNT_FACTORS or factor_id in {
         "eps",
         "bps",
