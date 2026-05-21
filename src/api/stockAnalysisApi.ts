@@ -52,14 +52,46 @@ type StockChartResponseDto = {
   recent: RecentStockChartRowDto[];
 };
 
+type IntroductionBusinessArea = {
+  sector_name?: string | null;
+  name?: string | null;
+  schema?: string | null;
+};
+
 type StatementStockIntroductionResponse = {
-  stock: {
-    stock_code: string;
-    security_id: string;
+  stock?: {
+    stock_code?: string | null;
+    security_id?: string | null;
     stock_name?: string | null;
     stock_name_en?: string | null;
     country?: string | null;
     currency?: string | null;
+  };
+  stock_code?: string | null;
+  stock_name?: string | null;
+  market?: string | null;
+  currency?: string | null;
+  market_cap?: number | null;
+  trailing_per?: number | null;
+  dividend_yield?: number | null;
+  week_52_low?: number | null;
+  week_52_high?: number | null;
+  week_52_change_rate?: number | null;
+  company_description?: string | null;
+  gsic_sectors?: Array<string | IntroductionBusinessArea>;
+  sections?: {
+    valuation?: {
+      market_cap?: number | null;
+      trailing_per?: number | null;
+      dividend_yield?: number | null;
+      week_52_low?: number | null;
+      week_52_high?: number | null;
+      week_52_change_rate?: number | null;
+    };
+    company?: {
+      description?: string | null;
+    };
+    business_areas?: Array<string | IntroductionBusinessArea>;
   };
   metrics?: {
     market_cap?: number | null;
@@ -74,11 +106,7 @@ type StatementStockIntroductionResponse = {
   company?: {
     description?: string | null;
   };
-  business_areas?: Array<{
-    sector_name?: string | null;
-    name?: string | null;
-    schema?: string | null;
-  }>;
+  business_areas?: Array<IntroductionBusinessArea>;
   factor_source?: string;
 };
 
@@ -325,15 +353,15 @@ function createStyleScoresFromRows(rows: StockAnalysisPoint[]): StyleScore[] {
   const maSpread = latest?.ma20 ? ((latest.ma5 - latest.ma20) / latest.ma20) * 100 : 0;
 
   return [
-    { label: "성장성", value: Math.max(0, Math.min(100, 55 + monthlyReturn * 2)) },
+    { label: "Growth", value: Math.max(0, Math.min(100, 55 + monthlyReturn * 2)) },
     {
-      label: "수익성",
+      label: "Profitability",
       value: Math.max(0, Math.min(100, 45 + (positiveDays / Math.max(recent.length, 1)) * 55)),
     },
-    { label: "안정성", value: Math.max(0, Math.min(100, 80 - Math.abs(monthlyReturn) * 1.4)) },
-    { label: "저평가", value: Math.max(0, Math.min(100, 58 - Math.max(maSpread, -20))) },
-    { label: "주주환원", value: 62 },
-    { label: "모멘텀", value: Math.max(0, Math.min(100, 50 + maSpread * 4 + volumeMomentum * 4)) },
+    { label: "Stability", value: Math.max(0, Math.min(100, 80 - Math.abs(monthlyReturn) * 1.4)) },
+    { label: "Valuation", value: Math.max(0, Math.min(100, 58 - Math.max(maSpread, -20))) },
+    { label: "Shareholder Return", value: 62 },
+    { label: "Momentum", value: Math.max(0, Math.min(100, 50 + maSpread * 4 + volumeMomentum * 4)) },
   ].map((score) => ({ ...score, value: Math.round(score.value) }));
 }
 
@@ -352,16 +380,32 @@ async function fetchStockIntroduction(stockCode: string): Promise<StatementStock
 }
 
 function getIntroductionStockCode(introduction: StatementStockIntroductionResponse | null) {
-  return introduction?.stock.stock_code;
+  return introduction?.stock?.stock_code ?? introduction?.stock_code ?? undefined;
 }
 
 function getIntroductionStockName(introduction: StatementStockIntroductionResponse | null) {
-  return introduction?.stock.stock_name;
+  return introduction?.stock?.stock_name ?? introduction?.stock_name ?? undefined;
 }
 
 function getIntroductionMarket(introduction: StatementStockIntroductionResponse | null): "KR" | "US" | undefined {
-  const market = introduction?.stock.country;
+  const market = introduction?.stock?.country ?? introduction?.market;
   return market === "US" ? "US" : market === "KR" ? "KR" : undefined;
+}
+
+function firstNumber(...values: Array<number | null | undefined>) {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function sectorLabel(sector: string | IntroductionBusinessArea) {
+  if (typeof sector === "string") {
+    return sector;
+  }
+  return sector.sector_name ?? sector.name ?? "";
 }
 
 function overviewFromIntroduction(
@@ -369,19 +413,36 @@ function overviewFromIntroduction(
   chart: StockAnalysisPoint[],
 ): StockOverview {
   const week52Range = calculateWeek52Range(chart);
-  const sectors = introduction?.business_areas ?? [];
+  const valuation = introduction?.sections?.valuation;
+  const sectors = [
+    ...(introduction?.business_areas ?? []),
+    ...(introduction?.gsic_sectors ?? []),
+    ...(introduction?.sections?.business_areas ?? []),
+  ];
 
   return {
-    marketCap: introduction?.metrics?.market_cap ?? null,
-    per: introduction?.metrics?.trailing_per ?? null,
-    dividendYield: introduction?.metrics?.dividend_yield ?? null,
-    week52Low: introduction?.metrics?.fifty_two_week_low ?? week52Range.week52Low,
-    week52High: introduction?.metrics?.fifty_two_week_high ?? week52Range.week52High,
-    week52ChangeRate: introduction?.metrics?.fifty_two_week_range_pct ?? week52Range.week52ChangeRate,
-    companyDescription: introduction?.company?.description ?? "",
-    gicsIndustries: sectors
-      .map((sector) => sector.sector_name ?? sector.name ?? "")
-      .filter((name) => name.trim().length > 0),
+    marketCap: firstNumber(introduction?.metrics?.market_cap, introduction?.market_cap, valuation?.market_cap),
+    per: firstNumber(introduction?.metrics?.trailing_per, introduction?.trailing_per, valuation?.trailing_per),
+    dividendYield: firstNumber(
+      introduction?.metrics?.dividend_yield,
+      introduction?.dividend_yield,
+      valuation?.dividend_yield,
+    ),
+    week52Low:
+      firstNumber(introduction?.metrics?.fifty_two_week_low, introduction?.week_52_low, valuation?.week_52_low) ??
+      week52Range.week52Low,
+    week52High:
+      firstNumber(introduction?.metrics?.fifty_two_week_high, introduction?.week_52_high, valuation?.week_52_high) ??
+      week52Range.week52High,
+    week52ChangeRate:
+      firstNumber(
+        introduction?.metrics?.fifty_two_week_range_pct,
+        introduction?.week_52_change_rate,
+        valuation?.week_52_change_rate,
+      ) ?? week52Range.week52ChangeRate,
+    companyDescription:
+      introduction?.company?.description ?? introduction?.company_description ?? introduction?.sections?.company?.description ?? "",
+    gicsIndustries: sectors.map(sectorLabel).filter((name) => name.trim().length > 0),
   };
 }
 

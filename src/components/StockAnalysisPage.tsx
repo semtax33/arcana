@@ -382,7 +382,7 @@ function StockOverviewPanel({
         </div>
         <div className="overview-price-block">
           <strong>{summary ? formatPrice(summary.latestPrice) : "-"}</strong>
-          <span>52주: {week52.range}</span>
+          <span>52주 {week52.range}</span>
         </div>
         <div className="overview-metric-grid">
           {metricCards.map((metric) => (
@@ -491,7 +491,7 @@ export function StockAnalysisPage({ initialStockCode = "236200" }: StockAnalysis
           <Search size={15} />
           <input
             aria-label="stock_search"
-            placeholder="종목 검색..."
+            placeholder="종목 검색.."
             type="search"
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
@@ -573,7 +573,7 @@ export function StockAnalysisPage({ initialStockCode = "236200" }: StockAnalysis
                     <button className="selected" type="button">
                       기본 차트
                     </button>
-                    <button type="button">수급</button>
+                    <button type="button">새로고침</button>
                   </div>
 
                   <div className="range-tabs" aria-label="차트 기간">
