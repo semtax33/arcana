@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -108,3 +108,93 @@ class FactorScreenResponseDto(BaseModel):
     fixed_columns: list[FactorScreenColumnDto]
     factor_columns: list[FactorScreenColumnDto]
     rows: list[ScreenedStockRowDto]
+
+
+ChartRange = Literal["1M", "3M", "6M", "1Y", "5Y", "MAX"]
+
+
+class StockChartPointDto(BaseModel):
+    time: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    ma5: float | None = None
+    ma20: float | None = None
+    ma50: float | None = None
+    ma150: float | None = None
+    ma200: float | None = None
+
+
+class RecentStockChartRowDto(BaseModel):
+    date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    monthly_return: float | None = None
+    continuity: str | None = None
+    volume_signal: str | None = None
+    rsi: str | float | None = None
+    bollinger_band: str | float | dict[str, Any] | None = None
+    trend: str | float | None = None
+    macd: str | float | dict[str, Any] | None = None
+
+
+class StockChartMetadataDto(BaseModel):
+    stock_code: str
+    security_id: str
+    stock_name: str | None = None
+    country: str | None = "KR"
+    currency: str | None = "KRW"
+
+
+class StockChartResponseDto(BaseModel):
+    stock: StockChartMetadataDto
+    range: ChartRange
+    from_date: date | None = None
+    to_date: date
+    chart: list[StockChartPointDto]
+    recent: list[RecentStockChartRowDto]
+    factor_source: str = "fact_daily_factors"
+    factor_ids: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class StockIntroductionMetadataDto(BaseModel):
+    stock_code: str
+    security_id: str
+    stock_name: str | None = None
+    stock_name_en: str | None = None
+    country: str | None = "KR"
+    currency: str | None = "KRW"
+
+
+class StockIntroductionMetricsDto(BaseModel):
+    market_cap: float | None = None
+    trailing_per: float | None = None
+    dividend_yield: float | None = None
+    fifty_two_week_range_pct: float | None = None
+    fifty_two_week_high: float | None = None
+    fifty_two_week_low: float | None = None
+    latest_close: float | None = None
+    latest_trade_date: date | None = None
+
+
+class CompanyIntroductionDto(BaseModel):
+    description: str = ""
+
+
+class BusinessAreaBadgeDto(BaseModel):
+    sector_code: str
+    sector_name: str
+    schema: str = "GICS"
+
+
+class StockIntroductionResponseDto(BaseModel):
+    stock: StockIntroductionMetadataDto
+    metrics: StockIntroductionMetricsDto
+    company: CompanyIntroductionDto
+    business_areas: list[BusinessAreaBadgeDto] = Field(default_factory=list)
+    factor_source: str = "fact_daily_factor"

@@ -7,9 +7,9 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from dividend_normalizer import (
-    calculate_payout_ratio_with_fallback,
-    calculate_total_dividend_amount,
-    calculate_total_dividend_per_share_with_fallback,
+    calculate_silver_payout_ratio_with_fallback,
+    calculate_silver_total_dividend_amount,
+    calculate_silver_total_dividend_per_share_with_fallback,
 )
 from statement_periodizer import quarterly_financial_frame, ttm_financial_frame
 
@@ -573,15 +573,15 @@ def add_dividend_factors(daily_df, stock_code):
     df = daily_df.copy()
     years = sorted(df["trade_date"].dt.year.unique())
     dividend_by_year = {
-        year: calculate_total_dividend_per_share_with_fallback(stock_code, year)
+        year: calculate_silver_total_dividend_per_share_with_fallback(stock_code, year)
         for year in years
     }
     payout_by_year = {
-        year: calculate_payout_ratio_with_fallback(stock_code, year)
+        year: calculate_silver_payout_ratio_with_fallback(stock_code, year)
         for year in years
     }
     total_dividend_amount_by_year = {
-        year: calculate_total_dividend_amount(stock_code, year)
+        year: calculate_silver_total_dividend_amount(stock_code, year)
         for year in years
     }
 

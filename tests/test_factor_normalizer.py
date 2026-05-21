@@ -114,15 +114,15 @@ class FactorNormalizerTest(unittest.TestCase):
 
         with (
             patch(
-                "engine.factor_normalizer.calculate_total_dividend_per_share_with_fallback",
+                "engine.factor_normalizer.calculate_silver_total_dividend_per_share_with_fallback",
                 return_value=1_000,
             ),
             patch(
-                "engine.factor_normalizer.calculate_payout_ratio_with_fallback",
+                "engine.factor_normalizer.calculate_silver_payout_ratio_with_fallback",
                 return_value=0.25,
             ),
             patch(
-                "engine.factor_normalizer.calculate_total_dividend_amount",
+                "engine.factor_normalizer.calculate_silver_total_dividend_amount",
                 return_value=100_000,
             ),
         ):
