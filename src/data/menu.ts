@@ -30,8 +30,8 @@ export const screenerMenus: MenuItem[] = [
     group: "퀀트",
   },
   {
-    id: "screen-score",
-    label: "스크린 스코어",
+    id: "style-score",
+    label: "스타일 스코어",
     icon: Star,
     group: "퀀트",
   },
@@ -64,8 +64,8 @@ export const contentCopy: Record<
     eyebrow: "기업 단위 리서치",
     summary: "재무, 밸류에이션, 가격 흐름을 종목별로 정리합니다.",
   },
-  "screen-score": {
-    title: "스크린 스코어",
+  "style-score": {
+    title: "스타일 스코어",
     eyebrow: "팩터 점수 비교",
     summary: "각 종목의 핵심 팩터 점수를 한눈에 비교합니다.",
   },

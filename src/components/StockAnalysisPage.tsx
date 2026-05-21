@@ -24,6 +24,7 @@ import {
   type Time,
 } from "lightweight-charts";
 import { fetchStockAnalysis } from "../api/stockAnalysisApi";
+import { FinancialStatementsPage } from "./FinancialStatementsPage";
 import type {
   StockAnalysisPoint,
   StockAnalysisResponse,
@@ -587,6 +588,7 @@ export function StockAnalysisPage({
               >
                 {tab === "차트" && <TrendingUp size={15} />}
                 {tab === "개요" && <FileText size={15} />}
+                {tab === "재무" && <BarChart3 size={15} />}
                 {tab === "스타일 스코어" && <Star size={15} />}
                 <span>{tab}</span>
               </button>
@@ -605,7 +607,9 @@ export function StockAnalysisPage({
         <div className="stock-analysis-scroll">
           {errorMessage && <p className="stock-error">{errorMessage}</p>}
 
-          {activeTab === "개요" ? (
+          {activeTab === "재무" ? (
+            <FinancialStatementsPage stockCode={stockCode} />
+          ) : activeTab === "개요" ? (
             <StockOverviewPanel
               data={data}
               isLoading={isLoading}
