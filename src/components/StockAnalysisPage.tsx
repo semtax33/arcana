@@ -34,7 +34,9 @@ import type {
 } from "../types/stockAnalysis";
 
 const numberFormatter = new Intl.NumberFormat("ko-KR");
-const compactFormatter = new Intl.NumberFormat("ko-KR", { notation: "compact" });
+const compactFormatter = new Intl.NumberFormat("ko-KR", {
+  notation: "compact",
+});
 
 const historyStocks = [
   { stockCode: "236200", name: "슈프리마" },
@@ -56,14 +58,18 @@ const topTabs = [
   "투자자",
   "피어그룹",
   "이벤트",
-  "구독 평가",
+  "구루 평가",
 ] as const;
 
 type StockTopTab = (typeof topTabs)[number];
 
 const ranges: StockChartRange[] = ["1M", "3M", "6M", "1Y", "2Y", "5Y", "MAX"];
 
-const chartModes: Array<{ id: StockChartMode; label: string; icon: LucideIcon }> = [
+const chartModes: Array<{
+  id: StockChartMode;
+  label: string;
+  icon: LucideIcon;
+}> = [
   { id: "line", label: "라인", icon: LineChart },
   { id: "area", label: "영역", icon: Activity },
   { id: "candle", label: "캔들", icon: BarChart3 },
@@ -91,7 +97,10 @@ function formatNullableNumber(value: number | null | undefined, digits = 2) {
   return numberFormatter.format(Number(value.toFixed(digits)));
 }
 
-function formatMarketCap(value: number | null | undefined, market: "KR" | "US" = "KR") {
+function formatMarketCap(
+  value: number | null | undefined,
+  market: "KR" | "US" = "KR",
+) {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "-";
   }
@@ -152,7 +161,8 @@ function StockPriceChart({ data, mode, name }: ChartProps) {
       layout: {
         background: { type: ColorType.Solid, color: "#111b2a" },
         textColor: "#93a4b8",
-        fontFamily: "Inter, Pretendard, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+        fontFamily:
+          "Inter, Pretendard, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
       },
       grid: {
         vertLines: { color: "#223044" },
@@ -219,7 +229,9 @@ function StockPriceChart({ data, mode, name }: ChartProps) {
       lastValueVisible: false,
       title: "MA5",
     });
-    ma5Series.setData(data.map((point) => ({ time: point.date as Time, value: point.ma5 })));
+    ma5Series.setData(
+      data.map((point) => ({ time: point.date as Time, value: point.ma5 })),
+    );
 
     const ma20Series = chart.addSeries(LineSeries, {
       color: "#f5c84c",
@@ -228,7 +240,9 @@ function StockPriceChart({ data, mode, name }: ChartProps) {
       lastValueVisible: false,
       title: "MA20",
     });
-    ma20Series.setData(data.map((point) => ({ time: point.date as Time, value: point.ma20 })));
+    ma20Series.setData(
+      data.map((point) => ({ time: point.date as Time, value: point.ma20 })),
+    );
 
     const volumeSeries = chart.addSeries(HistogramSeries, {
       priceScaleId: "",
@@ -240,7 +254,10 @@ function StockPriceChart({ data, mode, name }: ChartProps) {
       data.map((point) => ({
         time: point.date as Time,
         value: point.volume,
-        color: point.close >= point.open ? "rgba(25, 198, 135, 0.48)" : "rgba(239, 93, 98, 0.48)",
+        color:
+          point.close >= point.open
+            ? "rgba(25, 198, 135, 0.48)"
+            : "rgba(239, 93, 98, 0.48)",
       })),
     );
 
@@ -286,22 +303,38 @@ function StyleRadar({ scores }: { scores: StyleScore[] }) {
       label: score.label,
     };
   });
-  const polygon = points.map((point) => `${point.valueX},${point.valueY}`).join(" ");
+  const polygon = points
+    .map((point) => `${point.valueX},${point.valueY}`)
+    .join(" ");
 
   return (
-    <svg className="style-radar" viewBox="0 0 184 184" role="img" aria-label="스타일 스코어">
+    <svg
+      className="style-radar"
+      viewBox="0 0 184 184"
+      role="img"
+      aria-label="스타일 스코어"
+    >
       {[0.35, 0.65, 1].map((scale) => (
         <polygon
           className="radar-grid"
           key={scale}
           points={points
-            .map((point) => `${center + (point.axisX - center) * scale},${center + (point.axisY - center) * scale}`)
+            .map(
+              (point) =>
+                `${center + (point.axisX - center) * scale},${center + (point.axisY - center) * scale}`,
+            )
             .join(" ")}
         />
       ))}
       {points.map((point) => (
         <g key={point.label}>
-          <line className="radar-axis" x1={center} x2={point.axisX} y1={center} y2={point.axisY} />
+          <line
+            className="radar-axis"
+            x1={center}
+            x2={point.axisX}
+            y1={center}
+            y2={point.axisY}
+          />
           <text className="radar-label" x={point.labelX} y={point.labelY}>
             {point.label}
           </text>
@@ -355,7 +388,8 @@ function StockOverviewPanel({
     {
       label: "배당수익률",
       value:
-        overview?.dividendYield === null || overview?.dividendYield === undefined
+        overview?.dividendYield === null ||
+        overview?.dividendYield === undefined
           ? "-"
           : `${formatNullableNumber(overview.dividendYield)}%`,
       detail: "시가배당률",
@@ -376,7 +410,8 @@ function StockOverviewPanel({
       <section className="overview-hero-panel">
         <div className="overview-title-block">
           <h1>
-            {summary?.name ?? "종목"} <span>({summary?.stockCode ?? stockCode})</span>
+            {summary?.name ?? "종목"}{" "}
+            <span>({summary?.stockCode ?? stockCode})</span>
           </h1>
           <p>{summary?.industryLabel ?? ""}</p>
         </div>
@@ -400,7 +435,9 @@ function StockOverviewPanel({
           <Building2 size={18} />
           <h2>회사 소개</h2>
         </div>
-        <p className="company-description">{overview?.companyDescription ?? ""}</p>
+        <p className="company-description">
+          {overview?.companyDescription ?? ""}
+        </p>
       </section>
 
       <section className="overview-section">
@@ -420,7 +457,9 @@ function StockOverviewPanel({
   );
 }
 
-export function StockAnalysisPage({ initialStockCode = "236200" }: StockAnalysisPageProps) {
+export function StockAnalysisPage({
+  initialStockCode = "236200",
+}: StockAnalysisPageProps) {
   const [stockCode, setStockCode] = useState(initialStockCode);
   const [inputValue, setInputValue] = useState(initialStockCode);
   const [activeTab, setActiveTab] = useState<StockTopTab>("차트");
@@ -463,7 +502,10 @@ export function StockAnalysisPage({ initialStockCode = "236200" }: StockAnalysis
     () =>
       historyStocks.some((stock) => stock.stockCode === stockCode)
         ? historyStocks
-        : [{ stockCode, name: latest?.name ?? `${stockCode} 종목` }, ...historyStocks],
+        : [
+            { stockCode, name: latest?.name ?? `${stockCode} 종목` },
+            ...historyStocks,
+          ],
     [latest?.name, stockCode],
   );
 
@@ -564,7 +606,11 @@ export function StockAnalysisPage({ initialStockCode = "236200" }: StockAnalysis
           {errorMessage && <p className="stock-error">{errorMessage}</p>}
 
           {activeTab === "개요" ? (
-            <StockOverviewPanel data={data} isLoading={isLoading} stockCode={stockCode} />
+            <StockOverviewPanel
+              data={data}
+              isLoading={isLoading}
+              stockCode={stockCode}
+            />
           ) : (
             <>
               <section className="chart-toolbar">
@@ -611,9 +657,11 @@ export function StockAnalysisPage({ initialStockCode = "236200" }: StockAnalysis
                 </div>
 
                 <div className="indicator-row">
-                  {["MA5", "MA20", "EMA12", "EMA26", "매수"].map((indicator) => (
-                    <span key={indicator}>{indicator}</span>
-                  ))}
+                  {["MA5", "MA20", "EMA12", "EMA26", "매수"].map(
+                    (indicator) => (
+                      <span key={indicator}>{indicator}</span>
+                    ),
+                  )}
                 </div>
               </section>
 
@@ -631,16 +679,32 @@ export function StockAnalysisPage({ initialStockCode = "236200" }: StockAnalysis
                 <article className="price-chart-panel">
                   <div className="price-summary">
                     <span>{latest?.latestDate ?? "-"}</span>
-                    <strong>{latest ? formatPrice(latest.latestPrice) : "-"}</strong>
-                    <em className={(latest?.priceChange ?? 0) >= 0 ? "positive" : "negative"}>
-                      {latest ? `${formatSigned(latest.priceChange)} (${formatSigned(latest.priceChangeRate)}%)` : "-"}
+                    <strong>
+                      {latest ? formatPrice(latest.latestPrice) : "-"}
+                    </strong>
+                    <em
+                      className={
+                        (latest?.priceChange ?? 0) >= 0
+                          ? "positive"
+                          : "negative"
+                      }
+                    >
+                      {latest
+                        ? `${formatSigned(latest.priceChange)} (${formatSigned(latest.priceChangeRate)}%)`
+                        : "-"}
                     </em>
                   </div>
 
                   {isLoading || !data ? (
-                    <div className="chart-loading">차트 데이터를 불러오는 중...</div>
+                    <div className="chart-loading">
+                      차트 데이터를 불러오는 중...
+                    </div>
                   ) : (
-                    <StockPriceChart data={data.chart} mode={chartMode} name={data.summary.name} />
+                    <StockPriceChart
+                      data={data.chart}
+                      mode={chartMode}
+                      name={data.summary.name}
+                    />
                   )}
                 </article>
               </section>
@@ -679,15 +743,29 @@ export function StockAnalysisPage({ initialStockCode = "236200" }: StockAnalysis
                           <td>{formatPrice(row.low)}</td>
                           <td>{formatPrice(row.close)}</td>
                           <td>{compactFormatter.format(row.volume)}</td>
-                          <td className={row.weeklyReturn >= 0 ? "positive" : "negative"}>
+                          <td
+                            className={
+                              row.weeklyReturn >= 0 ? "positive" : "negative"
+                            }
+                          >
                             {formatSigned(row.weeklyReturn)}%
                           </td>
-                          <td className={getStatusClass(row.momentum)}>{row.momentum}</td>
+                          <td className={getStatusClass(row.momentum)}>
+                            {row.momentum}
+                          </td>
                           <td className={getStatusClass(row.rsi)}>{row.rsi}</td>
-                          <td className={getStatusClass(row.bollinger)}>{row.bollinger}</td>
-                          <td className={getStatusClass(row.trend)}>{row.trend}</td>
-                          <td className={getStatusClass(row.macd)}>{row.macd}</td>
-                          <td className={getStatusClass(row.volumeSignal)}>{row.volumeSignal}</td>
+                          <td className={getStatusClass(row.bollinger)}>
+                            {row.bollinger}
+                          </td>
+                          <td className={getStatusClass(row.trend)}>
+                            {row.trend}
+                          </td>
+                          <td className={getStatusClass(row.macd)}>
+                            {row.macd}
+                          </td>
+                          <td className={getStatusClass(row.volumeSignal)}>
+                            {row.volumeSignal}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
