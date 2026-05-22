@@ -11,7 +11,12 @@ from dividend_normalizer import (
     calculate_silver_total_dividend_amount,
     calculate_silver_total_dividend_per_share_with_fallback,
 )
-from statement_periodizer import quarterly_financial_frame, ttm_financial_frame
+from statement_periodizer import (
+    REPORT_METADATA_PATH,
+    attach_report_metadata,
+    quarterly_financial_frame,
+    ttm_financial_frame,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -126,6 +131,7 @@ def sanitize_temporal_amount_outliers(df, max_neighbor_multiple=100):
         "fiscal_year",
         "fiscal_month",
         "financial_period",
+        "report_date",
     }
     value_columns = [
         column
@@ -295,7 +301,7 @@ def extract_fallback_values(df):
     }
 
 
-def read_annual_financials(stock_code):
+def read_annual_financials(stock_code, report_metadata_path=REPORT_METADATA_PATH):
     rows = []
 
     for path in annual_financial_files(stock_code):
@@ -326,25 +332,28 @@ def read_annual_financials(stock_code):
         return pd.DataFrame()
 
     financial_df = pd.DataFrame(rows).sort_values("financial_period").reset_index(drop=True)
+    financial_df = attach_report_metadata(financial_df, report_metadata_path)
     return add_annual_financial_factors(financial_df, periods_per_year=1)
 
 
-def read_ttm_financials(stock_code, cumulative_statement_types=None):
+def read_ttm_financials(stock_code, cumulative_statement_types=None, report_metadata_path=REPORT_METADATA_PATH):
     financial_df = ttm_financial_frame(
         stock_code,
         FINANCIAL_DIR,
         cumulative_statement_types=cumulative_statement_types,
+        report_metadata_path=report_metadata_path,
     )
     if financial_df.empty:
         return financial_df
     return add_annual_financial_factors(financial_df, periods_per_year=4)
 
 
-def read_quarterly_financials(stock_code, cumulative_statement_types=None):
+def read_quarterly_financials(stock_code, cumulative_statement_types=None, report_metadata_path=REPORT_METADATA_PATH):
     financial_df = quarterly_financial_frame(
         stock_code,
         FINANCIAL_DIR,
         cumulative_statement_types=cumulative_statement_types,
+        report_metadata_path=report_metadata_path,
     )
     if financial_df.empty:
         return financial_df
@@ -610,12 +619,17 @@ def max_drawdown(returns):
 def add_price_momentum_factors(daily_df):
     df = daily_df.sort_values("trade_date").copy()
     close = pd.to_numeric(df["close"], errors="coerce")
+    high = numeric_column(df, "high").fillna(close)
+    low = numeric_column(df, "low").fillna(close)
+    volume = numeric_column(df, "volume")
     ret = close.pct_change()
 
     for window in [5, 20, 50, 150, 200]:
         df[f"na_{window}"] = close.rolling(window, min_periods=1).mean()
+    for window in [50, 120, 150, 200]:
+        df[f"ma_{window}"] = close.rolling(window, min_periods=1).mean()
 
-    add_technical_indicator_factors(df, close)
+    add_technical_indicator_factors(df, close, high, low, volume)
 
     df["tr_12_1"] = close.shift(21) / close.shift(252) - 1
     df["tr_6_1"] = close.shift(21) / close.shift(126) - 1
@@ -627,14 +641,19 @@ def add_price_momentum_factors(daily_df):
     df["mdd1yr_12_1_pct"] = (
         ret.shift(21).rolling(231, min_periods=60).apply(max_drawdown, raw=False) * 100
     )
-    df["adturn_pct_12_1"] = (
-        (df["volume"] / df["shares"] * 100).shift(21).rolling(231, min_periods=60).mean()
-    )
+    df["adturn_pct_12_1"] = (volume / df["shares"] * 100).shift(21).rolling(231, min_periods=60).mean()
 
     return df
 
 
-def add_technical_indicator_factors(df, close):
+def add_technical_indicator_factors(df, close, high=None, low=None, volume=None):
+    close = pd.to_numeric(close, errors="coerce")
+    high = pd.to_numeric(high if high is not None else df.get("high", close), errors="coerce").fillna(close)
+    low = pd.to_numeric(low if low is not None else df.get("low", close), errors="coerce").fillna(close)
+    if volume is None:
+        volume = df["volume"] if "volume" in df.columns else pd.Series(0, index=df.index, dtype="float64")
+    volume = pd.to_numeric(volume, errors="coerce")
+
     df["rsi_14"] = calculate_rsi(close, window=14)
 
     ema_12 = close.ewm(span=12, adjust=False, min_periods=12).mean()
@@ -651,6 +670,11 @@ def add_technical_indicator_factors(df, close):
     df["bb_width_pct"] = bb_band_range / df["bb_middle"] * 100
     df["bb_percent_b"] = (close - df["bb_lower"]) / bb_band_range
 
+    df["ati"] = calculate_ati(high, low, close, volume)
+    df["williams_r_14"] = calculate_williams_r(high, low, close, window=14)
+    df["cmf_20"] = calculate_cmf(high, low, close, volume, window=20)
+    df["mfi_14"] = calculate_mfi(high, low, close, volume, window=14)
+
     return df
 
 
@@ -666,6 +690,53 @@ def calculate_rsi(close, window=14):
     rsi = rsi.where(avg_loss != 0, 100)
     rsi = rsi.where(~((avg_gain == 0) & (avg_loss == 0)), 50)
     return rsi
+
+
+def calculate_money_flow_multiplier(high, low, close):
+    price_range = high - low
+    multiplier = ((close - low) - (high - close)) / price_range.replace(0, math.nan)
+    return multiplier.fillna(0)
+
+
+def calculate_accumulation_distribution_line(high, low, close, volume):
+    money_flow_volume = calculate_money_flow_multiplier(high, low, close) * volume.fillna(0)
+    return money_flow_volume.cumsum()
+
+
+def calculate_ati(high, low, close, volume, fast_span=3, slow_span=10):
+    ad_line = calculate_accumulation_distribution_line(high, low, close, volume)
+    fast_ema = ad_line.ewm(span=fast_span, adjust=False, min_periods=fast_span).mean()
+    slow_ema = ad_line.ewm(span=slow_span, adjust=False, min_periods=slow_span).mean()
+    return fast_ema - slow_ema
+
+
+def calculate_williams_r(high, low, close, window=14):
+    highest_high = high.rolling(window, min_periods=window).max()
+    lowest_low = low.rolling(window, min_periods=window).min()
+    price_range = (highest_high - lowest_low).replace(0, math.nan)
+    return -100 * (highest_high - close) / price_range
+
+
+def calculate_cmf(high, low, close, volume, window=20):
+    money_flow_volume = calculate_money_flow_multiplier(high, low, close) * volume.fillna(0)
+    volume_sum = volume.rolling(window, min_periods=window).sum().replace(0, math.nan)
+    return money_flow_volume.rolling(window, min_periods=window).sum() / volume_sum
+
+
+def calculate_mfi(high, low, close, volume, window=14):
+    typical_price = (high + low + close) / 3
+    raw_money_flow = typical_price * volume
+    typical_delta = typical_price.diff()
+    positive_flow = raw_money_flow.where(typical_delta > 0, 0)
+    negative_flow = raw_money_flow.where(typical_delta < 0, 0)
+    positive_sum = positive_flow.rolling(window, min_periods=window).sum()
+    negative_sum = negative_flow.rolling(window, min_periods=window).sum()
+
+    money_flow_ratio = positive_sum / negative_sum.replace(0, math.nan)
+    mfi = 100 - (100 / (1 + money_flow_ratio))
+    mfi = mfi.where(negative_sum != 0, 100)
+    mfi = mfi.where(~((positive_sum == 0) & (negative_sum == 0)), 50)
+    return mfi
 
 
 def add_daily_market_valuation_factors(daily_df):
@@ -757,6 +828,7 @@ def create_stock_factor_dataframe(
     shares_path=SHARES_PATH,
     financial_basis="annual",
     cumulative_statement_types=None,
+    report_metadata_path=REPORT_METADATA_PATH,
 ):
     stock_code = normalize_stock_code(stock_code)
     output_start_date = pd.Timestamp(start_date) if start_date is not None else None
@@ -767,14 +839,16 @@ def create_stock_factor_dataframe(
         financial_df = read_quarterly_financials(
             stock_code,
             cumulative_statement_types=cumulative_statement_types,
+            report_metadata_path=report_metadata_path,
         )
     elif financial_basis == "ttm":
         financial_df = read_ttm_financials(
             stock_code,
             cumulative_statement_types=cumulative_statement_types,
+            report_metadata_path=report_metadata_path,
         )
     elif financial_basis == "annual":
-        financial_df = read_annual_financials(stock_code)
+        financial_df = read_annual_financials(stock_code, report_metadata_path=report_metadata_path)
     else:
         raise ValueError("financial_basis must be 'annual', 'ttm', or 'quarterly'")
 
@@ -800,16 +874,23 @@ def create_stock_factor_dataframe(
         daily_df["market_cap"] = math.nan
 
     if not financial_df.empty:
+        financial_df = financial_df.copy()
+        financial_df["financial_period"] = pd.to_datetime(financial_df["financial_period"], errors="coerce")
+        if "report_date" not in financial_df.columns:
+            financial_df["report_date"] = financial_df["financial_period"]
+        financial_df["report_date"] = pd.to_datetime(financial_df["report_date"], errors="coerce")
+        financial_df["report_date"] = financial_df["report_date"].fillna(financial_df["financial_period"])
         daily_df = pd.merge_asof(
             daily_df.sort_values("trade_date"),
-            financial_df.sort_values("financial_period"),
+            financial_df.sort_values("report_date"),
             left_on="trade_date",
-            right_on="financial_period",
+            right_on="report_date",
             direction="backward",
             suffixes=("", "_fin"),
         )
     else:
         daily_df["financial_period"] = pd.NaT
+        daily_df["report_date"] = pd.NaT
 
     daily_df = daily_df.drop(columns=["security_id_fin", "stock_code_fin"], errors="ignore")
     daily_df["stock_code"] = stock_code
@@ -917,6 +998,10 @@ def preferred_factor_columns():
         "na_50",
         "na_150",
         "na_200",
+        "ma_50",
+        "ma_120",
+        "ma_150",
+        "ma_200",
         "rsi_14",
         "macd",
         "macd_signal",
@@ -926,6 +1011,10 @@ def preferred_factor_columns():
         "bb_lower",
         "bb_width_pct",
         "bb_percent_b",
+        "ati",
+        "williams_r_14",
+        "cmf_20",
+        "mfi_14",
         "tr_12_1",
         "tr_6_1",
         "tr_3_1",

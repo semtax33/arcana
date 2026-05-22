@@ -8,8 +8,9 @@ from typing import Any
 import pandas as pd
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FINANCIAL_DIR = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "normalized"
+REPORT_METADATA_PATH = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "report_metadata.csv"
 
 FLOW_STATEMENT_TYPES = {"IS", "CIS", "CF"}
 BALANCE_STATEMENT_TYPES = {"BS"}
@@ -38,6 +39,68 @@ def parse_period_from_filename(path: str | Path) -> dict[str, int | str] | None:
 
 def period_end_date(year: int, month: int) -> pd.Timestamp:
     return pd.Timestamp(year=int(year), month=int(month), day=1) + pd.offsets.MonthEnd(0)
+
+
+def load_report_metadata(path: str | Path = REPORT_METADATA_PATH, source_type: str = "statement") -> pd.DataFrame:
+    path = Path(path)
+    if not path.exists():
+        return pd.DataFrame()
+
+    df = pd.read_csv(path, dtype={"stock_code": str, "rcept_no": str, "source_type": str})
+    if df.empty:
+        return df
+
+    df["stock_code"] = df["stock_code"].map(normalize_stock_code)
+    df["fiscal_year"] = pd.to_numeric(df.get("fiscal_year"), errors="coerce").astype("Int64")
+    df["fiscal_month"] = pd.to_numeric(df.get("fiscal_month"), errors="coerce").astype("Int64")
+    df["report_date"] = pd.to_datetime(df.get("report_date"), errors="coerce")
+    if "period_end_date" in df.columns:
+        df["period_end_date"] = pd.to_datetime(df["period_end_date"], errors="coerce")
+    if source_type and "source_type" in df.columns:
+        df = df.loc[df.get("source_type", "").astype(str).eq(source_type)].copy()
+
+    return df.dropna(subset=["stock_code", "fiscal_year", "fiscal_month", "report_date"])
+
+
+def attach_report_metadata(
+    snapshot_df: pd.DataFrame,
+    metadata_path: str | Path = REPORT_METADATA_PATH,
+    *,
+    source_type: str = "statement",
+) -> pd.DataFrame:
+    if snapshot_df.empty:
+        return snapshot_df
+
+    df = snapshot_df.copy()
+    df["stock_code"] = df["stock_code"].map(normalize_stock_code)
+    df["financial_period"] = pd.to_datetime(df["financial_period"], errors="coerce")
+    fallback_report_date = df["financial_period"]
+
+    metadata_df = load_report_metadata(metadata_path, source_type=source_type)
+    if metadata_df.empty:
+        df["report_date"] = pd.to_datetime(df.get("report_date", fallback_report_date), errors="coerce")
+        df["report_date"] = df["report_date"].fillna(fallback_report_date)
+        return df
+
+    keep_columns = [
+        column
+        for column in ["stock_code", "fiscal_year", "fiscal_month", "report_date", "rcept_no", "report_name", "source_url"]
+        if column in metadata_df.columns
+    ]
+    metadata_df = (
+        metadata_df[keep_columns]
+        .sort_values(["report_date", "rcept_no"], kind="stable")
+        .drop_duplicates(["stock_code", "fiscal_year", "fiscal_month"], keep="last")
+    )
+    df = df.drop(columns=["report_date", "rcept_no", "report_name", "source_url"], errors="ignore")
+
+    df = df.merge(
+        metadata_df,
+        on=["stock_code", "fiscal_year", "fiscal_month"],
+        how="left",
+    )
+    df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce").fillna(fallback_report_date)
+    return df
 
 
 def financial_files(stock_code: Any, financial_dir: str | Path = FINANCIAL_DIR) -> list[Path]:
@@ -121,6 +184,7 @@ def extract_fallback_values(df: pd.DataFrame) -> dict[str, float]:
 def read_period_snapshots(
     stock_code: Any,
     financial_dir: str | Path = FINANCIAL_DIR,
+    report_metadata_path: str | Path = REPORT_METADATA_PATH,
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
 
@@ -165,7 +229,8 @@ def read_period_snapshots(
     if not rows:
         return pd.DataFrame()
 
-    return pd.DataFrame(rows).sort_values("financial_period").reset_index(drop=True)
+    result = pd.DataFrame(rows).sort_values("financial_period").reset_index(drop=True)
+    return attach_report_metadata(result, report_metadata_path)
 
 
 def infer_account_statement_types(snapshot_df: pd.DataFrame) -> dict[str, str]:
@@ -208,6 +273,10 @@ def add_quarter_and_ttm_amounts(
         "fiscal_year",
         "fiscal_month",
         "financial_period",
+        "report_date",
+        "rcept_no",
+        "report_name",
+        "source_url",
         "_fs_type_by_id",
     }
     value_columns = [
@@ -254,15 +323,18 @@ def ttm_financial_frame(
     stock_code: Any,
     financial_dir: str | Path = FINANCIAL_DIR,
     cumulative_statement_types: set[str] | None = None,
+    report_metadata_path: str | Path = REPORT_METADATA_PATH,
 ) -> pd.DataFrame:
     periodized = add_quarter_and_ttm_amounts(
-        read_period_snapshots(stock_code, financial_dir),
+        read_period_snapshots(stock_code, financial_dir, report_metadata_path),
         cumulative_statement_types=cumulative_statement_types,
     )
     if periodized.empty:
         return periodized
 
     base_columns = ["stock_code", "security_id", "fiscal_year", "fiscal_month", "financial_period"]
+    if "report_date" in periodized.columns:
+        base_columns.append("report_date")
     value_columns = {
         column[:-4]: periodized[column]
         for column in periodized.columns
@@ -279,15 +351,18 @@ def quarterly_financial_frame(
     stock_code: Any,
     financial_dir: str | Path = FINANCIAL_DIR,
     cumulative_statement_types: set[str] | None = None,
+    report_metadata_path: str | Path = REPORT_METADATA_PATH,
 ) -> pd.DataFrame:
     periodized = add_quarter_and_ttm_amounts(
-        read_period_snapshots(stock_code, financial_dir),
+        read_period_snapshots(stock_code, financial_dir, report_metadata_path),
         cumulative_statement_types=cumulative_statement_types,
     )
     if periodized.empty:
         return periodized
 
     base_columns = ["stock_code", "security_id", "fiscal_year", "fiscal_month", "financial_period"]
+    if "report_date" in periodized.columns:
+        base_columns.append("report_date")
     value_columns = {
         column[:-8]: periodized[column]
         for column in periodized.columns

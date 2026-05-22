@@ -54,6 +54,10 @@ TECHNICAL_FACTORS = {
     "na_50",
     "na_150",
     "na_200",
+    "ma_50",
+    "ma_120",
+    "ma_150",
+    "ma_200",
     "rsi_14",
     "macd",
     "macd_signal",
@@ -63,6 +67,10 @@ TECHNICAL_FACTORS = {
     "bb_lower",
     "bb_width_pct",
     "bb_percent_b",
+    "ati",
+    "williams_r_14",
+    "cmf_20",
+    "mfi_14",
     "tr_12_1",
     "tr_6_1",
     "tr_3_1",
@@ -84,6 +92,10 @@ NEUTRAL_TECHNICAL_FACTORS = {
     "bb_lower",
     "bb_width_pct",
     "bb_percent_b",
+    "ati",
+    "williams_r_14",
+    "cmf_20",
+    "mfi_14",
 }
 
 VALUATION_FACTORS = {
@@ -454,10 +466,12 @@ def infer_factor_type(factor_id: str) -> str:
 
 def infer_factor_group(factor_id: str) -> str:
     factor_type = infer_factor_type(factor_id)
-    if factor_id in {"na_5", "na_20", "na_50", "na_150", "na_200"}:
+    if factor_id in {"na_5", "na_20", "na_50", "na_150", "na_200", "ma_50", "ma_120", "ma_150", "ma_200"}:
         return "trend"
-    if factor_id in {"rsi_14", "macd", "macd_signal", "macd_hist"}:
+    if factor_id in {"rsi_14", "macd", "macd_signal", "macd_hist", "williams_r_14", "mfi_14"}:
         return "momentum"
+    if factor_id in {"ati", "cmf_20"}:
+        return "volume"
     if factor_id.startswith("bb_"):
         return "volatility"
     if factor_id in {"vol_12_1_ann", "mdd1yr_12_1_pct"}:
@@ -484,8 +498,12 @@ def infer_factor_unit(factor_id: str) -> str:
         "payout_ratio",
         "tdpr",
         "rsi_14",
+        "williams_r_14",
+        "mfi_14",
     }:
         return "percent"
+    if factor_id == "ati":
+        return "shares"
     if factor_id.endswith("_score") or factor_id == "f_score":
         return "score"
     if factor_id.endswith("_times") or factor_id in {"per", "pbr", "pcr", "psr", "peg"}:
@@ -496,7 +514,7 @@ def infer_factor_unit(factor_id: str) -> str:
         return "days"
     if factor_id in {"bb_upper", "bb_middle", "bb_lower", "macd", "macd_signal", "macd_hist"}:
         return "krw"
-    if factor_id.startswith("na_") or factor_id in FUNDAMENTAL_AMOUNT_FACTORS or factor_id in {
+    if factor_id.startswith(("na_", "ma_")) or factor_id in FUNDAMENTAL_AMOUNT_FACTORS or factor_id in {
         "eps",
         "bps",
         "sps",

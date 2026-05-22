@@ -11,8 +11,24 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlencode
 import json
 
+import pandas as pd
+
 
 RETRY_STATUS = {429, 500, 502, 503, 504}
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+REPORT_METADATA_COLUMNS = [
+    "security_id",
+    "stock_code",
+    "fiscal_year",
+    "fiscal_month",
+    "period_end_date",
+    "report_date",
+    "rcept_no",
+    "report_name",
+    "source_type",
+    "source_url",
+    "updated_at",
+]
 
 
 def request_with_retry(
@@ -82,6 +98,128 @@ def _write_text(content: str, save_dir: str, filename: str) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)  # 폴더 없으면 생성
     out_path.write_text(content, encoding="utf-8")      # HTML은 보통 utf-8로 저장하면 무난
     return out_path
+
+
+def _normalize_stock_code(value: Any) -> str:
+    return str(value).strip().zfill(6)
+
+
+def _security_id_of(stock_code: Any) -> str:
+    return f"SEC_KR_{_normalize_stock_code(stock_code)}"
+
+
+def _period_end_date(year: int, month: int) -> str:
+    return (pd.Timestamp(year=int(year), month=int(month), day=1) + pd.offsets.MonthEnd(0)).date().isoformat()
+
+
+def _extract_rcept_no_from_href(href: str) -> str | None:
+    parsed = urlparse(href)
+    values = parse_qs(parsed.query).get("rcpNo")
+    if values and re.fullmatch(r"\d{14}", values[0]):
+        return values[0]
+
+    match = re.search(r"(?:rcpNo=|['\"])(\d{14})(?:['\"]|&|$)", href)
+    return match.group(1) if match else None
+
+
+def report_date_from_rcept_no(rcept_no: str) -> str:
+    rcept_no = str(rcept_no).strip()
+    if not re.fullmatch(r"\d{14}", rcept_no):
+        raise ValueError(f"invalid rcept_no: {rcept_no}")
+    return f"{rcept_no[:4]}-{rcept_no[4:6]}-{rcept_no[6:8]}"
+
+
+def parse_report_period_from_title(title: str) -> tuple[int, int] | None:
+    match = re.search(r"\((\d{4})[./-]\s*(\d{1,2})\)", str(title))
+    if not match:
+        match = re.search(r"(\d{4})[./-]\s*(\d{1,2})", str(title))
+    if not match:
+        return None
+
+    month = int(match.group(2))
+    if month not in {3, 6, 9, 12}:
+        return None
+    return int(match.group(1)), month
+
+
+def deduplicate_report_metadata(records: pd.DataFrame | list[dict[str, Any]]) -> pd.DataFrame:
+    df = pd.DataFrame(records, columns=REPORT_METADATA_COLUMNS)
+    if df.empty:
+        return pd.DataFrame(columns=REPORT_METADATA_COLUMNS)
+
+    for column in REPORT_METADATA_COLUMNS:
+        if column not in df.columns:
+            df[column] = pd.NA
+
+    df = df[REPORT_METADATA_COLUMNS].copy()
+    df["stock_code"] = df["stock_code"].map(_normalize_stock_code)
+    df["security_id"] = df["stock_code"].map(_security_id_of)
+    df["fiscal_year"] = pd.to_numeric(df["fiscal_year"], errors="coerce").astype("Int64")
+    df["fiscal_month"] = pd.to_numeric(df["fiscal_month"], errors="coerce").astype("Int64")
+    df = df.dropna(subset=["stock_code", "fiscal_year", "fiscal_month", "source_type", "report_date"])
+    if df.empty:
+        return pd.DataFrame(columns=REPORT_METADATA_COLUMNS)
+
+    df["_report_date"] = pd.to_datetime(df["report_date"], errors="coerce")
+    df["_rcept_no"] = pd.to_numeric(df["rcept_no"], errors="coerce")
+    df = (
+        df.sort_values(["_report_date", "_rcept_no"], kind="stable")
+        .drop_duplicates(["stock_code", "fiscal_year", "fiscal_month", "source_type"], keep="last")
+        .drop(columns=["_report_date", "_rcept_no"])
+        .sort_values(["stock_code", "fiscal_year", "fiscal_month", "source_type"])
+        .reset_index(drop=True)
+    )
+    df["fiscal_year"] = df["fiscal_year"].astype(int)
+    df["fiscal_month"] = df["fiscal_month"].astype(int)
+    return df[REPORT_METADATA_COLUMNS]
+
+
+def extract_dart_report_metadata_from_search_html(
+    html: str,
+    stock_code: str,
+    *,
+    source_type: str = "statement",
+    updated_at: datetime | None = None,
+) -> pd.DataFrame:
+    soup = BeautifulSoup(html, "lxml")
+    stock_code = _normalize_stock_code(stock_code)
+    updated_at = updated_at or datetime.now()
+    rows: list[dict[str, Any]] = []
+    seen_hrefs: set[str] = set()
+
+    for anchor in soup.find_all("a", href=True):
+        href = str(anchor.get("href") or "")
+        if not href or href in seen_hrefs or "dsaf001" not in href:
+            continue
+
+        title = _safe_title_from_anchor(anchor)
+        period = parse_report_period_from_title(title)
+        rcept_no = _extract_rcept_no_from_href(href)
+        if period is None or rcept_no is None:
+            continue
+
+        seen_hrefs.add(href)
+        fiscal_year, fiscal_month = period
+        report_date = report_date_from_rcept_no(rcept_no)
+        source_url = urljoin("https://dart.fss.or.kr", href)
+
+        rows.append(
+            {
+                "security_id": _security_id_of(stock_code),
+                "stock_code": stock_code,
+                "fiscal_year": fiscal_year,
+                "fiscal_month": fiscal_month,
+                "period_end_date": _period_end_date(fiscal_year, fiscal_month),
+                "report_date": report_date,
+                "rcept_no": rcept_no,
+                "report_name": title,
+                "source_type": source_type,
+                "source_url": source_url,
+                "updated_at": updated_at,
+            }
+        )
+
+    return deduplicate_report_metadata(pd.DataFrame(rows, columns=REPORT_METADATA_COLUMNS))
 
 
 @dataclass
@@ -565,6 +703,85 @@ def fetch_dart_search(ticker: str, save_dir: str, save_filename: str | None = No
             out_name = f"finance_statement_{safe_title_line}.html"
 
             _write_text(statement_content, save_dir, out_name)
+
+
+def fetch_dart_report_metadata(
+    ticker: str,
+    *,
+    source_type: str = "statement",
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> pd.DataFrame:
+    url = "https://dart.fss.or.kr/dsab001/search.ax"
+
+    headers = {
+        "Accept": "text/html, */*; q=0.01",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Connection": "keep-alive",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "User-Agent": "Mozilla/8.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/137.36",
+    }
+
+    data = [
+        ("currentPage", "1"),
+        ("maxResults", "100"),
+        ("maxLinks", "10"),
+        ("sort", "date"),
+        ("series", "desc"),
+        ("pageGubun", "corp"),
+        ("attachDocNmPopYn", ""),
+        ("textCrpNm", ticker),
+        ("startDate", start_date or (datetime.now() - timedelta(1) * 3650).strftime("%Y%m%d")),
+        ("endDate", end_date or datetime.now().strftime("%Y%m%d")),
+        ("decadeType", ""),
+        ("publicType", "A001"),
+        ("publicType", "A002"),
+        ("publicType", "A003"),
+        ("publicType", "A005"),
+        ("publicType", "A004"),
+    ]
+
+    with requests.Session() as session:
+        resp = request_with_retry(session, "POST", url, headers=headers, data=data, timeout=30)
+        resp.encoding = resp.apparent_encoding
+        return extract_dart_report_metadata_from_search_html(
+            resp.text,
+            ticker,
+            source_type=source_type,
+        )
+
+
+def collect_dart_report_metadata(
+    stock_codes: list[str],
+    download_offset: int = 0,
+    *,
+    source_types: tuple[str, ...] = ("statement", "comment"),
+    output_csv_path: str | Path = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "report_metadata.csv",
+) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+
+    for offset, stock_code in enumerate(sorted(stock_codes)[download_offset:], start=download_offset):
+        print(f"downloading report metadata {stock_code} (download_offset : {offset})....")
+        for source_type in source_types:
+            try:
+                metadata_df = fetch_dart_report_metadata(stock_code, source_type=source_type)
+            except Exception as e:
+                print(f"[WARN] report metadata failed: stock_code={stock_code}, source_type={source_type}, error={repr(e)}")
+                continue
+            if not metadata_df.empty:
+                frames.append(metadata_df)
+        time.sleep(0.01)
+
+    if frames:
+        result = deduplicate_report_metadata(pd.concat(frames, ignore_index=True))
+    else:
+        result = pd.DataFrame(columns=REPORT_METADATA_COLUMNS)
+
+    output_csv_path = Path(output_csv_path)
+    output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    result.to_csv(output_csv_path, index=False, encoding="utf-8-sig")
+    print(f"[SAVED] {output_csv_path} rows={len(result):,}")
+    return result
 
 
 def _ensure_text(html: Union[str, bytes]) -> str:

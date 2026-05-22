@@ -8,6 +8,7 @@ from engine.factor_normalizer import (
     add_daily_market_valuation_factors,
     add_dividend_factors,
     add_price_momentum_factors,
+    create_stock_factor_dataframe,
 )
 
 
@@ -138,6 +139,8 @@ class FactorNormalizerTest(unittest.TestCase):
             {
                 "trade_date": pd.date_range("2025-01-01", periods=len(close), freq="D"),
                 "close": close,
+                "high": [value + 1 for value in close],
+                "low": [value - 2 for value in close],
                 "volume": 1_000,
                 "shares": 1_000_000,
             }
@@ -153,6 +156,8 @@ class FactorNormalizerTest(unittest.TestCase):
             {
                 "trade_date": pd.date_range("2025-01-01", periods=len(close), freq="D"),
                 "close": close,
+                "high": [value + 1 for value in close],
+                "low": [value - 2 for value in close],
                 "volume": 1_000,
                 "shares": 1_000_000,
             }
@@ -170,6 +175,50 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertLess(latest["bb_lower"], latest["bb_middle"])
         self.assertGreater(latest["bb_width_pct"], 0)
         self.assertGreater(latest["bb_percent_b"], 0)
+        self.assertAlmostEqual(latest["ma_50"], pd.Series(close).mean())
+        self.assertAlmostEqual(latest["ma_120"], pd.Series(close).mean())
+        self.assertAlmostEqual(latest["ma_150"], pd.Series(close).mean())
+        self.assertAlmostEqual(latest["ma_200"], pd.Series(close).mean())
+        self.assertGreater(latest["ati"], 0)
+        self.assertLess(latest["williams_r_14"], 0)
+        self.assertGreater(latest["williams_r_14"], -10)
+        self.assertGreater(latest["cmf_20"], 0)
+        self.assertAlmostEqual(latest["mfi_14"], 100.0)
+
+    def test_financials_are_merged_from_report_date_not_period_end(self):
+        price_df = pd.DataFrame(
+            {
+                "security_id": ["SEC_KR_005930"] * 4,
+                "trade_date": pd.to_datetime(["2025-03-31", "2025-04-14", "2025-04-15", "2025-04-16"]),
+                "close": [100, 100, 100, 100],
+                "volume": [1_000, 1_000, 1_000, 1_000],
+                "currency": ["KRW"] * 4,
+            }
+        )
+        financial_df = pd.DataFrame(
+            {
+                "stock_code": ["005930"],
+                "security_id": ["SEC_KR_005930"],
+                "fiscal_year": [2025],
+                "financial_period": pd.to_datetime(["2025-03-31"]),
+                "report_date": pd.to_datetime(["2025-04-15"]),
+                "at": [1_000],
+            }
+        )
+
+        with (
+            patch("engine.factor_normalizer.read_stock_prices", return_value=price_df),
+            patch("engine.factor_normalizer.read_stock_shares", return_value=pd.DataFrame()),
+            patch("engine.factor_normalizer.read_annual_financials", return_value=financial_df),
+            patch("engine.factor_normalizer.add_dividend_factors", side_effect=lambda df, stock_code: df),
+            patch("engine.factor_normalizer.add_daily_market_valuation_factors", side_effect=lambda df: df),
+            patch("engine.factor_normalizer.add_price_momentum_factors", side_effect=lambda df: df),
+        ):
+            result = create_stock_factor_dataframe("005930", financial_basis="annual")
+
+        self.assertTrue(pd.isna(result.loc[result["trade_date"] == pd.Timestamp("2025-04-14"), "at"].iat[0]))
+        self.assertEqual(result.loc[result["trade_date"] == pd.Timestamp("2025-04-15"), "at"].iat[0], 1_000)
+        self.assertEqual(result.loc[result["trade_date"] == pd.Timestamp("2025-04-16"), "at"].iat[0], 1_000)
 
 
 if __name__ == "__main__":

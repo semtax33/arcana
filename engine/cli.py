@@ -17,7 +17,13 @@ from company import kospi_kosdaq_corp_list
 from dividend import fetch_all_stock_dividends_async
 from market_snapshot_normalizer import normalize_price, normalize_shares
 from price import fetch_all_prices, fetch_all_shares
-from statements import download_dividend_histories, download_recent_statement_comments, download_statement_comments, download_statements
+from statements import (
+    collect_dart_report_metadata,
+    download_dividend_histories,
+    download_recent_statement_comments,
+    download_statement_comments,
+    download_statements,
+)
 
 
 CANONICAL_CSV_PATH = Path("../data-lake/meta/CanonicalAccount.csv")
@@ -251,6 +257,12 @@ def download_all_statement_comments():
     print(f"Total Length : {len(stock_codes)}")
     download_statement_comments(stock_codes, 0)
 
+def download_all_report_metadata():
+    corps_list = kospi_kosdaq_corp_list()
+    stock_codes = corps_list["stock_code"].tolist()
+    print(f"Total Length : {len(stock_codes)}")
+    collect_dart_report_metadata(stock_codes, 0)
+
 def download_all_prices():
     corps_list = kospi_kosdaq_corp_list()
     stock_codes = corps_list["stock_code"].tolist()
@@ -277,9 +289,10 @@ if __name__ == "__main__":
     #download_all_statements()
     #download_all_statement_comments()
     #download_all_dividend()
-    main()
-    #normalize_price("./data-lake/bronze/krx/price/*")
-    #normalize_shares("./data-lake/bronze/krx/shares/*")
+    download_all_report_metadata()
+    #main()
+    #normalize_price("../data-lake/bronze/krx/price/*")
+    #normalize_shares("../data-lake/bronze/krx/shares/*")
     #normalize_dividends()
 
 '''

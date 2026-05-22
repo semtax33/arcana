@@ -60,13 +60,35 @@ class FactorEltTest(unittest.TestCase):
         self.assertTrue(result.empty)
 
     def test_create_factor_catalog_dataframe_marks_technical_factors(self):
-        catalog_df = create_factor_catalog_dataframe(["roe", "na_20", "rsi_14", "macd", "bb_upper"])
+        catalog_df = create_factor_catalog_dataframe(
+            [
+                "roe",
+                "na_20",
+                "ma_50",
+                "ma_120",
+                "ma_150",
+                "ma_200",
+                "rsi_14",
+                "macd",
+                "bb_upper",
+                "ati",
+                "williams_r_14",
+                "cmf_20",
+                "mfi_14",
+            ]
+        )
 
         row_by_id = catalog_df.set_index("factor_id")
         self.assertEqual(row_by_id.loc["roe", "factor_type"], "quality")
         self.assertEqual(row_by_id.loc["roe", "unit"], "percent")
         self.assertEqual(row_by_id.loc["na_20", "factor_type"], "technical")
         self.assertEqual(row_by_id.loc["na_20", "factor_group"], "trend")
+        self.assertEqual(row_by_id.loc["ma_50", "factor_type"], "technical")
+        self.assertEqual(row_by_id.loc["ma_50", "factor_group"], "trend")
+        self.assertEqual(row_by_id.loc["ma_50", "unit"], "krw")
+        self.assertEqual(row_by_id.loc["ma_120", "factor_group"], "trend")
+        self.assertEqual(row_by_id.loc["ma_150", "factor_group"], "trend")
+        self.assertEqual(row_by_id.loc["ma_200", "factor_group"], "trend")
         self.assertEqual(row_by_id.loc["rsi_14", "factor_type"], "technical")
         self.assertEqual(row_by_id.loc["rsi_14", "factor_group"], "momentum")
         self.assertEqual(row_by_id.loc["rsi_14", "unit"], "percent")
@@ -75,6 +97,15 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(row_by_id.loc["macd", "unit"], "krw")
         self.assertEqual(row_by_id.loc["bb_upper", "factor_group"], "volatility")
         self.assertEqual(row_by_id.loc["bb_upper", "unit"], "krw")
+        self.assertEqual(row_by_id.loc["ati", "factor_type"], "technical")
+        self.assertEqual(row_by_id.loc["ati", "factor_group"], "volume")
+        self.assertEqual(row_by_id.loc["ati", "unit"], "shares")
+        self.assertEqual(row_by_id.loc["williams_r_14", "factor_group"], "momentum")
+        self.assertEqual(row_by_id.loc["williams_r_14", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["cmf_20", "factor_group"], "volume")
+        self.assertEqual(row_by_id.loc["cmf_20", "unit"], "ratio")
+        self.assertEqual(row_by_id.loc["mfi_14", "factor_group"], "momentum")
+        self.assertEqual(row_by_id.loc["mfi_14", "unit"], "percent")
 
 
 if __name__ == "__main__":
