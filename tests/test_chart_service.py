@@ -93,6 +93,35 @@ class ChartServiceTest(unittest.TestCase):
         self.assertEqual(result.recent[0].macd["macd"], 1.2)
         self.assertTrue(client.closed)
 
+    def test_get_chart_calculates_technical_signal_fallbacks_from_price_data(self):
+        base_date = date(2026, 3, 23)
+        price_rows = [
+            {
+                "trade_date": base_date + timedelta(days=index),
+                "open": 100 + index,
+                "high": 102 + index,
+                "low": 98 + index,
+                "close": 100 + index,
+                "volume": 1_000 + index,
+                "currency": "KRW",
+            }
+            for index in range(60)
+        ]
+        latest_date = date(2026, 5, 21)
+        client = FakeClickHouseClient(price_rows)
+
+        result = ChartService(
+            client_factory=lambda: client,
+            today_factory=lambda: latest_date,
+        ).get_chart("236200", "1M")
+
+        latest = result.recent[0]
+        self.assertEqual(latest.rsi, "Overbought")
+        self.assertIn(latest.bollinger_band["signal"], {"Inside_Bands", "Near_Upper_Band"})
+        self.assertEqual(latest.trend, "Strong_Uptrend")
+        self.assertEqual(latest.macd["macd"] >= latest.macd["signal"], True)
+        self.assertTrue(client.closed)
+
     def test_get_chart_raises_not_found_for_empty_price_data(self):
         client = FakeClickHouseClient([])
 

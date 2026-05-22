@@ -45,8 +45,10 @@ FACTOR_ID_GROUPS = {
         "bollinger_upper",
         "bollinger_middle",
         "bollinger_lower",
+        "bb_width_pct",
+        "bb_percent_b",
     ],
-    "trend": ["trend", "trend_signal", "price_trend", "ma_trend"],
+    "trend": ["trend", "trend_signal", "price_trend", "ma_trend", "high52w_gap_pct"],
     "macd": ["macd", "macd_signal", "macd_hist"],
 }
 
@@ -238,16 +240,26 @@ def _enrich_price_rows(
 ) -> list[dict[str, Any]]:
     enriched = []
     previous_close: float | None = None
-    closes: list[float] = []
+    sorted_rows = sorted(price_rows, key=lambda item: _as_date(item["trade_date"]))
+    closes = [
+        value if value is not None else math.nan
+        for value in (_float_or_none(row.get("close")) for row in sorted_rows)
+    ]
+    fallback = _technical_fallbacks(closes)
     volumes: list[float] = []
 
-    for row in sorted(price_rows, key=lambda item: _as_date(item["trade_date"])):
+    for index, row in enumerate(sorted_rows):
         trade_date = _as_date(row["trade_date"])
         close = _float_or_none(row.get("close"))
         volume = _float_or_none(row.get("volume"))
         factors = factor_by_date.get(trade_date, {})
-        closes.append(close if close is not None else math.nan)
         volumes.append(volume if volume is not None else math.nan)
+
+        ma5 = _factor_or_fallback(factors, "na_5", fallback["ma5"][index])
+        ma20 = _factor_or_fallback(factors, "na_20", fallback["ma20"][index])
+        ma50 = _factor_or_fallback(factors, "na_50", fallback["ma50"][index])
+        ma150 = _factor_or_fallback(factors, "na_150", fallback["ma150"][index])
+        ma200 = _factor_or_fallback(factors, "na_200", fallback["ma200"][index])
 
         enriched_row = {
             "trade_date": trade_date,
@@ -257,18 +269,28 @@ def _enrich_price_rows(
             "close": _required_float(row.get("close"), "close"),
             "volume": _required_float(row.get("volume"), "volume"),
             "currency": row.get("currency"),
-            "ma5": _factor_or_average(factors, "na_5", closes, 5),
-            "ma20": _factor_or_average(factors, "na_20", closes, 20),
-            "ma50": _factor_or_average(factors, "na_50", closes, 50),
-            "ma150": _factor_or_average(factors, "na_150", closes, 150),
-            "ma200": _factor_or_average(factors, "na_200", closes, 200),
-            "monthly_return": _monthly_return(factors, closes),
+            "ma5": ma5,
+            "ma20": ma20,
+            "ma50": ma50,
+            "ma150": ma150,
+            "ma200": ma200,
+            "monthly_return": _monthly_return(factors, closes[: index + 1]),
             "continuity": _continuity(row.get("open"), previous_close),
             "volume_signal": _volume_signal(volumes),
-            "rsi": _rsi_value(factors),
-            "bollinger_band": _bollinger_value(factors, close),
-            "trend": _first_present(factors, FACTOR_ID_GROUPS["trend"]),
-            "macd": _macd_value(factors),
+            "rsi": _rsi_value(factors, fallback["rsi"][index]),
+            "bollinger_band": _bollinger_value(
+                factors,
+                close,
+                fallback["bollinger"][index],
+            ),
+            "trend": _trend_value(
+                factors,
+                close=close,
+                ma5=ma5,
+                ma20=ma20,
+                ma50=ma50,
+            ),
+            "macd": _macd_value(factors, fallback["macd"][index]),
         }
         previous_close = close
         enriched.append(enriched_row)
@@ -377,6 +399,145 @@ def _factor_or_average(
     return sum(valid_values) / len(valid_values)
 
 
+def _factor_or_fallback(
+    factors: dict[str, float],
+    factor_id: str,
+    fallback_value: float | None,
+) -> float | None:
+    if factor_id in factors:
+        return factors[factor_id]
+    return fallback_value
+
+
+def _technical_fallbacks(closes: list[float]) -> dict[str, list[Any]]:
+    ma5 = _rolling_average_series(closes, 5)
+    ma20 = _rolling_average_series(closes, 20)
+    ma50 = _rolling_average_series(closes, 50)
+    return {
+        "ma5": ma5,
+        "ma20": ma20,
+        "ma50": ma50,
+        "ma150": _rolling_average_series(closes, 150),
+        "ma200": _rolling_average_series(closes, 200),
+        "rsi": _rsi_series(closes, 14),
+        "bollinger": _bollinger_series(closes, 20),
+        "macd": _macd_series(closes),
+    }
+
+
+def _rolling_average_series(values: list[float], window: int) -> list[float | None]:
+    result: list[float | None] = []
+    for index in range(len(values)):
+        window_values = [
+            value
+            for value in values[max(0, index - window + 1) : index + 1]
+            if math.isfinite(value)
+        ]
+        result.append(sum(window_values) / len(window_values) if window_values else None)
+    return result
+
+
+def _rsi_series(values: list[float], window: int) -> list[float | None]:
+    result: list[float | None] = []
+    for index in range(len(values)):
+        if index < window:
+            result.append(None)
+            continue
+
+        gains: list[float] = []
+        losses: list[float] = []
+        pairs = zip(
+            values[index - window : index],
+            values[index - window + 1 : index + 1],
+        )
+        for previous, current in pairs:
+            if not math.isfinite(previous) or not math.isfinite(current):
+                continue
+            delta = current - previous
+            gains.append(max(delta, 0))
+            losses.append(max(-delta, 0))
+
+        if not gains or not losses:
+            result.append(None)
+            continue
+
+        average_gain = sum(gains) / len(gains)
+        average_loss = sum(losses) / len(losses)
+        if average_loss == 0:
+            result.append(100 if average_gain > 0 else 50)
+            continue
+
+        rs = average_gain / average_loss
+        result.append(100 - (100 / (1 + rs)))
+    return result
+
+
+def _bollinger_series(values: list[float], window: int) -> list[dict[str, Any] | None]:
+    result: list[dict[str, Any] | None] = []
+    for index, close in enumerate(values):
+        window_values = values[max(0, index - window + 1) : index + 1]
+        if len(window_values) < window or not math.isfinite(close):
+            result.append(None)
+            continue
+        if any(not math.isfinite(value) for value in window_values):
+            result.append(None)
+            continue
+
+        middle = sum(window_values) / window
+        variance = sum((value - middle) ** 2 for value in window_values) / window
+        stddev = math.sqrt(variance)
+        upper = middle + 2 * stddev
+        lower = middle - 2 * stddev
+        signal = _bollinger_signal(close, upper, lower)
+        band_range = upper - lower
+        percent_b = (close - lower) / band_range if band_range else None
+        result.append(
+            {
+                "upper": upper,
+                "middle": middle,
+                "lower": lower,
+                "percent_b": percent_b,
+                "signal": signal,
+            }
+        )
+    return result
+
+
+def _macd_series(values: list[float]) -> list[dict[str, float | None] | None]:
+    result: list[dict[str, float | None] | None] = []
+    ema12: float | None = None
+    ema26: float | None = None
+    signal_ema: float | None = None
+    close_count = 0
+    macd_count = 0
+
+    for close in values:
+        if not math.isfinite(close):
+            result.append(None)
+            continue
+
+        close_count += 1
+        ema12 = close if ema12 is None else _ema_next(ema12, close, 12)
+        ema26 = close if ema26 is None else _ema_next(ema26, close, 26)
+        if close_count < 26:
+            result.append(None)
+            continue
+
+        macd = ema12 - ema26
+        macd_count += 1
+        signal_ema = macd if signal_ema is None else _ema_next(signal_ema, macd, 9)
+        signal = signal_ema if macd_count >= 9 else None
+        histogram = macd - signal if signal is not None else None
+        result.append({"macd": macd, "signal": signal, "histogram": histogram})
+
+    return result
+
+
+def _ema_next(previous: float, value: float, period: int) -> float:
+    multiplier = 2 / (period + 1)
+    return value * multiplier + previous * (1 - multiplier)
+
+
 def _monthly_return(factors: dict[str, float], closes: list[float]) -> float | None:
     factor_value = factors.get("ret_1m")
     if factor_value is not None:
@@ -422,8 +583,10 @@ def _volume_signal(volumes: list[float]) -> str | None:
     return "Normal_Volume"
 
 
-def _rsi_value(factors: dict[str, float]) -> str | float | None:
+def _rsi_value(factors: dict[str, float], fallback_value: float | None = None) -> str | float | None:
     value = _first_present(factors, FACTOR_ID_GROUPS["rsi"])
+    if value is None:
+        value = fallback_value
     if value is None:
         return None
     if value >= 70:
@@ -433,7 +596,11 @@ def _rsi_value(factors: dict[str, float]) -> str | float | None:
     return "Neutral"
 
 
-def _bollinger_value(factors: dict[str, float], close: float | None) -> float | dict[str, Any] | None:
+def _bollinger_value(
+    factors: dict[str, float],
+    close: float | None,
+    fallback_value: dict[str, Any] | None = None,
+) -> float | dict[str, Any] | None:
     direct = _first_present(factors, ["bollinger_band", "bollinger_signal", "bb_signal"])
     if direct is not None:
         return direct
@@ -441,28 +608,107 @@ def _bollinger_value(factors: dict[str, float], close: float | None) -> float | 
     upper = _first_present(factors, ["bb_upper", "bollinger_upper"])
     middle = _first_present(factors, ["bb_middle", "bollinger_middle"])
     lower = _first_present(factors, ["bb_lower", "bollinger_lower"])
+    percent_b = factors.get("bb_percent_b")
     if upper is None and middle is None and lower is None:
-        return None
+        if percent_b is not None:
+            return {
+                "percent_b": percent_b,
+                "signal": _bollinger_percent_b_signal(percent_b),
+            }
+        return fallback_value
 
     signal = None
     if close is not None:
-        if upper is not None and close > upper:
-            signal = "Above_Upper_Band"
-        elif lower is not None and close < lower:
-            signal = "Below_Lower_Band"
-        elif upper is not None and close > upper * 0.98:
-            signal = "Near_Upper_Band"
-        elif lower is not None and close < lower * 1.02:
-            signal = "Near_Lower_Band"
-        else:
-            signal = "Neutral"
-    return {"upper": upper, "middle": middle, "lower": lower, "signal": signal}
+        signal = _bollinger_signal(close, upper, lower)
+    return {
+        "upper": upper,
+        "middle": middle,
+        "lower": lower,
+        "percent_b": percent_b,
+        "signal": signal,
+    }
 
 
-def _macd_value(factors: dict[str, float]) -> float | dict[str, Any] | None:
+def _bollinger_signal(
+    close: float,
+    upper: float | None,
+    lower: float | None,
+) -> str:
+    if upper is not None and close > upper:
+        return "Above_Upper_Band"
+    if lower is not None and close < lower:
+        return "Below_Lower_Band"
+    if upper is not None and close > upper * 0.98:
+        return "Near_Upper_Band"
+    if lower is not None and close < lower * 1.02:
+        return "Near_Lower_Band"
+    return "Inside_Bands"
+
+
+def _bollinger_percent_b_signal(percent_b: float) -> str:
+    if percent_b > 1:
+        return "Above_Upper_Band"
+    if percent_b < 0:
+        return "Below_Lower_Band"
+    if percent_b >= 0.9:
+        return "Near_Upper_Band"
+    if percent_b <= 0.1:
+        return "Near_Lower_Band"
+    return "Inside_Bands"
+
+
+def _trend_value(
+    factors: dict[str, float],
+    *,
+    close: float | None,
+    ma5: float | None,
+    ma20: float | None,
+    ma50: float | None,
+) -> str | None:
+    trend_factor = _first_present(factors, ["trend", "trend_signal", "price_trend", "ma_trend"])
+    if trend_factor is not None:
+        return _numeric_trend_signal(trend_factor)
+
+    if ma5 is None or ma20 is None:
+        return None
+    if ma50 is not None:
+        if ma5 > ma20 > ma50:
+            return "Strong_Uptrend"
+        if ma5 < ma20 < ma50:
+            return "Strong_Downtrend"
+    if ma5 > ma20:
+        return "Uptrend"
+    if ma5 < ma20:
+        return "Downtrend"
+    if close is not None and ma20:
+        if close > ma20 * 1.02:
+            return "Uptrend"
+        if close < ma20 * 0.98:
+            return "Downtrend"
+    return "Sideways"
+
+
+def _numeric_trend_signal(value: float) -> str:
+    if value >= 1:
+        return "Strong_Uptrend"
+    if value > 0:
+        return "Uptrend"
+    if value <= -1:
+        return "Strong_Downtrend"
+    if value < 0:
+        return "Downtrend"
+    return "Sideways"
+
+
+def _macd_value(
+    factors: dict[str, float],
+    fallback_value: dict[str, float | None] | None = None,
+) -> float | dict[str, Any] | None:
     macd = factors.get("macd")
     signal = factors.get("macd_signal")
     hist = factors.get("macd_hist")
+    if macd is None and signal is None and hist is None:
+        return fallback_value
     if signal is None and hist is None:
         return macd
     return {"macd": macd, "signal": signal, "histogram": hist}

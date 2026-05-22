@@ -113,6 +113,7 @@ class FactorScreenResponseDto(BaseModel):
 ChartRange = Literal["1M", "3M", "6M", "1Y", "5Y", "MAX"]
 FinancialStatementPeriod = Literal["annual", "quarter", "ttm"]
 FinancialStatementFilter = Literal["all", "IS", "BS", "CF"]
+FinancialRatioPeriod = Literal["annual", "quarter"]
 
 
 class StockChartPointDto(BaseModel):
@@ -277,3 +278,42 @@ class FinancialAccountDetailResponseDto(BaseModel):
     account: FinancialAccountRowDto
     columns: list[FinancialPeriodColumnDto]
     source: str = "fact_canonical_statements"
+
+
+class FinancialRatioRowDto(BaseModel):
+    factor_id: str
+    factor_name: str
+    statement_type: str
+    group_key: str
+    group_name: str
+    unit: str | None = None
+    value_direction: str | None = None
+    description: str | None = None
+    values: list[FinancialStatementCellDto] = Field(default_factory=list)
+    trend: list[FinancialChartPointDto] = Field(default_factory=list)
+    growth_chart: list[FinancialChartPointDto] = Field(default_factory=list)
+    statistics: FinancialAccountStatisticsDto = Field(default_factory=FinancialAccountStatisticsDto)
+
+
+class FinancialRatioGroupDto(BaseModel):
+    group_key: str
+    title: str
+    title_en: str
+    ratios: list[FinancialRatioRowDto] = Field(default_factory=list)
+
+
+class FinancialRatioSectionDto(BaseModel):
+    statement_type: str
+    title: str
+    title_en: str
+    groups: list[FinancialRatioGroupDto] = Field(default_factory=list)
+
+
+class FinancialRatiosResponseDto(BaseModel):
+    stock: FinancialStatementMetadataDto
+    period: FinancialRatioPeriod
+    financial_basis: str
+    columns: list[FinancialPeriodColumnDto]
+    sections: list[FinancialRatioSectionDto]
+    source: str = "fact_daily_factor"
+    auxiliary_sources: list[str] = Field(default_factory=list)
