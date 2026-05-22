@@ -10,7 +10,7 @@ from api.controller.introduction_controller import router as introduction_router
 from api.controller.sector_controller import router as sector_router
 
 
-app = FastAPI(title="StatementParsing API")
+app = FastAPI(title="Arcana API")
 
 app.include_router(chart_router)
 app.include_router(sector_router)
