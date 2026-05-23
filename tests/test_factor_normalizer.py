@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import pandas as pd
@@ -9,6 +11,7 @@ from engine.factor_normalizer import (
     add_dividend_factors,
     add_price_momentum_factors,
     create_stock_factor_dataframe,
+    read_annual_financials,
 )
 
 
@@ -219,6 +222,39 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertTrue(pd.isna(result.loc[result["trade_date"] == pd.Timestamp("2025-04-14"), "at"].iat[0]))
         self.assertEqual(result.loc[result["trade_date"] == pd.Timestamp("2025-04-15"), "at"].iat[0], 1_000)
         self.assertEqual(result.loc[result["trade_date"] == pd.Timestamp("2025-04-16"), "at"].iat[0], 1_000)
+
+    def test_read_annual_financials_includes_fiscal_month_for_report_metadata_join(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            financial_dir = root / "financials"
+            financial_dir.mkdir()
+            metadata_path = root / "report_metadata.csv"
+
+            (financial_dir / "normalized_005930_2025.12.csv").write_text(
+                "\n".join(
+                    [
+                        "canonical_account_id,canonical_account_name,original_account_name,statement_type,period,normalized_amount",
+                        "TOTAL_ASSETS,Assets,Assets,BS,2025.12,1000",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            metadata_path.write_text(
+                "\n".join(
+                    [
+                        "security_id,stock_code,fiscal_year,fiscal_month,period_end_date,report_date,rcept_no,report_name,source_type,source_url,updated_at",
+                        "SEC_KR_005930,005930,2025,12,2025-12-31,2026-03-15,20260315000001,Annual,statement,https://dart.example/1,2026-05-22 09:00:00",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("engine.factor_normalizer.FINANCIAL_DIR", financial_dir):
+                result = read_annual_financials("005930", report_metadata_path=metadata_path)
+
+        self.assertEqual(result["fiscal_month"].iat[0], 12)
+        self.assertEqual(result["report_date"].dt.strftime("%Y-%m-%d").iat[0], "2026-03-15")
+        self.assertEqual(result["rcept_no"].iat[0], "20260315000001")
 
 
 if __name__ == "__main__":

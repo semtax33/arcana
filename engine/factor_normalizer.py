@@ -323,6 +323,7 @@ def read_annual_financials(stock_code, report_metadata_path=REPORT_METADATA_PATH
                 "stock_code": normalize_stock_code(stock_code),
                 "security_id": security_id_of(stock_code),
                 "fiscal_year": meta["year"],
+                "fiscal_month": meta["month"],
                 "financial_period": period_end_date(meta["year"], meta["month"]),
             }
         )

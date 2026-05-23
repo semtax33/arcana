@@ -74,6 +74,14 @@ def attach_report_metadata(
     df = snapshot_df.copy()
     df["stock_code"] = df["stock_code"].map(normalize_stock_code)
     df["financial_period"] = pd.to_datetime(df["financial_period"], errors="coerce")
+    if "fiscal_year" not in df.columns:
+        df["fiscal_year"] = df["financial_period"].dt.year
+    else:
+        df["fiscal_year"] = pd.to_numeric(df["fiscal_year"], errors="coerce").astype("Int64")
+    if "fiscal_month" not in df.columns:
+        df["fiscal_month"] = df["financial_period"].dt.month
+    else:
+        df["fiscal_month"] = pd.to_numeric(df["fiscal_month"], errors="coerce").astype("Int64")
     fallback_report_date = df["financial_period"]
 
     metadata_df = load_report_metadata(metadata_path, source_type=source_type)
