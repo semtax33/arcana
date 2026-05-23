@@ -109,3 +109,65 @@ export type QuantScreenerResponse = {
   fixedColumns?: QuantScreenerColumn[];
   factorColumns?: QuantScreenerColumn[];
 };
+
+export type BacktestRebalanceFrequency = "quarterly" | "semiannual" | "annual" | "monthly" | string;
+
+export type FactorBacktestRequest = {
+  market: MarketCode;
+  industries: string[];
+  conditions: ScreenerCondition[];
+  startDate: string;
+  endDate: string;
+  rebalanceFrequency: BacktestRebalanceFrequency;
+};
+
+export type BacktestEquityPoint = {
+  date: string;
+  strategy: number;
+  benchmark: number | null;
+  cash: number | null;
+  benchmarkName: string | null;
+};
+
+export type BacktestAnnualReturn = {
+  year: number;
+  strategy: number;
+  benchmark: number | null;
+  excess: number | null;
+};
+
+export type BacktestPosition = {
+  securityId: string;
+  ticker: string;
+  name: string;
+  weight: number | null;
+  score: number | null;
+};
+
+export type BacktestRebalance = {
+  rebalanceDate: string;
+  signalDate: string | null;
+  positions: BacktestPosition[];
+};
+
+export type FactorBacktestSummary = {
+  startDate: string;
+  endDate: string;
+  rebalanceFrequency: BacktestRebalanceFrequency;
+  cumulativeReturn: number | null;
+  cagr: number | null;
+  maxDrawdown: number | null;
+  volatility: number | null;
+  sharpe: number | null;
+  winRate: number | null;
+  rebalanceCount: number | null;
+  benchmarkName: string | null;
+};
+
+export type FactorBacktestResponse = {
+  summary: FactorBacktestSummary;
+  equityCurve: BacktestEquityPoint[];
+  annualReturns: BacktestAnnualReturn[];
+  rebalanceHistory: BacktestRebalance[];
+  warnings: string[];
+};

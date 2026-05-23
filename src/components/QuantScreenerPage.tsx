@@ -19,6 +19,7 @@ import type {
   QuantScreenerColumn,
   ScreenedStock,
 } from "../types/quantScreener";
+import { BacktestResultPage } from "./BacktestResultPage";
 
 type QuantScreenerPageProps = {
   store: QuantScreenerStore;
@@ -136,6 +137,10 @@ export const QuantScreenerPage = observer(({ store }: QuantScreenerPageProps) =>
     );
   }
 
+  if (store.viewMode === "backtest") {
+    return <BacktestResultPage store={store} />;
+  }
+
   if (store.viewMode === "result" && store.result) {
     const fixedColumns = [...(store.result.fixedColumns ?? [])].sort((a, b) => a.order - b.order);
     const factorColumns = [...(store.result.factorColumns ?? [])].sort((a, b) => a.order - b.order);
@@ -184,7 +189,7 @@ export const QuantScreenerPage = observer(({ store }: QuantScreenerPageProps) =>
               <ArrowLeft size={15} />
               조건 설정
             </button>
-            <button className="purple-button" type="button">
+            <button className="purple-button" type="button" onClick={() => void store.openBacktest()}>
               백테스팅
               <ArrowRight size={15} />
             </button>
@@ -366,7 +371,12 @@ export const QuantScreenerPage = observer(({ store }: QuantScreenerPageProps) =>
 
         <section className="condition-panel">
           <div className="condition-actions">
-            <button className="purple-button" type="button" disabled={store.isScreening}>
+            <button
+              className="purple-button"
+              type="button"
+              onClick={() => void store.openBacktest()}
+              disabled={store.isScreening || store.selectedConditionCount === 0}
+            >
               백테스팅
               <ArrowRight size={15} />
             </button>

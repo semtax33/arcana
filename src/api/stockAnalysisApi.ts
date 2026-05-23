@@ -220,7 +220,11 @@ function calculateWeek52Range(rows: StockAnalysisPoint[]) {
   };
 }
 
-function stringifySignal(value: unknown, fallback = "Neutral") {
+function finiteNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function stringifySignal(value: unknown, fallback = "No_Data") {
   if (value === null || value === undefined) {
     return fallback;
   }
@@ -244,15 +248,15 @@ function stringifySignal(value: unknown, fallback = "Neutral") {
 
 function macdSignal(value: RecentStockChartRowDto["macd"]) {
   if (typeof value === "object" && value !== null) {
-    const macd = Number(value.macd);
-    const signal = Number(value.signal);
+    const macd = finiteNumber(value.macd);
+    const signal = finiteNumber(value.signal);
 
-    if (Number.isFinite(macd) && Number.isFinite(signal)) {
+    if (macd !== null && signal !== null) {
       return macd >= signal ? "Bullish" : "Bearish";
     }
   }
 
-  return stringifySignal(value);
+  return stringifySignal(value, "No_Data");
 }
 
 function createSignalLabels(close: number, open: number, ma5: number, ma20: number, volume: number) {
@@ -530,9 +534,9 @@ function mapRecentRow(row: RecentStockChartRowDto, chartPoint?: StockAnalysisPoi
           : monthlyReturn < 0
             ? "Bearish_Momentum"
             : "Neutral",
-    rsi: stringifySignal(row.rsi),
-    bollinger: stringifySignal(row.bollinger_band),
-    trend: stringifySignal(row.trend),
+    rsi: stringifySignal(row.rsi, "No_Data"),
+    bollinger: stringifySignal(row.bollinger_band, "No_Data"),
+    trend: stringifySignal(row.trend, "No_Data"),
     macd: macdSignal(row.macd),
     volumeSignal: stringifySignal(row.volume_signal, "Normal_Volume"),
     volatility: stringifySignal(row.continuity, "Normal_Gap"),

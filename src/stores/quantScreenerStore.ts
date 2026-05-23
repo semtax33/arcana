@@ -4,6 +4,7 @@ import {
   fetchFilterCatalog,
   fetchIndustryCatalog,
   fetchMarketCatalog,
+  runFactorBacktest,
   runQuantScreening,
 } from "../api/quantScreenerApi";
 import type {
@@ -11,6 +12,7 @@ import type {
   ConditionInputMode,
   FilterDefinition,
   FilterGroup,
+  FactorBacktestResponse,
   IndustryOption,
   MarketCode,
   QuantScreenerResponse,
@@ -19,16 +21,22 @@ import type {
   QuantScreenerColumn,
 } from "../types/quantScreener";
 
-type ScreenerViewMode = "builder" | "loading" | "result";
+type ScreenerViewMode = "builder" | "loading" | "result" | "backtest";
 type SortDirection = "asc" | "desc";
 
 const maxResultRows = 5000;
+const defaultBacktestStartDate = "2016-01-01";
+const defaultBacktestEndDate = "2026-04-26";
+const defaultRebalanceFrequency = "quarterly";
 
 const defaultIndustryIds: string[] = [];
 const defaultExpandedGroups: string[] = [];
 const defaultFactorIds = ["roe", "per", "epr", "bpr"];
 
-function findFilter(groups: FilterGroup[], filterId: string): FilterDefinition | undefined {
+function findFilter(
+  groups: FilterGroup[],
+  filterId: string,
+): FilterDefinition | undefined {
   for (const group of groups) {
     const directMatch = group.filters?.find((filter) => filter.id === filterId);
 
@@ -36,7 +44,9 @@ function findFilter(groups: FilterGroup[], filterId: string): FilterDefinition |
       return directMatch;
     }
 
-    const childMatch = group.children ? findFilter(group.children, filterId) : undefined;
+    const childMatch = group.children
+      ? findFilter(group.children, filterId)
+      : undefined;
 
     if (childMatch) {
       return childMatch;
@@ -59,9 +69,13 @@ export class QuantScreenerStore {
   result: QuantScreenerResponse | null = null;
   sortKey = "rank";
   sortDirection: SortDirection = "asc";
+  backtestResult: FactorBacktestResponse | null = null;
+  isBacktesting = false;
+  backtestRequestId = 0;
   isCatalogLoading = false;
   isScreening = false;
   errorMessage = "";
+  backtestErrorMessage = "";
 
   constructor() {
     makeAutoObservable(this);
@@ -211,7 +225,9 @@ export class QuantScreenerStore {
 
   toggleIndustry(industryId: string) {
     if (this.selectedIndustries.includes(industryId)) {
-      this.selectedIndustries = this.selectedIndustries.filter((item) => item !== industryId);
+      this.selectedIndustries = this.selectedIndustries.filter(
+        (item) => item !== industryId,
+      );
       return;
     }
 
@@ -220,7 +236,9 @@ export class QuantScreenerStore {
 
   toggleGroup(groupId: string) {
     if (this.expandedGroupIds.includes(groupId)) {
-      this.expandedGroupIds = this.expandedGroupIds.filter((item) => item !== groupId);
+      this.expandedGroupIds = this.expandedGroupIds.filter(
+        (item) => item !== groupId,
+      );
       return;
     }
 
@@ -232,7 +250,11 @@ export class QuantScreenerStore {
   }
 
   addCondition(filter: FilterDefinition) {
-    if (this.selectedConditions.some((condition) => condition.filterId === filter.id)) {
+    if (
+      this.selectedConditions.some(
+        (condition) => condition.filterId === filter.id,
+      )
+    ) {
       return;
     }
 
@@ -277,7 +299,9 @@ export class QuantScreenerStore {
 
   updateConditionPercentile(filterId: string, percentile: number) {
     this.selectedConditions = this.selectedConditions.map((condition) =>
-      condition.filterId === filterId ? { ...condition, percentile } : condition,
+      condition.filterId === filterId
+        ? { ...condition, percentile }
+        : condition,
     );
   }
 
@@ -287,7 +311,81 @@ export class QuantScreenerStore {
   }
 
   backToBuilder() {
+    if (this.viewMode === "backtest") {
+      this.backtestRequestId += 1;
+      this.isBacktesting = false;
+    }
+
     this.viewMode = "builder";
+  }
+
+  openBacktest() {
+    if (this.selectedConditions.length === 0) {
+      return;
+    }
+
+    this.viewMode = "backtest";
+    this.backtestResult = null;
+    this.backtestErrorMessage = "";
+  }
+
+  async runBacktest() {
+    if (this.selectedConditions.length === 0 || this.isBacktesting) {
+      return;
+    }
+
+    const requestId = this.backtestRequestId + 1;
+    const conditions = this.selectedConditions.map((condition) => ({
+      ...condition,
+    }));
+    const industries = [...this.selectedIndustries];
+    const market = this.market;
+    const startDate =
+      this.backtestResult?.summary.startDate ?? defaultBacktestStartDate;
+    const endDate =
+      this.backtestResult?.summary.endDate ?? defaultBacktestEndDate;
+    const rebalanceFrequency =
+      this.backtestResult?.summary.rebalanceFrequency ??
+      defaultRebalanceFrequency;
+
+    this.backtestRequestId = requestId;
+    this.isBacktesting = true;
+    this.backtestErrorMessage = "";
+
+    try {
+      const result = await runFactorBacktest({
+        market,
+        industries,
+        conditions,
+        startDate,
+        endDate,
+        rebalanceFrequency,
+      });
+
+      runInAction(() => {
+        if (requestId !== this.backtestRequestId) {
+          return;
+        }
+
+        this.backtestResult = result;
+      });
+    } catch {
+      runInAction(() => {
+        if (requestId !== this.backtestRequestId) {
+          return;
+        }
+
+        this.backtestErrorMessage = "백테스트 결과를 불러오지 못했습니다.";
+      });
+    } finally {
+      runInAction(() => {
+        if (requestId !== this.backtestRequestId) {
+          return;
+        }
+
+        this.isBacktesting = false;
+      });
+    }
   }
 
   toggleSort(column: QuantScreenerColumn) {

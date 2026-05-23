@@ -2,6 +2,7 @@ import { observer } from "mobx-react-lite";
 import { quickActions } from "../data/menu";
 import type { QuantScreenerStore } from "../stores/quantScreenerStore";
 import type { ScreenerStore } from "../stores/screenerStore";
+import { IndustryAnalysisPage } from "./IndustryAnalysisPage";
 import { QuantScreenerPage } from "./QuantScreenerPage";
 import { StockAnalysisPage } from "./StockAnalysisPage";
 
@@ -24,6 +25,14 @@ export const Workspace = observer(
       return (
         <section className="workspace no-footer">
           <StockAnalysisPage />
+        </section>
+      );
+    }
+
+    if (screenerStore.activeMenuId === "industry-analysis") {
+      return (
+        <section className="workspace no-footer">
+          <IndustryAnalysisPage />
         </section>
       );
     }

@@ -2,6 +2,7 @@ import {
   Bell,
   BookOpen,
   Globe2,
+  Building2,
   Languages,
   LogOut,
   PieChart,
@@ -41,6 +42,12 @@ export const screenerMenus: MenuItem[] = [
     icon: PieChart,
     group: "종목분석",
   },
+  {
+    id: "industry-analysis",
+    label: "산업 분석",
+    icon: Building2,
+    group: "분석",
+  },
 ];
 
 export const utilityMenus: MenuItem[] = [
@@ -63,6 +70,11 @@ export const contentCopy: Record<
     title: "종목 분석",
     eyebrow: "기업 단위 리서치",
     summary: "재무, 밸류에이션, 가격 흐름을 종목별로 정리합니다.",
+  },
+  "industry-analysis": {
+    title: "산업 분석",
+    eyebrow: "주도 산업군 랭킹",
+    summary: "강세 종목 비율, 성장률, 수익률, 수익성 지표로 산업군을 비교합니다.",
   },
   "style-score": {
     title: "스타일 스코어",

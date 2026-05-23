@@ -2,6 +2,8 @@ import type {
   ComparisonOperator,
   FactorValueDirection,
   FilterDefinition,
+  FactorBacktestRequest,
+  FactorBacktestResponse,
   FilterGroup,
   IndustryOption,
   MarketOption,
@@ -123,6 +125,54 @@ type FactorScreenResponseDto = {
   fixed_columns: FactorScreenColumnDto[];
   factor_columns: FactorScreenColumnDto[];
   rows: ScreenedStockRowDto[];
+};
+
+type FactorBacktestSummaryDto = {
+  start_date: string;
+  end_date: string;
+  rebalance_frequency: string;
+  cumulative_return: number | null;
+  cagr: number | null;
+  max_drawdown: number | null;
+  volatility: number | null;
+  sharpe: number | null;
+  win_rate: number | null;
+  rebalance_count: number | null;
+};
+
+type FactorBacktestEquityPointDto = {
+  trade_date: string;
+  strategy_nav: number | null;
+  benchmark_navs?: Record<string, number | null> | null;
+};
+
+type FactorBacktestAnnualReturnDto = {
+  year: number;
+  strategy_return: number | null;
+  benchmark_returns?: Record<string, number | null> | null;
+  excess_returns?: Record<string, number | null> | null;
+};
+
+type FactorBacktestPositionDto = {
+  security_id: string;
+  ticker: string | null;
+  stock_name: string | null;
+  weight: number | null;
+  score: number | null;
+};
+
+type FactorBacktestRebalanceDto = {
+  rebalance_date: string;
+  signal_date: string | null;
+  positions: FactorBacktestPositionDto[];
+};
+
+type FactorBacktestResponseDto = {
+  summary: FactorBacktestSummaryDto;
+  equity_curve: FactorBacktestEquityPointDto[];
+  annual_returns: FactorBacktestAnnualReturnDto[];
+  rebalance_history: FactorBacktestRebalanceDto[];
+  warnings?: string[] | null;
 };
 
 const mockIndustries: IndustryOption[] = [
@@ -418,6 +468,101 @@ function mapConditionToDto(condition: QuantScreenerRequest["conditions"][number]
   };
 }
 
+function toPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return value * 100;
+}
+
+function navToCumulativePercent(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return (value - 1) * 100;
+}
+
+function getPrimaryBenchmark(
+  benchmarkValues: Record<string, number | null> | null | undefined,
+): { name: string | null; value: number | null } {
+  if (!benchmarkValues) {
+    return { name: null, value: null };
+  }
+
+  const entry =
+    Object.entries(benchmarkValues).find(([, value]) => value !== null && value !== undefined) ??
+    Object.entries(benchmarkValues)[0];
+
+  if (!entry) {
+    return { name: null, value: null };
+  }
+
+  return {
+    name: entry[0],
+    value: entry[1],
+  };
+}
+
+function mapBacktestResponse(response: FactorBacktestResponseDto): FactorBacktestResponse {
+  const firstBenchmark = response.equity_curve
+    .map((point) => getPrimaryBenchmark(point.benchmark_navs))
+    .find((benchmark) => benchmark.name !== null);
+
+  return {
+    summary: {
+      startDate: response.summary.start_date,
+      endDate: response.summary.end_date,
+      rebalanceFrequency: response.summary.rebalance_frequency,
+      cumulativeReturn: toPercent(response.summary.cumulative_return),
+      cagr: toPercent(response.summary.cagr),
+      maxDrawdown: toPercent(response.summary.max_drawdown),
+      volatility: toPercent(response.summary.volatility),
+      sharpe: response.summary.sharpe,
+      winRate: toPercent(response.summary.win_rate),
+      rebalanceCount: response.summary.rebalance_count,
+      benchmarkName: firstBenchmark?.name ?? null,
+    },
+    equityCurve: response.equity_curve.map((point) => {
+      const benchmark = getPrimaryBenchmark(point.benchmark_navs);
+
+      return {
+        date: point.trade_date,
+        strategy: navToCumulativePercent(point.strategy_nav) ?? 0,
+        benchmark: navToCumulativePercent(benchmark.value),
+        cash: null,
+        benchmarkName: benchmark.name,
+      };
+    }),
+    annualReturns: response.annual_returns
+      .map((item) => {
+        const benchmark = getPrimaryBenchmark(item.benchmark_returns);
+        const excess = getPrimaryBenchmark(item.excess_returns);
+
+        return {
+          year: item.year,
+          strategy: toPercent(item.strategy_return) ?? 0,
+          benchmark: toPercent(benchmark.value),
+          excess: toPercent(excess.value),
+        };
+      })
+      .sort((left, right) => right.year - left.year),
+    rebalanceHistory: response.rebalance_history.map((rebalance) => ({
+      rebalanceDate: rebalance.rebalance_date,
+      signalDate: rebalance.signal_date,
+      positions: rebalance.positions.map((position) => ({
+        securityId: position.security_id,
+        ticker: position.ticker ?? position.security_id,
+        name: position.stock_name ?? position.security_id,
+        weight: position.weight,
+        score: position.score,
+      })),
+    })),
+    warnings: response.warnings ?? [],
+  };
+}
+
 function mapColumn(column: FactorScreenColumnDto): QuantScreenerColumn {
   return {
     key: column.key,
@@ -589,4 +734,30 @@ export async function runQuantScreening(
   }
 
   return mapScreeningResponse((await response.json()) as FactorScreenResponseDto, request);
+}
+
+export async function runFactorBacktest(
+  request: FactorBacktestRequest,
+): Promise<FactorBacktestResponse> {
+  const payload = {
+    start_date: request.startDate,
+    end_date: request.endDate,
+    rebalance_frequency: request.rebalanceFrequency,
+    conditions: request.conditions.map(mapConditionToDto),
+    sector_codes: request.industries.length > 0 ? request.industries : null,
+    match_mode: "all",
+    market: request.market,
+  };
+
+  const response = await fetch(`${apiBaseUrl}/api/backtests/factor`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Backtest failed: ${response.status}`);
+  }
+
+  return mapBacktestResponse((await response.json()) as FactorBacktestResponseDto);
 }
