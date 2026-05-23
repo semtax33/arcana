@@ -200,6 +200,7 @@ def build_factor_screen_query(
     as_of_date: str | date | None = None,
     financial_basis: str | None = DEFAULT_FINANCIAL_BASIS,
     sector_codes: list[str] | None = None,
+    industry_group_codes: list[str] | None = None,
     match_mode: MatchMode = "all",
     limit: int | None = None,
     factor_table: str = "fact_daily_factors",
@@ -225,6 +226,9 @@ def build_factor_screen_query(
         raise ValueError("limit must be a positive integer")
 
     normalized_sector_codes = _validate_sector_codes(sector_codes) if sector_codes else None
+    normalized_industry_group_codes = (
+        _validate_sector_codes(industry_group_codes) if industry_group_codes else None
+    )
     factor_ids = _validate_factor_ids(
         sorted({condition.factor_id for condition in normalized_conditions})
     )
@@ -237,6 +241,8 @@ def build_factor_screen_query(
         params["financial_basis"] = financial_basis
     if normalized_sector_codes:
         params["sector_codes"] = normalized_sector_codes
+    if normalized_industry_group_codes:
+        params["industry_group_codes"] = normalized_industry_group_codes
     if limit is not None:
         params["limit"] = int(limit)
 
@@ -246,14 +252,23 @@ def build_factor_screen_query(
         basis_filter = "\n        AND f.financial_basis = {financial_basis:String}"
         basis_date_filter = "\n        AND financial_basis = {financial_basis:String}"
 
-    needs_security_universe = bool(normalized_sector_codes or include_security_metadata)
+    needs_security_universe = bool(
+        normalized_sector_codes
+        or normalized_industry_group_codes
+        or include_security_metadata
+    )
     security_universe_cte = ""
     security_universe_join = ""
     metadata_select_sql = ""
     if needs_security_universe:
         sector_filter = ""
         if normalized_sector_codes:
-            sector_filter = "\n        AND has({sector_codes:Array(String)}, iss.industry_code)"
+            sector_filter = "\n        AND has({sector_codes:Array(String)}, iss.sector_code)"
+        industry_group_filter = ""
+        if normalized_industry_group_codes:
+            industry_group_filter = (
+                "\n        AND has({industry_group_codes:Array(String)}, iss.industry_group_code)"
+            )
         security_universe_cte = f""",
 security_universe AS (
     SELECT
@@ -262,7 +277,9 @@ security_universe AS (
         any(iss.legal_name_ko) AS issuer_name,
         any(iss.legal_name_en) AS issuer_name_en,
         any(iss.domicile_country) AS country,
-        any(iss.industry_code) AS sector_code,
+        any(iss.sector_code) AS sector_code,
+        any(iss.industry_group_code) AS industry_group_code,
+        any(iss.industry_group_name) AS industry_group_name,
         any(mcap.market_cap) AS market_cap
     FROM {_validate_table_name(security_table)} AS sm
     LEFT JOIN {_validate_table_name(issuer_table)} AS iss
@@ -288,7 +305,7 @@ security_universe AS (
         GROUP BY security_id
     ) AS mcap
         ON mcap.security_id = sm.security_id
-    WHERE sm.is_active{sector_filter}
+    WHERE sm.is_active{sector_filter}{industry_group_filter}
     GROUP BY sm.security_id
 )"""
         security_universe_join = "\n    INNER JOIN security_universe AS u\n        ON u.security_id = f.security_id"
@@ -299,6 +316,8 @@ security_universe AS (
                 "    any(u.issuer_name_en) AS issuer_name_en,\n"
                 "    any(u.country) AS country,\n"
                 "    any(u.sector_code) AS sector_code,\n"
+                "    any(u.industry_group_code) AS industry_group_code,\n"
+                "    any(u.industry_group_name) AS industry_group_name,\n"
                 "    any(u.market_cap) AS market_cap,\n"
             )
 
@@ -411,6 +430,7 @@ def screen_stocks_by_factors(
     as_of_date: str | date | None = None,
     financial_basis: str | None = DEFAULT_FINANCIAL_BASIS,
     sector_codes: list[str] | None = None,
+    industry_group_codes: list[str] | None = None,
     match_mode: MatchMode = "all",
     limit: int | None = None,
     factor_table: str = "fact_daily_factors",
@@ -427,6 +447,7 @@ def screen_stocks_by_factors(
         as_of_date=as_of_date,
         financial_basis=financial_basis,
         sector_codes=sector_codes,
+        industry_group_codes=industry_group_codes,
         match_mode=match_mode,
         limit=limit,
         factor_table=factor_table,

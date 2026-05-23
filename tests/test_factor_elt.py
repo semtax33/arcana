@@ -63,6 +63,8 @@ class FactorEltTest(unittest.TestCase):
         catalog_df = create_factor_catalog_dataframe(
             [
                 "roe",
+                "roic_financial",
+                "roic_operational",
                 "na_20",
                 "ma_50",
                 "ma_120",
@@ -81,6 +83,10 @@ class FactorEltTest(unittest.TestCase):
         row_by_id = catalog_df.set_index("factor_id")
         self.assertEqual(row_by_id.loc["roe", "factor_type"], "quality")
         self.assertEqual(row_by_id.loc["roe", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["roic_financial", "factor_type"], "quality")
+        self.assertEqual(row_by_id.loc["roic_financial", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["roic_operational", "factor_type"], "quality")
+        self.assertEqual(row_by_id.loc["roic_operational", "unit"], "percent")
         self.assertEqual(row_by_id.loc["na_20", "factor_type"], "technical")
         self.assertEqual(row_by_id.loc["na_20", "factor_group"], "trend")
         self.assertEqual(row_by_id.loc["ma_50", "factor_type"], "technical")

@@ -10,9 +10,40 @@ sectors:
   "50": Communication Services
   "55": Utilities
   "60": Real Estate
+industry_groups:
+  "1010": Energy
+  "1510": Materials
+  "2010": Capital Goods
+  "2020": Commercial & Professional Services
+  "2030": Transportation
+  "2510": Automobiles & Components
+  "2520": Consumer Durables & Apparel
+  "2530": Consumer Services
+  "2550": Consumer Discretionary Distribution & Retail
+  "3010": Consumer Staples Distribution & Retail
+  "3020": Food, Beverage & Tobacco
+  "3030": Household & Personal Products
+  "3510": Health Care Equipment & Services
+  "3520": Pharmaceuticals, Biotechnology & Life Sciences
+  "4010": Banks
+  "4020": Financial Services
+  "4030": Insurance
+  "4510": Software & Services
+  "4520": Technology Hardware & Equipment
+  "4530": Semiconductors & Semiconductor Equipment
+  "5010": Telecommunication Services
+  "5020": Media & Entertainment
+  "5510": Utilities
+  "6010": Equity Real Estate Investment Trusts (REITs)
+  "6020": Real Estate Management & Development
 weights:
   industry: 3.0
   product: 1.5
+  confidence_denominator: 6.0
+industry_group_weights:
+  industry: 3.0
+  product: 1.5
+  any_text: 1.0
   confidence_denominator: 6.0
 sector_priority:
   - "45"
@@ -26,6 +57,32 @@ sector_priority:
   - "55"
   - "60"
   - "10"
+industry_group_priority:
+  - "4530"
+  - "4510"
+  - "4520"
+  - "5020"
+  - "5010"
+  - "3520"
+  - "3510"
+  - "4020"
+  - "4010"
+  - "4030"
+  - "2010"
+  - "2030"
+  - "2020"
+  - "1510"
+  - "2510"
+  - "2520"
+  - "2530"
+  - "2550"
+  - "3020"
+  - "3010"
+  - "3030"
+  - "5510"
+  - "6020"
+  - "6010"
+  - "1010"
 sector_rules:
   "10":
     industry_patterns:
@@ -461,7 +518,466 @@ score_overrides:
 
 # 종목코드 기준 강제 매핑
 # 여기는 사람이 검토한 뒤 하나씩 쌓으면 됨
+  - name: KRX hydrogen/gas/refining -> Energy
+    conditions:
+      any_text_any:
+        - "연료용 가스 제조 및 배관공급업|수소가스|고순도 수소|석유 정제품 제조업|석유정제|유전개발"
+    add_scores:
+      "10": 8.0
+  - name: KRX defense and electrical capital goods -> Industrials
+    conditions:
+      any_text_any:
+        - "무기 및 총포탄 제조업|방위산업|방탄|전동기, 발전기 및 전기 변환|수·배전반|인버터|차단기|배전반|절연전선|전기공사"
+    add_scores:
+      "20": 8.0
+  - name: KRX games media -> Communication Services
+    conditions:
+      any_text_any:
+        - "카카오게임즈|게임 퍼블리싱|모바일, PC게임|웹툰|웹소설|디지털 만화"
+    add_scores:
+      "50": 8.0
+  - name: KRX genomics and pharma holdings -> Health Care
+    conditions:
+      any_text_any:
+        - "유전체 분석|NGS|CES|알부민|유로키나제|간염백신|백신 제조|단백질 저해제|신약|치료제"
+    add_scores:
+      "35": 8.0
+  - name: KRX machine vision fiber optics -> Information Technology
+    conditions:
+      any_text_any:
+        - "AI 머신비전|카메라 모듈 검사기|광섬유|광분배기|광다이오드|POS|금전등록기|반도체 제조업|혼성직접회로"
+    add_scores:
+      "45": 8.0
+  - name: KRX auto parts -> Consumer Discretionary
+    conditions:
+      any_text_any:
+        - "자동차 신품 부품 제조업|캐니스터|플라스틱필러넥|의장부품"
+    add_scores:
+      "25": 8.0
+  - name: KRX telecom services -> Communication Services
+    conditions:
+      any_text_any:
+        - "전기 통신업|국제전화|유무선 전화기|휴대폰부가서비스|전화번호검색|전화번호안내"
+    add_scores:
+      "50": 8.0
+  - name: KRX printing commercial services -> Industrials
+    conditions:
+      any_text_any:
+        - "인쇄 및 인쇄관련 산업|다이어리"
+    add_scores:
+      "20": 8.0
+  - name: KRX musical instruments -> Consumer Discretionary
+    conditions:
+      any_text_any:
+        - "악기 제조업|피아노|기타,현악기"
+    add_scores:
+      "25": 8.0
+  - name: KRX fisheries -> Consumer Staples
+    conditions:
+      any_text_any:
+        - "어로 어업|원양어업|어획물"
+    add_scores:
+      "30": 8.0
+  - name: KRX steel and paper materials -> Materials
+    conditions:
+      any_text_any:
+        - "1차 철강 제조업|열연코일|냉연강판|스테인리스|마닐라판지|판지 제조|화공약품"
+    add_scores:
+      "15": 8.0
+  - name: KRX credit rating ATM VAN -> Financials
+    conditions:
+      any_text_any:
+        - "기업신용조사|신용평가|전자신용인증|ATM관리|CD-VAN|위험관리솔루션"
+    add_scores:
+      "40": 8.0
+
+industry_group_rules:
+  "1010":
+    sector_code: "10"
+    any_text_patterns:
+      - "Energy|Oil|Gas|LNG|LPG|Coal|석유|정유|가스|천연가스|석탄|에너지"
+  "1510":
+    sector_code: "15"
+    any_text_patterns:
+      - "Materials|Chemical|Steel|Metal|Mining|Paper|Packaging|Glass|Timber|Fertilizer|소재|화학|철강|금속|비철|광물|제지|포장|유리|목재|비료"
+  "2010":
+    sector_code: "20"
+    any_text_patterns:
+      - "Capital Goods|Machinery|Equipment|Construction|Engineering|Shipbuilding|Aerospace|Defense|Electrical|자본재|기계|장비|건설|엔지니어링|조선|항공|방산|전기장비"
+  "2020":
+    sector_code: "20"
+    any_text_patterns:
+      - "Commercial|Professional|Security|Facility|Environment|Printing|Consulting|Research|상업서비스|전문서비스|보안|경비|시설관리|환경|인쇄|컨설팅|리서치"
+  "2030":
+    sector_code: "20"
+    any_text_patterns:
+      - "Transportation|Logistics|Airline|Marine|Shipping|Warehouse|Courier|운송|물류|항공운송|해운|창고|택배"
+  "2510":
+    sector_code: "25"
+    any_text_patterns:
+      - "Automobile|Automotive|Auto Parts|Tire|Vehicle|자동차|차량|타이어|모빌리티"
+  "2520":
+    sector_code: "25"
+    any_text_patterns:
+      - "Durable|Apparel|Textile|Furniture|Appliance|Leisure Product|Household Durable|내구소비재|의류|섬유|가구|가전|레저제품|생활가전"
+  "2530":
+    sector_code: "25"
+    any_text_patterns:
+      - "Hotel|Restaurant|Leisure|Travel|Casino|Education|Consumer Service|호텔|레스토랑|여행|카지노|교육|외식|레저서비스"
+  "2550":
+    sector_code: "25"
+    any_text_patterns:
+      - "Retail|Distribution|Department Store|E-commerce|Duty Free|Specialty Retail|유통|소매|백화점|전자상거래|면세점|전문소매"
+  "3010":
+    sector_code: "30"
+    any_text_patterns:
+      - "Staples Distribution|Food Retail|Hypermarket|Grocery|필수품유통|식품유통|마트|슈퍼마켓"
+  "3020":
+    sector_code: "30"
+    any_text_patterns:
+      - "Food|Beverage|Tobacco|Feed|Agriculture|Fisheries|식품|음료|담배|사료|농업|축산|수산"
+  "3030":
+    sector_code: "30"
+    any_text_patterns:
+      - "Household|Personal Products|Cosmetics|생활용품|개인용품|화장품|퍼스널케어"
+  "3510":
+    sector_code: "35"
+    any_text_patterns:
+      - "Health Care Equipment|Health Care Service|Medical Device|Hospital|Diagnostics|의료장비|의료서비스|의료기기|병원|진단"
+  "3520":
+    sector_code: "35"
+    any_text_patterns:
+      - "Pharmaceutical|Biotechnology|Life Sciences|Drug|Vaccine|CRO|제약|바이오|생명공학|의약품|백신|임상"
+  "4010":
+    sector_code: "40"
+    any_text_patterns:
+      - "Bank|은행"
+  "4020":
+    sector_code: "40"
+    any_text_patterns:
+      - "Financial Services|Capital Markets|Consumer Finance|Card|Securities|Asset Management|Holding|금융서비스|증권|캐피탈|카드|자산운용|지주|투자"
+  "4030":
+    sector_code: "40"
+    any_text_patterns:
+      - "Insurance|보험"
+  "4510":
+    sector_code: "45"
+    any_text_patterns:
+      - "Software|Service|IT Service|Cloud|Security|Data|System Integration|SaaS|소프트웨어|IT서비스|클라우드|보안|데이터|시스템통합"
+  "4520":
+    sector_code: "45"
+    any_text_patterns:
+      - "Hardware|Electronic Equipment|Communication Equipment|Display|PCB|Electronic Component|하드웨어|전자장비|통신장비|디스플레이|전자부품"
+  "4530":
+    sector_code: "45"
+    any_text_patterns:
+      - "Semiconductor|Semiconductor Equipment|Memory|Foundry|반도체|반도체장비|메모리|파운드리"
+  "5010":
+    sector_code: "50"
+    any_text_patterns:
+      - "Telecommunication|Wireless|Internet Service|Broadband|통신서비스|이동통신|인터넷서비스|초고속인터넷"
+  "5020":
+    sector_code: "50"
+    any_text_patterns:
+      - "Media|Entertainment|Game|Advertising|Broadcasting|Publishing|Content|미디어|엔터테인먼트|게임|광고|방송|출판|콘텐츠"
+  "5510":
+    sector_code: "55"
+    any_text_patterns:
+      - "Utilities|Electric|Gas Utility|Water|Power Generation|유틸리티|전력|가스|수도|발전"
+  "6010":
+    sector_code: "60"
+    any_text_patterns:
+      - "REIT|Real Estate Investment Trust|리츠|부동산투자신탁"
+  "6020":
+    sector_code: "60"
+    any_text_patterns:
+      - "Real Estate|Development|Management|부동산|개발|분양|자산관리"
+industry_group_score_overrides:
+  - name: KRX energy utilities -> Energy
+    conditions:
+      any_text_any:
+        - "연료용 가스 제조 및 배관공급업|석유 정제품 제조업|수소가스|고순도 수소|LNG|LPG"
+    add_scores:
+      "1010": 6.0
+  - name: KRX materials manufacturing -> Materials
+    conditions:
+      any_text_any:
+        - "플라스틱제품 제조업|합성고무 및 플라스틱 물질 제조업|고무제품 제조업|시멘트, 석회, 플라스터|내화, 비내화 요업제품|펄프, 종이 및 판지|골판지, 종이 상자|기타 종이 및 판지|나무제품 제조업|1차 철강 제조업|기타 화학제품 제조업"
+    add_scores:
+      "1510": 6.0
+  - name: KRX capital goods manufacturing -> Capital Goods
+    conditions:
+      any_text_any:
+        - "전동기, 발전기 및 전기 변환|구조용 금속제품, 탱크 및 증기발생기|절연선 및 케이블|선박 및 보트 건조업|전구 및 조명장치|전기 및 통신 공사업|기반조성 및 시설물 축조|실내건축 및 건축마무리|무기 및 총포탄|일반 목적용 기계|측정, 시험, 항해, 제어 및 기타 정밀기기"
+    add_scores:
+      "2010": 6.0
+  - name: KRX commercial professional services -> Commercial & Professional Services
+    conditions:
+      any_text_any:
+        - "기타 사업지원 서비스업|회사 본부 및 경영 컨설팅|기타 과학기술 서비스업|그외 기타 전문, 과학 및 기술 서비스업|사업시설 유지·관리 서비스업|폐기물 처리업|인쇄 및 인쇄관련 산업"
+    add_scores:
+      "2020": 6.0
+  - name: KRX automobile components -> Automobiles & Components
+    conditions:
+      any_text_any:
+        - "자동차 신품 부품 제조업|자동차 부품|차량 부품|EV Relay|Motor Housing"
+    add_scores:
+      "2510": 6.0
+  - name: KRX durables apparel -> Consumer Durables & Apparel
+    conditions:
+      any_text_any:
+        - "봉제의복 제조업|신발 및 신발 부분품 제조업|가죽, 가방 및 유사제품 제조업|직물직조 및 직물제품 제조업|방적 및 가공사 제조업|가정용 기기 제조업|운동 및 경기용구 제조업|귀금속 및 장신용품 제조업|산업용 안전화|안전복"
+    add_scores:
+      "2520": 6.0
+  - name: KRX consumer services -> Consumer Services
+    conditions:
+      any_text_any:
+        - "일반 교습 학원|스포츠 서비스업|일반 및 생활 숙박시설 운영업|그외 기타 개인 서비스업|개인 및 가정용품 임대업|프랜차이즈|외식"
+    add_scores:
+      "2530": 6.0
+  - name: KRX discretionary retail distribution -> Consumer Discretionary Distribution & Retail
+    conditions:
+      any_text_any:
+        - "상품 종합 도매업|상품 중개업|기타 전문 도매업|전문 도매업|도소매 판매|중개"
+    add_scores:
+      "2550": 6.0
+  - name: KRX staples distribution retail -> Consumer Staples Distribution & Retail
+    conditions:
+      any_text_any:
+        - "음·식료품 및 담배 도매업|음·식료품 및 담배 소매업|식품 도매|식품 소매"
+    add_scores:
+      "3010": 6.0
+  - name: KRX food beverage tobacco -> Food, Beverage & Tobacco
+    conditions:
+      any_text_any:
+        - "도축, 육류 가공 및 저장 처리업|동·식물성 유지 및 낙농제품 제조업|곡물가공품, 전분 및 전분제품|작물 재배업|떡, 빵 및 과자류 제조업|과실, 채소 가공 및 저장 처리업|어로 어업|사료|축산|수산"
+    add_scores:
+      "3020": 6.0
+  - name: KRX household personal products -> Household & Personal Products
+    conditions:
+      any_text_any:
+        - "화장품|생활용품|개인용품|퍼스널케어"
+    add_scores:
+      "3030": 6.0
+  - name: KRX health care equipment services -> Health Care Equipment & Services
+    conditions:
+      any_text_any:
+        - "의료용 기기 제조업|의료용품 및 기타 의약 관련제품 제조업|의료기기|의료영상|X-ray|내시경|수술기구|환자 감시장치|웨어러블 로봇|진단|G-NIPT|암패널|희귀패널"
+    add_scores:
+      "3510": 6.0
+  - name: KRX pharma biotech life sciences -> Pharmaceuticals, Biotechnology & Life Sciences
+    conditions:
+      any_text_any:
+        - "자연과학 및 공학 연구개발업|기초 의약물질 제조업|신약|항암|ADC|오가노이드|치료제|백신|바이오|제약|CRO|임상|단백질 분해제|재생치료제"
+    add_scores:
+      "3520": 6.0
+  - name: KRX financial services -> Financial Services
+    conditions:
+      any_text_any:
+        - "금융 지원 서비스업|기타 금융업|기업인수합병|기업 인수합병|기업 인수 및 합병|기업인수목적|SPAC|스팩|증권|캐피탈|자산운용|디지털뱅킹|보험 서비스 어플리케이션|기업용 보험 솔루션"
+    add_scores:
+      "4020": 6.0
+  - name: KRX software services -> Software & Services
+    conditions:
+      any_text_any:
+        - "컴퓨터 프로그래밍, 시스템 통합 및 관리업|소프트웨어 개발 및 공급업|기타 정보 서비스업|자료처리, 호스팅, 포털 및 기타 인터넷 정보매개 서비스업|시스템 통합|디지털뱅킹 솔루션|기업용 보험 솔루션|AI플랫폼"
+    add_scores:
+      "4510": 6.0
+  - name: KRX technology hardware equipment -> Technology Hardware & Equipment
+    conditions:
+      any_text_any:
+        - "컴퓨터 및 주변장치 제조업|전자부품 제조업|영상 및 음향기기 제조업|통신 및 방송 장비 제조업|측정, 시험, 항해, 제어 및 기타 정밀기기|사진장비 및 광학기기 제조업|마그네틱 및 광학 매체 제조업|전자부품용 와이어"
+    add_scores:
+      "4520": 6.0
+  - name: KRX semiconductor -> Semiconductors
+    conditions:
+      any_text_any:
+        - "반도체 제조업|반도체 장비|반도체장비|Probe Card|Test Socket|Foundry|Memory"
+    add_scores:
+      "4530": 6.0
+  - name: KRX telecommunication services -> Telecommunication Services
+    conditions:
+      any_text_any:
+        - "전기 통신업|통신서비스|이동통신|인터넷서비스|VoIP"
+    add_scores:
+      "5010": 6.0
+  - name: KRX media entertainment -> Media & Entertainment
+    conditions:
+      any_text_any:
+        - "창작 및 예술관련 서비스업|광고업|영상·오디오물 제공 서비스업|자료처리, 호스팅, 포털 및 기타 인터넷 정보매개 서비스업|공연기획|MD|플랫폼|콘텐츠|게임|방송|미디어"
+    add_scores:
+      "5020": 6.0
+  - name: KRX utilities -> Utilities
+    conditions:
+      any_text_any:
+        - "증기, 냉·온수 및 공기조절 공급업|전기 공급|가스 공급|수도|발전"
+    add_scores:
+      "5510": 6.0
+  - name: KRX real estate management development -> Real Estate Management & Development
+    conditions:
+      any_text_any:
+        - "부동산 관련 서비스업|부동산 개발|부동산 관리|분양|자산관리"
+    add_scores:
+      "6020": 6.0
+  - name: KRX parent-scoped battery cells and materials
+    conditions:
+      any_text_any:
+        - "일차전지 및 이차전지 제조업|2차전지|이차전지|배터리|양극활물질|음극재|분리막|전구체|커패시터"
+    add_scores:
+      "1510": 6.0
+      "2010": 6.0
+  - name: KRX parent-scoped wholesale and trading leftovers
+    conditions:
+      any_text_any:
+        - "기타 전문 도매업|상품 종합 도매업|상품 중개업|건축자재, 철물 및 난방장치 도매업|도매|무역|B2B 전자상거래"
+    add_scores:
+      "2020": 6.0
+      "2550": 6.0
+      "3510": 6.0
+      "4020": 6.0
+      "4520": 6.0
+  - name: KRX parent-scoped information service leftovers
+    conditions:
+      any_text_any:
+        - "기타 정보 서비스업|권리조사|신용정보|신용인증|페이먼트|보험 서비스|휴대폰부가서비스|전화번호|고객센터|콜센터|데이터서비스"
+    add_scores:
+      "2020": 6.0
+      "4020": 6.0
+      "4510": 6.0
+      "5020": 6.0
+  - name: KRX parent-scoped financial support holdings leftovers
+    conditions:
+      any_text_any:
+        - "금융 지원 서비스|기타 금융업|회사 본부 및 경영 컨설팅 서비스업|지주|홀딩스|기업신용조사|신용평가|ATM관리|CD-VAN"
+    add_scores:
+      "2020": 6.0
+      "4020": 6.0
+  - name: KRX parent-scoped consumer software leisure leftovers
+    conditions:
+      any_text_any:
+        - "소프트웨어 개발 및 공급업|골프시뮬레이터|골프센서|게임 퍼블리싱|인쇄 및 인쇄관련 산업|다이어리"
+    add_scores:
+      "2530": 6.0
+      "4510": 6.0
+      "5020": 6.0
+  - name: KRX parent-scoped electronic hardware leftovers
+    conditions:
+      any_text_any:
+        - "전자부품 제조업|PCB|FPCB|인쇄회로|FPCA|카메라모듈|액츄에이터|OLED|동박|알루미늄박|모바일 IT응용제품|스마트폰|보조배터리"
+    add_scores:
+      "1510": 6.0
+      "2010": 6.0
+      "2520": 6.0
+      "3510": 6.0
+      "4520": 6.0
+  - name: KRX parent-scoped video audio equipment leftovers
+    conditions:
+      any_text_any:
+        - "영상 및 음향기기 제조업|영상저장장치|IP 카메라|블랙박스|디지털 사이니지|키오스크|DVR|블루투스헤드셋|영상스트리밍"
+    add_scores:
+      "2010": 6.0
+      "4520": 6.0
+      "5020": 6.0
+  - name: KRX parent-scoped consumer product leftovers
+    conditions:
+      any_text_any:
+        - "그외 기타 제품 제조업|정수기|정수기 필터|핸드폰 케이스|액정보호필름|플라스틱제품 제조업|기타 금속 가공제품 제조업|전문디자인업|광고업|악기 제조업"
+    add_scores:
+      "1510": 6.0
+      "2520": 6.0
+      "2530": 6.0
+      "3030": 6.0
+      "4520": 6.0
+  - name: KRX parent-scoped life science diagnostics leftovers
+    conditions:
+      any_text_any:
+        - "Genelix|Genext|Geneka|유전체|NGS|CES|단백질|오토택신|BAC DNA CHIP|자동세포카운팅|생체조직|디지털세포이미징|의약외품|플라스타|패취|화장품"
+    add_scores:
+      "3030": 6.0
+      "3510": 6.0
+      "3520": 6.0
+  - name: KRX parent-scoped utility leftovers
+    conditions:
+      any_text_any:
+        - "전기업|전기 공급업"
+    add_scores:
+      "5510": 6.0
+  - name: Semiconductor keywords -> Semiconductors
+    conditions:
+      any_text_any:
+        - "Semiconductor|반도체|Memory|Foundry|Probe Card|Test Socket"
+    add_scores:
+      "4530": 6.0
+  - name: Software/cloud/security -> Software & Services
+    conditions:
+      any_text_any:
+        - "Software|SaaS|Cloud|Security|Data|소프트웨어|클라우드|보안"
+    add_scores:
+      "4510": 6.0
+  - name: Game/content/media -> Media & Entertainment
+    conditions:
+      any_text_any:
+        - "Game|Content|Entertainment|Media|게임|콘텐츠|엔터테인먼트|미디어"
+    add_scores:
+      "5020": 6.0
+  - name: Biotechnology/pharma -> Pharmaceuticals, Biotechnology & Life Sciences
+    conditions:
+      any_text_any:
+        - "Biotech|Pharmaceutical|Vaccine|CRO|바이오|제약|백신|임상"
+    add_scores:
+      "3520": 6.0
+  - name: Automobiles/components -> Automobiles & Components
+    conditions:
+      any_text_any:
+        - "Automobile|Vehicle|Tire|자동차|차량|타이어"
+    add_scores:
+      "2510": 6.0
+
 manual_overrides:
+  "105760":
+    industry_group_code: "4520"
+    industry_group_name: Technology Hardware & Equipment
+    reason: "POS/KIOSK terminal hardware"
+  "238500":
+    industry_group_code: "4520"
+    industry_group_name: Technology Hardware & Equipment
+    reason: "mobility and module hardware"
+  "084180":
+    industry_group_code: "2010"
+    industry_group_name: Capital Goods
+    reason: "electric forklift/capital goods product"
+  "038870":
+    industry_group_code: "4520"
+    industry_group_name: Technology Hardware & Equipment
+    reason: "POS and cash register hardware"
+  "012700":
+    industry_group_code: "1510"
+    industry_group_name: Materials
+    reason: "chemical goods transport/trading"
+  "011690":
+    industry_group_code: "4530"
+    industry_group_name: Semiconductors & Semiconductor Equipment
+    reason: "hybrid integrated circuits and communication device manufacturing"
+  "010170":
+    industry_group_code: "4520"
+    industry_group_name: Technology Hardware & Equipment
+    reason: "optical fiber and fiber optic hardware"
+  "005490":
+    industry_group_code: "1510"
+    industry_group_name: Materials
+    reason: "steel holding company"
+  "002810":
+    industry_group_code: "1510"
+    industry_group_name: Materials
+    reason: "chemical products and lenses trading"
+  "002870":
+    industry_group_code: "1510"
+    industry_group_name: Materials
+    reason: "paperboard manufacturing and distribution"
+  "003090":
+    industry_group_code: "3520"
+    industry_group_name: Pharmaceuticals, Biotechnology & Life Sciences
+    reason: "pharmaceutical holding and products"
   # "0001A0":
   #   sector_code: "10"
   #   sector_name: "Energy"

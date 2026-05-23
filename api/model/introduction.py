@@ -35,6 +35,8 @@ class CompanyIntroduction:
 class BusinessAreaBadge:
     sector_code: str
     sector_name: str
+    industry_group_code: str | None = None
+    industry_group_name: str | None = None
     schema: str = "GICS"
 
 

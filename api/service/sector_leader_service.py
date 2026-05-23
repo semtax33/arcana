@@ -23,6 +23,8 @@ FACTOR_VALUE_COLUMNS = ("factor_value", "value")
 DEFAULT_FINANCIAL_BASIS = "annual"
 DEFAULT_NEAR_HIGH_PCT = 3.0
 DEFAULT_SORT_BY = "strong_stock_ratio"
+DEFAULT_LEVEL = "industry_group"
+LEVELS = {"sector", "industry_group"}
 SORTABLE_METRICS = {
     "strong_stock_ratio",
     "eps_expected_growth",
@@ -67,8 +69,10 @@ class SectorLeaderService:
         limit: int | None = None,
         near_high_pct: float = DEFAULT_NEAR_HIGH_PCT,
         financial_basis: str = DEFAULT_FINANCIAL_BASIS,
+        level: str = DEFAULT_LEVEL,
     ) -> SectorLeaderResponse:
         as_of = as_of_date or self._today_factory()
+        normalized_level = _normalize_level(level)
         normalized_sort_by = _normalize_sort_by(sort_by)
         normalized_direction = _normalize_direction(direction, normalized_sort_by)
         normalized_limit = _normalize_limit(limit)
@@ -77,7 +81,7 @@ class SectorLeaderService:
         if not normalized_financial_basis:
             normalized_financial_basis = DEFAULT_FINANCIAL_BASIS
 
-        sector_names = self._load_sector_names()
+        sector_names = self._load_classification_names(normalized_level)
         client = self._client_factory()
         try:
             eps_factor_id = _select_eps_growth_factor_id(client)
@@ -87,6 +91,7 @@ class SectorLeaderService:
                 near_high_pct=normalized_near_high_pct,
                 financial_basis=normalized_financial_basis,
                 eps_factor_id=eps_factor_id,
+                level=normalized_level,
             )
         finally:
             close = getattr(client, "close", None)
@@ -104,6 +109,7 @@ class SectorLeaderService:
 
         return SectorLeaderResponse(
             as_of_date=as_of,
+            level=normalized_level,
             sort_by=normalized_sort_by,
             direction=normalized_direction,
             near_high_pct=normalized_near_high_pct,
@@ -113,11 +119,12 @@ class SectorLeaderService:
             rows=leader_rows,
         )
 
-    def _load_sector_names(self) -> dict[str, str]:
+    def _load_classification_names(self, level: str) -> dict[str, str]:
         with self._gics_rules_path.open("r", encoding="utf-8") as file:
             config = yaml.safe_load(file) or {}
-        sectors = config.get("sectors", {})
-        return {str(code): str(name) for code, name in sectors.items()}
+        key = "industry_groups" if level == "industry_group" else "sectors"
+        names = config.get(key, {})
+        return {str(code): str(name) for code, name in names.items()}
 
 
 def _select_eps_growth_factor_id(client: Any) -> str:
@@ -150,6 +157,7 @@ def _load_metric_rows(
     near_high_pct: float,
     financial_basis: str,
     eps_factor_id: str,
+    level: str,
 ) -> tuple[list[dict[str, Any]], str]:
     factor_ids = ["roe", "per", "pbr", eps_factor_id]
     last_source = FACTOR_TABLES[0]
@@ -165,6 +173,7 @@ def _load_metric_rows(
                         _build_sector_leader_query(
                             factor_table=table_name,
                             value_column=value_column,
+                            level=level,
                         ),
                         parameters={
                             "as_of_date": as_of_date.isoformat(),
@@ -201,11 +210,20 @@ def _has_any_factor_metric(rows: list[dict[str, Any]]) -> bool:
     )
 
 
-def _build_sector_leader_query(*, factor_table: str, value_column: str) -> str:
+def _build_sector_leader_query(
+    *,
+    factor_table: str,
+    value_column: str,
+    level: str = DEFAULT_LEVEL,
+) -> str:
     if factor_table not in FACTOR_TABLES:
         raise ValueError(f"unsupported factor table: {factor_table}")
     if value_column not in FACTOR_VALUE_COLUMNS:
         raise ValueError(f"unsupported factor value column: {value_column}")
+    normalized_level = _normalize_level(level)
+    classification_column = (
+        "iss.industry_group_code" if normalized_level == "industry_group" else "iss.sector_code"
+    )
 
     return f"""
 WITH
@@ -217,15 +235,15 @@ latest_market_date AS (
 universe AS (
     SELECT
         sm.security_id AS security_id,
-        any(iss.industry_code) AS sector_code
+        any({classification_column}) AS sector_code
     FROM security_master AS sm
     INNER JOIN issuers AS iss
         ON iss.issuer_id = sm.issuer_id
     WHERE sm.is_active
         AND iss.is_active
         AND iss.industry_schema = 'GICS'
-        AND iss.industry_code != ''
-        AND iss.industry_code != 'UNMAPPED'
+        AND {classification_column} != ''
+        AND {classification_column} != 'UNMAPPED'
         AND lowerUTF8(coalesce(iss.legal_name_en, '')) NOT LIKE '%special purpose acquisition%'
         AND lowerUTF8(coalesce(iss.legal_name_en, '')) NOT LIKE '%spac%'
     GROUP BY sm.security_id
@@ -442,6 +460,14 @@ def _sort_rows(
         valid_rows.sort(key=lambda row: (metric_value(row) or 0, row.sector_name))
     missing_rows.sort(key=lambda row: row.sector_name)
     return [*valid_rows, *missing_rows]
+
+
+def _normalize_level(value: str) -> str:
+    normalized = str(value or DEFAULT_LEVEL).strip()
+    if normalized not in LEVELS:
+        allowed = ", ".join(sorted(LEVELS))
+        raise ValueError(f"level must be one of: {allowed}")
+    return normalized
 
 
 def _normalize_sort_by(value: str) -> str:

@@ -29,6 +29,7 @@ class SectorLeaderRow:
 @dataclass(frozen=True)
 class SectorLeaderResponse:
     as_of_date: date
+    level: str
     sort_by: str
     direction: str
     near_high_pct: float

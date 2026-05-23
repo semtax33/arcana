@@ -491,6 +491,8 @@ def infer_factor_unit(factor_id: str) -> str:
         "npm",
         "tax_rate",
         "roe",
+        "roic_financial",
+        "roic_operational",
         "sharehold_div_yield",
         "sharehold_net_buyback_yield",
         "sharehold_return",

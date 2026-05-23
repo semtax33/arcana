@@ -1,49 +1,74 @@
-import io
+from __future__ import annotations
+
 import re
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import requests
 import yaml
 
-from company import fetch_sector, kospi_kosdaq_corp_list
+
+DEFAULT_GICS_RULES_PATH = Path(__file__).resolve().parents[1] / "data-lake" / "meta" / "rules" / "gics_rules.yaml"
+UNMAPPED = "UNMAPPED"
 
 
-# ------------------------------------------------------------
-# 2. YAML 로드
-# ------------------------------------------------------------
-def load_gics_config(path: str | Path = "gics_rules.yaml") -> dict[str, Any]:
+def _load_company_functions():
+    try:
+        from company import fetch_sector, kospi_kosdaq_corp_list
+    except ModuleNotFoundError:  # pragma: no cover - package import path for tests/tools
+        from engine.company import fetch_sector, kospi_kosdaq_corp_list
+    return fetch_sector, kospi_kosdaq_corp_list
+
+
+def load_gics_config(path: str | Path = DEFAULT_GICS_RULES_PATH) -> dict[str, Any]:
     path = Path(path)
+    with path.open("r", encoding="utf-8") as file:
+        config = yaml.safe_load(file) or {}
 
-    with path.open("r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-
-    required_keys = ["sectors", "sector_rules"]
+    required_keys = ["sectors", "sector_rules", "industry_groups"]
     for key in required_keys:
         if key not in config:
-            raise ValueError(f"YAML 설정에 '{key}' 항목이 없습니다: {path}")
+            raise ValueError(f"YAML config is missing required key '{key}': {path}")
 
+    _validate_gics_config(config)
     return config
 
 
-# ------------------------------------------------------------
-# 3. 유틸
-# ------------------------------------------------------------
-def normalize_text(x: Any) -> str:
-    if pd.isna(x):
-        return ""
+def _validate_gics_config(config: dict[str, Any]) -> None:
+    sectors = {str(code) for code in config.get("sectors", {})}
+    industry_groups = {str(code) for code in config.get("industry_groups", {})}
 
-    x = str(x)
-    x = x.replace("\u3000", " ")
-    x = re.sub(r"\s+", " ", x)
-    return x.strip()
+    for sector_code in config.get("sector_rules", {}):
+        if str(sector_code) not in sectors:
+            raise ValueError(f"unknown sector_code in sector_rules: {sector_code}")
+
+    for group_code in industry_groups:
+        parent_sector = _parent_sector_code(group_code)
+        if parent_sector not in sectors:
+            raise ValueError(f"unknown parent sector for industry_group {group_code}: {parent_sector}")
+
+    for group_code, rule in config.get("industry_group_rules", {}).items():
+        group_code = str(group_code)
+        if group_code not in industry_groups:
+            raise ValueError(f"unknown industry_group_code in industry_group_rules: {group_code}")
+        sector_code = str(rule.get("sector_code", _parent_sector_code(group_code)))
+        if sector_code != _parent_sector_code(group_code):
+            raise ValueError(
+                f"industry_group_rules sector_code mismatch for {group_code}: {sector_code}"
+            )
+
+
+def normalize_text(value: Any) -> str:
+    if pd.isna(value):
+        return ""
+    text = str(value).replace("\u3000", " ")
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def pick_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    for c in candidates:
-        if c in df.columns:
-            return c
+    for column in candidates:
+        if column in df.columns:
+            return column
     return None
 
 
@@ -55,20 +80,13 @@ def match_patterns(
 ) -> list[str]:
     if not patterns:
         return []
-
-    matched = []
-    for pat in patterns:
-        if re.search(pat, text, flags=flags):
-            matched.append(pat)
-
-    return matched
+    return [pattern for pattern in patterns if re.search(str(pattern), text, flags=flags)]
 
 
 def get_row_fields(row: pd.Series) -> dict[str, str]:
     company = normalize_text(row.get("회사명", ""))
     industry = normalize_text(row.get("업종", ""))
     product = normalize_text(row.get("주요제품", row.get("주요 제품", "")))
-
     return {
         "company": company,
         "industry": industry,
@@ -77,36 +95,14 @@ def get_row_fields(row: pd.Series) -> dict[str, str]:
     }
 
 
-# ------------------------------------------------------------
-# 4. override 조건 판정
-# ------------------------------------------------------------
 def condition_matches(
     conditions: dict[str, Any],
     fields: dict[str, str],
 ) -> tuple[bool, list[str]]:
-    """
-    conditions 예시:
-
-    conditions:
-      company_any:
-        - '스팩|SPAC'
-
-    conditions:
-      industry_any:
-        - '기계|장비'
-      product_any:
-        - '전기차\s*충전|충전기'
-
-    기본 동작:
-    - conditions 안의 각 조건은 AND
-    - 각 조건의 patterns 내부는 OR
-    """
-
     if not conditions:
         return False, []
 
-    evidence = []
-
+    evidence: list[str] = []
     condition_to_field = {
         "company_any": "company",
         "industry_any": "industry",
@@ -116,164 +112,254 @@ def condition_matches(
 
     for condition_key, field_key in condition_to_field.items():
         patterns = conditions.get(condition_key)
-
         if patterns is None:
             continue
 
-        text = fields.get(field_key, "")
-        matched = match_patterns(patterns, text)
-
-        # 해당 조건이 있는데 하나도 안 맞으면 override 실패
+        matched = match_patterns(patterns, fields.get(field_key, ""))
         if not matched:
             return False, []
-
-        for pat in matched:
-            evidence.append(f"{condition_key}:{pat}")
+        evidence.extend(f"{condition_key}:{pattern}" for pattern in matched)
 
     return True, evidence
 
 
-# ------------------------------------------------------------
-# 5. 단일 row GICS Sector 분류
-# ------------------------------------------------------------
-def classify_gics_sector(
-    row: pd.Series,
-    config: dict[str, Any],
-) -> dict[str, Any]:
-    sectors: dict[str, str] = config["sectors"]
-    sector_rules: dict[str, Any] = config["sector_rules"]
-
-    weights = config.get("weights", {})
-    industry_weight = float(weights.get("industry", 3.0))
-    product_weight = float(weights.get("product", 1.5))
-    confidence_denominator = float(weights.get("confidence_denominator", 6.0))
-
+def classify_gics_sector(row: pd.Series, config: dict[str, Any]) -> dict[str, Any]:
     fields = get_row_fields(row)
+    sectors: dict[str, str] = {str(code): str(name) for code, name in config["sectors"].items()}
+    sector_rules: dict[str, Any] = config["sector_rules"]
+    weights = config.get("weights", {})
 
-    scores = {code: 0.0 for code in sectors.keys()}
-    matched_rules = {code: [] for code in sectors.keys()}
+    scores = {code: 0.0 for code in sectors}
+    matched_rules = {code: [] for code in sectors}
+    _score_rules(
+        scores=scores,
+        matched_rules=matched_rules,
+        rules=sector_rules,
+        fields=fields,
+        weights=weights,
+        allowed_codes=set(sectors),
+    )
+    _score_overrides(
+        scores=scores,
+        matched_rules=matched_rules,
+        overrides=config.get("score_overrides", []),
+        fields=fields,
+        allowed_codes=set(sectors),
+    )
 
-    # --------------------------------------------------------
-    # 5-1. 기본 sector rule 매칭
-    # --------------------------------------------------------
-    for sector_code, rule in sector_rules.items():
-        if sector_code not in sectors:
-            raise ValueError(f"sector_rules에 알 수 없는 sector_code가 있습니다: {sector_code}")
+    code, score = _pick_best_code(scores, config.get("sector_priority", list(sectors)))
+    if code is None:
+        return _unmapped_sector_result()
 
-        industry_patterns = rule.get("industry_patterns", [])
-        product_patterns = rule.get("product_patterns", [])
-
-        industry_matched = match_patterns(industry_patterns, fields["industry"])
-        product_matched = match_patterns(product_patterns, fields["product"])
-
-        if industry_matched:
-            scores[sector_code] += industry_weight * len(industry_matched)
-            for pat in industry_matched:
-                matched_rules[sector_code].append(f"industry:{pat}")
-
-        if product_matched:
-            scores[sector_code] += product_weight * len(product_matched)
-            for pat in product_matched:
-                matched_rules[sector_code].append(f"product:{pat}")
-
-    # --------------------------------------------------------
-    # 5-2. 특수 보정 rule 매칭
-    # --------------------------------------------------------
-    for override in config.get("score_overrides", []):
-        name = override.get("name", "unnamed_override")
-        conditions = override.get("conditions", {})
-        add_scores = override.get("add_scores", {})
-
-        ok, evidence = condition_matches(conditions, fields)
-
-        if not ok:
-            continue
-
-        for sector_code, add_score in add_scores.items():
-            if sector_code not in sectors:
-                raise ValueError(
-                    f"score_overrides '{name}'에 알 수 없는 sector_code가 있습니다: {sector_code}"
-                )
-
-            scores[sector_code] += float(add_score)
-            matched_rules[sector_code].append(
-                f"override:{name} ({', '.join(evidence)})"
-            )
-
-    # --------------------------------------------------------
-    # 5-3. 최고 점수 sector 선택
-    # --------------------------------------------------------
-    max_score = max(scores.values())
-
-    if max_score <= 0:
-        return {
-            "gics_sector_code": "UNMAPPED",
-            "gics_sector_name": "UNMAPPED",
-            "gics_confidence": 0.0,
-            "gics_score": 0.0,
-            "gics_matched_rules": "",
-        }
-
-    best_codes = [
-        code
-        for code, score in scores.items()
-        if score == max_score
-    ]
-
-    if len(best_codes) == 1:
-        best_code = best_codes[0]
-    else:
-        # 동점이면 YAML의 sector_priority 기준으로 선택
-        priority = config.get("sector_priority", list(sectors.keys()))
-        priority_rank = {code: i for i, code in enumerate(priority)}
-
-        best_code = sorted(
-            best_codes,
-            key=lambda code: priority_rank.get(code, 9999),
-        )[0]
-
-    confidence = min(max_score / confidence_denominator, 1.0)
-
+    denominator = float(weights.get("confidence_denominator", 6.0))
     return {
-        "gics_sector_code": best_code,
-        "gics_sector_name": sectors[best_code],
-        "gics_confidence": round(confidence, 3),
-        "gics_score": round(max_score, 3),
-        "gics_matched_rules": " | ".join(matched_rules[best_code]),
+        "gics_sector_code": code,
+        "gics_sector_name": sectors[code],
+        "gics_confidence": round(min(score / denominator, 1.0), 3),
+        "gics_score": round(score, 3),
+        "gics_matched_rules": " | ".join(matched_rules[code]),
     }
 
 
-# ------------------------------------------------------------
-# 6. manual override 적용
-# ------------------------------------------------------------
-def apply_manual_overrides(
-    df: pd.DataFrame,
+def classify_gics_industry_group(
+    row: pd.Series,
     config: dict[str, Any],
-) -> pd.DataFrame:
+    sector_code: str | None,
+) -> dict[str, Any]:
+    sector_code = str(sector_code or "")
+    if not sector_code or sector_code == UNMAPPED:
+        return _unmapped_industry_group_result()
+
+    fields = get_row_fields(row)
+    industry_groups = {
+        str(code): str(name)
+        for code, name in config.get("industry_groups", {}).items()
+        if _parent_sector_code(str(code)) == sector_code
+    }
+    if not industry_groups:
+        return _unmapped_industry_group_result()
+
+    weights = config.get("industry_group_weights", config.get("weights", {}))
+    scores = {code: 0.0 for code in industry_groups}
+    matched_rules = {code: [] for code in industry_groups}
+    _score_rules(
+        scores=scores,
+        matched_rules=matched_rules,
+        rules=config.get("industry_group_rules", {}),
+        fields=fields,
+        weights=weights,
+        allowed_codes=set(industry_groups),
+    )
+    _score_overrides(
+        scores=scores,
+        matched_rules=matched_rules,
+        overrides=config.get("industry_group_score_overrides", []),
+        fields=fields,
+        allowed_codes=set(industry_groups),
+    )
+
+    code, score = _pick_best_code(
+        scores,
+        config.get("industry_group_priority", list(industry_groups)),
+    )
+    if code is None:
+        return _unmapped_industry_group_result()
+
+    denominator = float(weights.get("confidence_denominator", 6.0))
+    return {
+        "gics_industry_group_code": code,
+        "gics_industry_group_name": industry_groups[code],
+        "gics_industry_group_confidence": round(min(score / denominator, 1.0), 3),
+        "gics_industry_group_score": round(score, 3),
+        "gics_industry_group_matched_rules": " | ".join(matched_rules[code]),
+    }
+
+
+def classify_gics(row: pd.Series, config: dict[str, Any]) -> dict[str, Any]:
+    sector_result = classify_gics_sector(row, config)
+    group_result = classify_gics_industry_group(
+        row,
+        config,
+        sector_result.get("gics_sector_code"),
+    )
+    return {**sector_result, **group_result}
+
+
+def _score_rules(
+    *,
+    scores: dict[str, float],
+    matched_rules: dict[str, list[str]],
+    rules: dict[str, Any],
+    fields: dict[str, str],
+    weights: dict[str, Any],
+    allowed_codes: set[str],
+) -> None:
+    industry_weight = float(weights.get("industry", 3.0))
+    product_weight = float(weights.get("product", 1.5))
+    any_text_weight = float(weights.get("any_text", 1.0))
+
+    for code, rule in rules.items():
+        code = str(code)
+        if code not in allowed_codes:
+            continue
+
+        matches = {
+            "industry": match_patterns(rule.get("industry_patterns", []), fields["industry"]),
+            "product": match_patterns(rule.get("product_patterns", []), fields["product"]),
+            "any_text": match_patterns(rule.get("any_text_patterns", []), fields["any_text"]),
+        }
+        for field_name, matched in matches.items():
+            if not matched:
+                continue
+            weight = {
+                "industry": industry_weight,
+                "product": product_weight,
+                "any_text": any_text_weight,
+            }[field_name]
+            scores[code] += weight * len(matched)
+            matched_rules[code].extend(f"{field_name}:{pattern}" for pattern in matched)
+
+
+def _score_overrides(
+    *,
+    scores: dict[str, float],
+    matched_rules: dict[str, list[str]],
+    overrides: list[dict[str, Any]],
+    fields: dict[str, str],
+    allowed_codes: set[str],
+) -> None:
+    for override in overrides:
+        name = override.get("name", "unnamed_override")
+        ok, evidence = condition_matches(override.get("conditions", {}), fields)
+        if not ok:
+            continue
+
+        for code, add_score in override.get("add_scores", {}).items():
+            code = str(code)
+            if code not in allowed_codes:
+                continue
+            scores[code] += float(add_score)
+            matched_rules[code].append(f"override:{name} ({', '.join(evidence)})")
+
+
+def _pick_best_code(scores: dict[str, float], priority: list[str]) -> tuple[str | None, float]:
+    if not scores:
+        return None, 0.0
+    max_score = max(scores.values())
+    if max_score <= 0:
+        return None, 0.0
+
+    best_codes = [code for code, score in scores.items() if score == max_score]
+    if len(best_codes) == 1:
+        return best_codes[0], max_score
+
+    priority_rank = {str(code): index for index, code in enumerate(priority)}
+    best_code = sorted(best_codes, key=lambda code: priority_rank.get(code, 9999))[0]
+    return best_code, max_score
+
+
+def _parent_sector_code(industry_group_code: str) -> str:
+    return str(industry_group_code)[:2]
+
+
+def _unmapped_sector_result() -> dict[str, Any]:
+    return {
+        "gics_sector_code": UNMAPPED,
+        "gics_sector_name": UNMAPPED,
+        "gics_confidence": 0.0,
+        "gics_score": 0.0,
+        "gics_matched_rules": "",
+    }
+
+
+def _unmapped_industry_group_result() -> dict[str, Any]:
+    return {
+        "gics_industry_group_code": UNMAPPED,
+        "gics_industry_group_name": UNMAPPED,
+        "gics_industry_group_confidence": 0.0,
+        "gics_industry_group_score": 0.0,
+        "gics_industry_group_matched_rules": "",
+    }
+
+
+def apply_manual_overrides(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
     df = df.copy()
-
     manual_overrides = config.get("manual_overrides", {})
-
-    if not manual_overrides:
-        return df
-
-    if "종목코드" not in df.columns:
+    if not manual_overrides or "종목코드" not in df.columns:
         return df
 
     stock_codes = df["종목코드"].astype(str).str.strip()
+    sectors = {str(code): str(name) for code, name in config.get("sectors", {}).items()}
+    groups = {str(code): str(name) for code, name in config.get("industry_groups", {}).items()}
 
     for stock_code, override in manual_overrides.items():
-        sector_code = str(override["sector_code"])
-        sector_name = override.get(
-            "sector_name",
-            config["sectors"].get(sector_code, "UNKNOWN"),
-        )
         reason = override.get("reason", "manual_override")
-
         mask = stock_codes.eq(str(stock_code).strip())
 
+        group_code = override.get("industry_group_code")
+        if group_code is not None:
+            group_code = str(group_code)
+            df.loc[mask, "gics_industry_group_code"] = group_code
+            df.loc[mask, "gics_industry_group_name"] = override.get(
+                "industry_group_name",
+                groups.get(group_code, "UNKNOWN"),
+            )
+            df.loc[mask, "gics_industry_group_confidence"] = 1.0
+            df.loc[mask, "gics_industry_group_score"] = 999.0
+            df.loc[mask, "gics_industry_group_matched_rules"] = f"manual_override:{reason}"
+
+        sector_code = override.get("sector_code")
+        if sector_code is None and group_code is not None:
+            sector_code = _parent_sector_code(group_code)
+        if sector_code is None:
+            continue
+
+        sector_code = str(sector_code)
         df.loc[mask, "gics_sector_code"] = sector_code
-        df.loc[mask, "gics_sector_name"] = sector_name
+        df.loc[mask, "gics_sector_name"] = override.get(
+            "sector_name",
+            sectors.get(sector_code, "UNKNOWN"),
+        )
         df.loc[mask, "gics_confidence"] = 1.0
         df.loc[mask, "gics_score"] = 999.0
         df.loc[mask, "gics_matched_rules"] = f"manual_override:{reason}"
@@ -281,9 +367,6 @@ def apply_manual_overrides(
     return df
 
 
-# ------------------------------------------------------------
-# 7. 전체 DataFrame에 GICS Sector 붙이기
-# ------------------------------------------------------------
 def attach_gics_sector(
     df: pd.DataFrame,
     config: dict[str, Any],
@@ -291,9 +374,7 @@ def attach_gics_sector(
     apply_manual: bool = True,
 ) -> pd.DataFrame:
     df = df.copy()
-
     product_col = pick_col(df, ["주요제품", "주요 제품"])
-
     if product_col is None:
         df["주요제품"] = ""
     elif product_col != "주요제품":
@@ -303,167 +384,103 @@ def attach_gics_sector(
         df["업종"] = ""
 
     result = df.apply(
-        lambda row: classify_gics_sector(row, config),
+        lambda row: classify_gics(row, config),
         axis=1,
         result_type="expand",
     )
-
     mapped = pd.concat([df, result], axis=1)
 
     if apply_manual:
         mapped = apply_manual_overrides(mapped, config)
-
     return mapped
 
 
-# ------------------------------------------------------------
-# 8. 검토 대상 추출
-# ------------------------------------------------------------
 def extract_review_targets(
     mapped: pd.DataFrame,
     *,
     min_confidence: float = 0.6,
 ) -> pd.DataFrame:
     return mapped[
-        mapped["gics_sector_code"].eq("UNMAPPED")
+        mapped["gics_sector_code"].eq(UNMAPPED)
         | mapped["gics_confidence"].lt(min_confidence)
+        | mapped["gics_industry_group_code"].eq(UNMAPPED)
+        | mapped["gics_industry_group_confidence"].lt(min_confidence)
     ].copy()
 
-def get_normalized_sector_and_issuer():
-    config = load_gics_config("../data-lake/meta/rules/gics_rules.yaml")
 
-    df = fetch_sector()
-
-    mapped = attach_gics_sector(df, config)
-
-    mapped["issuer_id"] = mapped["종목코드"].apply(
-        lambda stock_code: f"ISSUER_ID_{str(stock_code).strip().zfill(6)}"
-    )
-    mapped["legal_name_ko"] = mapped["회사명"].apply(lambda x: f"{x}")
-    mapped["legal_name_en"] = mapped["회사명"].apply(lambda x: f"{x}")
-    mapped["domicile_country"] = mapped["지역"].apply(lambda _: "KR")
-    mapped["region"] = mapped["지역"].apply(lambda region: region)
-    mapped["industry_schema"] = mapped["gics_sector_code"].apply(lambda _: "GICS")
-    mapped["industry_code"] = mapped["gics_sector_code"].apply(lambda code: code)
-    mapped["is_active"] = mapped["종목코드"].apply(lambda _: True)
-
-    mapped = mapped.drop(columns=["종목코드", "회사명", "지역", "gics_sector_code", "gics_sector_name"])
-
-    return mapped[
-        [
-            "issuer_id",
-            "legal_name_ko",
-            "legal_name_en",
-            "domicile_country",
-            "region",
-            "industry_schema",
-            "industry_code",
-            "is_active"
-        ]
-    ]
-
-
-def get_normalized_sector_and_issuer():
-    config = load_gics_config("../data-lake/meta/rules/gics_rules.yaml")
-
-    df = fetch_sector()
-    market_df = kospi_kosdaq_corp_list()
-    
-    def mapping_func(stock_code: str):
-        value = market_df.loc[market_df['stock_code'] == stock_code, 'corp_eng_name']
-        if len(value) == 0:
-            return "NONE"
-        else:
-            return value.iat[0]
-
-    mapped = attach_gics_sector(df, config)
-
-    mapped["issuer_id"] = mapped["종목코드"].apply(
-        lambda stock_code: f"ISSUER_ID_{str(stock_code).strip().zfill(6)}"
-    )
-    mapped["legal_name_ko"] = mapped["회사명"].apply(lambda x: f"{x}")
-    mapped["legal_name_en"] = mapped["종목코드"].apply(lambda stock_code: mapping_func(stock_code))
-    mapped["domicile_country"] = mapped["지역"].apply(lambda _: "KR")
-    mapped["region"] = mapped["지역"].apply(lambda region: str(region))
-    mapped["industry_schema"] = mapped["gics_sector_code"].apply(lambda _: "GICS")
-    mapped["industry_code"] = mapped["gics_sector_code"].apply(lambda code: str(code))
-    mapped["is_active"] = mapped["종목코드"].apply(lambda _: True)
-
-    mapped = mapped.drop(columns=["종목코드", "회사명", "지역", "gics_sector_code", "gics_sector_name"])
-
-    return mapped[
-        [
-            "issuer_id",
-            "legal_name_ko",
-            "legal_name_en",
-            "domicile_country",
-            "region",
-            "industry_schema",
-            "industry_code",
-            "is_active"
-        ]
-    ]
-
-def get_normalized_security_master():
-    config = load_gics_config("../data-lake/meta/rules/gics_rules.yaml")
-
-    df = fetch_sector()
-
-    mapped = attach_gics_sector(df, config)
-
-    mapped["security_id"] = mapped["종목코드"].apply(
-        lambda stock_code: f"SEC_KR_{str(stock_code).strip().zfill(6)}"
-    )
-    mapped["issuer_id"] = mapped["종목코드"].apply(lambda stock_code: f"ISSUER_ID_{str(stock_code).strip().zfill(6)[:-1] + '0'}")
-    mapped["sec_type"] = mapped["종목코드"].apply(lambda stock_code: "COMMON" if str(stock_code).strip()[-1] == "0" else "PREF")
-    mapped["asset_subtype"] = mapped["종목코드"].apply(lambda stock_code: "KR_ORD" if str(stock_code).strip()[-1] == "0" else "KR_PREF")
-    mapped["share_class"] = mapped["종목코드"].apply(lambda stock_code: "ORD" if str(stock_code).strip()[-1] == "0" else "PREF")
-    mapped["is_active"] = mapped["종목코드"].apply(lambda _: True)
-
-    mapped = mapped.drop(columns=["종목코드", "회사명", "지역", "gics_sector_code", "gics_sector_name"])
-
-    return mapped[
-        [
-            "security_id",
-            "issuer_id",
-            "sec_type",
-            "asset_subtype",
-            "share_class",
-            "is_active"
-        ]
-    ]
-
-def get_normalized_identifier():
-    config = load_gics_config("../data-lake/meta/rules/gics_rules.yaml")
-
+def get_normalized_sector_and_issuer() -> pd.DataFrame:
+    config = load_gics_config(DEFAULT_GICS_RULES_PATH)
+    fetch_sector, kospi_kosdaq_corp_list = _load_company_functions()
     df = fetch_sector()
     market_df = kospi_kosdaq_corp_list()
 
-    def mapping_func(stock_code: str):
-        value = market_df.loc[market_df['stock_code'] == stock_code, 'market']
-        if len(value) == 0:
-            return "NONE"
-        else:
-            return value.iat[0]
+    market_df = market_df.copy()
+    market_df["stock_code"] = market_df["stock_code"].astype(str).str.strip().str.zfill(6)
+    english_names = market_df.set_index("stock_code")["corp_eng_name"].to_dict()
 
     mapped = attach_gics_sector(df, config)
-
-    mapped["security_id"] = mapped["종목코드"].apply(
-        lambda stock_code: f"SEC_KR_{str(stock_code).strip().zfill(6)}"
+    stock_codes = mapped["종목코드"].astype(str).str.strip().map(
+        lambda value: value.zfill(6) if value.isdigit() else value
     )
-    mapped["id_type"] = mapped["종목코드"].apply(lambda _: "TICKER")
-    mapped["id_value"] = mapped["종목코드"].apply(lambda stock_code: stock_code)
-    mapped["market_mic"] = mapped["종목코드"].apply(lambda stock_code: mapping_func(stock_code))
-    mapped["is_primary"] = mapped["종목코드"].apply(lambda _: True)
+    regions = (
+        mapped["지역"]
+        if "지역" in mapped.columns
+        else pd.Series([""] * len(mapped), index=mapped.index)
+    )
 
-    mapped = mapped.drop(columns=["종목코드", "회사명", "지역", "gics_sector_code", "gics_sector_name"])
+    return pd.DataFrame(
+        {
+            "issuer_id": stock_codes.map(lambda code: f"ISSUER_ID_{code}"),
+            "legal_name_ko": mapped["회사명"].map(lambda value: f"{value}"),
+            "legal_name_en": stock_codes.map(lambda code: english_names.get(code, "NONE")),
+            "domicile_country": "KR",
+            "region": regions.map(lambda value: str(value)),
+            "industry_schema": "GICS",
+            "sector_code": mapped["gics_sector_code"].map(lambda code: str(code)),
+            "industry_group_code": mapped["gics_industry_group_code"].map(lambda code: str(code)),
+            "industry_group_name": mapped["gics_industry_group_name"].map(lambda name: str(name)),
+            "is_active": True,
+        }
+    )
 
-    return mapped[
-        [
-            "security_id",
-            "id_type",
-            "id_value",
-            "market_mic",
-            "is_primary"
-        ]
-    ]
+
+def get_normalized_security_master() -> pd.DataFrame:
+    fetch_sector, _ = _load_company_functions()
+    df = fetch_sector()
+    stock_codes = df["종목코드"].astype(str).str.strip().map(
+        lambda value: value.zfill(6) if value.isdigit() else value
+    )
+
+    return pd.DataFrame(
+        {
+            "security_id": stock_codes.map(lambda code: f"SEC_KR_{code}"),
+            "issuer_id": stock_codes.map(lambda code: f"ISSUER_ID_{code[:-1] + '0'}"),
+            "sec_type": stock_codes.map(lambda code: "COMMON" if code[-1] == "0" else "PREF"),
+            "asset_subtype": stock_codes.map(lambda code: "KR_ORD" if code[-1] == "0" else "KR_PREF"),
+            "share_class": stock_codes.map(lambda code: "ORD" if code[-1] == "0" else "PREF"),
+            "is_active": True,
+        }
+    )
+
+
+def get_normalized_identifier() -> pd.DataFrame:
+    fetch_sector, kospi_kosdaq_corp_list = _load_company_functions()
+    df = fetch_sector()
+    market_df = kospi_kosdaq_corp_list()
+
+    market_df = market_df.copy()
+    market_df["stock_code"] = market_df["stock_code"].astype(str).str.strip().str.zfill(6)
+    markets = market_df.set_index("stock_code")["market"].to_dict()
+    stock_codes = df["종목코드"].astype(str).str.strip().map(
+        lambda value: value.zfill(6) if value.isdigit() else value
+    )
+
+    return pd.DataFrame(
+        {
+            "security_id": stock_codes.map(lambda code: f"SEC_KR_{code}"),
+            "id_type": "TICKER",
+            "id_value": stock_codes,
+            "market_mic": stock_codes.map(lambda code: markets.get(code, "NONE")),
+            "is_primary": True,
+        }
+    )

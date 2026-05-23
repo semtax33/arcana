@@ -106,6 +106,20 @@ class FactorScreenQueryTest(unittest.TestCase):
 
         self.assertIn("sm.security_id AS security_id", query)
         self.assertIn("ON u.security_id = f.security_id", query)
+        self.assertIn("has({sector_codes:Array(String)}, iss.sector_code)", query)
+        self.assertIn("any(iss.sector_code) AS sector_code", query)
+
+    def test_security_universe_can_filter_and_expose_industry_groups(self):
+        query, params = build_factor_screen_query(
+            [FactorCondition.top("roe", 30)],
+            industry_group_codes=["4530"],
+            include_security_metadata=True,
+        )
+
+        self.assertEqual(params["industry_group_codes"], ["4530"])
+        self.assertIn("has({industry_group_codes:Array(String)}, iss.industry_group_code)", query)
+        self.assertIn("any(iss.industry_group_code) AS industry_group_code", query)
+        self.assertIn("any(u.industry_group_name) AS industry_group_name", query)
 
     def test_invalid_dynamic_identifiers_are_rejected(self):
         with self.assertRaises(ValueError):

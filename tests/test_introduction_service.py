@@ -87,6 +87,8 @@ class IntroductionServiceTest(unittest.TestCase):
                     "country": "KR",
                     "sector_schema": "GICS",
                     "sector_code": "45",
+                    "industry_group_code": "4530",
+                    "industry_group_name": "Semiconductors & Semiconductor Equipment",
                 }
             ],
             factor_rows=[
@@ -110,7 +112,13 @@ class IntroductionServiceTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             rules_path = Path(temp_dir) / "gics_rules.yaml"
-            rules_path.write_text("sectors:\n  '45': Information Technology\n", encoding="utf-8")
+            rules_path.write_text(
+                "sectors:\n"
+                "  '45': Information Technology\n"
+                "industry_groups:\n"
+                "  '4530': Semiconductors & Semiconductor Equipment\n",
+                encoding="utf-8",
+            )
 
             result = IntroductionService(
                 client_factory=lambda: client,
@@ -128,6 +136,11 @@ class IntroductionServiceTest(unittest.TestCase):
         self.assertEqual(result.company.description, "반도체와 전자제품을 제조합니다.")
         self.assertEqual(result.business_areas[0].sector_code, "45")
         self.assertEqual(result.business_areas[0].sector_name, "Information Technology")
+        self.assertEqual(result.business_areas[0].industry_group_code, "4530")
+        self.assertEqual(
+            result.business_areas[0].industry_group_name,
+            "Semiconductors & Semiconductor Equipment",
+        )
         self.assertTrue(any("FROM fact_daily_factor" in query for query, _ in client.queries))
         self.assertFalse(any("max(trade_date) AS trade_date" in query for query, _ in client.queries))
         self.assertTrue(any("isFinite(f.factor_value)" in query for query, _ in client.queries))

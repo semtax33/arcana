@@ -9,6 +9,7 @@ from api.service.dto import (
     SectorLeaderMetricDto,
     SectorLeaderResponseDto,
     SectorLeaderRowDto,
+    SectorLeaderLevel,
     SectorLeaderSortBy,
     SortDirection,
 )
@@ -26,6 +27,7 @@ def get_sector_leaders(
     limit: int | None = Query(default=None, gt=0),
     near_high_pct: float = Query(default=3.0, ge=0, lt=100),
     financial_basis: str = Query(default="annual"),
+    level: SectorLeaderLevel = Query(default="industry_group"),
 ) -> SectorLeaderResponseDto:
     try:
         result = SectorLeaderService().get_sector_leaders(
@@ -35,6 +37,7 @@ def get_sector_leaders(
             limit=limit,
             near_high_pct=near_high_pct,
             financial_basis=financial_basis,
+            level=level,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -43,6 +46,7 @@ def get_sector_leaders(
 
     return SectorLeaderResponseDto(
         as_of_date=result.as_of_date,
+        level=result.level,
         sort_by=result.sort_by,
         direction=result.direction,
         near_high_pct=result.near_high_pct,

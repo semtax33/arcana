@@ -105,6 +105,7 @@ class IntroductionService:
             )
 
         sector_names = self._load_sector_names()
+        industry_group_names = self._load_industry_group_names()
         metadata = _to_metadata(
             metadata_row,
             stock_code=normalized_stock_code,
@@ -122,7 +123,11 @@ class IntroductionService:
                 price_row=price_row,
             ),
             company=CompanyIntroduction(description=company_description),
-            business_areas=_to_business_areas(metadata_row, sector_names),
+            business_areas=_to_business_areas(
+                metadata_row,
+                sector_names,
+                industry_group_names,
+            ),
             factor_source=factor_source,
         )
 
@@ -138,7 +143,9 @@ SELECT
     any(iss.legal_name_en) AS stock_name_en,
     any(iss.domicile_country) AS country,
     any(iss.industry_schema) AS sector_schema,
-    any(iss.industry_code) AS sector_code
+    any(iss.sector_code) AS sector_code,
+    any(iss.industry_group_code) AS industry_group_code,
+    any(iss.industry_group_name) AS industry_group_name
 FROM security_master AS sm
 LEFT JOIN identifiers AS id
     ON id.security_id = sm.security_id
@@ -294,11 +301,24 @@ WHERE database = currentDatabase()
 
                 config = yaml.safe_load(file) or {}
         except ModuleNotFoundError:
-            return _load_sector_names_without_yaml(self._gics_rules_path)
+            return _load_yaml_mapping_without_yaml(self._gics_rules_path, "sectors")
         except FileNotFoundError:
             return {}
         sectors = config.get("sectors", {})
         return {str(code): str(name) for code, name in sectors.items()}
+
+    def _load_industry_group_names(self) -> dict[str, str]:
+        try:
+            with self._gics_rules_path.open("r", encoding="utf-8") as file:
+                import yaml
+
+                config = yaml.safe_load(file) or {}
+        except ModuleNotFoundError:
+            return _load_yaml_mapping_without_yaml(self._gics_rules_path, "industry_groups")
+        except FileNotFoundError:
+            return {}
+        industry_groups = config.get("industry_groups", {})
+        return {str(code): str(name) for code, name in industry_groups.items()}
 
 
 def _build_metric_factor_query(table_name: str, *, value_column: str = "factor_value") -> str:
@@ -367,15 +387,24 @@ def _to_metrics(
 def _to_business_areas(
     row: dict[str, Any],
     sector_names: dict[str, str],
+    industry_group_names: dict[str, str],
 ) -> list[BusinessAreaBadge]:
     sector_code = _optional_str(row.get("sector_code"))
     if not sector_code or sector_code == "UNMAPPED":
         return []
     sector_schema = _optional_str(row.get("sector_schema")) or "GICS"
+    industry_group_code = _optional_str(row.get("industry_group_code"))
+    if industry_group_code == "UNMAPPED":
+        industry_group_code = None
+    industry_group_name = _optional_str(row.get("industry_group_name"))
+    if industry_group_code and not industry_group_name:
+        industry_group_name = industry_group_names.get(industry_group_code)
     return [
         BusinessAreaBadge(
             sector_code=sector_code,
             sector_name=sector_names.get(sector_code, sector_code),
+            industry_group_code=industry_group_code,
+            industry_group_name=industry_group_name,
             schema=sector_schema,
         )
     ]
@@ -433,31 +462,35 @@ def _factor_currency(rows: list[dict[str, Any]]) -> str | None:
 
 
 def _load_sector_names_without_yaml(path: Path) -> dict[str, str]:
+    return _load_yaml_mapping_without_yaml(path, "sectors")
+
+
+def _load_yaml_mapping_without_yaml(path: Path, key_name: str) -> dict[str, str]:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return {}
 
-    sectors: dict[str, str] = {}
-    in_sectors = False
+    values: dict[str, str] = {}
+    in_mapping = False
     for line in lines:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        if stripped == "sectors:":
-            in_sectors = True
+        if stripped == f"{key_name}:":
+            in_mapping = True
             continue
-        if in_sectors and not line.startswith((" ", "\t")):
+        if in_mapping and not line.startswith((" ", "\t")):
             break
-        if not in_sectors or ":" not in stripped:
+        if not in_mapping or ":" not in stripped:
             continue
 
         key, value = stripped.split(":", 1)
-        sector_code = key.strip().strip("'\"")
-        sector_name = value.strip().strip("'\"")
-        if sector_code and sector_name:
-            sectors[sector_code] = sector_name
-    return sectors
+        code = key.strip().strip("'\"")
+        name = value.strip().strip("'\"")
+        if code and name:
+            values[code] = name
+    return values
 
 
 def _normalize_stock_code(stock_code: str) -> str:

@@ -73,6 +73,8 @@ class FactorNormalizerTest(unittest.TestCase):
                     "fiscal_year": 2024,
                     "financial_period": "2024-12-31",
                     "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "PPE": 500,
                     "EAOP": 500,
                     "REVENUE": 1_000,
                     "GROSS_PROFIT": 400,
@@ -86,6 +88,8 @@ class FactorNormalizerTest(unittest.TestCase):
                     "fiscal_year": 2025,
                     "financial_period": "2025-12-31",
                     "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "PPE": 500,
                     "EAOP": 500,
                     "REVENUE": 1_000,
                     "GROSS_PROFIT": 400,
@@ -107,6 +111,8 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["npm"], 10.0)
         self.assertAlmostEqual(latest["tax_rate"], 25.0)
         self.assertAlmostEqual(latest["roe"], 20.0)
+        self.assertAlmostEqual(latest["roic_financial"], 30.0)
+        self.assertAlmostEqual(latest["roic_operational"], 30.0)
 
     def test_dividend_payout_factor_is_empty_without_disclosure_events(self):
         daily_df = pd.DataFrame(

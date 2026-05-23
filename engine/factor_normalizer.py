@@ -54,6 +54,8 @@ PERCENT_RATIO_FACTOR_COLUMNS = {
     "npm",
     "tax_rate",
     "roe",
+    "roic_financial",
+    "roic_operational",
 }
 
 

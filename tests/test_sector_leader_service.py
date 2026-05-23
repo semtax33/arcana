@@ -70,9 +70,10 @@ class SectorLeaderServiceTest(unittest.TestCase):
                 client_factory=lambda: client,
                 today_factory=lambda: date(2026, 5, 23),
                 gics_rules_path=rules_path,
-            ).get_sector_leaders()
+            ).get_sector_leaders(level="sector")
 
         self.assertEqual(result.as_of_date, date(2026, 5, 23))
+        self.assertEqual(result.level, "sector")
         self.assertEqual(result.sort_by, "strong_stock_ratio")
         self.assertEqual(result.direction, "desc")
         self.assertEqual(result.eps_growth_factor_id, "expected_eps_growth")
@@ -103,7 +104,7 @@ class SectorLeaderServiceTest(unittest.TestCase):
                 client_factory=lambda: client,
                 today_factory=lambda: date(2026, 5, 23),
                 gics_rules_path=rules_path,
-            ).get_sector_leaders(sort_by="per")
+            ).get_sector_leaders(sort_by="per", level="sector")
 
         self.assertEqual(result.direction, "asc")
         self.assertEqual([row.sector_code for row in result.rows], ["20", "10", "30"])
@@ -117,7 +118,7 @@ class SectorLeaderServiceTest(unittest.TestCase):
                 ]),
                 today_factory=lambda: date(2026, 5, 23),
                 gics_rules_path=rules_path,
-            ).get_sector_leaders(sort_by="per", direction="desc")
+            ).get_sector_leaders(sort_by="per", direction="desc", level="sector")
 
         self.assertEqual([row.sector_code for row in result.rows], ["10", "20", "30"])
 
@@ -129,7 +130,7 @@ class SectorLeaderServiceTest(unittest.TestCase):
                 client_factory=lambda: client,
                 today_factory=lambda: date(2026, 5, 23),
                 gics_rules_path=rules_path,
-            ).get_sector_leaders()
+            ).get_sector_leaders(level="sector")
 
         self.assertEqual(result.eps_growth_factor_id, "eps_yoy_pct")
         metric_query_params = next(
@@ -148,7 +149,7 @@ class SectorLeaderServiceTest(unittest.TestCase):
                 client_factory=lambda: client,
                 today_factory=lambda: date(2026, 5, 23),
                 gics_rules_path=rules_path,
-            ).get_sector_leaders(limit=1)
+            ).get_sector_leaders(limit=1, level="sector")
 
         self.assertEqual(result.factor_source, "fact_daily_factors")
         self.assertEqual(len(result.rows), 1)
@@ -159,6 +160,7 @@ class SectorLeaderServiceTest(unittest.TestCase):
 
         self.assertIn("/api/sector-leaders", paths)
         self.assertIn("/api/sectors", paths)
+        self.assertIn("/api/sectors/industry-groups", paths)
 
     def test_strong_stock_ratio_query_uses_current_market_day_and_excludes_spacs(self):
         query = _build_sector_leader_query(
@@ -182,9 +184,46 @@ class SectorLeaderServiceTest(unittest.TestCase):
             query,
         )
         self.assertIn("INNER JOIN latest_price AS lp", query)
+        self.assertIn("any(iss.industry_group_code) AS sector_code", query)
         self.assertIn("countIf(strong_flag = 1) AS strong_stock_count", query)
         self.assertIn("countIf(strong_flag = 1) / count() * 100", query)
         self.assertNotIn("sum(strong_flag) AS strong_stock_count", query)
+
+    def test_sector_leader_query_can_group_by_industry_group(self):
+        query = _build_sector_leader_query(
+            factor_table="fact_daily_factors",
+            value_column="factor_value",
+            level="industry_group",
+        )
+
+        self.assertIn("any(iss.industry_group_code) AS sector_code", query)
+        self.assertIn("iss.industry_group_code != ''", query)
+        self.assertIn("iss.industry_group_code != 'UNMAPPED'", query)
+
+    def test_sector_leader_query_can_group_by_sector(self):
+        query = _build_sector_leader_query(
+            factor_table="fact_daily_factors",
+            value_column="factor_value",
+            level="sector",
+        )
+
+        self.assertIn("any(iss.sector_code) AS sector_code", query)
+        self.assertIn("iss.sector_code != ''", query)
+        self.assertIn("iss.sector_code != 'UNMAPPED'", query)
+
+    def test_sector_leaders_default_to_industry_group_level(self):
+        client = FakeClickHouseClient(metric_rows=[_sector_row("4530", strong_stock_ratio=80)])
+
+        with _industry_group_rules_file() as rules_path:
+            result = SectorLeaderService(
+                client_factory=lambda: client,
+                today_factory=lambda: date(2026, 5, 23),
+                gics_rules_path=rules_path,
+            ).get_sector_leaders(limit=1)
+
+        self.assertEqual(result.level, "industry_group")
+        self.assertEqual(result.rows[0].sector_code, "4530")
+        self.assertEqual(result.rows[0].sector_name, "Semiconductors & Semiconductor Equipment")
 
 
 def _sector_row(
@@ -223,6 +262,23 @@ class _rules_file:
             "  '10': Energy\n"
             "  '20': Industrials\n"
             "  '30': Consumer Staples\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def __exit__(self, exc_type, exc, tb):
+        self._temp_dir.cleanup()
+
+
+class _industry_group_rules_file:
+    def __enter__(self):
+        self._temp_dir = tempfile.TemporaryDirectory()
+        path = Path(self._temp_dir.name) / "gics_rules.yaml"
+        path.write_text(
+            "sectors:\n"
+            "  '45': Information Technology\n"
+            "industry_groups:\n"
+            "  '4530': Semiconductors & Semiconductor Equipment\n",
             encoding="utf-8",
         )
         return path

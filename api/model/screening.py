@@ -37,6 +37,8 @@ class ScreenedStockRow:
     country: str | None = None
     market_cap: float | None = None
     sector_code: str | None = None
+    industry_group_code: str | None = None
+    industry_group_name: str | None = None
     percentile: float | None = None
     matched_condition_count: int = 0
     matched_conditions: list[str] = field(default_factory=list)

@@ -19,10 +19,19 @@ SectorLeaderSortBy = Literal[
     "per",
     "pbr",
 ]
+SectorLeaderLevel = Literal["sector", "industry_group"]
 SortDirection = Literal["asc", "desc"]
 
 
 class SectorDto(BaseModel):
+    sector_code: str
+    sector_name: str
+    stock_count: int = 0
+
+
+class IndustryGroupDto(BaseModel):
+    industry_group_code: str
+    industry_group_name: str
     sector_code: str
     sector_name: str
     stock_count: int = 0
@@ -50,6 +59,7 @@ class SectorLeaderRowDto(BaseModel):
 
 class SectorLeaderResponseDto(BaseModel):
     as_of_date: date
+    level: SectorLeaderLevel = "industry_group"
     sort_by: SectorLeaderSortBy
     direction: SortDirection
     near_high_pct: float
@@ -87,6 +97,7 @@ class FactorScreenRequestDto(BaseModel):
     as_of_date: date | None = None
     financial_basis: str | None = "annual"
     sector_codes: list[str] | None = None
+    industry_group_codes: list[str] | None = None
     match_mode: MatchMode = "all"
     limit: int | None = Field(default=5000, gt=0, le=5000)
 
@@ -137,6 +148,8 @@ class ScreenedStockRowDto(BaseModel):
     country: str | None = None
     market_cap: float | None = None
     sector_code: str | None = None
+    industry_group_code: str | None = None
+    industry_group_name: str | None = None
     percentile: float | None = None
     matched_condition_count: int
     matched_conditions: list[str]
@@ -295,6 +308,8 @@ class CompanyIntroductionDto(BaseModel):
 class BusinessAreaBadgeDto(BaseModel):
     sector_code: str
     sector_name: str
+    industry_group_code: str | None = None
+    industry_group_name: str | None = None
     schema: str = "GICS"
 
 

@@ -34,6 +34,8 @@ def screen_stocks(request: FactorScreenRequestDto) -> FactorScreenResponseDto:
             country=row.country,
             market_cap=row.market_cap,
             sector_code=row.sector_code,
+            industry_group_code=row.industry_group_code,
+            industry_group_name=row.industry_group_name,
             percentile=row.percentile,
             matched_condition_count=row.matched_condition_count,
             matched_conditions=row.matched_conditions,
