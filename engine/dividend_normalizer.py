@@ -1128,3 +1128,99 @@ def create_all_stock_dividend_dataframe(
         .sort_values(["security_id", "trade_date"])
         .reset_index(drop=True)
     )
+
+
+def report_date_from_dividend_rcept_no(rcept_no):
+    text = str(rcept_no or "").strip()
+    if not re.fullmatch(r"\d{8}\d*", text):
+        return None
+    try:
+        return pd.Timestamp(f"{text[:4]}-{text[4:6]}-{text[6:8]}")
+    except ValueError:
+        return None
+
+
+def silver_dividend_asof_events(stock_code, share_type="common"):
+    stock_code = normalize_stock_code(stock_code)
+    stock_kind_rows = _silver_stock_kind_rows(stock_code, share_type)
+    company_rows = _silver_company_summary_rows(stock_code)
+    columns = [
+        "stock_code",
+        "bsns_year",
+        "report_date",
+        "rcept_no",
+        "report_name",
+        "annual_dividend_per_share",
+        "payout_ratio",
+        "total_dividend_amount",
+    ]
+    event_rows = []
+
+    if not stock_kind_rows.empty:
+        for row in stock_kind_rows.to_dict("records"):
+            report_date = report_date_from_dividend_rcept_no(row.get("rcept_no"))
+            if report_date is None:
+                continue
+            event_rows.append(
+                {
+                    "stock_code": stock_code,
+                    "bsns_year": int(row["bsns_year"]) if not pd.isna(row.get("bsns_year")) else None,
+                    "report_date": report_date,
+                    "rcept_no": str(row.get("rcept_no") or ""),
+                    "report_name": str(row.get("report_name") or ""),
+                    "annual_dividend_per_share": normalize_decimal_amount(
+                        row.get("per_share_cash_dividend_krw")
+                    ),
+                    "payout_ratio": None,
+                    "total_dividend_amount": None,
+                }
+            )
+
+    if not company_rows.empty:
+        for row in company_rows.to_dict("records"):
+            report_date = report_date_from_dividend_rcept_no(row.get("rcept_no"))
+            if report_date is None:
+                continue
+            payout_ratio_pct = normalize_decimal_amount(row.get("dividend_payout_ratio_pct"))
+            event_rows.append(
+                {
+                    "stock_code": stock_code,
+                    "bsns_year": int(row["bsns_year"]) if not pd.isna(row.get("bsns_year")) else None,
+                    "report_date": report_date,
+                    "rcept_no": str(row.get("rcept_no") or ""),
+                    "report_name": str(row.get("report_name") or ""),
+                    "annual_dividend_per_share": None,
+                    "payout_ratio": None if payout_ratio_pct is None else payout_ratio_pct / 100,
+                    "total_dividend_amount": normalize_decimal_amount(
+                        row.get("dividend_payment_amount_krw")
+                    ),
+                }
+            )
+
+    if not event_rows:
+        return pd.DataFrame(columns=columns)
+
+    event_df = pd.DataFrame(event_rows, columns=columns)
+    event_df["_rcept_no_numeric"] = pd.to_numeric(event_df["rcept_no"], errors="coerce")
+    event_df = event_df.sort_values(
+        ["report_date", "_rcept_no_numeric"],
+        na_position="first",
+    )
+    event_df = (
+        event_df.groupby(["report_date", "rcept_no"], as_index=False, dropna=False)
+        .agg(
+            {
+                "stock_code": "last",
+                "bsns_year": "last",
+                "report_name": "last",
+                "annual_dividend_per_share": "last",
+                "payout_ratio": "last",
+                "total_dividend_amount": "last",
+            }
+        )
+        .sort_values(["report_date", "rcept_no"])
+        .reset_index(drop=True)
+    )
+    for column in ["annual_dividend_per_share", "payout_ratio", "total_dividend_amount"]:
+        event_df[column] = pd.to_numeric(event_df[column], errors="coerce")
+    return event_df[columns]

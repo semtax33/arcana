@@ -9,12 +9,54 @@ from pydantic import BaseModel, Field
 ConditionMode = Literal["top_percent", "threshold"]
 MatchMode = Literal["all", "any"]
 RankDirection = Literal["catalog", "higher", "lower"]
+RebalanceFrequency = Literal["quarterly", "semiannual", "annual"]
+SectorLeaderSortBy = Literal[
+    "strong_stock_ratio",
+    "eps_expected_growth",
+    "return_1d",
+    "return_1w",
+    "roe",
+    "per",
+    "pbr",
+]
+SortDirection = Literal["asc", "desc"]
 
 
 class SectorDto(BaseModel):
     sector_code: str
     sector_name: str
     stock_count: int = 0
+
+
+class SectorLeaderMetricDto(BaseModel):
+    value: float | None = None
+    display_value: str = "N/A"
+
+
+class SectorLeaderRowDto(BaseModel):
+    rank: int
+    sector_code: str
+    sector_name: str
+    stock_count: int = 0
+    strong_stock_count: int = 0
+    strong_stock_ratio: SectorLeaderMetricDto
+    eps_expected_growth: SectorLeaderMetricDto
+    return_1d: SectorLeaderMetricDto
+    return_1w: SectorLeaderMetricDto
+    roe: SectorLeaderMetricDto
+    per: SectorLeaderMetricDto
+    pbr: SectorLeaderMetricDto
+
+
+class SectorLeaderResponseDto(BaseModel):
+    as_of_date: date
+    sort_by: SectorLeaderSortBy
+    direction: SortDirection
+    near_high_pct: float
+    financial_basis: str
+    factor_source: str
+    eps_growth_factor_id: str
+    rows: list[SectorLeaderRowDto] = Field(default_factory=list)
 
 
 class FactorDto(BaseModel):
@@ -108,6 +150,67 @@ class FactorScreenResponseDto(BaseModel):
     fixed_columns: list[FactorScreenColumnDto]
     factor_columns: list[FactorScreenColumnDto]
     rows: list[ScreenedStockRowDto]
+
+
+class FactorBacktestRequestDto(BaseModel):
+    conditions: list[FactorConditionDto] = Field(..., min_length=1)
+    start_date: date
+    end_date: date
+    rebalance_frequency: RebalanceFrequency
+    financial_basis: str | None = "annual"
+    match_mode: MatchMode = "all"
+    benchmarks: list[str] = Field(default_factory=lambda: ["KOSPI200", "KOSDAQ"])
+    max_positions: int | None = Field(default=None, gt=0)
+    transaction_cost_bps: float = Field(default=0, ge=0)
+
+
+class BacktestSummaryDto(BaseModel):
+    start_date: date
+    end_date: date
+    rebalance_frequency: RebalanceFrequency
+    cumulative_return: float | None = None
+    cagr: float | None = None
+    max_drawdown: float | None = None
+    volatility: float | None = None
+    sharpe: float | None = None
+    win_rate: float | None = None
+    rebalance_count: int
+
+
+class BacktestEquityCurvePointDto(BaseModel):
+    trade_date: date
+    strategy_nav: float
+    benchmark_navs: dict[str, float | None] = Field(default_factory=dict)
+
+
+class BacktestPositionDto(BaseModel):
+    security_id: str
+    ticker: str | None = None
+    stock_name: str | None = None
+    weight: float
+    score: float | None = None
+    factor_values: dict[str, float | None] = Field(default_factory=dict)
+
+
+class BacktestRebalanceDto(BaseModel):
+    rebalance_date: date
+    signal_date: date
+    positions: list[BacktestPositionDto] = Field(default_factory=list)
+
+
+class BacktestAnnualReturnDto(BaseModel):
+    year: int
+    strategy_return: float | None = None
+    benchmark_returns: dict[str, float | None] = Field(default_factory=dict)
+    excess_returns: dict[str, float | None] = Field(default_factory=dict)
+
+
+class FactorBacktestResponseDto(BaseModel):
+    summary: BacktestSummaryDto
+    equity_curve: list[BacktestEquityCurvePointDto] = Field(default_factory=list)
+    rebalance_history: list[BacktestRebalanceDto] = Field(default_factory=list)
+    annual_returns: list[BacktestAnnualReturnDto] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 ChartRange = Literal["1M", "3M", "6M", "1Y", "5Y", "MAX"]

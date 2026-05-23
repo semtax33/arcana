@@ -108,7 +108,7 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["tax_rate"], 25.0)
         self.assertAlmostEqual(latest["roe"], 20.0)
 
-    def test_dividend_payout_factor_is_stored_as_percent(self):
+    def test_dividend_payout_factor_is_empty_without_disclosure_events(self):
         daily_df = pd.DataFrame(
             {
                 "trade_date": pd.to_datetime(["2025-01-02"]),
@@ -116,20 +116,56 @@ class FactorNormalizerTest(unittest.TestCase):
             }
         )
 
-        with (
-            patch(
-                "engine.factor_normalizer.calculate_silver_total_dividend_per_share_with_fallback",
-                return_value=1_000,
-            ),
-            patch(
-                "engine.factor_normalizer.calculate_silver_payout_ratio_with_fallback",
-                return_value=0.25,
-            ),
-            patch(
-                "engine.factor_normalizer.calculate_silver_total_dividend_amount",
-                return_value=100_000,
-            ),
+        with patch(
+            "engine.factor_normalizer.silver_dividend_asof_events",
+            return_value=pd.DataFrame(),
         ):
+            result = add_dividend_factors(daily_df, "005930")
+            valued = add_daily_market_valuation_factors(result)
+
+        self.assertTrue(pd.isna(result["tdpr"].iat[0]))
+        self.assertTrue(pd.isna(valued["payout_ratio"].iat[0]))
+
+    def test_dividend_factors_are_merged_from_disclosure_date(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2025-03-14", "2025-03-15", "2025-03-16"]),
+                "close": [50_000, 50_000, 50_000],
+            }
+        )
+        events = pd.DataFrame(
+            {
+                "report_date": pd.to_datetime(["2025-03-15"]),
+                "annual_dividend_per_share": [1_000],
+                "payout_ratio": [0.25],
+                "total_dividend_amount": [100_000],
+            }
+        )
+
+        with patch("engine.factor_normalizer.silver_dividend_asof_events", return_value=events):
+            result = add_dividend_factors(daily_df, "005930")
+
+        self.assertTrue(pd.isna(result.loc[result["trade_date"] == pd.Timestamp("2025-03-14"), "dvpsx"].iat[0]))
+        self.assertEqual(result.loc[result["trade_date"] == pd.Timestamp("2025-03-15"), "dvpsx"].iat[0], 1_000)
+        self.assertEqual(result.loc[result["trade_date"] == pd.Timestamp("2025-03-16"), "tdpr"].iat[0], 25.0)
+
+    def test_dividend_payout_factor_is_stored_as_percent_after_disclosure(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2025-03-16"]),
+                "close": [50_000],
+            }
+        )
+        events = pd.DataFrame(
+            {
+                "report_date": pd.to_datetime(["2025-03-15"]),
+                "annual_dividend_per_share": [1_000],
+                "payout_ratio": [0.25],
+                "total_dividend_amount": [100_000],
+            }
+        )
+
+        with patch("engine.factor_normalizer.silver_dividend_asof_events", return_value=events):
             result = add_dividend_factors(daily_df, "005930")
             valued = add_daily_market_valuation_factors(result)
 

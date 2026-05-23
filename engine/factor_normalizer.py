@@ -6,11 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from dividend_normalizer import (
-    calculate_silver_payout_ratio_with_fallback,
-    calculate_silver_total_dividend_amount,
-    calculate_silver_total_dividend_per_share_with_fallback,
-)
+from dividend_normalizer import silver_dividend_asof_events
 from statement_periodizer import (
     REPORT_METADATA_PATH,
     attach_report_metadata,
@@ -581,32 +577,53 @@ def calculate_piotroski_f_score(df, periods=1):
 
 def add_dividend_factors(daily_df, stock_code):
     df = daily_df.copy()
-    years = sorted(df["trade_date"].dt.year.unique())
-    dividend_by_year = {
-        year: calculate_silver_total_dividend_per_share_with_fallback(stock_code, year)
-        for year in years
-    }
-    payout_by_year = {
-        year: calculate_silver_payout_ratio_with_fallback(stock_code, year)
-        for year in years
-    }
-    total_dividend_amount_by_year = {
-        year: calculate_silver_total_dividend_amount(stock_code, year)
-        for year in years
-    }
+    dividend_events = silver_dividend_asof_events(stock_code)
+    if not dividend_events.empty:
+        events = dividend_events.copy()
+        events["report_date"] = pd.to_datetime(events["report_date"], errors="coerce")
+        events = events.dropna(subset=["report_date"]).sort_values("report_date")
+        if not events.empty:
+            df = pd.merge_asof(
+                df.sort_values("trade_date"),
+                events[
+                    [
+                        "report_date",
+                        "annual_dividend_per_share",
+                        "payout_ratio",
+                        "total_dividend_amount",
+                    ]
+                ].sort_values("report_date"),
+                left_on="trade_date",
+                right_on="report_date",
+                direction="backward",
+            )
+            df["dvpsx"] = pd.to_numeric(df["annual_dividend_per_share"], errors="coerce")
+            df["dvpsp"] = math.nan
+            df["sharehold_div_yield"] = df["dvpsx"] / df["close"] * 100
+            df["tdpr"] = pd.to_numeric(df["payout_ratio"], errors="coerce") * 100
+            df.loc[df["tdpr"] < 0, "tdpr"] = math.nan
+            df.loc[
+                (df["sharehold_div_yield"] < 0) | (df["sharehold_div_yield"] > 100),
+                "sharehold_div_yield",
+            ] = math.nan
+            df["total_dividend_amount"] = pd.to_numeric(
+                df["total_dividend_amount"],
+                errors="coerce",
+            )
+            return df.drop(
+                columns=[
+                    "report_date",
+                    "annual_dividend_per_share",
+                    "payout_ratio",
+                ],
+                errors="ignore",
+            )
 
-    df["dvpsx"] = df["trade_date"].dt.year.map(dividend_by_year)
+    df["dvpsx"] = math.nan
     df["dvpsp"] = math.nan
-    df["sharehold_div_yield"] = df["dvpsx"] / df["close"] * 100
-    df["tdpr"] = (
-        pd.to_numeric(df["trade_date"].dt.year.map(payout_by_year), errors="coerce") * 100
-    )
-    df.loc[df["tdpr"] < 0, "tdpr"] = math.nan
-    df.loc[
-        (df["sharehold_div_yield"] < 0) | (df["sharehold_div_yield"] > 100),
-        "sharehold_div_yield",
-    ] = math.nan
-    df["total_dividend_amount"] = df["trade_date"].dt.year.map(total_dividend_amount_by_year)
+    df["sharehold_div_yield"] = math.nan
+    df["tdpr"] = math.nan
+    df["total_dividend_amount"] = math.nan
 
     return df
 

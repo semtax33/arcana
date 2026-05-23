@@ -1,0 +1,205 @@
+import unittest
+from datetime import date
+
+import pandas as pd
+
+from api.service.backtest_service import BacktestService, _rebalance_dates
+from api.service.dto import FactorBacktestRequestDto, FactorConditionDto
+
+
+class FakeClickHouseClient:
+    def __init__(self):
+        self.closed = False
+        self.queries = []
+
+    def query_df(self, query, parameters=None):
+        parameters = parameters or {}
+        self.queries.append((query, parameters))
+        if "SELECT DISTINCT trade_date" in query:
+            return pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(
+                        ["2026-01-01", "2026-01-02", "2026-01-03"]
+                    )
+                }
+            )
+        if "latest_factor_values AS" in query:
+            return pd.DataFrame(
+                [
+                    {
+                        "security_id": "SEC_KR_A",
+                        "ticker": "A",
+                        "stock_name": "A Corp",
+                        "factor_id": "roe",
+                        "value_direction": "HIGHER_BETTER",
+                        "factor_value": 20,
+                        "rank_high": 1,
+                        "rank_low": 2,
+                        "factor_count": 2,
+                        "percentile_score": 100,
+                    },
+                    {
+                        "security_id": "SEC_KR_A",
+                        "ticker": "A",
+                        "stock_name": "A Corp",
+                        "factor_id": "per",
+                        "value_direction": "LOWER_BETTER",
+                        "factor_value": 5,
+                        "rank_high": 2,
+                        "rank_low": 1,
+                        "factor_count": 2,
+                        "percentile_score": 100,
+                    },
+                    {
+                        "security_id": "SEC_KR_B",
+                        "ticker": "B",
+                        "stock_name": "B Corp",
+                        "factor_id": "roe",
+                        "value_direction": "HIGHER_BETTER",
+                        "factor_value": 10,
+                        "rank_high": 2,
+                        "rank_low": 1,
+                        "factor_count": 2,
+                        "percentile_score": 0,
+                    },
+                    {
+                        "security_id": "SEC_KR_B",
+                        "ticker": "B",
+                        "stock_name": "B Corp",
+                        "factor_id": "per",
+                        "value_direction": "LOWER_BETTER",
+                        "factor_value": 12,
+                        "rank_high": 1,
+                        "rank_low": 2,
+                        "factor_count": 2,
+                        "percentile_score": 0,
+                    },
+                ]
+            )
+        if "FROM price_daily" in query:
+            return pd.DataFrame(
+                {
+                    "security_id": ["SEC_KR_A", "SEC_KR_A"],
+                    "trade_date": pd.to_datetime(["2026-01-02", "2026-01-03"]),
+                    "close": [100, 110],
+                }
+            )
+        if "FROM benchmark_price_daily" in query:
+            return pd.DataFrame()
+        return pd.DataFrame()
+
+    def close(self):
+        self.closed = True
+
+
+class MultiRebalanceFakeClickHouseClient(FakeClickHouseClient):
+    def query_df(self, query, parameters=None):
+        parameters = parameters or {}
+        self.queries.append((query, parameters))
+        if "SELECT DISTINCT trade_date" in query:
+            return pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(
+                        [
+                            "2026-01-01",
+                            "2026-01-02",
+                            "2026-01-03",
+                            "2026-03-31",
+                            "2026-04-01",
+                            "2026-04-02",
+                            "2026-04-03",
+                        ]
+                    )
+                }
+            )
+        if "latest_factor_values AS" in query:
+            return super().query_df(query, parameters)
+        if "FROM price_daily" in query:
+            return pd.DataFrame(
+                {
+                    "security_id": ["SEC_KR_A"] * 4,
+                    "trade_date": pd.to_datetime(
+                        ["2026-01-02", "2026-01-03", "2026-04-01", "2026-04-02"]
+                    ),
+                    "close": [100, 110, 110, 121],
+                }
+            )
+        if "FROM benchmark_price_daily" in query:
+            return pd.DataFrame()
+        return pd.DataFrame()
+
+
+class BacktestServiceTest(unittest.TestCase):
+    def test_rebalance_dates_include_start_and_period_boundary_execution_dates(self):
+        trading_days = [
+            date(2026, 1, 2),
+            date(2026, 3, 31),
+            date(2026, 4, 1),
+            date(2026, 6, 30),
+            date(2026, 7, 1),
+        ]
+
+        result = _rebalance_dates(
+            trading_days,
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 7, 1),
+            frequency="quarterly",
+        )
+
+        self.assertEqual(
+            result,
+            [date(2026, 1, 2), date(2026, 4, 1), date(2026, 7, 1)],
+        )
+
+    def test_factor_backtest_sorts_by_average_score_and_limits_positions(self):
+        client = FakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(factor_id="roe", mode="top_percent", top_percent=100),
+                FactorConditionDto(factor_id="per", mode="top_percent", top_percent=100),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 1, 3),
+            rebalance_frequency="quarterly",
+            max_positions=1,
+        )
+
+        result = BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        self.assertTrue(client.closed)
+        self.assertAlmostEqual(result.summary.cumulative_return, 0.1)
+        self.assertEqual(result.summary.rebalance_count, 1)
+        self.assertEqual(result.rebalance_history[0].signal_date, date(2026, 1, 1))
+        self.assertEqual(len(result.rebalance_history[0].positions), 1)
+        self.assertEqual(result.rebalance_history[0].positions[0].security_id, "SEC_KR_A")
+        self.assertEqual(result.rebalance_history[0].positions[0].weight, 1.0)
+        self.assertEqual(result.rebalance_history[0].positions[0].score, 100.0)
+        self.assertTrue(any("Survivor bias" in warning for warning in result.warnings))
+
+    def test_factor_backtest_loads_price_history_once_for_multiple_rebalances(self):
+        client = MultiRebalanceFakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(factor_id="roe", mode="top_percent", top_percent=100),
+                FactorConditionDto(factor_id="per", mode="top_percent", top_percent=100),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 4, 3),
+            rebalance_frequency="quarterly",
+            max_positions=1,
+        )
+
+        result = BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        price_history_queries = [
+            query
+            for query, params in client.queries
+            if "FROM price_daily" in query and "security_ids" in params
+        ]
+        self.assertEqual(len(result.rebalance_history), 2)
+        self.assertEqual(len(price_history_queries), 1)
+        self.assertAlmostEqual(result.summary.cumulative_return, 0.21)
+
+
+if __name__ == "__main__":
+    unittest.main()
