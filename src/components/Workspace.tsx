@@ -5,6 +5,7 @@ import type { ScreenerStore } from "../stores/screenerStore";
 import { IndustryAnalysisPage } from "./IndustryAnalysisPage";
 import { QuantScreenerPage } from "./QuantScreenerPage";
 import { StockAnalysisPage } from "./StockAnalysisPage";
+import { StyleScorePage } from "./StyleScorePage";
 
 type WorkspaceProps = {
   screenerStore: ScreenerStore;
@@ -33,6 +34,14 @@ export const Workspace = observer(
       return (
         <section className="workspace no-footer">
           <IndustryAnalysisPage />
+        </section>
+      );
+    }
+
+    if (screenerStore.activeMenuId === "style-score") {
+      return (
+        <section className="workspace no-footer">
+          <StyleScorePage />
         </section>
       );
     }

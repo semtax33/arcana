@@ -13,6 +13,7 @@ import type {
   FilterDefinition,
   FilterGroup,
   FactorBacktestResponse,
+  BacktestRebalanceFrequency,
   IndustryOption,
   MarketCode,
   QuantScreenerResponse,
@@ -27,7 +28,7 @@ type SortDirection = "asc" | "desc";
 const maxResultRows = 5000;
 const defaultBacktestStartDate = "2016-01-01";
 const defaultBacktestEndDate = "2026-04-26";
-const defaultRebalanceFrequency = "quarterly";
+const defaultRebalanceFrequency: BacktestRebalanceFrequency = "annual";
 
 const defaultIndustryIds: string[] = [];
 const defaultExpandedGroups: string[] = [];
@@ -70,6 +71,10 @@ export class QuantScreenerStore {
   sortKey = "rank";
   sortDirection: SortDirection = "asc";
   backtestResult: FactorBacktestResponse | null = null;
+  backtestStartDate = defaultBacktestStartDate;
+  backtestEndDate = defaultBacktestEndDate;
+  backtestRebalanceFrequency: BacktestRebalanceFrequency =
+    defaultRebalanceFrequency;
   isBacktesting = false;
   backtestRequestId = 0;
   isCatalogLoading = false;
@@ -326,7 +331,12 @@ export class QuantScreenerStore {
 
     this.viewMode = "backtest";
     this.backtestResult = null;
+    this.backtestRebalanceFrequency = defaultRebalanceFrequency;
     this.backtestErrorMessage = "";
+  }
+
+  setBacktestRebalanceFrequency(frequency: BacktestRebalanceFrequency) {
+    this.backtestRebalanceFrequency = frequency;
   }
 
   async runBacktest() {
@@ -340,13 +350,9 @@ export class QuantScreenerStore {
     }));
     const industries = [...this.selectedIndustries];
     const market = this.market;
-    const startDate =
-      this.backtestResult?.summary.startDate ?? defaultBacktestStartDate;
-    const endDate =
-      this.backtestResult?.summary.endDate ?? defaultBacktestEndDate;
-    const rebalanceFrequency =
-      this.backtestResult?.summary.rebalanceFrequency ??
-      defaultRebalanceFrequency;
+    const startDate = this.backtestStartDate;
+    const endDate = this.backtestEndDate;
+    const rebalanceFrequency = this.backtestRebalanceFrequency;
 
     this.backtestRequestId = requestId;
     this.isBacktesting = true;

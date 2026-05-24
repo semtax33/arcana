@@ -484,31 +484,47 @@ function navToCumulativePercent(value: number | null | undefined) {
   return (value - 1) * 100;
 }
 
-function getPrimaryBenchmark(
+function sortBenchmarkNames(names: string[]) {
+  const preferredOrder = ["KOSPI200", "KOSPI 200", "KOSDAQ"];
+
+  return [...new Set(names)].sort((left, right) => {
+    const leftIndex = preferredOrder.indexOf(left);
+    const rightIndex = preferredOrder.indexOf(right);
+
+    if (leftIndex !== -1 || rightIndex !== -1) {
+      return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex) -
+        (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex);
+    }
+
+    return left.localeCompare(right, "ko-KR", { numeric: true });
+  });
+}
+
+function getBenchmarkNames(response: FactorBacktestResponseDto) {
+  return sortBenchmarkNames([
+    ...response.equity_curve.flatMap((point) => Object.keys(point.benchmark_navs ?? {})),
+    ...response.annual_returns.flatMap((item) => Object.keys(item.benchmark_returns ?? {})),
+  ]);
+}
+
+function mapBenchmarkValues(
   benchmarkValues: Record<string, number | null> | null | undefined,
-): { name: string | null; value: number | null } {
+  mapper: (value: number | null | undefined) => number | null,
+): Record<string, number | null> {
   if (!benchmarkValues) {
-    return { name: null, value: null };
+    return {};
   }
 
-  const entry =
-    Object.entries(benchmarkValues).find(([, value]) => value !== null && value !== undefined) ??
-    Object.entries(benchmarkValues)[0];
-
-  if (!entry) {
-    return { name: null, value: null };
-  }
-
-  return {
-    name: entry[0],
-    value: entry[1],
-  };
+  return Object.fromEntries(
+    sortBenchmarkNames(Object.keys(benchmarkValues)).map((name) => [
+      name,
+      mapper(benchmarkValues[name]),
+    ]),
+  );
 }
 
 function mapBacktestResponse(response: FactorBacktestResponseDto): FactorBacktestResponse {
-  const firstBenchmark = response.equity_curve
-    .map((point) => getPrimaryBenchmark(point.benchmark_navs))
-    .find((benchmark) => benchmark.name !== null);
+  const benchmarkNames = getBenchmarkNames(response);
 
   return {
     summary: {
@@ -522,31 +538,21 @@ function mapBacktestResponse(response: FactorBacktestResponseDto): FactorBacktes
       sharpe: response.summary.sharpe,
       winRate: toPercent(response.summary.win_rate),
       rebalanceCount: response.summary.rebalance_count,
-      benchmarkName: firstBenchmark?.name ?? null,
+      benchmarkNames,
     },
-    equityCurve: response.equity_curve.map((point) => {
-      const benchmark = getPrimaryBenchmark(point.benchmark_navs);
-
-      return {
-        date: point.trade_date,
-        strategy: navToCumulativePercent(point.strategy_nav) ?? 0,
-        benchmark: navToCumulativePercent(benchmark.value),
-        cash: null,
-        benchmarkName: benchmark.name,
-      };
-    }),
+    equityCurve: response.equity_curve.map((point) => ({
+      date: point.trade_date,
+      strategy: navToCumulativePercent(point.strategy_nav) ?? 0,
+      benchmarks: mapBenchmarkValues(point.benchmark_navs, navToCumulativePercent),
+      cash: null,
+    })),
     annualReturns: response.annual_returns
-      .map((item) => {
-        const benchmark = getPrimaryBenchmark(item.benchmark_returns);
-        const excess = getPrimaryBenchmark(item.excess_returns);
-
-        return {
-          year: item.year,
-          strategy: toPercent(item.strategy_return) ?? 0,
-          benchmark: toPercent(benchmark.value),
-          excess: toPercent(excess.value),
-        };
-      })
+      .map((item) => ({
+        year: item.year,
+        strategy: toPercent(item.strategy_return) ?? 0,
+        benchmarkReturns: mapBenchmarkValues(item.benchmark_returns, toPercent),
+        excessReturns: mapBenchmarkValues(item.excess_returns, toPercent),
+      }))
       .sort((left, right) => right.year - left.year),
     rebalanceHistory: response.rebalance_history.map((rebalance) => ({
       rebalanceDate: rebalance.rebalance_date,

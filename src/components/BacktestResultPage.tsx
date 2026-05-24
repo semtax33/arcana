@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import { observer } from "mobx-react-lite";
 import {
   ArrowLeft,
@@ -21,6 +21,7 @@ import type { QuantScreenerStore } from "../stores/quantScreenerStore";
 import type {
   BacktestAnnualReturn,
   BacktestEquityPoint,
+  BacktestRebalanceFrequency,
   FactorBacktestResponse,
 } from "../types/quantScreener";
 
@@ -52,6 +53,15 @@ const rebalanceLabels: Record<string, string> = {
   semiannual: "반기",
   annual: "연간",
 };
+const rebalanceOptions: Array<{
+  label: string;
+  frequency: BacktestRebalanceFrequency;
+}> = [
+  { label: "연간", frequency: "annual" },
+  { label: "반기", frequency: "semiannual" },
+  { label: "분기", frequency: "quarterly" },
+];
+const benchmarkColors = ["#ef6067", "#7fa7ff", "#f5c84c", "#c084fc"];
 
 function formatSignedPercent(value: number | null | undefined) {
   if (value === null || value === undefined || !Number.isFinite(value)) {
@@ -90,9 +100,20 @@ function getMetricClass(value: number | null | undefined) {
   return "";
 }
 
-function getBenchmarkValue(annualReturns: BacktestAnnualReturn[]) {
+function formatBenchmarkName(name: string) {
+  return name === "KOSPI200" ? "KOSPI 200" : name;
+}
+
+function getBenchmarkValue(
+  annualReturns: BacktestAnnualReturn[],
+  benchmarkName: string | null,
+) {
+  if (!benchmarkName) {
+    return null;
+  }
+
   const values = annualReturns
-    .map((item) => item.benchmark)
+    .map((item) => item.benchmarkReturns[benchmarkName])
     .filter((value): value is number => value !== null && value !== undefined);
 
   if (values.length === 0) {
@@ -106,8 +127,9 @@ function getMetricSections(
   result: FactorBacktestResponse | null,
 ): Array<{ title: string; rows: MetricRow[] }> {
   const summary = result?.summary;
+  const primaryBenchmarkName = summary?.benchmarkNames[0] ?? null;
   const benchmarkReturn = result
-    ? getBenchmarkValue(result.annualReturns)
+    ? getBenchmarkValue(result.annualReturns, primaryBenchmarkName)
     : null;
   const benchmarkPercent =
     benchmarkReturn === null ? null : benchmarkReturn * 100;
@@ -221,21 +243,29 @@ function CumulativeReturnChart({ data }: { data: BacktestEquityPoint[] }) {
       })),
     );
 
-    const benchmarkRows = data
-      .filter((point) => point.benchmark !== null)
-      .map((point) => ({
-        time: point.date as Time,
-        value: point.benchmark as number,
-      }));
+    const benchmarkNames = [
+      ...new Set(data.flatMap((point) => Object.keys(point.benchmarks))),
+    ];
 
-    if (benchmarkRows.length > 0) {
+    benchmarkNames.forEach((benchmarkName, index) => {
+      const benchmarkRows = data
+        .filter((point) => point.benchmarks[benchmarkName] !== null)
+        .map((point) => ({
+          time: point.date as Time,
+          value: point.benchmarks[benchmarkName] as number,
+        }));
+
+      if (benchmarkRows.length === 0) {
+        return;
+      }
+
       const benchmarkSeries = chart.addSeries(LineSeries, {
-        color: "#ef6067",
+        color: benchmarkColors[index % benchmarkColors.length],
         lineWidth: 2,
         priceFormat: { type: "percent" },
       });
       benchmarkSeries.setData(benchmarkRows);
-    }
+    });
 
     const cashRows = data
       .filter((point) => point.cash !== null)
@@ -341,6 +371,8 @@ export const BacktestResultPage = observer(
     const summary = result?.summary;
     const annualReturns = result?.annualReturns ?? [];
     const equityCurve = result?.equityCurve ?? [];
+    const benchmarkNames = summary?.benchmarkNames ?? [];
+    const primaryBenchmarkName = benchmarkNames[0] ?? null;
     const selectedLabels = store.selectedConditions.map(
       (condition) => condition.label,
     );
@@ -356,9 +388,12 @@ export const BacktestResultPage = observer(
       store.result?.total ??
       0;
     const averageExcess =
-      annualReturns.length > 0
-        ? annualReturns.reduce((sum, item) => sum + (item.excess ?? 0), 0) /
-          annualReturns.length
+      annualReturns.length > 0 && primaryBenchmarkName
+        ? annualReturns.reduce(
+            (sum, item) =>
+              sum + (item.excessReturns[primaryBenchmarkName] ?? 0),
+            0,
+          ) / annualReturns.length
         : null;
     const isInitialLoading = store.isBacktesting && !result;
 
@@ -388,9 +423,11 @@ export const BacktestResultPage = observer(
             <p>
               {formatDateLabel(summary?.startDate)} -{" "}
               {formatDateLabel(summary?.endDate)} · {store.market} ·{" "}
-              {rebalanceLabels[summary?.rebalanceFrequency ?? "quarterly"] ??
+              {rebalanceLabels[
+                summary?.rebalanceFrequency ?? store.backtestRebalanceFrequency
+              ] ??
                 summary?.rebalanceFrequency ??
-                "분기"}{" "}
+                store.backtestRebalanceFrequency}{" "}
               리밸런싱
             </p>
           </div>
@@ -434,20 +471,16 @@ export const BacktestResultPage = observer(
             </div>
             <div className="backtest-control-group">
               <span>리밸런싱</span>
-              {[
-                ["분기", "quarterly"],
-                ["반기", "semiannual"],
-                ["연간", "annual"],
-                ["DCA", "monthly"],
-              ].map(([label, frequency]) => (
+              {rebalanceOptions.map(({ label, frequency }) => (
                 <button
                   className={
-                    frequency === (summary?.rebalanceFrequency ?? "quarterly")
+                    frequency === store.backtestRebalanceFrequency
                       ? "selected"
                       : ""
                   }
                   key={frequency}
                   type="button"
+                  onClick={() => store.setBacktestRebalanceFrequency(frequency)}
                 >
                   {label}
                 </button>
@@ -494,14 +527,28 @@ export const BacktestResultPage = observer(
                       <p>
                         {formatDateLabel(summary?.startDate)} -{" "}
                         {formatDateLabel(summary?.endDate)} ·{" "}
-                        {summary?.benchmarkName ?? "벤치마크"} 비교
+                        {benchmarkNames.length > 0
+                          ? benchmarkNames.map(formatBenchmarkName).join(", ")
+                          : "벤치마크"}{" "}
+                        비교
                       </p>
                     </div>
                     <div className="backtest-legend">
                       <span className="strategy">전략</span>
-                      <span className="benchmark">
-                        {summary?.benchmarkName ?? "벤치마크"}
-                      </span>
+                      {benchmarkNames.map((benchmarkName, index) => (
+                        <span
+                          className="benchmark"
+                          key={benchmarkName}
+                          style={
+                            {
+                              "--legend-color":
+                                benchmarkColors[index % benchmarkColors.length],
+                            } as CSSProperties
+                          }
+                        >
+                          {formatBenchmarkName(benchmarkName)}
+                        </span>
+                      ))}
                     </div>
                   </div>
                   {equityCurve.length > 0 ? (
@@ -588,7 +635,18 @@ export const BacktestResultPage = observer(
                             <strong className={getMetricClass(item.strategy)}>
                               {formatSignedPercent(item.strategy)}
                             </strong>
-                            <em>BM {formatSignedPercent(item.benchmark)}</em>
+                            {benchmarkNames.length > 0 ? (
+                              benchmarkNames.map((benchmarkName) => (
+                                <em key={benchmarkName}>
+                                  {formatBenchmarkName(benchmarkName)}{" "}
+                                  {formatSignedPercent(
+                                    item.benchmarkReturns[benchmarkName],
+                                  )}
+                                </em>
+                              ))
+                            ) : (
+                              <em>BM -</em>
+                            )}
                           </article>
                         ))}
                       </div>

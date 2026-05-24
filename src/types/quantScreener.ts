@@ -124,16 +124,15 @@ export type FactorBacktestRequest = {
 export type BacktestEquityPoint = {
   date: string;
   strategy: number;
-  benchmark: number | null;
+  benchmarks: Record<string, number | null>;
   cash: number | null;
-  benchmarkName: string | null;
 };
 
 export type BacktestAnnualReturn = {
   year: number;
   strategy: number;
-  benchmark: number | null;
-  excess: number | null;
+  benchmarkReturns: Record<string, number | null>;
+  excessReturns: Record<string, number | null>;
 };
 
 export type BacktestPosition = {
@@ -161,7 +160,7 @@ export type FactorBacktestSummary = {
   sharpe: number | null;
   winRate: number | null;
   rebalanceCount: number | null;
-  benchmarkName: string | null;
+  benchmarkNames: string[];
 };
 
 export type FactorBacktestResponse = {
