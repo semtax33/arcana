@@ -198,3 +198,110 @@ create table arcana.stock_shares
         ORDER BY (trade_date, security_id)
         SETTINGS index_granularity = 8192;
 
+CREATE TABLE IF NOT EXISTS arcana.fact_daily_factor_score
+(
+    trade_date Date,
+    security_id String,
+    issuer_id String DEFAULT '',
+    stock_code FixedString(6) DEFAULT '',
+    company_name String DEFAULT '',
+    industry_schema LowCardinality(String) DEFAULT '',
+    industry_level LowCardinality(String) DEFAULT '',
+    industry_code String DEFAULT '',
+    industry_name String DEFAULT '',
+    factor_id LowCardinality(String),
+    style_group LowCardinality(String) DEFAULT '',
+    factor_direction Int8,
+    raw_factor_value Nullable(Float64),
+    winsorized_value Nullable(Float64),
+    percentile_score Nullable(Float64),
+    robust_z_score Nullable(Float64),
+    n_peers UInt32,
+    score_method LowCardinality(String) DEFAULT 'INDUSTRY_PERCENTILE',
+    fallback_level LowCardinality(String) DEFAULT '',
+    is_valid Bool DEFAULT true,
+    invalid_reason String DEFAULT '',
+    is_winsorized Bool DEFAULT false,
+    is_missing Bool DEFAULT false,
+    score_confidence Float64 DEFAULT 1.0,
+    source_trade_date Date,
+    updated_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY toYYYYMM(trade_date)
+ORDER BY
+(
+    trade_date,
+    factor_id,
+    industry_schema,
+    industry_code,
+    security_id
+)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS arcana.fact_daily_style_score
+(
+    trade_date Date,
+    security_id String,
+    issuer_id String DEFAULT '',
+    stock_code FixedString(6) DEFAULT '',
+    company_name String DEFAULT '',
+    industry_schema LowCardinality(String) DEFAULT '',
+    industry_code String DEFAULT '',
+    industry_name String DEFAULT '',
+    style_profile LowCardinality(String),
+    value_score Nullable(Float64),
+    quality_score Nullable(Float64),
+    growth_score Nullable(Float64),
+    momentum_score Nullable(Float64),
+    risk_score Nullable(Float64),
+    dividend_score Nullable(Float64),
+    total_score Nullable(Float64),
+    total_score_sort Float64 DEFAULT -1,
+    available_factor_count UInt16,
+    required_factor_count UInt16,
+    score_confidence Float64,
+    missing_factor_ids Array(String) DEFAULT [],
+    invalid_factor_ids Array(String) DEFAULT [],
+    updated_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY toYYYYMM(trade_date)
+ORDER BY
+(
+    trade_date,
+    style_profile,
+    total_score_sort,
+    security_id
+)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS arcana.industry_factor_daily_snapshot
+(
+    trade_date Date,
+    industry_schema LowCardinality(String) DEFAULT '',
+    industry_level LowCardinality(String) DEFAULT '',
+    industry_code String DEFAULT '',
+    industry_name String DEFAULT '',
+    factor_id LowCardinality(String),
+    n_companies UInt32,
+    avg_value Nullable(Float64),
+    median_value Nullable(Float64),
+    p10_value Nullable(Float64),
+    p25_value Nullable(Float64),
+    p75_value Nullable(Float64),
+    p90_value Nullable(Float64),
+    winsor_avg_value Nullable(Float64),
+    updated_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY toYYYYMM(trade_date)
+ORDER BY
+(
+    trade_date,
+    industry_schema,
+    industry_level,
+    industry_code,
+    factor_id
+)
+SETTINGS index_granularity = 8192;

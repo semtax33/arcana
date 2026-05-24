@@ -121,6 +121,39 @@ class FactorScreenQueryTest(unittest.TestCase):
         self.assertIn("any(iss.industry_group_code) AS industry_group_code", query)
         self.assertIn("any(u.industry_group_name) AS industry_group_name", query)
 
+    def test_build_factor_screen_query_supports_style_score_conditions(self):
+        query, params = build_factor_screen_query(
+            [
+                FactorCondition.threshold("style_total_score", ">=", 60, alias="style"),
+                FactorCondition.top("roe", 20, alias="high_roe"),
+            ],
+            as_of_date="2026-05-17",
+            style_profile="MINERVINI_ZWEIG",
+        )
+
+        self.assertEqual(params["factor_ids"], ["roe", "style_total_score"])
+        self.assertEqual(params["regular_factor_ids"], ["roe"])
+        self.assertEqual(params["style_profile"], "MINERVINI_ZWEIG")
+        self.assertIn("latest_style_trade_date AS", query)
+        self.assertIn("FROM arcana.fact_daily_style_score AS s", query)
+        self.assertIn("'style_total_score' AS factor_id", query)
+        self.assertIn("toFloat64(s.total_score) AS factor_value", query)
+        self.assertIn("UNION ALL", query)
+        self.assertIn("has({regular_factor_ids:Array(String)}, f.factor_id)", query)
+        self.assertIn("factor_value >= {condition_0_value:Float64}", query)
+        self.assertIn("style_0_value", query)
+
+    def test_style_score_aliases_are_canonicalized(self):
+        query, params = build_factor_screen_query(
+            [FactorCondition.threshold("total_score", ">=", 70)],
+            as_of_date="2026-05-17",
+        )
+
+        self.assertEqual(params["factor_ids"], ["style_total_score"])
+        self.assertEqual(params["condition_0_factor_id"], "style_total_score")
+        self.assertNotIn("selected_catalog AS", query)
+        self.assertIn("FROM arcana.fact_daily_style_score AS s", query)
+
     def test_invalid_dynamic_identifiers_are_rejected(self):
         with self.assertRaises(ValueError):
             build_latest_factor_values_query(["roe;DROP"])

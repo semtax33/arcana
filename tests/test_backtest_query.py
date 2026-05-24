@@ -21,6 +21,37 @@ class BacktestQueryTest(unittest.TestCase):
         self.assertIn("percentile_score", query)
         self.assertNotIn("sm.is_active", query)
 
+    def test_factor_snapshot_query_supports_style_score_conditions(self):
+        query, params = build_factor_snapshot_query(
+            [
+                FactorCondition.top("style_total_score", 10),
+                FactorCondition.threshold("roe", ">=", 15),
+            ],
+            signal_date="2026-03-31",
+            style_profile="DIVIDEND_QUALITY",
+        )
+
+        self.assertEqual(params["factor_ids"], ["roe", "style_total_score"])
+        self.assertEqual(params["regular_factor_ids"], ["roe"])
+        self.assertEqual(params["style_profile"], "DIVIDEND_QUALITY")
+        self.assertIn("FROM arcana.fact_daily_style_score AS s", query)
+        self.assertIn("'style_total_score' AS factor_id", query)
+        self.assertIn("argMax(toFloat64(s.total_score), tuple(s.trade_date, s.updated_at))", query)
+        self.assertIn("s.style_profile = {style_profile:String}", query)
+        self.assertIn("UNION ALL", query)
+        self.assertIn("has({regular_factor_ids:Array(String)}, f.factor_id)", query)
+
+    def test_factor_snapshot_query_canonicalizes_style_score_aliases(self):
+        query, params = build_factor_snapshot_query(
+            [FactorCondition.threshold("total_score", ">=", 70)],
+            signal_date="2026-03-31",
+        )
+
+        self.assertEqual(params["factor_ids"], ["style_total_score"])
+        self.assertEqual(params["style_profile"], "DEFAULT")
+        self.assertNotIn("selected_catalog AS", query)
+        self.assertIn("FROM arcana.fact_daily_style_score AS s", query)
+
 
 if __name__ == "__main__":
     unittest.main()

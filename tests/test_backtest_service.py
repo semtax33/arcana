@@ -23,6 +23,23 @@ class FakeClickHouseClient:
                     )
                 }
             )
+        if "latest_factor_values AS" in query and "style_total_score" in query:
+            return pd.DataFrame(
+                [
+                    {
+                        "security_id": "SEC_KR_A",
+                        "ticker": "A",
+                        "stock_name": "A Corp",
+                        "factor_id": "style_total_score",
+                        "value_direction": "HIGHER_BETTER",
+                        "factor_value": 80,
+                        "rank_high": 1,
+                        "rank_low": 1,
+                        "factor_count": 1,
+                        "percentile_score": 100,
+                    },
+                ]
+            )
         if "latest_factor_values AS" in query:
             return pd.DataFrame(
                 [
@@ -199,6 +216,35 @@ class BacktestServiceTest(unittest.TestCase):
         self.assertEqual(len(result.rebalance_history), 2)
         self.assertEqual(len(price_history_queries), 1)
         self.assertAlmostEqual(result.summary.cumulative_return, 0.21)
+
+    def test_factor_backtest_passes_style_profile_to_snapshot_query(self):
+        client = FakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(
+                    factor_id="style_total_score",
+                    mode="top_percent",
+                    top_percent=100,
+                ),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 1, 3),
+            rebalance_frequency="quarterly",
+            style_profile="MINERVINI_ZWEIG",
+            max_positions=1,
+        )
+
+        BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        snapshot_queries = [
+            (query, params)
+            for query, params in client.queries
+            if "latest_factor_values AS" in query
+        ]
+        self.assertEqual(len(snapshot_queries), 1)
+        query, params = snapshot_queries[0]
+        self.assertIn("FROM arcana.fact_daily_style_score AS s", query)
+        self.assertEqual(params["style_profile"], "MINERVINI_ZWEIG")
 
 
 if __name__ == "__main__":
