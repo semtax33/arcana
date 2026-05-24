@@ -106,6 +106,30 @@ python -m engine.workflows.normalize
 DART HTML 재무제표를 canonical account 기준 CSV로 정규화합니다. 산출물은
 `data-lake/silver/dart/normalized/` 아래에 저장됩니다.
 
+`engine.workflows.normalize`는 DART 재무제표 전용 workflow입니다. KRX
+price/shares, dividend, benchmark 정규화는 아래 경로를 사용합니다.
+
+Normalize price/shares silver CSV만 갱신:
+
+```powershell
+python -c "from engine.transformers.market_data import normalize_price, normalize_shares; normalize_price(r'data-lake\bronze\krx\price\*'); normalize_shares(r'data-lake\bronze\krx\shares\*')"
+```
+
+Normalize dividend silver CSV만 갱신:
+
+```powershell
+python -c "from engine.loaders.dividends import refresh_silver_dividend_files; refresh_silver_dividend_files()"
+```
+
+Normalize benchmark silver CSV만 갱신:
+
+```powershell
+python -c "from engine.loaders.benchmarks import normalize_downloaded_benchmark_prices; normalize_downloaded_benchmark_prices(r'data-lake\bronze\krx\benchmark\*.csv')"
+```
+
+아래 loader 명령들은 정규화된 silver 파일을 갱신한 뒤 ClickHouse 적재까지
+이어 수행합니다.
+
 ### 3. Load Market Data
 
 ```powershell
