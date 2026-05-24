@@ -21,6 +21,16 @@ SectorLeaderSortBy = Literal[
 ]
 SectorLeaderLevel = Literal["sector", "industry_group"]
 SortDirection = Literal["asc", "desc"]
+StyleProfile = Literal["DEFAULT", "MINERVINI_ZWEIG", "DIVIDEND_QUALITY"]
+StyleScoreComponentKey = Literal[
+    "COMPOSITE",
+    "VALUE",
+    "QUALITY",
+    "GROWTH",
+    "MOMENTUM",
+    "RISK",
+    "DIVIDEND",
+]
 
 
 class SectorDto(BaseModel):
@@ -69,6 +79,112 @@ class SectorLeaderResponseDto(BaseModel):
     rows: list[SectorLeaderRowDto] = Field(default_factory=list)
 
 
+class StyleScoreRowDto(BaseModel):
+    trade_date: date
+    rank: int
+    security_id: str
+    issuer_id: str = ""
+    stock_code: str = ""
+    company_name: str = ""
+    industry_schema: str = ""
+    sector_code: str = ""
+    industry_group_code: str = ""
+    industry_group_name: str = ""
+    style_profile: str = "DEFAULT"
+    value_score: float | None = None
+    quality_score: float | None = None
+    growth_score: float | None = None
+    momentum_score: float | None = None
+    risk_score: float | None = None
+    dividend_score: float | None = None
+    total_score: float | None = None
+    score_confidence: float = 0.0
+    available_factor_count: int = 0
+    required_factor_count: int = 0
+    missing_factor_ids: list[str] = Field(default_factory=list)
+    invalid_factor_ids: list[str] = Field(default_factory=list)
+
+
+class StyleScoreResponseDto(BaseModel):
+    trade_date: date
+    style_profile: str
+    total_count: int
+    rows: list[StyleScoreRowDto] = Field(default_factory=list)
+
+
+class FactorScoreBreakdownDto(BaseModel):
+    factor_id: str
+    style_group: str
+    factor_direction: int
+    raw_factor_value: float | None = None
+    winsorized_value: float | None = None
+    percentile_score: float | None = None
+    robust_z_score: float | None = None
+    n_peers: int = 0
+    industry_level: str = ""
+    industry_code: str = ""
+    industry_name: str = ""
+    is_valid: bool = True
+    invalid_reason: str = ""
+    is_winsorized: bool = False
+    score_confidence: float = 0.0
+
+
+class StyleScoreDetailResponseDto(BaseModel):
+    row: StyleScoreRowDto | None = None
+    factors: list[FactorScoreBreakdownDto] = Field(default_factory=list)
+
+
+class StyleScoreComponentDto(BaseModel):
+    component_key: str
+    label: str
+    score: float | None = None
+    score_confidence: float = 0.0
+    available_factor_count: int = 0
+    required_factor_count: int = 0
+    available_weight: float = 0.0
+    required_weight: float = 0.0
+
+
+class StyleScoreComponentFactorDto(BaseModel):
+    factor_id: str
+    label: str
+    style_group: str
+    raw_factor_value: float | None = None
+    winsorized_value: float | None = None
+    percentile_score: float | None = None
+    robust_z_score: float | None = None
+    factor_weight: float = 0.0
+    weighted_score: float | None = None
+    n_peers: int = 0
+    industry_level: str = ""
+    industry_code: str = ""
+    industry_name: str = ""
+    is_valid: bool = False
+    invalid_reason: str = ""
+    is_winsorized: bool = False
+    score_confidence: float = 0.0
+
+
+class StyleScoreComponentsResponseDto(BaseModel):
+    trade_date: date
+    security_id: str
+    stock_code: str = ""
+    company_name: str = ""
+    style_profile: str
+    components: list[StyleScoreComponentDto] = Field(default_factory=list)
+
+
+class StyleScoreComponentDetailResponseDto(BaseModel):
+    trade_date: date
+    security_id: str
+    stock_code: str = ""
+    company_name: str = ""
+    style_profile: str
+    component: StyleScoreComponentDto
+    factors: list[StyleScoreComponentFactorDto] = Field(default_factory=list)
+
+
 class FactorDto(BaseModel):
     factor_id: str
     factor_name: str
@@ -96,6 +212,7 @@ class FactorScreenRequestDto(BaseModel):
     conditions: list[FactorConditionDto] = Field(..., min_length=1)
     as_of_date: date | None = None
     financial_basis: str | None = "annual"
+    style_profile: StyleProfile = "DEFAULT"
     sector_codes: list[str] | None = None
     industry_group_codes: list[str] | None = None
     match_mode: MatchMode = "all"
@@ -171,6 +288,7 @@ class FactorBacktestRequestDto(BaseModel):
     end_date: date
     rebalance_frequency: RebalanceFrequency
     financial_basis: str | None = "annual"
+    style_profile: StyleProfile = "DEFAULT"
     match_mode: MatchMode = "all"
     benchmarks: list[str] = Field(default_factory=lambda: ["KOSPI200", "KOSDAQ"])
     max_positions: int | None = Field(default=None, gt=0)

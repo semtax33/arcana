@@ -24,6 +24,10 @@ from api.repository.backtest_query import (
 )
 from api.repository.factor_screen_query import FactorCondition
 from api.service.dto import FactorBacktestRequestDto, FactorConditionDto
+from api.service.style_score_catalog import (
+    canonical_style_score_factor_id,
+    is_style_score_factor,
+)
 
 
 SURVIVOR_BIAS_WARNING = (
@@ -68,6 +72,7 @@ class BacktestService:
                 rebalance_dates=rebalance_dates,
                 end_date=request.end_date,
                 financial_basis=request.financial_basis or "annual",
+                style_profile=request.style_profile,
                 match_mode=request.match_mode,
                 max_positions=request.max_positions,
                 transaction_cost_bps=float(request.transaction_cost_bps),
@@ -128,6 +133,7 @@ class BacktestService:
         rebalance_dates: list[date],
         end_date: date,
         financial_basis: str,
+        style_profile: str,
         match_mode: str,
         max_positions: int | None,
         transaction_cost_bps: float,
@@ -150,6 +156,7 @@ class BacktestService:
                 conditions=conditions,
                 signal_date=signal_date,
                 financial_basis=financial_basis,
+                style_profile=style_profile,
             )
             candidates = _select_candidates(
                 snapshot_rows,
@@ -192,7 +199,16 @@ class BacktestService:
             )
 
         if not planned_segments:
-            raise ValueError("backtest produced no equity curve points")
+            warnings.append(
+                _no_positions_error_message(
+                    client,
+                    conditions=conditions,
+                    style_profile=style_profile,
+                    rebalance_dates=rebalance_dates,
+                    warnings=warnings,
+                )
+            )
+            return [], rebalance_history
 
         price_returns = self._load_price_return_matrix(
             client,
@@ -219,7 +235,11 @@ class BacktestService:
                 )
 
         if not equity_points:
-            raise ValueError("backtest produced no equity curve points")
+            warnings.append(
+                "backtest produced no equity curve points because selected securities had no "
+                "usable price returns in the requested holding periods"
+            )
+            return [], rebalance_history
 
         return _deduplicate_equity_points(equity_points), rebalance_history
 
@@ -230,11 +250,13 @@ class BacktestService:
         conditions: list[FactorCondition],
         signal_date: date,
         financial_basis: str,
+        style_profile: str,
     ) -> list[dict[str, Any]]:
         query, params = build_factor_snapshot_query(
             conditions,
             signal_date=signal_date,
             financial_basis=financial_basis,
+            style_profile=style_profile,
         )
         return _records(client.query_df(query, parameters=params))
 
@@ -324,6 +346,7 @@ class BacktestService:
 
 def _to_repository_condition(condition: FactorConditionDto) -> FactorCondition:
     data = condition.model_dump() if hasattr(condition, "model_dump") else condition.dict()
+    data["factor_id"] = canonical_style_score_factor_id(str(data["factor_id"]))
     return FactorCondition(**data)
 
 
@@ -334,6 +357,72 @@ def _validate_request(request: FactorBacktestRequestDto) -> None:
         raise ValueError("match_mode must be 'all' or 'any'")
     if request.transaction_cost_bps < 0:
         raise ValueError("transaction_cost_bps must be greater than or equal to 0")
+
+
+def _no_positions_error_message(
+    client: Any,
+    *,
+    conditions: list[FactorCondition],
+    style_profile: str,
+    rebalance_dates: list[date],
+    warnings: list[str],
+) -> str:
+    base = (
+        "backtest selected no positions for any rebalance date; "
+        "no equity curve can be produced"
+    )
+    if not any(is_style_score_factor(condition.factor_id) for condition in conditions):
+        return base
+
+    start, end, count = _load_style_score_date_range(client, style_profile)
+    if start is None or end is None or count == 0:
+        return (
+            f"{base}. Style score data was not found for style_profile={style_profile}. "
+            "Build style scores before running a style-score backtest."
+        )
+
+    first_rebalance = min(rebalance_dates) if rebalance_dates else None
+    last_rebalance = max(rebalance_dates) if rebalance_dates else None
+    warning_text = " ".join(warnings)
+    return (
+        f"{base}. Style score data for style_profile={style_profile} is available only from "
+        f"{start.isoformat()} to {end.isoformat()} ({count} rows). "
+        f"Requested rebalance dates run from "
+        f"{first_rebalance.isoformat() if first_rebalance else 'N/A'} to "
+        f"{last_rebalance.isoformat() if last_rebalance else 'N/A'}. "
+        "Choose a backtest period with signal dates on or after the first style-score date, "
+        "or build historical style scores for the requested period."
+        + (f" Details: {warning_text}" if warning_text else "")
+    )
+
+
+def _load_style_score_date_range(
+    client: Any,
+    style_profile: str,
+) -> tuple[date | None, date | None, int]:
+    try:
+        rows = _records(
+            client.query_df(
+                """
+SELECT
+    nullIf(min(trade_date), toDate(0)) AS min_trade_date,
+    nullIf(max(trade_date), toDate(0)) AS max_trade_date,
+    count() AS row_count
+FROM arcana.fact_daily_style_score FINAL
+WHERE style_profile = {style_profile:String}
+""".strip(),
+                parameters={"style_profile": style_profile},
+            )
+        )
+    except Exception:
+        return None, None, 0
+    if not rows:
+        return None, None, 0
+    row = rows[0]
+    row_count = int(_float_or_none(row.get("row_count")) or 0)
+    start = _as_date(row["min_trade_date"]) if row.get("min_trade_date") is not None else None
+    end = _as_date(row["max_trade_date"]) if row.get("max_trade_date") is not None else None
+    return start, end, row_count
 
 
 def _rebalance_dates(

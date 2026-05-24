@@ -17,6 +17,11 @@ from api.repository.factor_screen_query import (
     screen_stocks_by_factors,
 )
 from api.service.dto import FactorConditionDto, FactorScreenRequestDto
+from api.service.style_score_catalog import (
+    canonical_style_score_factor_id,
+    is_style_score_factor,
+    style_score_factor_metadata,
+)
 
 
 FIXED_COLUMNS = [
@@ -44,6 +49,7 @@ class FactorScreenService:
                 conditions,
                 as_of_date=request.as_of_date,
                 financial_basis=request.financial_basis or DEFAULT_FINANCIAL_BASIS,
+                style_profile=request.style_profile,
                 sector_codes=request.sector_codes,
                 industry_group_codes=request.industry_group_codes,
                 match_mode=request.match_mode,
@@ -73,6 +79,7 @@ class FactorScreenService:
 
 def _to_repository_condition(condition: FactorConditionDto) -> FactorCondition:
     data = _model_dump(condition)
+    data["factor_id"] = canonical_style_score_factor_id(str(data["factor_id"]))
     return FactorCondition(**data)
 
 
@@ -80,7 +87,20 @@ def _load_factor_metadata(
     client: Any,
     conditions: list[FactorCondition],
 ) -> dict[str, dict[str, Any]]:
-    factor_ids = sorted({condition.factor_id for condition in conditions})
+    factor_ids = sorted(
+        {
+            condition.factor_id
+            for condition in conditions
+            if not is_style_score_factor(condition.factor_id)
+        }
+    )
+    metadata = {
+        condition.factor_id: style_score_factor_metadata(condition.factor_id)
+        for condition in conditions
+        if is_style_score_factor(condition.factor_id)
+    }
+    if not factor_ids:
+        return metadata
     query = """
 SELECT
     factor_id,
@@ -91,7 +111,8 @@ FROM factor_catalog
 WHERE has({factor_ids:Array(String)}, factor_id)
 """.strip()
     rows = client.query_df(query, parameters={"factor_ids": factor_ids}).to_dict("records")
-    return {str(row["factor_id"]): row for row in rows}
+    metadata.update({str(row["factor_id"]): row for row in rows})
+    return metadata
 
 
 def _build_factor_columns(

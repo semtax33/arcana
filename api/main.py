@@ -10,6 +10,7 @@ from api.controller.financials_controller import router as financials_router
 from api.controller.introduction_controller import router as introduction_router
 from api.controller.sector_leader_controller import router as sector_leader_router
 from api.controller.sector_controller import router as sector_router
+from api.controller.style_score_controller import router as style_score_router
 
 
 app = FastAPI(title="Arcana API")
@@ -22,6 +23,7 @@ app.include_router(factor_router)
 app.include_router(factor_screen_router)
 app.include_router(introduction_router)
 app.include_router(financials_router)
+app.include_router(style_score_router)
 
 
 @app.get("/health")

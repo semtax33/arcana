@@ -8,6 +8,13 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from api.repository.factor_screen_query import FactorCondition
+from api.service.style_score_catalog import (
+    DEFAULT_SCREEN_STYLE_PROFILE,
+    STYLE_SCORE_FACTORS,
+    canonical_style_score_factor_id,
+    is_style_score_factor,
+    style_score_factor_definition,
+)
 
 
 RankDirection = Literal["catalog", "higher", "lower"]
@@ -28,7 +35,9 @@ def build_factor_snapshot_query(
     *,
     signal_date: str | date,
     financial_basis: str | None = "annual",
+    style_profile: str | None = DEFAULT_SCREEN_STYLE_PROFILE,
     factor_table: str = "fact_daily_factors",
+    style_score_table: str = "arcana.fact_daily_style_score",
     catalog_table: str = "factor_catalog",
     security_table: str = "security_master",
     issuer_table: str = "issuers",
@@ -41,17 +50,26 @@ def build_factor_snapshot_query(
     factor_ids = _validate_factor_ids(
         sorted({condition.factor_id for condition in normalized_conditions})
     )
+    regular_factor_ids = [factor_id for factor_id in factor_ids if not is_style_score_factor(factor_id)]
+    style_factor_ids = [factor_id for factor_id in factor_ids if is_style_score_factor(factor_id)]
+    regular_factor_param = "regular_factor_ids" if style_factor_ids else "factor_ids"
     params: dict[str, Any] = {
         "signal_date": _resolve_date(signal_date),
         "factor_ids": factor_ids,
     }
+    if regular_factor_ids:
+        params[regular_factor_param] = regular_factor_ids
+    if style_factor_ids:
+        params["style_profile"] = _normalize_style_profile(style_profile)
     basis_filter = ""
     if financial_basis:
         params["financial_basis"] = financial_basis
         basis_filter = "\n        AND f.financial_basis = {financial_basis:String}"
 
-    query = f"""
-WITH
+    ctes = []
+    if regular_factor_ids:
+        ctes.append(
+            f"""
 selected_catalog AS (
     SELECT
         factor_id,
@@ -59,10 +77,16 @@ selected_catalog AS (
         any(value_direction) AS value_direction
     FROM {_validate_table_name(catalog_table)}
     WHERE is_active
-        AND has({{factor_ids:Array(String)}}, factor_id)
+        AND has({{{regular_factor_param}:Array(String)}}, factor_id)
     GROUP BY factor_id
-),
-latest_factor_values AS (
+)
+""".strip()
+        )
+
+    latest_factor_sources = []
+    if regular_factor_ids:
+        latest_factor_sources.append(
+            f"""
     SELECT
         f.security_id AS security_id,
         f.factor_id AS factor_id,
@@ -74,13 +98,27 @@ latest_factor_values AS (
     INNER JOIN selected_catalog AS c
         ON c.factor_id = f.factor_id
     WHERE f.trade_date <= {{signal_date:Date}}
-        AND has({{factor_ids:Array(String)}}, f.factor_id)
+        AND has({{{regular_factor_param}:Array(String)}}, f.factor_id)
         AND isFinite(f.factor_value){basis_filter}
     GROUP BY
         f.security_id,
         f.factor_id
     HAVING factor_value >= 0
-),
+""".strip()
+        )
+    latest_factor_sources.extend(
+        _build_style_score_snapshot_sources(
+            style_factor_ids,
+            style_score_table=style_score_table,
+        )
+    )
+    ctes.append(
+        "latest_factor_values AS (\n"
+        + "\nUNION ALL\n".join(latest_factor_sources)
+        + "\n)"
+    )
+    ctes.append(
+        """
 ranked_factor_values AS (
     SELECT
         security_id,
@@ -94,6 +132,12 @@ ranked_factor_values AS (
         count() OVER (PARTITION BY factor_id) AS factor_count
     FROM latest_factor_values
 )
+""".strip()
+    )
+    with_sql = "WITH\n" + ",\n".join(ctes)
+
+    query = f"""
+{with_sql}
 SELECT
     rf.security_id AS security_id,
     any(id.id_value) AS ticker,
@@ -212,13 +256,71 @@ ORDER BY trade_date ASC, benchmark_id ASC
 
 def _coerce_condition(condition: FactorCondition | dict[str, Any]) -> FactorCondition:
     if isinstance(condition, FactorCondition):
-        _validate_factor_id(condition.factor_id)
-        return condition
+        factor_id = _validate_factor_id(canonical_style_score_factor_id(condition.factor_id))
+        if factor_id == condition.factor_id:
+            return condition
+        return FactorCondition(
+            factor_id=factor_id,
+            mode=condition.mode,
+            top_percent=condition.top_percent,
+            rank_direction=condition.rank_direction,
+            operator=condition.operator,
+            value=condition.value,
+            min_value=condition.min_value,
+            max_value=condition.max_value,
+            alias=condition.alias,
+        )
     if isinstance(condition, dict):
+        condition = {**condition, "factor_id": canonical_style_score_factor_id(condition["factor_id"])}
         coerced = FactorCondition(**condition)
         _validate_factor_id(coerced.factor_id)
         return coerced
     raise TypeError("conditions must contain FactorCondition instances or dictionaries")
+
+
+def _build_style_score_snapshot_sources(
+    factor_ids: list[str],
+    *,
+    style_score_table: str,
+) -> list[str]:
+    sources = []
+    for factor_id in factor_ids:
+        definition = style_score_factor_definition(factor_id)
+        column_name = _validate_style_score_column(definition.column_name)
+        sources.append(
+            f"""
+    SELECT
+        s.security_id AS security_id,
+        '{definition.factor_id}' AS factor_id,
+        '{_escape_sql_string(definition.factor_name)}' AS factor_name,
+        '{definition.value_direction}' AS value_direction,
+        argMax(toFloat64(s.{column_name}), tuple(s.trade_date, s.updated_at)) AS factor_value,
+        max(s.trade_date) AS trade_date
+    FROM {_validate_table_name(style_score_table)} AS s
+    WHERE s.trade_date <= {{signal_date:Date}}
+        AND s.style_profile = {{style_profile:String}}
+        AND s.{column_name} IS NOT NULL
+        AND isFinite(toFloat64(s.{column_name}))
+    GROUP BY s.security_id
+    HAVING factor_value >= 0
+""".strip()
+        )
+    return sources
+
+
+def _validate_style_score_column(column_name: str) -> str:
+    allowed = {definition.column_name for definition in STYLE_SCORE_FACTORS.values()}
+    if column_name not in allowed:
+        raise ValueError(f"invalid style score column: {column_name!r}")
+    return column_name
+
+
+def _normalize_style_profile(value: str | None) -> str:
+    return str(value or DEFAULT_SCREEN_STYLE_PROFILE).strip().upper()
+
+
+def _escape_sql_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
 def _validate_factor_ids(factor_ids: list[str]) -> list[str]:
