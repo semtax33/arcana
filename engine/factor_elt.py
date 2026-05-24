@@ -100,6 +100,7 @@ NEUTRAL_TECHNICAL_FACTORS = {
 
 VALUATION_FACTORS = {
     "mcap_mil",
+    "rnd_to_market_cap",
     "epr",
     "bpr",
     "tpr",
@@ -119,10 +120,15 @@ VALUATION_FACTORS = {
 }
 
 QUALITY_FACTORS = {
+    "fcf_margin",
     "gpm",
+    "net_margin",
     "opm",
+    "operating_profit_margin",
     "ebitda_margin",
     "npm",
+    "rnd_margin",
+    "rnd_to_sales",
     "tax_rate",
     "roe",
     "roa",
@@ -130,6 +136,7 @@ QUALITY_FACTORS = {
     "roic_financial",
     "roic_operational",
     "asset_turnover",
+    "total_asset_turnover",
     "receivables_turnover",
     "inventory_turnover",
     "working_capital_turnover",
@@ -141,6 +148,16 @@ QUALITY_FACTORS = {
 GROWTH_FACTORS = {
     "sales_yoy_pct",
     "op_yoy_pct",
+    "sales_growth_1y",
+    "sales_growth_3y",
+    "sales_growth_5y",
+    "sales_cagr_3y",
+    "net_income_growth_1y",
+    "net_income_growth_3y",
+    "net_income_growth_5y",
+    "operating_income_growth_1y",
+    "operating_income_growth_3y",
+    "operating_income_growth_5y",
     "sales_change_mil",
     "op_change_mil",
     "eps_yoy_pct",
@@ -208,6 +225,26 @@ FUNDAMENTAL_AMOUNT_FACTORS = {
     "prstkc",
     "nopat",
     "working_capital",
+}
+
+FACTOR_NAME_OVERRIDES = {
+    "rnd_margin": "R&D Margin",
+    "fcf_margin": "FCF Margin",
+    "sales_cagr_3y": "Sales CAGR 3Y",
+    "rnd_to_sales": "R&D / Sales",
+    "operating_profit_margin": "Operating Profit Margin",
+    "net_income_growth_1y": "Net Income Growth 1Y",
+    "net_income_growth_3y": "Net Income Growth 3Y",
+    "net_income_growth_5y": "Net Income Growth 5Y",
+    "operating_income_growth_1y": "Operating Income Growth 1Y",
+    "operating_income_growth_3y": "Operating Income Growth 3Y",
+    "operating_income_growth_5y": "Operating Income Growth 5Y",
+    "sales_growth_1y": "Sales Growth 1Y",
+    "sales_growth_3y": "Sales Growth 3Y",
+    "sales_growth_5y": "Sales Growth 5Y",
+    "net_margin": "Net Margin",
+    "total_asset_turnover": "Total Asset Turnover",
+    "rnd_to_market_cap": "R&D / Market Cap",
 }
 
 LOWER_IS_BETTER = {
@@ -433,7 +470,10 @@ def create_factor_catalog_dataframe(factor_ids: list[str] | None = None) -> pd.D
         rows.append(
             {
                 "factor_id": factor_id,
-                "factor_name": factor_id.replace("_", " ").upper(),
+                "factor_name": FACTOR_NAME_OVERRIDES.get(
+                    factor_id,
+                    factor_id.replace("_", " ").upper(),
+                ),
                 "factor_type": infer_factor_type(factor_id),
                 "factor_group": infer_factor_group(factor_id),
                 "unit": infer_factor_unit(factor_id),
@@ -485,14 +525,30 @@ def infer_factor_group(factor_id: str) -> str:
 
 def infer_factor_unit(factor_id: str) -> str:
     if factor_id.endswith("_pct") or factor_id in {
+        "fcf_margin",
         "gpm",
+        "net_margin",
         "opm",
+        "operating_profit_margin",
         "ebitda_margin",
         "npm",
+        "rnd_margin",
+        "rnd_to_market_cap",
+        "rnd_to_sales",
         "tax_rate",
         "roe",
         "roic_financial",
         "roic_operational",
+        "sales_growth_1y",
+        "sales_growth_3y",
+        "sales_growth_5y",
+        "sales_cagr_3y",
+        "net_income_growth_1y",
+        "net_income_growth_3y",
+        "net_income_growth_5y",
+        "operating_income_growth_1y",
+        "operating_income_growth_3y",
+        "operating_income_growth_5y",
         "sharehold_div_yield",
         "sharehold_net_buyback_yield",
         "sharehold_return",
@@ -508,7 +564,18 @@ def infer_factor_unit(factor_id: str) -> str:
         return "shares"
     if factor_id.endswith("_score") or factor_id == "f_score":
         return "score"
-    if factor_id.endswith("_times") or factor_id in {"per", "pbr", "pcr", "psr", "peg"}:
+    if factor_id.endswith("_times") or factor_id in {
+        "per",
+        "pbr",
+        "pcr",
+        "psr",
+        "peg",
+        "asset_turnover",
+        "total_asset_turnover",
+        "receivables_turnover",
+        "inventory_turnover",
+        "working_capital_turnover",
+    }:
         return "times"
     if factor_id in {"shares", "csho"}:
         return "shares"

@@ -73,6 +73,8 @@ class BacktestService:
                 end_date=request.end_date,
                 financial_basis=request.financial_basis or "annual",
                 style_profile=request.style_profile,
+                sector_codes=request.sector_codes,
+                industry_group_codes=request.industry_group_codes,
                 match_mode=request.match_mode,
                 max_positions=request.max_positions,
                 transaction_cost_bps=float(request.transaction_cost_bps),
@@ -134,6 +136,8 @@ class BacktestService:
         end_date: date,
         financial_basis: str,
         style_profile: str,
+        sector_codes: list[str] | None,
+        industry_group_codes: list[str] | None,
         match_mode: str,
         max_positions: int | None,
         transaction_cost_bps: float,
@@ -157,6 +161,8 @@ class BacktestService:
                 signal_date=signal_date,
                 financial_basis=financial_basis,
                 style_profile=style_profile,
+                sector_codes=sector_codes,
+                industry_group_codes=industry_group_codes,
             )
             candidates = _select_candidates(
                 snapshot_rows,
@@ -251,12 +257,16 @@ class BacktestService:
         signal_date: date,
         financial_basis: str,
         style_profile: str,
+        sector_codes: list[str] | None,
+        industry_group_codes: list[str] | None,
     ) -> list[dict[str, Any]]:
         query, params = build_factor_snapshot_query(
             conditions,
             signal_date=signal_date,
             financial_basis=financial_basis,
             style_profile=style_profile,
+            sector_codes=sector_codes,
+            industry_group_codes=industry_group_codes,
         )
         return _records(client.query_df(query, parameters=params))
 

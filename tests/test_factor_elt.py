@@ -113,6 +113,46 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(row_by_id.loc["mfi_14", "factor_group"], "momentum")
         self.assertEqual(row_by_id.loc["mfi_14", "unit"], "percent")
 
+    def test_create_factor_catalog_dataframe_registers_requested_factors(self):
+        factor_ids = [
+            "rnd_margin",
+            "fcf_margin",
+            "sales_cagr_3y",
+            "rnd_to_sales",
+            "operating_profit_margin",
+            "net_income_growth_1y",
+            "net_income_growth_3y",
+            "net_income_growth_5y",
+            "operating_income_growth_1y",
+            "operating_income_growth_3y",
+            "operating_income_growth_5y",
+            "sales_growth_1y",
+            "sales_growth_3y",
+            "sales_growth_5y",
+            "net_margin",
+            "total_asset_turnover",
+            "rnd_to_market_cap",
+        ]
+
+        catalog_df = create_factor_catalog_dataframe(factor_ids)
+
+        row_by_id = catalog_df.set_index("factor_id")
+        self.assertEqual(row_by_id.loc["rnd_margin", "factor_name"], "R&D Margin")
+        self.assertEqual(row_by_id.loc["rnd_margin", "factor_type"], "quality")
+        self.assertEqual(row_by_id.loc["rnd_margin", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["fcf_margin", "factor_type"], "quality")
+        self.assertEqual(row_by_id.loc["sales_cagr_3y", "factor_type"], "growth")
+        self.assertEqual(row_by_id.loc["sales_cagr_3y", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["net_income_growth_5y", "factor_type"], "growth")
+        self.assertEqual(row_by_id.loc["operating_income_growth_3y", "factor_type"], "growth")
+        self.assertEqual(row_by_id.loc["sales_growth_5y", "factor_type"], "growth")
+        self.assertEqual(row_by_id.loc["total_asset_turnover", "unit"], "times")
+        self.assertEqual(row_by_id.loc["rnd_to_market_cap", "factor_type"], "valuation")
+        self.assertEqual(row_by_id.loc["rnd_to_market_cap", "unit"], "percent")
+        self.assertTrue(
+            (row_by_id.loc[factor_ids, "value_direction"] == "HIGHER_BETTER").all()
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

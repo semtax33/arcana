@@ -48,10 +48,15 @@ NON_FACTOR_COLUMNS = set(BASE_COLUMNS) | {
     "stock_code_fin",
 }
 PERCENT_RATIO_FACTOR_COLUMNS = {
+    "fcf_margin",
     "gpm",
+    "net_margin",
     "opm",
+    "operating_profit_margin",
     "ebitda_margin",
     "npm",
+    "rnd_margin",
+    "rnd_to_sales",
     "tax_rate",
     "roe",
     "roic_financial",
@@ -363,6 +368,20 @@ def yoy_pct(series, periods=1):
     return (series / series.shift(periods) - 1) * 100
 
 
+def growth_pct(series, periods=1):
+    previous = series.shift(periods)
+    return (series - previous) / previous.abs() * 100
+
+
+def cagr_pct(series, years, periods_per_year=1):
+    periods = max(int(round(years * periods_per_year)), 1)
+    previous = series.shift(periods)
+    current = pd.to_numeric(series, errors="coerce")
+    ratio = current / previous
+    result = (ratio ** (1 / years) - 1) * 100
+    return result.where((current > 0) & (previous > 0))
+
+
 def add_annual_financial_factors(financial_df, periods_per_year=1):
     df = sanitize_temporal_amount_outliers(financial_df)
     lag = max(int(periods_per_year), 1)
@@ -441,8 +460,13 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
 
     df["gpm"] = df["gross_profit"] / df["sale"]
     df["opm"] = df["oiadp"] / df["sale"]
+    df["operating_profit_margin"] = df["opm"]
     df["ebitda_margin"] = df["oibdp"] / df["sale"]
     df["npm"] = df["ni"] / df["sale"]
+    df["net_margin"] = df["npm"]
+    df["fcf_margin"] = df["fcf"] / df["sale"]
+    df["rnd_margin"] = df["xrd"] / df["sale"]
+    df["rnd_to_sales"] = df["xrd"] / df["sale"]
     df["tax_rate"] = df["tax_expense"] / df["pbt"]
     df.loc[(df["tax_rate"] < 0) | (df["tax_rate"] > 1), "tax_rate"] = math.nan
     df["nopat"] = df["oiadp"] * (1 - df["tax_rate"])
@@ -469,6 +493,7 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["roic_operational"] = df["nopat"] / df["avg_ic_operational"]
 
     df["asset_turnover"] = df["sale"] / df["avg_assets"]
+    df["total_asset_turnover"] = df["asset_turnover"]
     df["receivables_turnover"] = df["sale"] / df["avg_receivables"]
     df["inventory_turnover"] = df["cogs"] / df["avg_inventory"]
     df["inv_days"] = df["avg_inventory"] / df["cogs"] * 365
@@ -494,6 +519,16 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
 
     df["sales_yoy_pct"] = yoy_pct(df["sale"], periods=lag)
     df["op_yoy_pct"] = yoy_pct(df["oiadp"], periods=lag)
+    df["sales_growth_1y"] = growth_pct(df["sale"], periods=lag)
+    df["sales_growth_3y"] = growth_pct(df["sale"], periods=lag * 3)
+    df["sales_growth_5y"] = growth_pct(df["sale"], periods=lag * 5)
+    df["sales_cagr_3y"] = cagr_pct(df["sale"], years=3, periods_per_year=lag)
+    df["net_income_growth_1y"] = growth_pct(df["ni"], periods=lag)
+    df["net_income_growth_3y"] = growth_pct(df["ni"], periods=lag * 3)
+    df["net_income_growth_5y"] = growth_pct(df["ni"], periods=lag * 5)
+    df["operating_income_growth_1y"] = growth_pct(df["oiadp"], periods=lag)
+    df["operating_income_growth_3y"] = growth_pct(df["oiadp"], periods=lag * 3)
+    df["operating_income_growth_5y"] = growth_pct(df["oiadp"], periods=lag * 5)
     df["sales_change_mil"] = (df["sale"] - df["sale"].shift(lag)) / 1_000_000
     df["op_change_mil"] = (df["oiadp"] - df["oiadp"].shift(lag)) / 1_000_000
     df["rdsr_pct"] = df["xrd"] / df["sale"] * 100
@@ -815,6 +850,7 @@ def add_daily_market_valuation_factors(daily_df):
     df["fcfpr"] = df["fcfe"] / market_cap
     df["npr"] = (che - debt) / market_cap
     df["rpr"] = xrd / market_cap
+    df["rnd_to_market_cap"] = xrd / market_cap * 100
     df["enterprise_value"] = market_cap + debt.fillna(0) - che.fillna(0)
     df["ebitda_to_ev"] = oibdp / df["enterprise_value"]
     df["ev_to_ebitda"] = df["enterprise_value"] / oibdp
@@ -969,10 +1005,15 @@ def preferred_factor_columns():
         "cps",
         "csho",
         "mcap_mil",
+        "rnd_to_market_cap",
         "gpm",
         "opm",
+        "operating_profit_margin",
         "ebitda_margin",
         "npm",
+        "net_margin",
+        "fcf_margin",
+        "rnd_margin",
         "tax_rate",
         "nopat",
         "roe",
@@ -982,6 +1023,7 @@ def preferred_factor_columns():
         "roic_financial",
         "roic_operational",
         "asset_turnover",
+        "total_asset_turnover",
         "receivables_turnover",
         "inventory_turnover",
         "inv_days",
@@ -993,9 +1035,20 @@ def preferred_factor_columns():
         "working_capital_turnover",
         "sales_yoy_pct",
         "op_yoy_pct",
+        "sales_growth_1y",
+        "sales_growth_3y",
+        "sales_growth_5y",
+        "sales_cagr_3y",
+        "net_income_growth_1y",
+        "net_income_growth_3y",
+        "net_income_growth_5y",
+        "operating_income_growth_1y",
+        "operating_income_growth_3y",
+        "operating_income_growth_5y",
         "sales_change_mil",
         "op_change_mil",
         "rdsr_pct",
+        "rnd_to_sales",
         "eps_yoy_pct",
         "asset_yoy_pct",
         "cfo_yoy_pct",

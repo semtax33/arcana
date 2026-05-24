@@ -22,6 +22,7 @@ RankDirection = Literal["catalog", "higher", "lower"]
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
 _FACTOR_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
 _BENCHMARK_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_CLASSIFICATION_CODE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,8 @@ def build_factor_snapshot_query(
     signal_date: str | date,
     financial_basis: str | None = "annual",
     style_profile: str | None = DEFAULT_SCREEN_STYLE_PROFILE,
+    sector_codes: list[str] | None = None,
+    industry_group_codes: list[str] | None = None,
     factor_table: str = "fact_daily_factors",
     style_score_table: str = "arcana.fact_daily_style_score",
     catalog_table: str = "factor_catalog",
@@ -46,6 +49,14 @@ def build_factor_snapshot_query(
     normalized_conditions = [_coerce_condition(condition) for condition in conditions]
     if not normalized_conditions:
         raise ValueError("at least one factor condition is required")
+    normalized_sector_codes = (
+        _validate_classification_codes(sector_codes, "sector_codes") if sector_codes else None
+    )
+    normalized_industry_group_codes = (
+        _validate_classification_codes(industry_group_codes, "industry_group_codes")
+        if industry_group_codes
+        else None
+    )
 
     factor_ids = _validate_factor_ids(
         sorted({condition.factor_id for condition in normalized_conditions})
@@ -61,12 +72,47 @@ def build_factor_snapshot_query(
         params[regular_factor_param] = regular_factor_ids
     if style_factor_ids:
         params["style_profile"] = _normalize_style_profile(style_profile)
+    if normalized_sector_codes:
+        params["sector_codes"] = normalized_sector_codes
+    if normalized_industry_group_codes:
+        params["industry_group_codes"] = normalized_industry_group_codes
     basis_filter = ""
     if financial_basis:
         params["financial_basis"] = financial_basis
         basis_filter = "\n        AND f.financial_basis = {financial_basis:String}"
 
     ctes = []
+    needs_security_universe = bool(normalized_sector_codes or normalized_industry_group_codes)
+    regular_security_universe_join = ""
+    style_security_universe_join = ""
+    if needs_security_universe:
+        sector_filter = ""
+        if normalized_sector_codes:
+            sector_filter = "\n        AND has({sector_codes:Array(String)}, iss.sector_code)"
+        industry_group_filter = ""
+        if normalized_industry_group_codes:
+            industry_group_filter = (
+                "\n        AND has({industry_group_codes:Array(String)}, iss.industry_group_code)"
+            )
+        ctes.append(
+            f"""
+security_universe AS (
+    SELECT
+        sm.security_id AS security_id
+    FROM {_validate_table_name(security_table)} AS sm
+    LEFT JOIN {_validate_table_name(issuer_table)} AS iss
+        ON iss.issuer_id = sm.issuer_id
+    WHERE 1 = 1{sector_filter}{industry_group_filter}
+    GROUP BY sm.security_id
+)
+""".strip()
+        )
+        regular_security_universe_join = (
+            "\n    INNER JOIN security_universe AS u\n        ON u.security_id = f.security_id"
+        )
+        style_security_universe_join = (
+            "\n    INNER JOIN security_universe AS u\n        ON u.security_id = s.security_id"
+        )
     if regular_factor_ids:
         ctes.append(
             f"""
@@ -96,20 +142,20 @@ selected_catalog AS (
         max(f.trade_date) AS trade_date
     FROM {_validate_table_name(factor_table)} AS f
     INNER JOIN selected_catalog AS c
-        ON c.factor_id = f.factor_id
+        ON c.factor_id = f.factor_id{regular_security_universe_join}
     WHERE f.trade_date <= {{signal_date:Date}}
         AND has({{{regular_factor_param}:Array(String)}}, f.factor_id)
         AND isFinite(f.factor_value){basis_filter}
     GROUP BY
         f.security_id,
         f.factor_id
-    HAVING factor_value >= 0
 """.strip()
         )
     latest_factor_sources.extend(
         _build_style_score_snapshot_sources(
             style_factor_ids,
             style_score_table=style_score_table,
+            security_universe_join=style_security_universe_join,
         )
     )
     ctes.append(
@@ -282,6 +328,7 @@ def _build_style_score_snapshot_sources(
     factor_ids: list[str],
     *,
     style_score_table: str,
+    security_universe_join: str,
 ) -> list[str]:
     sources = []
     for factor_id in factor_ids:
@@ -296,7 +343,7 @@ def _build_style_score_snapshot_sources(
         '{definition.value_direction}' AS value_direction,
         argMax(toFloat64(s.{column_name}), tuple(s.trade_date, s.updated_at)) AS factor_value,
         max(s.trade_date) AS trade_date
-    FROM {_validate_table_name(style_score_table)} AS s
+    FROM {_validate_table_name(style_score_table)} AS s{security_universe_join}
     WHERE s.trade_date <= {{signal_date:Date}}
         AND s.style_profile = {{style_profile:String}}
         AND s.{column_name} IS NOT NULL
@@ -345,6 +392,17 @@ def _validate_benchmark_ids(benchmark_ids: list[str]) -> list[str]:
             raise ValueError(f"invalid benchmark_id: {benchmark_id!r}")
         normalized_ids.append(text)
     return sorted(set(normalized_ids))
+
+
+def _validate_classification_codes(codes: list[str], field_name: str) -> list[str]:
+    if not codes:
+        raise ValueError(f"{field_name} must not be empty")
+    normalized_codes = []
+    for code in codes:
+        if not isinstance(code, str) or not _CLASSIFICATION_CODE_RE.match(code):
+            raise ValueError(f"invalid {field_name}: {code!r}")
+        normalized_codes.append(code)
+    return normalized_codes
 
 
 def _validate_table_name(table_name: str) -> str:

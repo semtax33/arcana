@@ -17,6 +17,7 @@ class BacktestQueryTest(unittest.TestCase):
         self.assertEqual(params["financial_basis"], "annual")
         self.assertIn("f.trade_date <= {signal_date:Date}", query)
         self.assertIn("argMax(f.factor_value, tuple(f.trade_date, f.updated_at))", query)
+        self.assertNotIn("HAVING factor_value >= 0", query)
         self.assertIn("value_direction) = 'LOWER_BETTER'", query)
         self.assertIn("percentile_score", query)
         self.assertNotIn("sm.is_active", query)
@@ -51,6 +52,18 @@ class BacktestQueryTest(unittest.TestCase):
         self.assertEqual(params["style_profile"], "DEFAULT")
         self.assertNotIn("selected_catalog AS", query)
         self.assertIn("FROM arcana.fact_daily_style_score AS s", query)
+
+    def test_factor_snapshot_query_can_filter_industry_groups(self):
+        query, params = build_factor_snapshot_query(
+            [FactorCondition.top("roe", 30)],
+            signal_date="2026-01-01",
+            industry_group_codes=["4530"],
+        )
+
+        self.assertEqual(params["industry_group_codes"], ["4530"])
+        self.assertIn("security_universe AS", query)
+        self.assertIn("has({industry_group_codes:Array(String)}, iss.industry_group_code)", query)
+        self.assertIn("INNER JOIN security_universe AS u", query)
 
 
 if __name__ == "__main__":

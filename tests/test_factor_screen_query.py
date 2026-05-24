@@ -28,7 +28,7 @@ class FactorScreenQueryTest(unittest.TestCase):
         self.assertIn("trade_date <= {as_of_date:Date}", query)
         self.assertIn("f.trade_date = (SELECT trade_date FROM latest_trade_date)", query)
         self.assertIn("f.financial_basis = {financial_basis:String}", query)
-        self.assertIn("HAVING factor_value >= 0", query)
+        self.assertNotIn("HAVING factor_value >= 0", query)
 
     def test_queries_default_to_annual_financial_basis(self):
         latest_query, latest_params = build_latest_factor_values_query(
@@ -76,7 +76,7 @@ class FactorScreenQueryTest(unittest.TestCase):
         self.assertIn("ORDER BY trade_date DESC", query)
         self.assertIn("f.trade_date = (SELECT trade_date FROM latest_trade_date)", query)
         self.assertIn("has({factor_ids:Array(String)}, f.factor_id)", query)
-        self.assertIn("HAVING factor_value >= 0", query)
+        self.assertNotIn("HAVING factor_value >= 0", query)
         self.assertIn("f.security_id AS security_id", query)
         self.assertIn("f.factor_id AS factor_id", query)
         self.assertIn("argMax(f.factor_value", query)

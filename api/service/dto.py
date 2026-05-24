@@ -289,6 +289,8 @@ class FactorBacktestRequestDto(BaseModel):
     rebalance_frequency: RebalanceFrequency
     financial_basis: str | None = "annual"
     style_profile: StyleProfile = "DEFAULT"
+    sector_codes: list[str] | None = None
+    industry_group_codes: list[str] | None = None
     match_mode: MatchMode = "all"
     benchmarks: list[str] = Field(default_factory=lambda: ["KOSPI200", "KOSDAQ"])
     max_positions: int | None = Field(default=None, gt=0)

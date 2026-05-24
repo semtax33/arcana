@@ -176,7 +176,6 @@ GROUP BY
     c.factor_group,
     c.unit,
     c.value_direction
-HAVING factor_value >= 0
 """.strip()
     return query, params
 
@@ -441,7 +440,6 @@ latest_style_trade_date AS (
         f.factor_id,
         c.factor_name,
         c.value_direction
-    HAVING factor_value >= 0
 """.strip()
         )
     latest_factor_sources.extend(

@@ -26,11 +26,15 @@ from statements import (
 )
 
 
-CANONICAL_CSV_PATH = Path("../data-lake/meta/CanonicalAccount.csv")
-CONTEXT_RULE_PATH = Path("../data-lake/meta/rules/context_common.yaml")
-MAPPING_RULE_PATH = Path("../data-lake/meta/rules/mapping_common.yaml")
-COMMENT_RULE_PATH = Path("../data-lake/meta/rules/comment_common.yaml")
-SIGN_POLICY_PATH = Path("../data-lake/meta/rules/sign_policy_common.yaml")
+ENGINE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = ENGINE_DIR.parent
+DATA_LAKE_DIR = PROJECT_ROOT / "data-lake"
+
+CANONICAL_CSV_PATH = DATA_LAKE_DIR / "meta" / "CanonicalAccount.csv"
+CONTEXT_RULE_PATH = DATA_LAKE_DIR / "meta" / "rules" / "context_common.yaml"
+MAPPING_RULE_PATH = DATA_LAKE_DIR / "meta" / "rules" / "mapping_common.yaml"
+COMMENT_RULE_PATH = DATA_LAKE_DIR / "meta" / "rules" / "comment_common.yaml"
+SIGN_POLICY_PATH = DATA_LAKE_DIR / "meta" / "rules" / "sign_policy_common.yaml"
 SAVE_DEBUG = True
 FORCE_REBUILD = False
 MAX_WORKERS = int(os.environ.get("NORMALIZE_MAX_WORKERS") or "0")
@@ -131,7 +135,7 @@ def main() -> None:
     start_year = end_year - 10
 
     dependency_paths = [
-        Path("./canonical_rule_normalizer.py"),
+        ENGINE_DIR / "canonical_rule_normalizer.py",
         CANONICAL_CSV_PATH,
         CONTEXT_RULE_PATH,
         MAPPING_RULE_PATH,
@@ -147,9 +151,9 @@ def main() -> None:
     for stock_code in stock_codes:
         for year in range(start_year, end_year):
             for month in [3, 6, 9, 12]:
-                input_html_path = Path(f"../data-lake/bronze/dart/finance-statement/{stock_code}/finance_statement_({year}.{str(month).zfill(2)}).html")
+                input_html_path = DATA_LAKE_DIR / "bronze" / "dart" / "finance-statement" / stock_code / f"finance_statement_({year}.{str(month).zfill(2)}).html"
                 period = f"{year}.{month}"
-                output_csv_path = Path(f"../data-lake/silver/dart/normalized/normalized_{stock_code}_{year}.{str(month).zfill(2)}.csv")
+                output_csv_path = DATA_LAKE_DIR / "silver" / "dart" / "normalized" / f"normalized_{stock_code}_{year}.{str(month).zfill(2)}.csv"
                 comment_html_path = infer_comment_html_path(
                     input_html_path=input_html_path,
                     company_name=stock_code,
@@ -279,7 +283,7 @@ def download_all_dividend():
     corps_list = kospi_kosdaq_corp_list()
     stock_codes = corps_list["stock_code"].tolist()
     print(f"Total Length : {len(stock_codes)}")
-    download_dividend_histories(stock_codes, 2625)
+    download_dividend_histories(stock_codes, 0)
 
 
 if __name__ == "__main__":
@@ -289,8 +293,8 @@ if __name__ == "__main__":
     #download_all_statements()
     #download_all_statement_comments()
     #download_all_dividend()
-    download_all_report_metadata()
-    #main()
+    #download_all_report_metadata()
+    main()
     #normalize_price("../data-lake/bronze/krx/price/*")
     #normalize_shares("../data-lake/bronze/krx/shares/*")
     #normalize_dividends()

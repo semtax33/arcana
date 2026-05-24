@@ -114,6 +114,67 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["roic_financial"], 30.0)
         self.assertAlmostEqual(latest["roic_operational"], 30.0)
 
+    def test_requested_growth_and_margin_factors_are_calculated(self):
+        revenues = [100, 120, 144, 172.8, 207.36, 248.832]
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2020 + index,
+                    "financial_period": f"{2020 + index}-12-31",
+                    "TOTAL_ASSETS": 1_000 + index * 100,
+                    "TOTAL_EQUITY": 500,
+                    "EAOP": 500,
+                    "REVENUE": revenue,
+                    "OPERATING_INCOME": 10 * (index + 1),
+                    "NET_INCOME": [-10, 10, 20, 30, 40, 50][index],
+                    "NET_INCOME_PARENT": [-10, 10, 20, 30, 40, 50][index],
+                    "RND": 10,
+                    "CFO": 40,
+                    "CAPEX_PPE": 10,
+                    "PBT": 100,
+                    "TAX_EXPENSE": 25,
+                }
+                for index, revenue in enumerate(revenues)
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+        latest = result.iloc[-1]
+
+        self.assertAlmostEqual(latest["rnd_margin"], 10 / revenues[-1] * 100)
+        self.assertAlmostEqual(latest["rnd_to_sales"], 10 / revenues[-1] * 100)
+        self.assertAlmostEqual(latest["fcf_margin"], 30 / revenues[-1] * 100)
+        self.assertAlmostEqual(latest["operating_profit_margin"], latest["opm"])
+        self.assertAlmostEqual(latest["net_margin"], latest["npm"])
+        self.assertAlmostEqual(latest["total_asset_turnover"], latest["asset_turnover"])
+        self.assertAlmostEqual(latest["sales_growth_1y"], 20.0)
+        self.assertAlmostEqual(latest["sales_growth_3y"], 72.8)
+        self.assertAlmostEqual(latest["sales_growth_5y"], 148.832)
+        self.assertAlmostEqual(latest["sales_cagr_3y"], 20.0)
+        self.assertAlmostEqual(latest["net_income_growth_1y"], 25.0)
+        self.assertAlmostEqual(latest["net_income_growth_3y"], 150.0)
+        self.assertAlmostEqual(latest["net_income_growth_5y"], 600.0)
+        self.assertAlmostEqual(latest["operating_income_growth_1y"], 20.0)
+        self.assertAlmostEqual(latest["operating_income_growth_3y"], 100.0)
+        self.assertAlmostEqual(latest["operating_income_growth_5y"], 500.0)
+
+    def test_rnd_to_market_cap_factor_is_percent_of_market_cap(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2025-01-02"]),
+                "close": [10],
+                "volume": [100],
+                "shares": [100],
+                "market_cap": [1_000],
+                "xrd": [50],
+            }
+        )
+
+        result = add_daily_market_valuation_factors(daily_df)
+
+        self.assertAlmostEqual(result["rpr"].iat[0], 0.05)
+        self.assertAlmostEqual(result["rnd_to_market_cap"].iat[0], 5.0)
+
     def test_dividend_payout_factor_is_empty_without_disclosure_events(self):
         daily_df = pd.DataFrame(
             {
