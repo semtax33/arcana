@@ -18,12 +18,12 @@ from engine.core.paths import (
 base_dir = DATA_LAKE.silver("dart", "normalized")
 dividend_base_dir = DATA_LAKE.bronze("dart", "dividend")
 silver_dividend_dir = DATA_LAKE.silver("dart", "dividend")
-legacy_silver_dividend_by_stock_kind_path = silver_dividend_dir / "dividend_by_stock_kind.csv"
+legacy_silver_dividend_by_stock_kind_path = silver_dividend_dir / "kr_dividend_by_stock_kind.csv"
 silver_dividend_by_stock_kind_path = silver_dividend_dir / market_csv_name("dividend_by_stock_kind")
-legacy_silver_dividend_company_summary_path = silver_dividend_dir / "dividend_company_summary.csv"
+legacy_silver_dividend_company_summary_path = silver_dividend_dir / "kr_dividend_company_summary.csv"
 silver_dividend_company_summary_path = silver_dividend_dir / market_csv_name("dividend_company_summary")
 price_file_path = DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price"))
-krx_price_file_path = DATA_LAKE.silver("krx", "price", "normalized_price.csv")
+krx_price_file_path = DATA_LAKE.silver("krx", "price", "kr_normalized_price.csv")
 
 COMMON_STOCK_KIND_LABELS = {"보통주", "보통주식", "common", "ordinary"}
 REPORT_ORDER = {

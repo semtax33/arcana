@@ -24,8 +24,8 @@ from engine.transformers.filing_periods import (
 FINANCIAL_DIR = DATA_LAKE.silver("dart", "normalized")
 PRICE_PATH = DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price"))
 LEGACY_PRICE_PATHS = (
-    DATA_LAKE.silver("krx", "price", "normalized_price.csv"),
-    DATA_LAKE.silver("price", "normalized_price.csv"),
+    DATA_LAKE.silver("krx", "price", "kr_normalized_price.csv"),
+    DATA_LAKE.silver("price", "kr_normalized_price.csv"),
 )
 KRX_PRICE_PATH = LEGACY_PRICE_PATHS[0]
 SHARES_PATH = DATA_LAKE.silver("krx", "shares", market_csv_name("normalized_shares"))

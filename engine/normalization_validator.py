@@ -1683,7 +1683,7 @@ def find_pairs(input_dir: str | Path) -> list[tuple[Path, Path]]:
 
     normalized_files = [
         p
-        for p in input_dir.rglob("*.csv")
+        for p in input_dir.rglob("kr_*.csv")
         if ".debug" not in p.name and ".validation" not in p.name
     ]
 
@@ -2586,14 +2586,14 @@ def aggregate_zai_suggestions(
     # ----------------------------
     # Save JSON
     # ----------------------------
-    write_json(out_dir / "aggregated_suggestions.json", result)
+    write_json(out_dir / "kr_aggregated_suggestions.json", result)
 
     # ----------------------------
     # Save raw rows
     # ----------------------------
     if raw_rows:
         pd.DataFrame(raw_rows).to_csv(
-            out_dir / "aggregated_suggestions_raw.csv",
+            out_dir / "kr_aggregated_suggestions_raw.csv",
             index=False,
             encoding="utf-8-sig",
         )
@@ -2636,7 +2636,7 @@ def aggregate_zai_suggestions(
         })
 
     pd.DataFrame(review_rows).to_csv(
-        out_dir / "aggregated_suggestions_review.csv",
+        out_dir / "kr_aggregated_suggestions_review.csv",
         index=False,
         encoding="utf-8-sig",
     )
@@ -2660,7 +2660,7 @@ def aggregate_zai_suggestions(
 
     if canonical_csv_rows:
         pd.DataFrame(canonical_csv_rows).to_csv(
-            out_dir / "aggregated_canonical_candidates.csv",
+            out_dir / "kr_aggregated_canonical_candidates.csv",
             index=False,
             encoding="utf-8-sig",
         )
@@ -2708,12 +2708,12 @@ def aggregate_zai_suggestions(
 
 def extract_stock_period_from_report_file(report: dict[str, Any]) -> tuple[str, str]:
     """
-    normalized_000180_2019.12.csv -> 000180, 2019.12
+    kr_normalized_000180_2019.12.csv -> 000180, 2019.12
     """
     file_path = Path(report.get("file", ""))
     stem = file_path.stem
 
-    m = re.search(r"normalized_(\d{6})_(\d{4}\.\d{2})", stem)
+    m = re.search(r"kr_normalized_(\d{6})_(\d{4}\.\d{2})", stem)
     if m:
         return m.group(1), m.group(2)
 
@@ -2899,8 +2899,8 @@ def cluster_failures_to_files(
     cases = collect_failure_cases(input_dir)
     clusters = summarize_failure_clusters(cases)
 
-    cases_path = out_dir / "validation_failure_cases.csv"
-    clusters_path = out_dir / "validation_failure_clusters.csv"
+    cases_path = out_dir / "kr_validation_failure_cases.csv"
+    clusters_path = out_dir / "kr_validation_failure_clusters.csv"
 
     cases.to_csv(cases_path, index=False, encoding="utf-8-sig")
     clusters.to_csv(clusters_path, index=False, encoding="utf-8-sig")
@@ -3062,7 +3062,7 @@ def evaluate_batch(
     summary = pd.DataFrame(rows)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    summary.to_csv(out_dir / "validation_summary.csv", index=False, encoding="utf-8-sig")
+    summary.to_csv(out_dir / "kr_validation_summary.csv", index=False, encoding="utf-8-sig")
     return summary
 
 
@@ -3083,7 +3083,7 @@ def parse_stock_period_from_filename(path: str | Path) -> dict[str, Any]:
 
 def file_version_num(path: str | Path) -> int:
     name = Path(path).name
-    m = re.search(r"\((\d+)\)\.csv$", name)
+    m = re.search(r"kr_\((\d+)\)\.csv$", name)
     return int(m.group(1)) if m else 0
 
 def period_month(path: str | Path) -> int:
@@ -3114,7 +3114,7 @@ def build_stock_year_index(
     wanted = set(stock_codes or [])
     index: StockYearIndex = {}
 
-    for p in input_dir.rglob("normalized_*.csv"):
+    for p in input_dir.rglob("kr_normalized_*.csv"):
         name = p.name
         if ".debug" in name or ".validation" in name:
             continue
@@ -3147,7 +3147,7 @@ def find_stock_year_pairs(
     if stock_year_index is None:
         candidates = [
             p
-            for p in input_dir.rglob(f"*normalized_{stock_code}_*.csv")
+            for p in input_dir.rglob(f"kr_normalized_{stock_code}_*.csv")
             if ".debug" not in p.name and ".validation" not in p.name
         ]
 
@@ -3222,7 +3222,7 @@ def discover_stock_codes(input_dir: str | Path) -> list[str]:
     input_dir = Path(input_dir)
     codes = set()
 
-    for p in input_dir.rglob("normalized_*.csv"):
+    for p in input_dir.rglob("kr_normalized_*.csv"):
         if ".debug" in p.name or ".validation" in p.name:
             continue
         meta = parse_stock_period_from_filename(p)
@@ -3819,7 +3819,7 @@ def evaluate_stock_to_files(
         "time_series_anomalies": time_series_anomalies,
     }
 
-    base = f"{stock_code}_{start_year}_{end_year}.stock"
+    base = f"kr_{stock_code}_{start_year}_{end_year}.stock"
     json_path = stock_out_dir / f"{base}.validation.json"
     md_path = stock_out_dir / f"{base}.validation.md"
     factor_csv_path = stock_out_dir / f"{base}.factor_trend.csv"
@@ -3937,7 +3937,7 @@ def load_completed_stock_result(
         "time_series_anomaly_count": len(data.get("time_series_anomalies", [])),
         "json_path": str(json_path),
         "md_path": str(stock_out_dir / f"{stock_code}_{start_year}_{end_year}.stock.validation.md"),
-        "factor_csv_path": str(stock_out_dir / f"{stock_code}_{start_year}_{end_year}.stock.factor_trend.csv"),
+        "factor_csv_path": str(stock_out_dir / f"kr_{stock_code}_{start_year}_{end_year}.stock.factor_trend.csv"),
         "resumed": True,
     }
 
@@ -3975,8 +3975,8 @@ def evaluate_stock_batch_to_files(
 
     total = len(stock_codes)
 
-    progress_path = out_dir / f"stock_validation_progress_{start_year}_{end_year}.csv"
-    summary_path = out_dir / f"stock_validation_summary_{start_year}_{end_year}.csv"
+    progress_path = out_dir / f"kr_stock_validation_progress_{start_year}_{end_year}.csv"
+    summary_path = out_dir / f"kr_stock_validation_summary_{start_year}_{end_year}.csv"
 
     rows = []
 
