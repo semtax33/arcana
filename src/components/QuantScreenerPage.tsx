@@ -309,7 +309,7 @@ export const QuantScreenerPage = observer(({ store }: QuantScreenerPageProps) =>
             ))}
           </select>
 
-          <label className="field-label">산업 선택</label>
+          <label className="field-label">산업군 선택</label>
           <div className="industry-box">
             <button
               className="select-trigger"
@@ -318,8 +318,8 @@ export const QuantScreenerPage = observer(({ store }: QuantScreenerPageProps) =>
             >
               <span>
                 {store.selectedIndustries.length > 0
-                  ? `${store.selectedIndustries.length}개 산업 선택`
-                  : "전체 산업"}
+                  ? `${store.selectedIndustries.length}개 산업군 선택`
+                  : "전체 산업군"}
               </span>
               {store.isIndustryOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
             </button>

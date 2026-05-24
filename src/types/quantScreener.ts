@@ -75,6 +75,8 @@ export type ScreenedStock = {
   market: string;
   marketCap: number | null;
   sectorCode?: string | null;
+  industryGroupCode?: string | null;
+  industryGroupName?: string | null;
   percentile: number | null;
   matchedConditionCount?: number;
   matchedConditions?: string[];

@@ -23,7 +23,9 @@ export const defaultMarketOptions: MarketOption[] = [
   { id: "JP", label: "일본" },
 ];
 
-type SectorDto = {
+type IndustryGroupDto = {
+  industry_group_code: string;
+  industry_group_name: string;
   sector_code: string;
   sector_name: string;
   stock_count: number;
@@ -74,7 +76,7 @@ type FactorConditionDto = {
 
 type FactorScreenRequestDto = {
   conditions: FactorConditionDto[];
-  sector_codes?: string[] | null;
+  industry_group_codes?: string[] | null;
   match_mode: "all" | "any";
   limit: number;
 };
@@ -108,6 +110,8 @@ type ScreenedStockRowDto = {
   country: string | null;
   market_cap: number | null;
   sector_code: string | null;
+  industry_group_code: string | null;
+  industry_group_name: string | null;
   percentile: number | null;
   matched_condition_count: number;
   matched_conditions: string[];
@@ -176,14 +180,16 @@ type FactorBacktestResponseDto = {
 };
 
 const mockIndustries: IndustryOption[] = [
-  { id: "10", name: "Energy", count: 34 },
-  { id: "15", name: "Materials", count: 91 },
-  { id: "20", name: "Industrials", count: 184 },
-  { id: "25", name: "Consumer Discretionary", count: 221 },
-  { id: "30", name: "Consumer Staples", count: 74 },
-  { id: "35", name: "Health Care", count: 128 },
-  { id: "40", name: "Financials", count: 83 },
-  { id: "45", name: "Information Technology", count: 312 },
+  { id: "1010", name: "Energy", count: 34 },
+  { id: "1510", name: "Materials", count: 91 },
+  { id: "2010", name: "Capital Goods", count: 98 },
+  { id: "2020", name: "Commercial & Professional Services", count: 45 },
+  { id: "2030", name: "Transportation", count: 41 },
+  { id: "3510", name: "Health Care Equipment & Services", count: 52 },
+  { id: "3520", name: "Pharmaceuticals, Biotechnology & Life Sciences", count: 76 },
+  { id: "4510", name: "Software & Services", count: 85 },
+  { id: "4520", name: "Technology Hardware & Equipment", count: 91 },
+  { id: "4530", name: "Semiconductors & Semiconductor Equipment", count: 136 },
 ];
 
 const mockFilters: FilterDefinition[] = [
@@ -378,11 +384,11 @@ function defaultValueFor(unit: string | null) {
   return 0;
 }
 
-function mapSector(sector: SectorDto): IndustryOption {
+function mapIndustryGroup(industryGroup: IndustryGroupDto): IndustryOption {
   return {
-    id: sector.sector_code,
-    name: sector.sector_name,
-    count: sector.stock_count,
+    id: industryGroup.industry_group_code,
+    name: industryGroup.industry_group_name,
+    count: industryGroup.stock_count,
   };
 }
 
@@ -618,6 +624,8 @@ function mapScreeningResponse(
       market: row.country ?? request.market,
       marketCap: row.market_cap,
       sectorCode: row.sector_code,
+      industryGroupCode: row.industry_group_code,
+      industryGroupName: row.industry_group_name,
       percentile: row.percentile,
       matchedConditionCount: row.matched_condition_count,
       matchedConditions: row.matched_conditions,
@@ -701,8 +709,8 @@ export async function fetchIndustryCatalog(_market: string): Promise<IndustryOpt
     return mockIndustries;
   }
 
-  const sectors = await getJson<SectorDto[]>("/api/sectors");
-  return sectors.map(mapSector);
+  const industryGroups = await getJson<IndustryGroupDto[]>("/api/sectors/industry-groups");
+  return industryGroups.map(mapIndustryGroup);
 }
 
 export async function fetchFilterCatalog(): Promise<FilterGroup[]> {
@@ -724,7 +732,7 @@ export async function runQuantScreening(
 
   const payload: FactorScreenRequestDto = {
     conditions: request.conditions.map(mapConditionToDto),
-    sector_codes: request.industries.length > 0 ? request.industries : null,
+    industry_group_codes: request.industries.length > 0 ? request.industries : null,
     match_mode: "all",
     limit: request.pageSize,
   };
@@ -750,7 +758,7 @@ export async function runFactorBacktest(
     end_date: request.endDate,
     rebalance_frequency: request.rebalanceFrequency,
     conditions: request.conditions.map(mapConditionToDto),
-    sector_codes: request.industries.length > 0 ? request.industries : null,
+    industry_group_codes: request.industries.length > 0 ? request.industries : null,
     match_mode: "all",
     market: request.market,
   };
