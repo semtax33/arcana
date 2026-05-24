@@ -3,7 +3,7 @@ import unittest
 
 import pandas as pd
 
-from engine.company_normalizer import attach_gics_sector, load_gics_config
+from engine.transformers.securities import attach_gics_sector, load_gics_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

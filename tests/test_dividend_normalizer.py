@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from engine import dividend_normalizer
+from engine.transformers import dividends as dividend_normalizer
 
 
 class DividendNormalizerTest(unittest.TestCase):

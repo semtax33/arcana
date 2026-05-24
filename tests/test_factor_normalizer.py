@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from engine.factor_normalizer import (
+from engine.transformers.factors import (
     add_annual_financial_factors,
     add_daily_market_valuation_factors,
     add_dividend_factors,
@@ -184,7 +184,7 @@ class FactorNormalizerTest(unittest.TestCase):
         )
 
         with patch(
-            "engine.factor_normalizer.silver_dividend_asof_events",
+            "engine.transformers.factors.silver_dividend_asof_events",
             return_value=pd.DataFrame(),
         ):
             result = add_dividend_factors(daily_df, "005930")
@@ -209,7 +209,7 @@ class FactorNormalizerTest(unittest.TestCase):
             }
         )
 
-        with patch("engine.factor_normalizer.silver_dividend_asof_events", return_value=events):
+        with patch("engine.transformers.factors.silver_dividend_asof_events", return_value=events):
             result = add_dividend_factors(daily_df, "005930")
 
         self.assertTrue(pd.isna(result.loc[result["trade_date"] == pd.Timestamp("2025-03-14"), "dvpsx"].iat[0]))
@@ -232,7 +232,7 @@ class FactorNormalizerTest(unittest.TestCase):
             }
         )
 
-        with patch("engine.factor_normalizer.silver_dividend_asof_events", return_value=events):
+        with patch("engine.transformers.factors.silver_dividend_asof_events", return_value=events):
             result = add_dividend_factors(daily_df, "005930")
             valued = add_daily_market_valuation_factors(result)
 
@@ -313,12 +313,12 @@ class FactorNormalizerTest(unittest.TestCase):
         )
 
         with (
-            patch("engine.factor_normalizer.read_stock_prices", return_value=price_df),
-            patch("engine.factor_normalizer.read_stock_shares", return_value=pd.DataFrame()),
-            patch("engine.factor_normalizer.read_annual_financials", return_value=financial_df),
-            patch("engine.factor_normalizer.add_dividend_factors", side_effect=lambda df, stock_code: df),
-            patch("engine.factor_normalizer.add_daily_market_valuation_factors", side_effect=lambda df: df),
-            patch("engine.factor_normalizer.add_price_momentum_factors", side_effect=lambda df: df),
+            patch("engine.transformers.factors.read_stock_prices", return_value=price_df),
+            patch("engine.transformers.factors.read_stock_shares", return_value=pd.DataFrame()),
+            patch("engine.transformers.factors.read_annual_financials", return_value=financial_df),
+            patch("engine.transformers.factors.add_dividend_factors", side_effect=lambda df, stock_code: df),
+            patch("engine.transformers.factors.add_daily_market_valuation_factors", side_effect=lambda df: df),
+            patch("engine.transformers.factors.add_price_momentum_factors", side_effect=lambda df: df),
         ):
             result = create_stock_factor_dataframe("005930", financial_basis="annual")
 
@@ -352,7 +352,7 @@ class FactorNormalizerTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("engine.factor_normalizer.FINANCIAL_DIR", financial_dir):
+            with patch("engine.transformers.factors.FINANCIAL_DIR", financial_dir):
                 result = read_annual_financials("005930", report_metadata_path=metadata_path)
 
         self.assertEqual(result["fiscal_month"].iat[0], 12)

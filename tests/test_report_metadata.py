@@ -3,7 +3,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from engine.statements import (
+from engine.extractors.filings import (
     deduplicate_report_metadata,
     extract_dart_report_metadata_from_search_html,
     parse_report_period_from_title,

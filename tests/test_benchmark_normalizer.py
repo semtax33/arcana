@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 
 import pandas as pd
 
-from engine.benchmark_normalizer import (
+from engine.transformers.benchmarks import (
     BENCHMARK_PRICE_COLUMNS,
     normalize_benchmark_price_frame,
     normalize_benchmark_prices,

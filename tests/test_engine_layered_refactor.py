@@ -5,7 +5,7 @@ import pandas as pd
 
 from engine.core.identifiers import issuer_id_of, security_id_of
 from engine.markets.kr import KR_MARKET_CONFIG
-from engine.style_score_pipeline import calculate_factor_scores, calculate_style_scores
+from engine.workflows.score import calculate_factor_scores, calculate_style_scores
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

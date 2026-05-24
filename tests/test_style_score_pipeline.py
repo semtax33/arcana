@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from engine.transformers.style_score_definitions import canonical_factor_id, factor_direction
-from engine.style_score_pipeline import (
+from engine.workflows.score import (
     FactorTableSchema,
     _build_universe_query,
     build_style_score_range,
@@ -201,14 +201,14 @@ class StyleScorePipelineTest(unittest.TestCase):
 
         with (
             patch(
-                "engine.style_score_pipeline.build_factor_scores",
+                "engine.workflows.score.build_factor_scores",
                 side_effect=lambda *args, **kwargs: (
                     pd.DataFrame([{"row": 1}, {"row": 2}]),
                     pd.DataFrame([{"row": 1}]),
                 ),
             ) as factor_build,
             patch(
-                "engine.style_score_pipeline.build_style_scores",
+                "engine.workflows.score.build_style_scores",
                 side_effect=lambda *args, **kwargs: pd.DataFrame([{"row": 1}]),
             ) as style_build,
         ):

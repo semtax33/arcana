@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from engine.benchmark_elt import BENCHMARK_TABLE, insert_benchmark_prices
+from engine.loaders.benchmarks import BENCHMARK_TABLE, insert_benchmark_prices
 
 
 class FakeClickHouseClient:
@@ -36,7 +36,7 @@ class BenchmarkEltTest(unittest.TestCase):
         )
         client = FakeClickHouseClient()
 
-        with patch("engine.benchmark_elt.create_benchmark_price_dataframe", return_value=benchmark_df):
+        with patch("engine.loaders.benchmarks.create_benchmark_price_dataframe", return_value=benchmark_df):
             result = insert_benchmark_prices(client=client)
 
         self.assertEqual(result.attrs["inserted_rows"], 2)

@@ -87,6 +87,79 @@ def safe_str(v: Any) -> str:
     return str(v)
 
 
+DEFAULT_VALIDATION_MARKET = "kr"
+
+_NORMALIZED_STATEMENT_FILE_RE = re.compile(
+    r"^(?:(?P<market>[a-z][a-z0-9]*)_)?normalized_"
+    r"(?P<stock_code>.+?)_"
+    r"(?P<period>\d{4}[._]\d{2})"
+    r"(?:\.debug)?"
+    r"(?:\(\d+\))?"
+    r"\.csv$",
+    re.IGNORECASE,
+)
+
+
+def normalize_validation_market(market: str | None = None) -> str:
+    text = safe_str(market).strip().lower()
+    return text or DEFAULT_VALIDATION_MARKET
+
+
+def stock_ref_key(market: str | None, stock_code: str) -> str:
+    return f"{normalize_validation_market(market)}:{safe_str(stock_code).strip()}"
+
+
+def split_stock_ref_key(key: str) -> tuple[str, str]:
+    if ":" not in key:
+        return DEFAULT_VALIDATION_MARKET, key
+    market, stock_code = key.split(":", 1)
+    return normalize_validation_market(market), stock_code
+
+
+def parse_stock_ref_arg(value: str, default_market: str | None = None) -> tuple[str | None, str]:
+    text = safe_str(value).strip()
+    if ":" in text:
+        market, stock_code = text.split(":", 1)
+        return normalize_validation_market(market), stock_code.strip()
+    if default_market:
+        return normalize_validation_market(default_market), text
+    return None, text
+
+
+def stock_output_dir_name(stock_code: str, market: str | None = None) -> str:
+    market_text = normalize_validation_market(market)
+    stock_code_text = safe_str(stock_code).strip()
+    if market_text == DEFAULT_VALIDATION_MARKET:
+        return stock_code_text
+    return f"{market_text}_{stock_code_text}"
+
+
+def stock_artifact_base(
+    stock_code: str,
+    start_year: int,
+    end_year: int,
+    market: str | None = None,
+) -> str:
+    return (
+        f"{normalize_validation_market(market)}_"
+        f"{safe_str(stock_code).strip()}_{start_year}_{end_year}.stock"
+    )
+
+
+def parse_stock_period_from_filename(path: str | Path) -> dict[str, Any]:
+    match = _NORMALIZED_STATEMENT_FILE_RE.match(Path(path).name)
+    if not match:
+        return {"market": "", "stock_code": "", "period": "", "year": None}
+
+    period = match.group("period").replace("_", ".")
+    return {
+        "market": normalize_validation_market(match.group("market")),
+        "stock_code": match.group("stock_code"),
+        "period": period,
+        "year": int(period[:4]),
+    }
+
+
 def normalize_name(v: Any) -> str:
     s = safe_str(v)
     prefix_patterns = [
@@ -1683,8 +1756,10 @@ def find_pairs(input_dir: str | Path) -> list[tuple[Path, Path]]:
 
     normalized_files = [
         p
-        for p in input_dir.rglob("kr_*.csv")
-        if ".debug" not in p.name and ".validation" not in p.name
+        for p in input_dir.rglob("*normalized_*.csv")
+        if ".debug" not in p.name
+        and ".validation" not in p.name
+        and parse_stock_period_from_filename(p)["stock_code"]
     ]
 
     pairs: list[tuple[Path, Path]] = []
@@ -2340,12 +2415,22 @@ def extract_stock_code_from_eval_path(path: str | Path) -> str:
     p = Path(path)
 
     # 보통 validation_by_stock/011780/011780_2016_2025.stock.zai_eval.json
-    if re.match(r"^\d{6}$", p.parent.name):
-        return p.parent.name
+    parent_match = re.match(
+        r"^(?:(?P<market>[a-z][a-z0-9]*)_)?(?P<stock_code>[A-Za-z0-9][A-Za-z0-9._-]*)$",
+        p.parent.name,
+        re.IGNORECASE,
+    )
+    if parent_match:
+        return parent_match.group("stock_code")
 
-    m = re.search(r"(\d{6})_", p.name)
+    m = re.search(
+        r"^(?:(?P<market>[a-z][a-z0-9]*)_)?"
+        r"(?P<stock_code>.+?)_\d{4}_\d{4}\.stock",
+        p.name,
+        re.IGNORECASE,
+    )
     if m:
-        return m.group(1)
+        return m.group("stock_code")
 
     return ""
 
@@ -2586,14 +2671,14 @@ def aggregate_zai_suggestions(
     # ----------------------------
     # Save JSON
     # ----------------------------
-    write_json(out_dir / "kr_aggregated_suggestions.json", result)
+    write_json(out_dir / "all_aggregated_suggestions.json", result)
 
     # ----------------------------
     # Save raw rows
     # ----------------------------
     if raw_rows:
         pd.DataFrame(raw_rows).to_csv(
-            out_dir / "kr_aggregated_suggestions_raw.csv",
+            out_dir / "all_aggregated_suggestions_raw.csv",
             index=False,
             encoding="utf-8-sig",
         )
@@ -2636,7 +2721,7 @@ def aggregate_zai_suggestions(
         })
 
     pd.DataFrame(review_rows).to_csv(
-        out_dir / "kr_aggregated_suggestions_review.csv",
+        out_dir / "all_aggregated_suggestions_review.csv",
         index=False,
         encoding="utf-8-sig",
     )
@@ -2660,7 +2745,7 @@ def aggregate_zai_suggestions(
 
     if canonical_csv_rows:
         pd.DataFrame(canonical_csv_rows).to_csv(
-            out_dir / "kr_aggregated_canonical_candidates.csv",
+            out_dir / "all_aggregated_canonical_candidates.csv",
             index=False,
             encoding="utf-8-sig",
         )
@@ -2708,14 +2793,12 @@ def aggregate_zai_suggestions(
 
 def extract_stock_period_from_report_file(report: dict[str, Any]) -> tuple[str, str]:
     """
-    kr_normalized_000180_2019.12.csv -> 000180, 2019.12
+    {market}_normalized_{symbol}_{yyyy.mm}.csv -> symbol, yyyy.mm
     """
     file_path = Path(report.get("file", ""))
-    stem = file_path.stem
-
-    m = re.search(r"kr_normalized_(\d{6})_(\d{4}\.\d{2})", stem)
-    if m:
-        return m.group(1), m.group(2)
+    meta = parse_stock_period_from_filename(file_path)
+    if meta["stock_code"]:
+        return meta["stock_code"], meta["period"]
 
     return "", ""
 
@@ -2899,8 +2982,8 @@ def cluster_failures_to_files(
     cases = collect_failure_cases(input_dir)
     clusters = summarize_failure_clusters(cases)
 
-    cases_path = out_dir / "kr_validation_failure_cases.csv"
-    clusters_path = out_dir / "kr_validation_failure_clusters.csv"
+    cases_path = out_dir / "all_validation_failure_cases.csv"
+    clusters_path = out_dir / "all_validation_failure_clusters.csv"
 
     cases.to_csv(cases_path, index=False, encoding="utf-8-sig")
     clusters.to_csv(clusters_path, index=False, encoding="utf-8-sig")
@@ -3062,7 +3145,7 @@ def evaluate_batch(
     summary = pd.DataFrame(rows)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    summary.to_csv(out_dir / "kr_validation_summary.csv", index=False, encoding="utf-8-sig")
+    summary.to_csv(out_dir / "all_validation_summary.csv", index=False, encoding="utf-8-sig")
     return summary
 
 
@@ -3070,20 +3153,9 @@ def evaluate_batch(
 # Stock-level validation
 # ============================================================
 
-def parse_stock_period_from_filename(path: str | Path) -> dict[str, Any]:
-    name = Path(path).name
-    m = re.search(r"normalized_(\d{6})_(\d{4}\.\d{2})", name)
-
-    if not m:
-        return {"stock_code": "", "period": "", "year": None}
-
-    period = m.group(2)
-    return {"stock_code": m.group(1), "period": period, "year": int(period[:4])}
-
-
 def file_version_num(path: str | Path) -> int:
     name = Path(path).name
-    m = re.search(r"kr_\((\d+)\)\.csv$", name)
+    m = re.search(r"\((\d+)\)\.csv$", name)
     return int(m.group(1)) if m else 0
 
 def period_month(path: str | Path) -> int:
@@ -3109,26 +3181,40 @@ def build_stock_year_index(
     start_year: int,
     end_year: int,
     stock_codes: list[str] | None = None,
+    market: str | None = None,
 ) -> StockYearIndex:
     input_dir = Path(input_dir)
-    wanted = set(stock_codes or [])
+    market_filter = normalize_validation_market(market) if market else None
+    wanted_refs = [parse_stock_ref_arg(code, default_market=market_filter) for code in (stock_codes or [])]
     index: StockYearIndex = {}
 
-    for p in input_dir.rglob("kr_normalized_*.csv"):
+    for p in input_dir.rglob("*normalized_*.csv"):
         name = p.name
         if ".debug" in name or ".validation" in name:
             continue
 
         meta = parse_stock_period_from_filename(p)
+        market_name = meta["market"]
         stock_code = meta["stock_code"]
         year = meta["year"]
 
         if not stock_code or year is None:
             continue
-        if wanted and stock_code not in wanted:
+        if market_filter and market_name != market_filter:
             continue
+        if wanted_refs:
+            matched = False
+            for wanted_market, wanted_stock_code in wanted_refs:
+                if wanted_market and wanted_market != market_name:
+                    continue
+                if wanted_stock_code == stock_code:
+                    matched = True
+                    break
+            if not matched:
+                continue
 
-        index.setdefault(stock_code, {}).setdefault(year, []).append(p)
+        key = stock_ref_key(market_name, stock_code)
+        index.setdefault(key, {}).setdefault(year, []).append(p)
 
     return index
 
@@ -3139,17 +3225,35 @@ def find_stock_year_pairs(
     start_year: int,
     end_year: int,
     stock_year_index: StockYearIndex | None = None,
+    market: str | None = None,
 ) -> list[dict[str, Any]]:
     input_dir = Path(input_dir)
+    market_filter = normalize_validation_market(market) if market else None
 
     by_year: dict[int, list[Path]] = {}
 
     if stock_year_index is None:
         candidates = [
             p
-            for p in input_dir.rglob(f"kr_normalized_{stock_code}_*.csv")
-            if ".debug" not in p.name and ".validation" not in p.name
+            for p in input_dir.rglob("*normalized_*.csv")
+            if ".debug" not in p.name
+            and ".validation" not in p.name
+            and parse_stock_period_from_filename(p)["stock_code"] == stock_code
+            and (
+                not market_filter
+                or parse_stock_period_from_filename(p)["market"] == market_filter
+            )
         ]
+        candidate_markets = {
+            parse_stock_period_from_filename(p)["market"]
+            for p in candidates
+            if parse_stock_period_from_filename(p)["market"]
+        }
+        if not market_filter and len(candidate_markets) > 1:
+            raise ValueError(
+                f"stock_code={stock_code} exists in multiple markets: "
+                f"{', '.join(sorted(candidate_markets))}. Pass market explicitly."
+            )
 
         for p in candidates:
             meta = parse_stock_period_from_filename(p)
@@ -3159,9 +3263,25 @@ def find_stock_year_pairs(
             if start_year <= year <= end_year:
                 by_year.setdefault(year, []).append(p)
     else:
-        for year, paths in stock_year_index.get(stock_code, {}).items():
-            if start_year <= year <= end_year:
-                by_year[year] = list(paths)
+        if market_filter:
+            keys = [stock_ref_key(market_filter, stock_code)]
+        else:
+            keys = [
+                key
+                for key in stock_year_index
+                if split_stock_ref_key(key)[1] == stock_code
+            ]
+            markets = {split_stock_ref_key(key)[0] for key in keys}
+            if len(markets) > 1:
+                raise ValueError(
+                    f"stock_code={stock_code} exists in multiple markets: "
+                    f"{', '.join(sorted(markets))}. Pass market explicitly."
+                )
+
+        for key in keys:
+            for year, paths in stock_year_index.get(key, {}).items():
+                if start_year <= year <= end_year:
+                    by_year.setdefault(year, []).extend(paths)
 
     results: list[dict[str, Any]] = []
 
@@ -3218,16 +3338,22 @@ def find_stock_year_pairs(
     return results
 
 
-def discover_stock_codes(input_dir: str | Path) -> list[str]:
+def discover_stock_codes(input_dir: str | Path, market: str | None = None) -> list[str]:
     input_dir = Path(input_dir)
+    market_filter = normalize_validation_market(market) if market else None
     codes = set()
 
-    for p in input_dir.rglob("kr_normalized_*.csv"):
+    for p in input_dir.rglob("*normalized_*.csv"):
         if ".debug" in p.name or ".validation" in p.name:
             continue
         meta = parse_stock_period_from_filename(p)
+        if market_filter and meta["market"] != market_filter:
+            continue
         if meta["stock_code"]:
-            codes.add(meta["stock_code"])
+            if market_filter:
+                codes.add(meta["stock_code"])
+            else:
+                codes.add(stock_ref_key(meta["market"], meta["stock_code"]))
 
     return sorted(codes)
 
@@ -3685,8 +3811,30 @@ def evaluate_stock_to_files(
     validation_config: dict[str, Any] | None = None,
     report_mode: Literal["full", "json", "stock"] = "full",
     json_indent: int | None = 2,
+    market: str | None = None,
 ) -> dict[str, Any]:
-    stock_out_dir = Path(out_dir) / stock_code
+    if market is None and stock_year_index is None:
+        stock_year_index = build_stock_year_index(
+            input_dir=input_dir,
+            start_year=start_year,
+            end_year=end_year,
+            stock_codes=[stock_code],
+        )
+    if market is None and stock_year_index is not None:
+        matching_markets = {
+            split_stock_ref_key(key)[0]
+            for key in stock_year_index
+            if split_stock_ref_key(key)[1] == stock_code
+        }
+        if len(matching_markets) == 1:
+            market = next(iter(matching_markets))
+        elif len(matching_markets) > 1:
+            raise ValueError(
+                f"stock_code={stock_code} exists in multiple markets: "
+                f"{', '.join(sorted(matching_markets))}. Pass market explicitly."
+            )
+    market = normalize_validation_market(market)
+    stock_out_dir = Path(out_dir) / stock_output_dir_name(stock_code, market)
     stock_out_dir.mkdir(parents=True, exist_ok=True)
 
     pairs = find_stock_year_pairs(
@@ -3695,6 +3843,7 @@ def evaluate_stock_to_files(
         start_year=start_year,
         end_year=end_year,
         stock_year_index=stock_year_index,
+        market=market,
     )
     config = validation_config if validation_config is not None else load_config(validation_rule_path)
 
@@ -3752,8 +3901,8 @@ def evaluate_stock_to_files(
 
         debug_paths_by_year[year] = d
 
-        year_json = stock_out_dir / f"{stock_code}_{year}.validation.json"
-        year_md = stock_out_dir / f"{stock_code}_{year}.validation.md"
+        year_json = stock_out_dir / f"{market}_{stock_code}_{year}.validation.json"
+        year_md = stock_out_dir / f"{market}_{stock_code}_{year}.validation.md"
 
         if report_mode in {"full", "json"}:
             write_json(year_json, asdict(report), indent=json_indent)
@@ -3802,6 +3951,7 @@ def evaluate_stock_to_files(
     )
 
     stock_report = {
+        "market": market,
         "stock_code": stock_code,
         "start_year": start_year,
         "end_year": end_year,
@@ -3819,7 +3969,7 @@ def evaluate_stock_to_files(
         "time_series_anomalies": time_series_anomalies,
     }
 
-    base = f"kr_{stock_code}_{start_year}_{end_year}.stock"
+    base = stock_artifact_base(stock_code, start_year, end_year, market)
     json_path = stock_out_dir / f"{base}.validation.json"
     md_path = stock_out_dir / f"{base}.validation.md"
     factor_csv_path = stock_out_dir / f"{base}.factor_trend.csv"
@@ -3845,6 +3995,7 @@ def evaluate_stock_to_files(
         )
 
     return {
+        "market": market,
         "stock_code": stock_code,
         "start_year": start_year,
         "end_year": end_year,
@@ -3880,6 +4031,7 @@ def append_progress_csv(path: str | Path, row: dict[str, Any]) -> None:
         "timestamp",
         "index",
         "total",
+        "market",
         "stock_code",
         "status",
         "verdict",
@@ -3903,9 +4055,15 @@ def load_completed_stock_result(
     out_dir: str | Path,
     start_year: int,
     end_year: int,
+    market: str | None = None,
 ) -> dict[str, Any] | None:
-    stock_out_dir = Path(out_dir) / stock_code
-    json_path = stock_out_dir / f"{stock_code}_{start_year}_{end_year}.stock.validation.json"
+    market = normalize_validation_market(market)
+    stock_out_dir = Path(out_dir) / stock_output_dir_name(stock_code, market)
+    json_path = stock_out_dir / f"{stock_artifact_base(stock_code, start_year, end_year, market)}.validation.json"
+    if not json_path.exists() and market == DEFAULT_VALIDATION_MARKET:
+        legacy_path = stock_out_dir / f"{stock_code}_{start_year}_{end_year}.stock.validation.json"
+        if legacy_path.exists():
+            json_path = legacy_path
 
     if not json_path.exists():
         return None
@@ -3922,6 +4080,7 @@ def load_completed_stock_result(
         )
 
     return {
+        "market": market,
         "stock_code": stock_code,
         "start_year": start_year,
         "end_year": end_year,
@@ -3936,10 +4095,54 @@ def load_completed_stock_result(
         "mapping_inconsistency_count": len(data.get("mapping_inconsistency", [])),
         "time_series_anomaly_count": len(data.get("time_series_anomalies", [])),
         "json_path": str(json_path),
-        "md_path": str(stock_out_dir / f"{stock_code}_{start_year}_{end_year}.stock.validation.md"),
-        "factor_csv_path": str(stock_out_dir / f"kr_{stock_code}_{start_year}_{end_year}.stock.factor_trend.csv"),
+        "md_path": str(stock_out_dir / f"{stock_artifact_base(stock_code, start_year, end_year, market)}.validation.md"),
+        "factor_csv_path": str(stock_out_dir / f"{stock_artifact_base(stock_code, start_year, end_year, market)}.factor_trend.csv"),
         "resumed": True,
     }
+
+
+def resolve_batch_stock_refs(
+    stock_year_index: StockYearIndex,
+    stock_codes: list[str] | None = None,
+    market: str | None = None,
+) -> list[tuple[str, str]]:
+    market_filter = normalize_validation_market(market) if market else None
+
+    if not stock_codes:
+        return [split_stock_ref_key(key) for key in sorted(stock_year_index)]
+
+    refs: list[tuple[str, str]] = []
+    for raw_code in stock_codes:
+        parsed_market, stock_code = parse_stock_ref_arg(raw_code, default_market=market_filter)
+        if parsed_market:
+            refs.append((parsed_market, stock_code))
+            continue
+
+        matching_keys = [
+            key
+            for key in stock_year_index
+            if split_stock_ref_key(key)[1] == stock_code
+        ]
+        matching_markets = {split_stock_ref_key(key)[0] for key in matching_keys}
+        if len(matching_markets) > 1:
+            raise ValueError(
+                f"stock_code={stock_code} exists in multiple markets: "
+                f"{', '.join(sorted(matching_markets))}. Use market:stock_code."
+            )
+        if len(matching_markets) == 1:
+            refs.append((next(iter(matching_markets)), stock_code))
+        else:
+            refs.append((DEFAULT_VALIDATION_MARKET, stock_code))
+
+    deduped_refs = []
+    seen_refs = set()
+    for ref in refs:
+        if ref in seen_refs:
+            continue
+        seen_refs.add(ref)
+        deduped_refs.append(ref)
+    return deduped_refs
+
 
 def evaluate_stock_batch_to_files(
     input_dir: str | Path,
@@ -3957,26 +4160,28 @@ def evaluate_stock_batch_to_files(
     report_mode: Literal["full", "json", "stock"] = "full",
     json_indent: int | None = 2,
     workers: int = 1,
+    market: str | None = None,
 ) -> pd.DataFrame:
     stock_year_index = build_stock_year_index(
         input_dir=input_dir,
         start_year=start_year,
         end_year=end_year,
         stock_codes=stock_codes if stock_codes else None,
+        market=market,
     )
 
-    if stock_codes is None or len(stock_codes) == 0:
-        stock_codes = sorted(stock_year_index)
+    stock_refs = resolve_batch_stock_refs(stock_year_index, stock_codes, market=market)
 
     validation_config = load_config(validation_rule_path)
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    total = len(stock_codes)
+    total = len(stock_refs)
 
-    progress_path = out_dir / f"kr_stock_validation_progress_{start_year}_{end_year}.csv"
-    summary_path = out_dir / f"kr_stock_validation_summary_{start_year}_{end_year}.csv"
+    output_market = normalize_validation_market(market) if market else "all"
+    progress_path = out_dir / f"{output_market}_stock_validation_progress_{start_year}_{end_year}.csv"
+    summary_path = out_dir / f"{output_market}_stock_validation_summary_{start_year}_{end_year}.csv"
 
     rows = []
 
@@ -4017,7 +4222,7 @@ def evaluate_stock_batch_to_files(
             f"eta={eta_sec/60:.1f}min"
         )
 
-    def run_stock_item(idx: int, stock_code: str) -> dict[str, Any]:
+    def run_stock_item(idx: int, market_name: str, stock_code: str) -> dict[str, Any]:
         item_start = time.time()
         result = evaluate_stock_to_files(
             stock_code=stock_code,
@@ -4034,6 +4239,7 @@ def evaluate_stock_batch_to_files(
             validation_config=validation_config,
             report_mode=report_mode,
             json_indent=json_indent,
+            market=market_name,
         )
         elapsed = time.time() - item_start
         result["status"] = "DONE"
@@ -4045,13 +4251,14 @@ def evaluate_stock_batch_to_files(
         futures = {}
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            for idx, stock_code in enumerate(stock_codes, start=1):
+            for idx, (market_name, stock_code) in enumerate(stock_refs, start=1):
                 if resume:
                     completed = load_completed_stock_result(
                         stock_code=stock_code,
                         out_dir=out_dir,
                         start_year=start_year,
                         end_year=end_year,
+                        market=market_name,
                     )
 
                     if completed is not None:
@@ -4066,6 +4273,7 @@ def evaluate_stock_batch_to_files(
                                 "timestamp": now_str(),
                                 "index": idx,
                                 "total": total,
+                                "market": market_name,
                                 "stock_code": stock_code,
                                 "status": "SKIPPED_RESUME",
                                 "verdict": completed.get("verdict", ""),
@@ -4077,18 +4285,18 @@ def evaluate_stock_batch_to_files(
                         )
 
                         print(
-                            f"[{idx}/{total}] SKIP stock_code={stock_code} "
+                            f"[{idx}/{total}] SKIP market={market_name} stock_code={stock_code} "
                             f"verdict={completed.get('verdict')} score={completed.get('score')}"
                         )
                         save_summary_if_needed(len(rows))
                         print_batch_progress(len(rows))
                         continue
 
-                print(f"[{idx}/{total}] START stock_code={stock_code}")
-                futures[executor.submit(run_stock_item, idx, stock_code)] = (idx, stock_code)
+                print(f"[{idx}/{total}] START market={market_name} stock_code={stock_code}")
+                futures[executor.submit(run_stock_item, idx, market_name, stock_code)] = (idx, market_name, stock_code)
 
             for future in as_completed(futures):
-                idx, stock_code = futures[future]
+                idx, market_name, stock_code = futures[future]
 
                 try:
                     result = future.result()
@@ -4100,6 +4308,7 @@ def evaluate_stock_batch_to_files(
                             "timestamp": now_str(),
                             "index": idx,
                             "total": total,
+                            "market": market_name,
                             "stock_code": stock_code,
                             "status": "DONE",
                             "verdict": result.get("verdict", ""),
@@ -4111,13 +4320,14 @@ def evaluate_stock_batch_to_files(
                     )
 
                     print(
-                        f"[{idx}/{total}] DONE stock_code={stock_code} "
+                        f"[{idx}/{total}] DONE market={market_name} stock_code={stock_code} "
                         f"verdict={result.get('verdict')} score={result.get('score')} "
                         f"elapsed={float(result.get('elapsed_sec', 0)):.1f}s"
                     )
 
                 except Exception as e:
                     error_row = {
+                        "market": market_name,
                         "stock_code": stock_code,
                         "start_year": start_year,
                         "end_year": end_year,
@@ -4136,6 +4346,7 @@ def evaluate_stock_batch_to_files(
                             "timestamp": now_str(),
                             "index": idx,
                             "total": total,
+                            "market": market_name,
                             "stock_code": stock_code,
                             "status": "ERROR",
                             "verdict": "ERROR",
@@ -4146,7 +4357,7 @@ def evaluate_stock_batch_to_files(
                         },
                     )
 
-                    print(f"[{idx}/{total}] ERROR stock_code={stock_code} error={e}")
+                    print(f"[{idx}/{total}] ERROR market={market_name} stock_code={stock_code} error={e}")
 
                 save_summary_if_needed(len(rows))
                 print_batch_progress(len(rows))
@@ -4164,10 +4375,10 @@ def evaluate_stock_batch_to_files(
 
         return summary
 
-    for idx, stock_code in enumerate(stock_codes, start=1):
+    for idx, (market_name, stock_code) in enumerate(stock_refs, start=1):
         item_start = time.time()
 
-        print(f"[{idx}/{total}] START stock_code={stock_code}")
+        print(f"[{idx}/{total}] START market={market_name} stock_code={stock_code}")
 
         try:
             if resume:
@@ -4176,6 +4387,7 @@ def evaluate_stock_batch_to_files(
                     out_dir=out_dir,
                     start_year=start_year,
                     end_year=end_year,
+                    market=market_name,
                 )
 
                 if completed is not None:
@@ -4190,6 +4402,7 @@ def evaluate_stock_batch_to_files(
                             "timestamp": now_str(),
                             "index": idx,
                             "total": total,
+                            "market": market_name,
                             "stock_code": stock_code,
                             "status": "SKIPPED_RESUME",
                             "verdict": completed.get("verdict", ""),
@@ -4201,7 +4414,7 @@ def evaluate_stock_batch_to_files(
                     )
 
                     print(
-                        f"[{idx}/{total}] SKIP stock_code={stock_code} "
+                        f"[{idx}/{total}] SKIP market={market_name} stock_code={stock_code} "
                         f"verdict={completed.get('verdict')} score={completed.get('score')}"
                     )
 
@@ -4229,6 +4442,7 @@ def evaluate_stock_batch_to_files(
                 validation_config=validation_config,
                 report_mode=report_mode,
                 json_indent=json_indent,
+                market=market_name,
             )
 
             elapsed = time.time() - item_start
@@ -4244,6 +4458,7 @@ def evaluate_stock_batch_to_files(
                     "timestamp": now_str(),
                     "index": idx,
                     "total": total,
+                    "market": market_name,
                     "stock_code": stock_code,
                     "status": "DONE",
                     "verdict": result.get("verdict", ""),
@@ -4255,7 +4470,7 @@ def evaluate_stock_batch_to_files(
             )
 
             print(
-                f"[{idx}/{total}] DONE stock_code={stock_code} "
+                f"[{idx}/{total}] DONE market={market_name} stock_code={stock_code} "
                 f"verdict={result.get('verdict')} score={result.get('score')} "
                 f"elapsed={elapsed:.1f}s"
             )
@@ -4264,6 +4479,7 @@ def evaluate_stock_batch_to_files(
             elapsed = time.time() - item_start
 
             error_row = {
+                "market": market_name,
                 "stock_code": stock_code,
                 "start_year": start_year,
                 "end_year": end_year,
@@ -4282,6 +4498,7 @@ def evaluate_stock_batch_to_files(
                     "timestamp": now_str(),
                     "index": idx,
                     "total": total,
+                    "market": market_name,
                     "stock_code": stock_code,
                     "status": "ERROR",
                     "verdict": "ERROR",
@@ -4293,7 +4510,7 @@ def evaluate_stock_batch_to_files(
             )
 
             print(
-                f"[{idx}/{total}] ERROR stock_code={stock_code} "
+                f"[{idx}/{total}] ERROR market={market_name} stock_code={stock_code} "
                 f"elapsed={elapsed:.1f}s error={e}"
             )
 
@@ -4384,6 +4601,7 @@ def main() -> None:
     stock.add_argument("--out-dir", required=True)
     stock.add_argument("--start-year", type=int, required=True)
     stock.add_argument("--end-year", type=int, required=True)
+    stock.add_argument("--market", default="")
     add_zai_args(stock)
 
     stock_batch = sub.add_parser("stock-batch")
@@ -4393,6 +4611,11 @@ def main() -> None:
     stock_batch.add_argument("--start-year", type=int, required=True)
     stock_batch.add_argument("--end-year", type=int, required=True)
     stock_batch.add_argument("--stock-codes", nargs="*", default=[])
+    stock_batch.add_argument(
+        "--market",
+        default="",
+        help="market prefix filter, e.g. kr, us, jp. Omit to scan all markets.",
+    )
     stock_batch.add_argument(
         "--resume",
         action="store_true",
@@ -4483,6 +4706,7 @@ def main() -> None:
             zai_mode=args.zai_mode,
             zai_config=zai_config,
             zai_dry_run=args.zai_dry_run,
+            market=args.market or None,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
 
@@ -4503,6 +4727,7 @@ def main() -> None:
             report_mode=args.report_mode,
             json_indent=None if args.compact_json else 2,
             workers=args.workers,
+            market=args.market or None,
         )
         print(summary.to_string(index=False))
     

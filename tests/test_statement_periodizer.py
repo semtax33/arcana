@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from engine.statement_periodizer import add_quarter_and_ttm_amounts, read_period_snapshots
+from engine.transformers.filing_periods import add_quarter_and_ttm_amounts, read_period_snapshots
 
 
 class StatementPeriodizerTest(unittest.TestCase):

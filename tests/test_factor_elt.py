@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from engine.factor_elt import (
+from engine.loaders.factors import (
     FACT_DAILY_FACTOR_COLUMNS,
     create_factor_catalog_dataframe,
     prepare_daily_factor_rows,
