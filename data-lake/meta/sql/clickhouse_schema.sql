@@ -1,7 +1,10 @@
 CREATE TABLE IF NOT EXISTS arcana.dart_report_metadata
 (
     security_id String,
-    stock_code FixedString(6),
+    stock_code FixedString(64),
+    country LowCardinality(String) DEFAULT 'KR',
+    market_mic LowCardinality(String) DEFAULT '',
+    filing_system LowCardinality(String) DEFAULT 'DART',
     fiscal_year Int32,
     fiscal_month UInt8,
     period_end_date Date,
@@ -34,6 +37,9 @@ CREATE TABLE IF NOT EXISTS arcana.benchmark_price_daily
     close        Nullable(Decimal(20, 6)),
     volume       Nullable(UInt64),
     currency     LowCardinality(String)      default 'KRW',
+    country      LowCardinality(String)      default '',
+    market_mic   LowCardinality(String)      default '',
+    benchmark_family LowCardinality(String)  default '',
     updated_at   DateTime64(3, 'Asia/Seoul') default now64(3)
 )
     engine = ReplacingMergeTree(updated_at)
@@ -51,6 +57,9 @@ CREATE TABLE IF NOT EXISTS benchmark_price_daily
     close        Nullable(Decimal(20, 6)),
     volume       Nullable(UInt64),
     currency     LowCardinality(String)      default 'KRW',
+    country      LowCardinality(String)      default '',
+    market_mic   LowCardinality(String)      default '',
+    benchmark_family LowCardinality(String)  default '',
     updated_at   DateTime64(3, 'Asia/Seoul') default now64(3)
 )
     engine = ReplacingMergeTree(updated_at)
@@ -161,6 +170,9 @@ CREATE TABLE IF NOT EXISTS arcana.security_master
     sec_type      LowCardinality(String)      default '',
     asset_subtype LowCardinality(String)      default '',
     share_class   LowCardinality(String)      default '',
+    country       LowCardinality(String)      default '',
+    primary_market_mic LowCardinality(String) default '',
+    currency      LowCardinality(String)      default '',
     is_active     Bool                        default true,
     created_at    DateTime64(3, 'Asia/Seoul') default now64(3),
     updated_at    DateTime64(3, 'Asia/Seoul') default now64(3)
@@ -203,7 +215,9 @@ CREATE TABLE IF NOT EXISTS arcana.fact_daily_factor_score
     trade_date Date,
     security_id String,
     issuer_id String DEFAULT '',
-    stock_code FixedString(6) DEFAULT '',
+    stock_code FixedString(64) DEFAULT '',
+    country LowCardinality(String) DEFAULT '',
+    market_mic LowCardinality(String) DEFAULT '',
     company_name String DEFAULT '',
     industry_schema LowCardinality(String) DEFAULT '',
     industry_level LowCardinality(String) DEFAULT '',
@@ -244,7 +258,9 @@ CREATE TABLE IF NOT EXISTS arcana.fact_daily_style_score
     trade_date Date,
     security_id String,
     issuer_id String DEFAULT '',
-    stock_code FixedString(6) DEFAULT '',
+    stock_code FixedString(64) DEFAULT '',
+    country LowCardinality(String) DEFAULT '',
+    market_mic LowCardinality(String) DEFAULT '',
     company_name String DEFAULT '',
     industry_schema LowCardinality(String) DEFAULT '',
     industry_code String DEFAULT '',

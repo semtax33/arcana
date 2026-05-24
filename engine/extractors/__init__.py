@@ -1,0 +1,2 @@
+"""Raw source extraction layer."""
+

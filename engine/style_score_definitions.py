@@ -101,8 +101,8 @@ STYLE_WEIGHTS = {
     STYLE_DIVIDEND: {
         "dividend_yield": 0.30,
         "sharehold_div_yield": 0.15,
-        "sharehold_net_buyback_yield": 0.20,
-        "sharehold_return": 0.20,
+        "sharehold_net_buyback_yield": 0.19,
+        "sharehold_return": 0.21,
         "payout_ratio": 0.15,
     },
 }
