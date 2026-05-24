@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from engine.style_score_definitions import canonical_factor_id, factor_direction
+from engine.transformers.style_score_definitions import canonical_factor_id, factor_direction
 from engine.style_score_pipeline import (
     FactorTableSchema,
     _build_universe_query,

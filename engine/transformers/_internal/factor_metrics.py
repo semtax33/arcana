@@ -6,6 +6,12 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from engine.core.paths import (
+    DATA_LAKE,
+    first_existing_path,
+    market_csv_name,
+    parse_statement_snapshot_filename,
+)
 from engine.transformers.dividends import silver_dividend_asof_events
 from engine.transformers.filing_periods import (
     REPORT_METADATA_PATH,
@@ -15,11 +21,15 @@ from engine.transformers.filing_periods import (
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-FINANCIAL_DIR = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "normalized"
-PRICE_PATH = PROJECT_ROOT / "data-lake" / "silver" / "price" / "normalized_price.csv"
-KRX_PRICE_PATH = PROJECT_ROOT / "data-lake" / "silver" / "krx" / "price" / "normalized_price.csv"
-SHARES_PATH = PROJECT_ROOT / "data-lake" / "silver" / "krx" / "shares" / "normalized_shares.csv"
+FINANCIAL_DIR = DATA_LAKE.silver("dart", "normalized")
+PRICE_PATH = DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price"))
+LEGACY_PRICE_PATHS = (
+    DATA_LAKE.silver("krx", "price", "normalized_price.csv"),
+    DATA_LAKE.silver("price", "normalized_price.csv"),
+)
+KRX_PRICE_PATH = LEGACY_PRICE_PATHS[0]
+SHARES_PATH = DATA_LAKE.silver("krx", "shares", market_csv_name("normalized_shares"))
+LEGACY_SHARES_PATHS = (DATA_LAKE.silver("krx", "shares", "normalized_shares.csv"),)
 ANNUAL_MONTH = 12
 
 
@@ -75,9 +85,7 @@ def security_id_of(stock_code):
 def resolve_price_path(path=None):
     if path is not None:
         return Path(path)
-    if PRICE_PATH.exists():
-        return PRICE_PATH
-    return KRX_PRICE_PATH
+    return first_existing_path(PRICE_PATH, *LEGACY_PRICE_PATHS)
 
 
 def safe_div(numerator, denominator):
@@ -201,9 +209,12 @@ def read_stock_prices(stock_code, path=None):
     return price_df.sort_values("trade_date").reset_index(drop=True)
 
 
-def read_stock_shares(stock_code, path=SHARES_PATH):
+def read_stock_shares(stock_code, path=None):
     security_id = security_id_of(stock_code)
-    shares_df = read_stock_csv_by_security_id(path, security_id)
+    shares_df = read_stock_csv_by_security_id(
+        first_existing_path(SHARES_PATH, *LEGACY_SHARES_PATHS) if path is None else path,
+        security_id,
+    )
 
     if shares_df.empty:
         return shares_df
@@ -216,14 +227,14 @@ def read_stock_shares(stock_code, path=SHARES_PATH):
 
 
 def parse_period_from_filename(path):
-    match = re.search(r"normalized_(\d{6})_(\d{4})[._](\d{2})\.csv$", Path(path).name)
-    if not match:
+    meta = parse_statement_snapshot_filename(path)
+    if meta is None:
         return None
 
     return {
-        "stock_code": match.group(1),
-        "year": int(match.group(2)),
-        "month": int(match.group(3)),
+        "stock_code": meta["stock_code"],
+        "year": meta["year"],
+        "month": meta["month"],
     }
 
 
@@ -233,16 +244,18 @@ def period_end_date(year, month):
 
 def annual_financial_files(stock_code):
     stock_code = normalize_stock_code(stock_code)
-    paths = []
+    paths_by_year = {}
 
-    for path in FINANCIAL_DIR.glob(f"normalized_{stock_code}_*.csv"):
+    for path in FINANCIAL_DIR.glob(f"*normalized_{stock_code}_*.csv"):
         if ".debug" in path.name or ".validation" in path.name:
             continue
         meta = parse_period_from_filename(path)
         if meta and meta["month"] == ANNUAL_MONTH:
-            paths.append(path)
+            year = int(meta["year"])
+            if year not in paths_by_year or path.name.startswith("kr_"):
+                paths_by_year[year] = path
 
-    return sorted(paths, key=lambda p: parse_period_from_filename(p)["year"])
+    return sorted(paths_by_year.values(), key=lambda p: parse_period_from_filename(p)["year"])
 
 
 def pick_largest_abs(series):
@@ -881,7 +894,7 @@ def create_stock_factor_dataframe(
     start_date=None,
     end_date=None,
     price_path=None,
-    shares_path=SHARES_PATH,
+    shares_path=None,
     financial_basis="annual",
     cumulative_statement_types=None,
     report_metadata_path=REPORT_METADATA_PATH,

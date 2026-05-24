@@ -1,4 +1,5 @@
 from engine.core.clickhouse import get_clickhouse_client
+from engine.core.paths import DATA_LAKE
 from engine.transformers.market_data import normalize_price, normalize_shares
 
 
@@ -15,7 +16,7 @@ def _insert_partitioned(client, table_name, frame):
 def insert_price():
     client = get_clickhouse_client()
     try:
-        normalized_price_df = normalize_price("../data-lake/bronze/krx/price/*")
+        normalized_price_df = normalize_price(str(DATA_LAKE.bronze("krx", "price", "*")))
         _insert_partitioned(client, "price_daily", normalized_price_df)
     finally:
         client.close()
@@ -24,7 +25,7 @@ def insert_price():
 def insert_shares():
     client = get_clickhouse_client()
     try:
-        normalized_shares_df = normalize_shares("../data-lake/bronze/krx/shares/*")
+        normalized_shares_df = normalize_shares(str(DATA_LAKE.bronze("krx", "shares", "*")))
         _insert_partitioned(client, "stock_shares", normalized_shares_df)
     finally:
         client.close()

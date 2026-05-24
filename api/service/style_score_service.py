@@ -16,7 +16,11 @@ from api.model.style_score import (
     StyleScoreResponse,
     StyleScoreRow,
 )
-from engine.style_score_definitions import FACTOR_ALIASES, STYLE_WEIGHTS, style_profile_weights
+from engine.transformers.style_score_definitions import (
+    FACTOR_ALIASES,
+    STYLE_WEIGHTS,
+    style_profile_weights,
+)
 
 
 DEFAULT_STYLE_PROFILE = "DEFAULT"

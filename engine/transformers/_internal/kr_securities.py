@@ -7,11 +7,12 @@ from typing import Any
 import pandas as pd
 import yaml
 
+from engine.core.paths import DATA_LAKE
 from engine.core.identifiers import issuer_id_of, security_id_of
 from engine.markets.kr import KR_MARKET_CONFIG, normalize_kr_stock_code
 
 
-DEFAULT_GICS_RULES_PATH = Path(__file__).resolve().parents[3] / "data-lake" / "meta" / "rules" / "gics_rules.yaml"
+DEFAULT_GICS_RULES_PATH = DATA_LAKE.rules("gics_rules.yaml")
 UNMAPPED = "UNMAPPED"
 
 

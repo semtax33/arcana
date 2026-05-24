@@ -1,10 +1,11 @@
-from pathlib import Path
-import re
 from time import sleep
+import re
 
 import pandas as pd
 
 from pykrx import stock
+
+from engine.core.paths import DATA_LAKE, market_symbol_csv_name
 
 
 def fetch_price(stock_code: str, start_date: str, end_date: str):
@@ -21,10 +22,10 @@ def fetch_all_prices(stock_codes: list[str], download_offset: int, start_date: s
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
-        dir = f"../data-lake/bronze/krx/price"
+        output_dir = DATA_LAKE.bronze("krx", "price")
 
         prices = _with_date_column(fetch_price(ticker, start_date, end_date))
-        out_path = Path(dir) / _safe_filename(ticker)
+        out_path = output_dir / market_symbol_csv_name(ticker)
         out_path.parent.mkdir(parents=True, exist_ok=True)  # 폴더 없으면 생성
         prices.to_csv(out_path, index=False, encoding="utf-8-sig")
         sleep(0.1)
@@ -35,10 +36,10 @@ def fetch_all_shares(stock_codes: list[str], download_offset: int, start_date: s
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
-        dir = f"../data-lake/bronze/krx/shares"
+        output_dir = DATA_LAKE.bronze("krx", "shares")
 
         shares = _with_date_column(fetch_share(ticker, start_date, end_date))
-        out_path = Path(dir) / _safe_filename(ticker)
+        out_path = output_dir / market_symbol_csv_name(ticker)
         out_path.parent.mkdir(parents=True, exist_ok=True)  # 폴더 없으면 생성
         shares.to_csv(out_path, index=False, encoding="utf-8-sig")
         sleep(0.1)

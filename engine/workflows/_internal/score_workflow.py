@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from engine.core.clickhouse import get_clickhouse_client
-from engine.style_score_definitions import (
+from engine.transformers.style_score_definitions import (
     STYLE_FACTOR_DEFINITIONS,
     STYLE_WEIGHTS,
     VALUE_LIMITS,

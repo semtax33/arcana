@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from engine.core.paths import DATA_LAKE, PROJECT_ROOT, statement_snapshot_name
 from engine.transformers.filings import (
     ContextEngine,
     RuleEngine,
@@ -17,15 +18,11 @@ from engine.transformers.filings import (
 from engine.extractors.market_universe import kospi_kosdaq_corp_list
 
 
-ENGINE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = ENGINE_DIR.parents[2]
-DATA_LAKE_DIR = PROJECT_ROOT / "data-lake"
-
-CANONICAL_CSV_PATH = DATA_LAKE_DIR / "meta" / "CanonicalAccount.csv"
-CONTEXT_RULE_PATH = DATA_LAKE_DIR / "meta" / "rules" / "context_common.yaml"
-MAPPING_RULE_PATH = DATA_LAKE_DIR / "meta" / "rules" / "mapping_common.yaml"
-COMMENT_RULE_PATH = DATA_LAKE_DIR / "meta" / "rules" / "comment_common.yaml"
-SIGN_POLICY_PATH = DATA_LAKE_DIR / "meta" / "rules" / "sign_policy_common.yaml"
+CANONICAL_CSV_PATH = DATA_LAKE.canonical_accounts()
+CONTEXT_RULE_PATH = DATA_LAKE.rules("context_common.yaml")
+MAPPING_RULE_PATH = DATA_LAKE.rules("mapping_common.yaml")
+COMMENT_RULE_PATH = DATA_LAKE.rules("comment_common.yaml")
+SIGN_POLICY_PATH = DATA_LAKE.rules("sign_policy_common.yaml")
 SAVE_DEBUG = True
 FORCE_REBUILD = False
 MAX_WORKERS = int(os.environ.get("NORMALIZE_MAX_WORKERS") or "0")
@@ -90,20 +87,17 @@ def build_normalization_tasks(
             for month in [3, 6, 9, 12]:
                 month_text = str(month).zfill(2)
                 input_html_path = (
-                    DATA_LAKE_DIR
-                    / "bronze"
-                    / "dart"
-                    / "finance-statement"
-                    / stock_code
-                    / f"finance_statement_({year}.{month_text}).html"
+                    DATA_LAKE.bronze(
+                        "dart",
+                        "finance-statement",
+                        stock_code,
+                        f"finance_statement_({year}.{month_text}).html",
+                    )
                 )
                 period = f"{year}.{month}"
                 output_csv_path = (
-                    DATA_LAKE_DIR
-                    / "silver"
-                    / "dart"
-                    / "normalized"
-                    / f"normalized_{stock_code}_{year}.{month_text}.csv"
+                    DATA_LAKE.silver("dart", "normalized")
+                    / statement_snapshot_name(stock_code, year, month)
                 )
                 comment_html_path = infer_comment_html_path(
                     input_html_path=input_html_path,
@@ -148,7 +142,7 @@ def normalize_all_statements() -> None:
     start_year = end_year - 10
 
     dependency_paths = [
-        ENGINE_DIR / "canonical_rule_normalizer.py",
+        PROJECT_ROOT / "engine" / "canonical_rule_normalizer.py",
         CANONICAL_CSV_PATH,
         CONTEXT_RULE_PATH,
         MAPPING_RULE_PATH,

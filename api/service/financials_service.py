@@ -21,11 +21,11 @@ from api.model.financials import (
     FinancialStatementSection,
     FinancialStatementsResponse,
 )
+from engine.core.paths import DATA_LAKE, parse_statement_snapshot_filename
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CANONICAL_ACCOUNTS_PATH = PROJECT_ROOT / "data-lake" / "meta" / "CanonicalAccount.csv"
-DEFAULT_NORMALIZED_STATEMENT_DIR = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "normalized"
+DEFAULT_CANONICAL_ACCOUNTS_PATH = DATA_LAKE.canonical_accounts()
+DEFAULT_NORMALIZED_STATEMENT_DIR = DATA_LAKE.silver("dart", "normalized")
 FACT_TABLE = "fact_canonical_statements"
 STATEMENT_TYPES = ("IS", "BS", "CF")
 STATEMENT_LABELS = {
@@ -100,7 +100,6 @@ PREFERRED_ACCOUNT_ORDER = {
 
 _STOCK_CODE_RE = re.compile(r"^[0-9A-Za-z]{1,12}$")
 _IDENTIFIER_RE = re.compile(r"^[0-9A-Za-z_]+$")
-_NORMALIZED_FILE_RE = re.compile(r"normalized_(?P<stock_code>\d{6})_(?P<year>\d{4})[.](?P<month>\d{2})[.]csv$")
 
 
 class FinancialStatementsNotFoundError(ValueError):
@@ -324,15 +323,23 @@ def _load_normalized_statement_rows(
     if not normalized_statement_dir.exists():
         return rows
 
-    for path in sorted(normalized_statement_dir.glob(f"normalized_{stock_code}_*.csv")):
-        match = _NORMALIZED_FILE_RE.match(path.name)
-        if match is None:
+    paths_by_period: dict[tuple[int, int], Path] = {}
+    for path in normalized_statement_dir.glob(f"*normalized_{stock_code}_*.csv"):
+        meta = parse_statement_snapshot_filename(path)
+        if meta is None:
             continue
-        fiscal_year = int(match.group("year"))
-        fiscal_month = int(match.group("month"))
+        fiscal_year = int(meta["year"])
+        fiscal_month = int(meta["month"])
         if fiscal_year < start_year or fiscal_month not in {3, 6, 9, 12}:
             continue
+        key = (fiscal_year, fiscal_month)
+        if key not in paths_by_period or path.name.startswith("kr_"):
+            paths_by_period[key] = path
 
+    for path in sorted(paths_by_period.values()):
+        meta = parse_statement_snapshot_filename(path)
+        fiscal_year = int(meta["year"])
+        fiscal_month = int(meta["month"])
         rows.extend(
             _load_normalized_file_rows(
                 path=path,

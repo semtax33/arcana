@@ -13,6 +13,7 @@ import pandas as pd
 import yaml
 from bs4 import BeautifulSoup, Tag
 
+from engine.core.paths import parse_statement_snapshot_filename
 
 # amount는 하위 호환용으로 normalized_amount와 동일하게 저장한다.
 EXPECTED_HEADER = [
@@ -63,7 +64,6 @@ UNIT_SCALE_OUTLIER_FACTORS = (1_000, 1_000_000)
 UNIT_SCALE_OUTLIER_MIN_SUPPORT = 3
 UNIT_SCALE_OUTLIER_MULTIPLE = 100
 UNIT_SCALE_REPAIRED_MULTIPLE = 10
-NORMALIZED_OUTPUT_RE = re.compile(r"normalized_(?P<stock_code>\d{6})_(?P<year>\d{4})[.](?P<month>\d{2})[.]csv$")
 
 
 def safe_str(value: Any) -> str:
@@ -2125,15 +2125,7 @@ def apply_is_cis_priority(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _normalized_output_meta(path: str | Path) -> dict[str, int | str] | None:
-    match = NORMALIZED_OUTPUT_RE.match(Path(path).name)
-    if not match:
-        return None
-
-    return {
-        "stock_code": match.group("stock_code"),
-        "year": int(match.group("year")),
-        "month": int(match.group("month")),
-    }
+    return parse_statement_snapshot_filename(path)
 
 
 def _period_distance(left: dict[str, int | str], right: dict[str, int | str]) -> int:

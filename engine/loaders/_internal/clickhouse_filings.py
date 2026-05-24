@@ -5,7 +5,8 @@ from pathlib import Path
 import pandas as pd
 
 from engine.core.clickhouse import get_clickhouse_client
-from engine.transformers.filing_periods import REPORT_METADATA_PATH
+from engine.core.paths import first_existing_path
+from engine.transformers.filing_periods import LEGACY_REPORT_METADATA_PATH, REPORT_METADATA_PATH
 
 
 DART_REPORT_METADATA_COLUMNS = [
@@ -27,7 +28,11 @@ DART_REPORT_METADATA_COLUMNS = [
 
 
 def read_report_metadata(path: str | Path = REPORT_METADATA_PATH) -> pd.DataFrame:
-    path = Path(path)
+    path = (
+        first_existing_path(REPORT_METADATA_PATH, LEGACY_REPORT_METADATA_PATH)
+        if path == REPORT_METADATA_PATH
+        else Path(path)
+    )
     if not path.exists():
         return pd.DataFrame(columns=DART_REPORT_METADATA_COLUMNS)
 

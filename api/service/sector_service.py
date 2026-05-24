@@ -5,12 +5,12 @@ from typing import Any, Callable
 
 import yaml
 
+from engine.core.paths import DATA_LAKE
 from api.config.clickhouse import get_clickhouse_client
 from api.model.sector import IndustryGroup, Sector
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_GICS_RULES_PATH = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "gics_rules.yaml"
+DEFAULT_GICS_RULES_PATH = DATA_LAKE.rules("gics_rules.yaml")
 
 
 class SectorService:

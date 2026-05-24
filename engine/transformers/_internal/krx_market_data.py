@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from engine.core.paths import DATA_LAKE, PROJECT_ROOT, market_csv_name
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENGINE_DIR = Path(__file__).resolve().parent
 
 
@@ -31,15 +31,31 @@ def _write_csv(df: pd.DataFrame, output_path: Path) -> None:
     df.to_csv(output_path, index=False, encoding="utf-8-sig")
 
 
+def _stock_code_from_path(path: str | Path) -> str:
+    stem = Path(path).stem
+    if stem.lower().startswith("kr_"):
+        stem = stem[3:]
+    return stem
+
+
+def _dedupe_market_symbol_files(files: list[str]) -> list[str]:
+    by_stock_code: dict[str, str] = {}
+    for file in files:
+        stock_code = _stock_code_from_path(file)
+        if stock_code not in by_stock_code or Path(file).name.lower().startswith("kr_"):
+            by_stock_code[stock_code] = file
+    return list(by_stock_code.values())
+
+
 def normalize_price(path: str):
-    files = _glob_files(path)
+    files = _dedupe_market_symbol_files(_glob_files(path))
 
     if not files:
         raise FileNotFoundError("CSV 파일을 찾지 못했습니다.")
 
     df = pd.concat(
         [
-            pd.read_csv(file).assign(stock_code=Path(file).name)
+            pd.read_csv(file).assign(stock_code=_stock_code_from_path(file))
             for file in files
         ],
         ignore_index=True
@@ -57,19 +73,19 @@ def normalize_price(path: str):
 
     df = df.drop(columns=["날짜", "시가", "고가", "저가", "종가", "거래량", "stock_code", "등락률"])
 
-    _write_csv(df, PROJECT_ROOT / 'data-lake' / 'silver' / 'krx' / 'price' / 'normalized_price.csv')
+    _write_csv(df, DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price")))
 
     return df
 
 def normalize_shares(path: str):
-    files = _glob_files(path)
+    files = _dedupe_market_symbol_files(_glob_files(path))
 
     if not files:
         raise FileNotFoundError("CSV 파일을 찾지 못했습니다.")
 
     df = pd.concat(
         [
-            pd.read_csv(file).assign(stock_code=Path(file).name)
+            pd.read_csv(file).assign(stock_code=_stock_code_from_path(file))
             for file in files
         ],
         ignore_index=True
@@ -82,6 +98,6 @@ def normalize_shares(path: str):
 
     df = df.drop(columns=["날짜", "상장주식수", "시가총액", "거래량", "거래대금", "상장주식수", "stock_code"])
 
-    _write_csv(df, PROJECT_ROOT / 'data-lake' / 'silver' / 'krx' / 'shares' / 'normalized_shares.csv')
+    _write_csv(df, DATA_LAKE.silver("krx", "shares", market_csv_name("normalized_shares")))
 
     return df

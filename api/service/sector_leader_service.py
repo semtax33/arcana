@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
+from engine.core.paths import DATA_LAKE
 from api.config.clickhouse import get_clickhouse_client
 from api.model.sector_leader import (
     SectorLeaderMetric,
@@ -16,8 +17,7 @@ from api.model.sector_leader import (
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_GICS_RULES_PATH = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "gics_rules.yaml"
+DEFAULT_GICS_RULES_PATH = DATA_LAKE.rules("gics_rules.yaml")
 FACTOR_TABLES = ("fact_daily_factor", "fact_daily_factors")
 FACTOR_VALUE_COLUMNS = ("factor_value", "value")
 DEFAULT_FINANCIAL_BASIS = "annual"

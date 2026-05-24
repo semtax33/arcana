@@ -7,12 +7,14 @@ from typing import Any
 
 import pandas as pd
 
+from engine.core.paths import DATA_LAKE, PROJECT_ROOT, market_csv_name
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENGINE_DIR = Path(__file__).resolve().parent
-BRONZE_BENCHMARK_DIR = PROJECT_ROOT / "data-lake" / "bronze" / "krx" / "benchmark"
-SILVER_BENCHMARK_PATH = (
-    PROJECT_ROOT / "data-lake" / "silver" / "krx" / "benchmark" / "normalized_benchmark_price.csv"
+BRONZE_BENCHMARK_DIR = DATA_LAKE.bronze("krx", "benchmark")
+SILVER_BENCHMARK_PATH = DATA_LAKE.silver(
+    "krx",
+    "benchmark",
+    market_csv_name("normalized_benchmark_price"),
 )
 
 DEFAULT_BENCHMARK_INDEX_CODES = {

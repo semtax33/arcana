@@ -3147,7 +3147,7 @@ def find_stock_year_pairs(
     if stock_year_index is None:
         candidates = [
             p
-            for p in input_dir.rglob(f"normalized_{stock_code}_*.csv")
+            for p in input_dir.rglob(f"*normalized_{stock_code}_*.csv")
             if ".debug" not in p.name and ".validation" not in p.name
         ]
 

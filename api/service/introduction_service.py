@@ -15,10 +15,10 @@ from api.model.introduction import (
     StockIntroductionMetrics,
     StockIntroductionResponse,
 )
+from engine.core.paths import DATA_LAKE
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_GICS_RULES_PATH = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "gics_rules.yaml"
+DEFAULT_GICS_RULES_PATH = DATA_LAKE.rules("gics_rules.yaml")
 PRICE_TABLE = "price_daily"
 FACTOR_TABLE = "fact_daily_factor"
 FACTOR_TABLES = ["fact_daily_factor", "fact_daily_factors"]

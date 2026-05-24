@@ -118,7 +118,8 @@ class StatementPeriodizerTest(unittest.TestCase):
             metadata_path = root / "report_metadata.csv"
 
             for month in [3, 6]:
-                (financial_dir / f"normalized_005930_2025.{month:02d}.csv").write_text(
+                prefix = "kr_" if month == 3 else ""
+                (financial_dir / f"{prefix}normalized_005930_2025.{month:02d}.csv").write_text(
                     "\n".join(
                         [
                             "canonical_account_id,canonical_account_name,original_account_name,statement_type,period,normalized_amount",

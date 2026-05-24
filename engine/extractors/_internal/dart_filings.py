@@ -13,9 +13,9 @@ import json
 
 import pandas as pd
 
+from engine.core.paths import DATA_LAKE, market_csv_name
 
 RETRY_STATUS = {429, 500, 502, 503, 504}
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPORT_METADATA_COLUMNS = [
     "security_id",
     "stock_code",
@@ -756,7 +756,7 @@ def collect_dart_report_metadata(
     download_offset: int = 0,
     *,
     source_types: tuple[str, ...] = ("statement", "comment"),
-    output_csv_path: str | Path = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "report_metadata.csv",
+    output_csv_path: str | Path = DATA_LAKE.silver("dart", market_csv_name("report_metadata")),
 ) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
 
@@ -1038,7 +1038,7 @@ def download_statements(stock_codes, download_offset):
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
-        dir = f"../data-lake/bronze/dart/finance-statement/{ticker}"
+        dir = str(DATA_LAKE.bronze("dart", "finance-statement", ticker))
         fetch_dart_search(ticker, dir)
 
 def download_statement_comments(stock_codes, download_offset):
@@ -1047,7 +1047,7 @@ def download_statement_comments(stock_codes, download_offset):
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
-        dir = f"../data-lake/bronze/dart/finance-comment/{ticker}"
+        dir = str(DATA_LAKE.bronze("dart", "finance-comment", ticker))
         fetch_dart_comment_search(ticker, dir)
 
 def download_recent_statement_comments(stock_codes, download_offset):
@@ -1056,7 +1056,7 @@ def download_recent_statement_comments(stock_codes, download_offset):
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
-        dir = f"../data-lake/bronze/dart/finance-comment/{ticker}"
+        dir = str(DATA_LAKE.bronze("dart", "finance-comment", ticker))
         fetch_dart_recent_comment_search(ticker, dir)
 
 def download_dividend_histories(stock_codes, download_offset):
@@ -1065,5 +1065,5 @@ def download_dividend_histories(stock_codes, download_offset):
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
-        dir = f"../data-lake/bronze/dart/dividend/{ticker}"
+        dir = str(DATA_LAKE.bronze("dart", "dividend", ticker))
         fetch_dart_dividend_search(ticker, dir)

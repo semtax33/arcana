@@ -333,7 +333,7 @@ class FactorNormalizerTest(unittest.TestCase):
             financial_dir.mkdir()
             metadata_path = root / "report_metadata.csv"
 
-            (financial_dir / "normalized_005930_2025.12.csv").write_text(
+            (financial_dir / "kr_normalized_005930_2025.12.csv").write_text(
                 "\n".join(
                     [
                         "canonical_account_id,canonical_account_name,original_account_name,statement_type,period,normalized_amount",

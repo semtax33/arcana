@@ -16,6 +16,8 @@ from typing import Any
 import pandas as pd
 import requests
 
+from engine.core.paths import DATA_LAKE
+
 
 # =============================================================================
 # DART API 설정
@@ -684,7 +686,7 @@ def download_dividends_for_one_stock(
     download_offset: int | None = None,
     start_year: int = 2015,
     end_year: int | None = None,
-    out_root: str | Path = "../data-lake/bronze/dart/dividend",
+    out_root: str | Path = DATA_LAKE.bronze("dart", "dividend"),
     report_codes: dict[str, str] = REPORT_CODES,
     skip_existing: bool = True,
     sleep_sec: float = 0.1,
@@ -879,7 +881,7 @@ def fetch_all_stock_dividends_async(
     download_offset: int = 0,
     start_year: int = 2015,
     end_year: int | None = None,
-    out_root: str | Path = "../data-lake/bronze/dart/dividend",
+    out_root: str | Path = DATA_LAKE.bronze("dart", "dividend"),
     report_codes: dict[str, str] = REPORT_CODES,
     skip_existing: bool = True,
     sleep_sec: float = 0.1,

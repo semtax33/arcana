@@ -5,7 +5,7 @@ from engine.workflows.score import (
     calculate_factor_scores,
     calculate_style_scores,
 )
-from engine.style_score_definitions import style_factor_definitions
+from engine.transformers.style_score_definitions import style_factor_definitions
 
 __all__ = [
     "build_industry_snapshot",

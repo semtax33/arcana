@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import math
-import re
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from engine.core.paths import (
+    DATA_LAKE,
+    first_existing_path,
+    market_csv_name,
+    parse_statement_snapshot_filename,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-FINANCIAL_DIR = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "normalized"
-REPORT_METADATA_PATH = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "report_metadata.csv"
+FINANCIAL_DIR = DATA_LAKE.silver("dart", "normalized")
+REPORT_METADATA_PATH = DATA_LAKE.silver("dart", market_csv_name("report_metadata"))
+LEGACY_REPORT_METADATA_PATH = DATA_LAKE.silver("dart", "report_metadata.csv")
 
 FLOW_STATEMENT_TYPES = {"IS", "CIS", "CF"}
 BALANCE_STATEMENT_TYPES = {"BS"}
@@ -26,14 +31,14 @@ def security_id_of(stock_code: Any) -> str:
 
 
 def parse_period_from_filename(path: str | Path) -> dict[str, int | str] | None:
-    match = re.search(r"normalized_(\d{6})_(\d{4})[._](\d{2})\.csv$", Path(path).name)
-    if not match:
+    meta = parse_statement_snapshot_filename(path)
+    if meta is None:
         return None
 
     return {
-        "stock_code": match.group(1),
-        "year": int(match.group(2)),
-        "month": int(match.group(3)),
+        "stock_code": meta["stock_code"],
+        "year": meta["year"],
+        "month": meta["month"],
     }
 
 
@@ -42,7 +47,7 @@ def period_end_date(year: int, month: int) -> pd.Timestamp:
 
 
 def load_report_metadata(path: str | Path = REPORT_METADATA_PATH, source_type: str = "statement") -> pd.DataFrame:
-    path = Path(path)
+    path = first_existing_path(REPORT_METADATA_PATH, LEGACY_REPORT_METADATA_PATH) if path == REPORT_METADATA_PATH else Path(path)
     if not path.exists():
         return pd.DataFrame()
 
@@ -113,16 +118,21 @@ def attach_report_metadata(
 
 def financial_files(stock_code: Any, financial_dir: str | Path = FINANCIAL_DIR) -> list[Path]:
     stock_code = normalize_stock_code(stock_code)
-    paths: list[Path] = []
+    paths_by_period: dict[tuple[int, int], Path] = {}
 
-    for path in Path(financial_dir).glob(f"normalized_{stock_code}_*.csv"):
+    for path in Path(financial_dir).glob(f"*normalized_{stock_code}_*.csv"):
         if ".debug" in path.name or ".validation" in path.name:
             continue
         meta = parse_period_from_filename(path)
         if meta and meta["month"] in {3, 6, 9, 12}:
-            paths.append(path)
+            key = (int(meta["year"]), int(meta["month"]))
+            if key not in paths_by_period or path.name.startswith("kr_"):
+                paths_by_period[key] = path
 
-    return sorted(paths, key=lambda p: (parse_period_from_filename(p)["year"], parse_period_from_filename(p)["month"]))
+    return sorted(
+        paths_by_period.values(),
+        key=lambda p: (parse_period_from_filename(p)["year"], parse_period_from_filename(p)["month"]),
+    )
 
 
 def pick_largest_abs(series: pd.Series) -> float:

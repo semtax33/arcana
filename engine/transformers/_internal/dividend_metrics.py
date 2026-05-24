@@ -7,14 +7,23 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 import pandas as pd
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-base_dir = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "normalized"
-dividend_base_dir = PROJECT_ROOT / "data-lake" / "bronze" / "dart" / "dividend"
-silver_dividend_dir = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "dividend"
-silver_dividend_by_stock_kind_path = silver_dividend_dir / "dividend_by_stock_kind.csv"
-silver_dividend_company_summary_path = silver_dividend_dir / "dividend_company_summary.csv"
-price_file_path = PROJECT_ROOT / "data-lake" / "silver" / "krx" / "price" / "normalized_price.csv"
-krx_price_file_path = PROJECT_ROOT / "data-lake" / "silver" / "krx" / "price" / "normalized_price.csv"
+from engine.core.paths import (
+    DATA_LAKE,
+    PROJECT_ROOT,
+    first_existing_path,
+    market_csv_name,
+    statement_snapshot_name,
+)
+
+base_dir = DATA_LAKE.silver("dart", "normalized")
+dividend_base_dir = DATA_LAKE.bronze("dart", "dividend")
+silver_dividend_dir = DATA_LAKE.silver("dart", "dividend")
+legacy_silver_dividend_by_stock_kind_path = silver_dividend_dir / "dividend_by_stock_kind.csv"
+silver_dividend_by_stock_kind_path = silver_dividend_dir / market_csv_name("dividend_by_stock_kind")
+legacy_silver_dividend_company_summary_path = silver_dividend_dir / "dividend_company_summary.csv"
+silver_dividend_company_summary_path = silver_dividend_dir / market_csv_name("dividend_company_summary")
+price_file_path = DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price"))
+krx_price_file_path = DATA_LAKE.silver("krx", "price", "normalized_price.csv")
 
 COMMON_STOCK_KIND_LABELS = {"보통주", "보통주식", "common", "ordinary"}
 REPORT_ORDER = {
@@ -79,8 +88,10 @@ def calculate_net_income(stock_code, year, month):
     import pandas as pd
 
     stock_code = normalize_stock_code(stock_code)
-    file_name = f"normalized_{stock_code}_{year}.{month:02d}.csv"
-    file_path = base_dir / file_name
+    file_path = first_existing_path(
+        base_dir / statement_snapshot_name(stock_code, year, month),
+        base_dir / f"normalized_{stock_code}_{year}.{month:02d}.csv",
+    )
 
     if not file_path.exists():
         print(f"[SKIP] 파일 없음: {file_path}")
@@ -504,9 +515,9 @@ def write_silver_dividend_summary_files(
     silver_dir.mkdir(parents=True, exist_ok=True)
 
     by_kind_df, company_df, failed_df = build_silver_dividend_summary_dataframes(bronze_root)
-    by_kind_df.to_csv(silver_dir / "dividend_by_stock_kind.csv", index=False, encoding="utf-8-sig")
-    company_df.to_csv(silver_dir / "dividend_company_summary.csv", index=False, encoding="utf-8-sig")
-    failed_df.to_csv(silver_dir / "dividend_company_summary.failed.csv", index=False, encoding="utf-8-sig")
+    by_kind_df.to_csv(silver_dir / market_csv_name("dividend_by_stock_kind"), index=False, encoding="utf-8-sig")
+    company_df.to_csv(silver_dir / market_csv_name("dividend_company_summary"), index=False, encoding="utf-8-sig")
+    failed_df.to_csv(silver_dir / "kr_dividend_company_summary.failed.csv", index=False, encoding="utf-8-sig")
     clear_silver_dividend_cache()
 
     return by_kind_df, company_df, failed_df
@@ -525,7 +536,12 @@ def _read_silver_csv(path):
 
 @lru_cache(maxsize=1)
 def _silver_dividend_by_stock_kind_df():
-    df = _read_silver_csv(silver_dividend_by_stock_kind_path)
+    df = _read_silver_csv(
+        first_existing_path(
+            silver_dividend_by_stock_kind_path,
+            legacy_silver_dividend_by_stock_kind_path,
+        )
+    )
     if df.empty:
         return df
 
@@ -539,7 +555,12 @@ def _silver_dividend_by_stock_kind_df():
 
 @lru_cache(maxsize=1)
 def _silver_dividend_company_summary_df():
-    df = _read_silver_csv(silver_dividend_company_summary_path)
+    df = _read_silver_csv(
+        first_existing_path(
+            silver_dividend_company_summary_path,
+            legacy_silver_dividend_company_summary_path,
+        )
+    )
     if df.empty:
         return df
 
@@ -683,7 +704,7 @@ def has_silver_dividend_year(stock_code, year, share_type="보통주식"):
 
 
 def calculate_silver_total_dividend_per_share(stock_code, year, share_type="보통주식"):
-    if not silver_dividend_by_stock_kind_path.exists():
+    if not first_existing_path(silver_dividend_by_stock_kind_path, legacy_silver_dividend_by_stock_kind_path).exists():
         print(f"[SKIP] 파일 없음: {silver_dividend_by_stock_kind_path}")
         return 0
 
@@ -696,7 +717,7 @@ def calculate_silver_total_dividend_per_share(stock_code, year, share_type="보�
 
 
 def calculate_silver_total_dividend_amount(stock_code, year):
-    if not silver_dividend_company_summary_path.exists():
+    if not first_existing_path(silver_dividend_company_summary_path, legacy_silver_dividend_company_summary_path).exists():
         print(f"[SKIP] 파일 없음: {silver_dividend_company_summary_path}")
         return None
 
