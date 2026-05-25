@@ -67,16 +67,20 @@ def statement_snapshot_name(
     month: int,
     market: str = DEFAULT_MARKET,
 ) -> str:
-    stock_code_text = str(stock_code).strip().zfill(6)
+    normalized_market = _normalize_market(market)
+    stock_code_text = str(stock_code).strip()
+    if normalized_market == DEFAULT_MARKET and stock_code_text.isdigit():
+        stock_code_text = stock_code_text.zfill(6)
+    stock_code_text = _safe_filename_part(stock_code_text)
     return (
-        f"{_normalize_market(market)}_normalized_"
+        f"{normalized_market}_normalized_"
         f"{stock_code_text}_{int(year)}.{int(month):02d}.csv"
     )
 
 
 _STATEMENT_SNAPSHOT_RE = re.compile(
     r"(?:(?P<market>[a-z][a-z0-9]*)_)?normalized_"
-    r"(?P<stock_code>\d{6})_"
+    r"(?P<stock_code>.+?)_"
     r"(?P<year>\d{4})[._](?P<month>\d{2})\.csv$",
     re.IGNORECASE,
 )

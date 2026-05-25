@@ -54,9 +54,11 @@ data-lake/
   bronze/
     dart/
     krx/
+    sec/
   silver/
     dart/
     krx/
+    sec/
   meta/
     CanonicalAccount.csv
     rules/
@@ -71,6 +73,7 @@ kr_normalized_price.csv
 kr_normalized_shares.csv
 kr_report_metadata.csv
 kr_normalized_005930_2025.12.csv
+us_normalized_AAPL_2025.12.csv
 kr_dividend_by_stock_kind.csv
 kr_dividend_company_summary.csv
 kr_normalized_benchmark_price.csv
@@ -79,6 +82,13 @@ kr_normalized_benchmark_price.csv
 일부 reader는 기존 파일명도 fallback으로 읽습니다. 예:
 `normalized_price.csv`, `report_metadata.csv`,
 `normalized_005930_2025.12.csv`.
+
+캐노니컬 매핑 룰은 시장별로 분리합니다. KR은 `kr_mapping.yaml`,
+`context_kr.yaml`, `comment_kr.yaml`을 사용하고, US는 `us_mapping.yaml`의
+`companyfacts_rules`, `notes_rules`, `edgartools_fallback_rules`를 사용합니다.
+이전 파일명인 `mapping_kr.yaml`, `mapping_us.yaml`은 호환 fallback으로만
+참조합니다.
+기존 `*_common.yaml` 파일은 호환 fallback으로 유지합니다.
 
 ## ELT Flow
 
@@ -91,23 +101,42 @@ python -m engine.workflows.download statements
 python -m engine.workflows.download comments
 python -m engine.workflows.download metadata
 python -m engine.workflows.download dividend
+python -m engine.workflows.download --market us sec-tickers
 ```
 
 `prices`와 `shares`는 KRX bronze CSV를 `data-lake/bronze/krx/...` 아래에
 저장합니다. DART 재무제표, 주석, 메타데이터, 배당 공시는
 `data-lake/bronze/dart/...` 아래에 저장합니다.
 
+`--market us sec-tickers`는 SEC의 CIK/ticker 매핑을
+`data-lake/meta/sec_company_tickers.csv`에 저장합니다. SEC companyfacts와
+Financial Statement and Notes Data Sets 파일은 아래 위치를 사용합니다.
+
+```text
+data-lake/bronze/sec/companyfacts/
+data-lake/bronze/sec/financial-statement-and-notes-data-set/
+```
+
 ### 2. Transform / Normalize
 
 ```powershell
 python -m engine.workflows.normalize
+python -m engine.workflows.normalize --market kr
+python -m engine.workflows.normalize --market us --symbols AAPL,MSFT --start-year 2020 --end-year 2025
 ```
 
-DART HTML 재무제표를 canonical account 기준 CSV로 정규화합니다. 산출물은
-`data-lake/silver/dart/normalized/` 아래에 저장됩니다.
+KR은 DART HTML 재무제표를 canonical account 기준 CSV로 정규화합니다.
+산출물은 `data-lake/silver/dart/normalized/` 아래에 저장됩니다. US는 SEC
+companyfacts, SEC Notes Data Sets, edgartools fallback 순서로 값을 채워
+`data-lake/silver/sec/normalized/` 아래에 저장합니다.
 
-`engine.workflows.normalize`는 DART 재무제표 전용 workflow입니다. KRX
-price/shares, dividend, benchmark 정규화는 아래 경로를 사용합니다.
+US fallback 값은 선택 의존성인 edgartools 패키지를 사용합니다. 패키지가
+설치되지 않았거나 SEC 조회가 실패하면 edgartools fallback만 건너뛰고
+companyfacts/Notes 기반 정규화는 계속 진행합니다. US 가격과 주식수 다운로드는
+이 workflow에 포함되지 않으므로, 팩터 계산에는 별도 silver price/share 파일이
+필요합니다.
+
+KRX price/shares, dividend, benchmark 정규화는 아래 경로를 사용합니다.
 
 Normalize price/shares silver CSV만 갱신:
 
@@ -153,26 +182,34 @@ Dry run:
 
 ```powershell
 python -m engine.loaders.factors --financial-basis annual --dry-run
+python -m engine.loaders.factors --market us --stock-codes AAPL --financial-basis annual --dry-run
 ```
 
 Insert:
 
 ```powershell
 python -m engine.loaders.factors --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24
+python -m engine.loaders.factors --market us --stock-codes AAPL --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24
 ```
 
 주요 옵션:
 
 ```text
 --stock-codes 005930,000660
+--market kr|us
 --financial-basis annual|quarterly|ttm
 --start-date YYYY-MM-DD
 --end-date YYYY-MM-DD
 --skip-catalog
 --dry-run
---insert-batch-size 25
+--insert-batch-size 100
 --insert-max-rows 2000000
 ```
+
+US 팩터 적재는 `data-lake/silver/sec/normalized/` 재무 CSV와
+`data-lake/silver/us/price/us_normalized_price.csv`,
+`data-lake/silver/us/shares/us_normalized_shares.csv`가 있을 때 daily factor
+rows를 생성합니다.
 
 ### 6. Load Benchmarks
 
@@ -201,6 +238,8 @@ python -m engine.workflows.score_cli debug-single-security-score --trade-date 20
 
 ```powershell
 python -m unittest discover
+python -m unittest tests.test_sec_filings_normalizer
+python -m engine.normalization_validator stock-batch --market us --input-dir data-lake\silver\sec\normalized --rules data-lake\meta\rules\common_validation.yaml --out-dir data-lake\silver\sec\validation --start-year 2020 --end-year 2025
 ```
 
 명령 진입점 확인:

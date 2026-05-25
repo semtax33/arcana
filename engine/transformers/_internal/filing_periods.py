@@ -23,7 +23,8 @@ DEFAULT_CUMULATIVE_STATEMENT_TYPES = set(FLOW_STATEMENT_TYPES)
 
 
 def normalize_stock_code(stock_code: Any) -> str:
-    return str(stock_code).strip().zfill(6)
+    text = str(stock_code).strip()
+    return text.zfill(6) if text.isdigit() else text
 
 
 def security_id_of(stock_code: Any) -> str:

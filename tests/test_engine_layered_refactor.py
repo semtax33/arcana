@@ -127,6 +127,14 @@ class EngineLayeredRefactorTest(unittest.TestCase):
 
         self.assertNotIn("api.config.clickhouse", text)
 
+    def test_kr_normalization_dependencies_track_refactored_transformer(self):
+        text = (PROJECT_ROOT / "engine" / "workflows" / "_internal" / "normalize_workflow.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("dart_filings.py", text)
+        self.assertNotIn("canonical_rule_normalizer.py", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,8 @@ from engine.core.paths import (
     market_csv_name,
     parse_statement_snapshot_filename,
 )
+from engine.core.identifiers import security_id_of as market_security_id_of
+from engine.markets.registry import market_config
 from engine.transformers.dividends import silver_dividend_asof_events
 from engine.transformers.filing_periods import (
     REPORT_METADATA_PATH,
@@ -82,10 +84,47 @@ def security_id_of(stock_code):
     return f"SEC_KR_{normalize_stock_code(stock_code)}"
 
 
-def resolve_price_path(path=None):
+def normalize_symbol_for_market(symbol, market="kr"):
+    market = str(market or "kr").strip().lower()
+    if market == "kr":
+        return normalize_stock_code(symbol)
+    return market_config(market).normalize_symbol(symbol)
+
+
+def security_id_for_market(symbol, market="kr"):
+    market = str(market or "kr").strip().lower()
+    if market == "kr":
+        return security_id_of(symbol)
+    return market_security_id_of(symbol, market_config(market))
+
+
+def financial_dir_for_market(market="kr"):
+    market = str(market or "kr").strip().lower()
+    if market == "kr":
+        return FINANCIAL_DIR
+    if market == "us":
+        return DATA_LAKE.silver("sec", "normalized")
+    return DATA_LAKE.silver(market, "normalized")
+
+
+def price_path_for_market(market="kr"):
+    market = str(market or "kr").strip().lower()
+    if market == "kr":
+        return first_existing_path(PRICE_PATH, *LEGACY_PRICE_PATHS)
+    return DATA_LAKE.silver(market, "price", market_csv_name("normalized_price", market=market))
+
+
+def shares_path_for_market(market="kr"):
+    market = str(market or "kr").strip().lower()
+    if market == "kr":
+        return first_existing_path(SHARES_PATH, *LEGACY_SHARES_PATHS)
+    return DATA_LAKE.silver(market, "shares", market_csv_name("normalized_shares", market=market))
+
+
+def resolve_price_path(path=None, market="kr"):
     if path is not None:
         return Path(path)
-    return first_existing_path(PRICE_PATH, *LEGACY_PRICE_PATHS)
+    return price_path_for_market(market)
 
 
 def safe_div(numerator, denominator):
@@ -191,9 +230,11 @@ def read_stock_csv_by_security_id(path, security_id, chunksize=500_000):
     return pd.concat(chunks, ignore_index=True)
 
 
-def read_stock_prices(stock_code, path=None):
-    security_id = security_id_of(stock_code)
-    price_df = read_stock_csv_by_security_id(resolve_price_path(path), security_id)
+def read_stock_prices(stock_code, path=None, market="kr"):
+    market = str(market or "kr").strip().lower()
+    stock_code = normalize_symbol_for_market(stock_code, market)
+    security_id = security_id_for_market(stock_code, market)
+    price_df = read_stock_csv_by_security_id(resolve_price_path(path, market=market), security_id)
 
     if price_df.empty:
         return price_df
@@ -203,16 +244,18 @@ def read_stock_prices(stock_code, path=None):
         if column in price_df.columns:
             price_df[column] = pd.to_numeric(price_df[column], errors="coerce")
     if "currency" not in price_df.columns:
-        price_df["currency"] = "KRW"
-    price_df["stock_code"] = normalize_stock_code(stock_code)
+        price_df["currency"] = market_config(market).currency
+    price_df["stock_code"] = stock_code
 
     return price_df.sort_values("trade_date").reset_index(drop=True)
 
 
-def read_stock_shares(stock_code, path=None):
-    security_id = security_id_of(stock_code)
+def read_stock_shares(stock_code, path=None, market="kr"):
+    market = str(market or "kr").strip().lower()
+    stock_code = normalize_symbol_for_market(stock_code, market)
+    security_id = security_id_for_market(stock_code, market)
     shares_df = read_stock_csv_by_security_id(
-        first_existing_path(SHARES_PATH, *LEGACY_SHARES_PATHS) if path is None else path,
+        shares_path_for_market(market) if path is None else path,
         security_id,
     )
 
@@ -242,17 +285,19 @@ def period_end_date(year, month):
     return pd.Timestamp(year=int(year), month=int(month), day=1) + pd.offsets.MonthEnd(0)
 
 
-def annual_financial_files(stock_code):
-    stock_code = normalize_stock_code(stock_code)
+def annual_financial_files(stock_code, financial_dir=None, market="kr"):
+    market = str(market or "kr").strip().lower()
+    stock_code = normalize_symbol_for_market(stock_code, market)
+    financial_dir = Path(financial_dir) if financial_dir is not None else financial_dir_for_market(market)
     paths_by_year = {}
 
-    for path in FINANCIAL_DIR.glob(f"*normalized_{stock_code}_*.csv"):
+    for path in Path(financial_dir).glob(f"*normalized_{stock_code}_*.csv"):
         if ".debug" in path.name or ".validation" in path.name:
             continue
         meta = parse_period_from_filename(path)
         if meta and meta["month"] == ANNUAL_MONTH:
             year = int(meta["year"])
-            if year not in paths_by_year or path.name.startswith("kr_"):
+            if year not in paths_by_year or path.name.startswith(f"{market}_"):
                 paths_by_year[year] = path
 
     return sorted(paths_by_year.values(), key=lambda p: parse_period_from_filename(p)["year"])
@@ -317,10 +362,18 @@ def extract_fallback_values(df):
     }
 
 
-def read_annual_financials(stock_code, report_metadata_path=REPORT_METADATA_PATH):
+def read_annual_financials(
+    stock_code,
+    report_metadata_path=REPORT_METADATA_PATH,
+    *,
+    financial_dir=None,
+    market="kr",
+):
+    market = str(market or "kr").strip().lower()
+    stock_code = normalize_symbol_for_market(stock_code, market)
     rows = []
 
-    for path in annual_financial_files(stock_code):
+    for path in annual_financial_files(stock_code, financial_dir=financial_dir, market=market):
         meta = parse_period_from_filename(path)
         df = pd.read_csv(path)
         if df.empty:
@@ -336,8 +389,8 @@ def read_annual_financials(stock_code, report_metadata_path=REPORT_METADATA_PATH
         values.update(extract_fallback_values(df))
         values.update(
             {
-                "stock_code": normalize_stock_code(stock_code),
-                "security_id": security_id_of(stock_code),
+                "stock_code": stock_code,
+                "security_id": security_id_for_market(stock_code, market),
                 "fiscal_year": meta["year"],
                 "fiscal_month": meta["month"],
                 "financial_period": period_end_date(meta["year"], meta["month"]),
@@ -353,10 +406,18 @@ def read_annual_financials(stock_code, report_metadata_path=REPORT_METADATA_PATH
     return add_annual_financial_factors(financial_df, periods_per_year=1)
 
 
-def read_ttm_financials(stock_code, cumulative_statement_types=None, report_metadata_path=REPORT_METADATA_PATH):
+def read_ttm_financials(
+    stock_code,
+    cumulative_statement_types=None,
+    report_metadata_path=REPORT_METADATA_PATH,
+    *,
+    financial_dir=None,
+    market="kr",
+):
+    financial_dir = financial_dir if financial_dir is not None else financial_dir_for_market(market)
     financial_df = ttm_financial_frame(
-        stock_code,
-        FINANCIAL_DIR,
+        normalize_symbol_for_market(stock_code, market),
+        financial_dir,
         cumulative_statement_types=cumulative_statement_types,
         report_metadata_path=report_metadata_path,
     )
@@ -365,10 +426,18 @@ def read_ttm_financials(stock_code, cumulative_statement_types=None, report_meta
     return add_annual_financial_factors(financial_df, periods_per_year=4)
 
 
-def read_quarterly_financials(stock_code, cumulative_statement_types=None, report_metadata_path=REPORT_METADATA_PATH):
+def read_quarterly_financials(
+    stock_code,
+    cumulative_statement_types=None,
+    report_metadata_path=REPORT_METADATA_PATH,
+    *,
+    financial_dir=None,
+    market="kr",
+):
+    financial_dir = financial_dir if financial_dir is not None else financial_dir_for_market(market)
     financial_df = quarterly_financial_frame(
-        stock_code,
-        FINANCIAL_DIR,
+        normalize_symbol_for_market(stock_code, market),
+        financial_dir,
         cumulative_statement_types=cumulative_statement_types,
         report_metadata_path=report_metadata_path,
     )
@@ -898,26 +967,42 @@ def create_stock_factor_dataframe(
     financial_basis="annual",
     cumulative_statement_types=None,
     report_metadata_path=REPORT_METADATA_PATH,
+    market="kr",
+    financial_dir=None,
 ):
-    stock_code = normalize_stock_code(stock_code)
+    market = str(market or "kr").strip().lower()
+    stock_code = normalize_symbol_for_market(stock_code, market)
+    if financial_dir is None:
+        financial_dir = financial_dir_for_market(market)
+    if report_metadata_path == REPORT_METADATA_PATH and market == "us":
+        report_metadata_path = DATA_LAKE.silver("sec", "us_report_metadata.csv")
     output_start_date = pd.Timestamp(start_date) if start_date is not None else None
     output_end_date = pd.Timestamp(end_date) if end_date is not None else None
-    price_df = read_stock_prices(stock_code, price_path)
-    shares_df = read_stock_shares(stock_code, shares_path)
+    price_df = read_stock_prices(stock_code, price_path, market=market)
+    shares_df = read_stock_shares(stock_code, shares_path, market=market)
     if financial_basis == "quarterly":
         financial_df = read_quarterly_financials(
             stock_code,
             cumulative_statement_types=cumulative_statement_types,
             report_metadata_path=report_metadata_path,
+            financial_dir=financial_dir,
+            market=market,
         )
     elif financial_basis == "ttm":
         financial_df = read_ttm_financials(
             stock_code,
             cumulative_statement_types=cumulative_statement_types,
             report_metadata_path=report_metadata_path,
+            financial_dir=financial_dir,
+            market=market,
         )
     elif financial_basis == "annual":
-        financial_df = read_annual_financials(stock_code, report_metadata_path=report_metadata_path)
+        financial_df = read_annual_financials(
+            stock_code,
+            report_metadata_path=report_metadata_path,
+            financial_dir=financial_dir,
+            market=market,
+        )
     else:
         raise ValueError("financial_basis must be 'annual', 'ttm', or 'quarterly'")
 
@@ -963,11 +1048,18 @@ def create_stock_factor_dataframe(
 
     daily_df = daily_df.drop(columns=["security_id_fin", "stock_code_fin"], errors="ignore")
     daily_df["stock_code"] = stock_code
-    daily_df = add_dividend_factors(daily_df, stock_code)
+    if market == "kr":
+        daily_df = add_dividend_factors(daily_df, stock_code)
+    else:
+        daily_df["dvpsx"] = math.nan
+        daily_df["dvpsp"] = math.nan
+        daily_df["sharehold_div_yield"] = math.nan
+        daily_df["tdpr"] = math.nan
+        daily_df["total_dividend_amount"] = math.nan
     daily_df = add_daily_market_valuation_factors(daily_df)
     daily_df = add_price_momentum_factors(daily_df)
     daily_df["updated_at"] = datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
-    daily_df["currency"] = "KRW"
+    daily_df["currency"] = market_config(market).currency
 
     if output_start_date is not None:
         daily_df = daily_df.loc[daily_df["trade_date"] >= output_start_date].copy()

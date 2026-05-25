@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from engine.core.clickhouse import get_clickhouse_client
+from engine.core.paths import DATA_LAKE
 from engine.transformers.factors import (
     create_stock_factor_dataframe,
     factor_columns,
@@ -374,15 +375,17 @@ def create_daily_factor_rows(
     financial_basis: str = "annual",
     start_date: str | None = None,
     end_date: str | None = None,
+    market: str = "kr",
     **kwargs,
 ) -> pd.DataFrame:
     frames = []
-    for stock_code in _resolve_stock_codes(stock_codes):
+    for stock_code in _resolve_stock_codes(stock_codes, market=market):
         wide_df = create_stock_factor_dataframe(
             stock_code,
             financial_basis=financial_basis,
             start_date=start_date,
             end_date=end_date,
+            market=market,
             **kwargs,
         )
         factor_df = prepare_daily_factor_rows(
@@ -400,9 +403,24 @@ def create_daily_factor_rows(
     ).reset_index(drop=True)
 
 
-def _resolve_stock_codes(stock_codes: list[str] | None) -> list[str]:
+def _resolve_stock_codes(stock_codes: list[str] | None, market: str = "kr") -> list[str]:
+    market = str(market or "kr").strip().lower()
     if stock_codes is not None:
-        return [normalize_stock_code(stock_code) for stock_code in stock_codes]
+        if market == "kr":
+            return [normalize_stock_code(stock_code) for stock_code in stock_codes]
+        return [str(stock_code).strip().upper() for stock_code in stock_codes]
+
+    if market != "kr":
+        financial_dir = DATA_LAKE.silver("sec", "normalized") if market == "us" else DATA_LAKE.silver(market, "normalized")
+        symbols = set()
+        if financial_dir.exists():
+            for path in financial_dir.glob(f"{market}_normalized_*.csv"):
+                if ".debug" in path.name:
+                    continue
+                parts = path.name.split("_")
+                if len(parts) >= 4:
+                    symbols.add("_".join(parts[2:-1]))
+        return sorted(symbols)
 
     from engine.extractors.market_universe import kospi_kosdaq_corp_list
 
@@ -614,6 +632,7 @@ def insert_daily_factors(
     financial_basis: str = "annual",
     start_date: str | None = None,
     end_date: str | None = None,
+    market: str = "kr",
     insert_catalog: bool = True,
     dry_run: bool = False,
     client=None,
@@ -627,6 +646,7 @@ def insert_daily_factors(
             financial_basis=financial_basis,
             start_date=start_date,
             end_date=end_date,
+            market=market,
             **kwargs,
         )
         return factor_df
@@ -643,13 +663,14 @@ def insert_daily_factors(
         if insert_catalog:
             insert_factor_catalog(client, factor_ids=preferred_factor_columns())
 
-        resolved_stock_codes = _resolve_stock_codes(stock_codes)
+        resolved_stock_codes = _resolve_stock_codes(stock_codes, market=market)
         for stock_index, stock_code in enumerate(resolved_stock_codes, start=1):
             wide_df = create_stock_factor_dataframe(
                 stock_code,
                 financial_basis=financial_basis,
                 start_date=start_date,
                 end_date=end_date,
+                market=market,
                 **kwargs,
             )
             factor_df = prepare_daily_factor_rows(
@@ -695,14 +716,17 @@ def insert_daily_factors(
     return result
 
 
-def _parse_stock_codes(value: str | None) -> list[str] | None:
+def _parse_stock_codes(value: str | None, market: str = "kr") -> list[str] | None:
     if value is None or not value.strip():
         return None
-    return [item.strip().zfill(6) for item in value.split(",") if item.strip()]
+    if str(market or "kr").strip().lower() == "kr":
+        return [item.strip().zfill(6) for item in value.split(",") if item.strip()]
+    return [item.strip().upper() for item in value.split(",") if item.strip()]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Insert daily factor rows into ClickHouse.")
+    parser.add_argument("--market", default="kr", choices=["kr", "us"])
     parser.add_argument("--stock-codes", help="Comma-separated stock codes. Defaults to all KOSPI/KOSDAQ stocks.")
     parser.add_argument("--financial-basis", default="annual", choices=["annual", "quarterly", "ttm"])
     parser.add_argument("--start-date")
@@ -714,10 +738,11 @@ def main() -> None:
     args = parser.parse_args()
 
     factor_df = insert_daily_factors(
-        stock_codes=_parse_stock_codes(args.stock_codes),
+        stock_codes=_parse_stock_codes(args.stock_codes, market=args.market),
         financial_basis=args.financial_basis,
         start_date=args.start_date,
         end_date=args.end_date,
+        market=args.market,
         insert_catalog=not args.skip_catalog,
         dry_run=args.dry_run,
         insert_batch_size=args.insert_batch_size,

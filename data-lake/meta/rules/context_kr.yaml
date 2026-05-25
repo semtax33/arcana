@@ -1,0 +1,289 @@
+context_rules:
+  # =========================
+  # IGNORE: context로 쓰면 안 되는 행
+  # =========================
+
+  - id: ignore_bs_totals
+    priority: 1000
+    fs_type: BS
+    include_any:
+      - 자산총계
+      - 부채총계
+      - 자본총계
+      - 부채및자본총계
+      - 부채와자본총계
+    action:
+      type: IGNORE_CONTEXT
+    reason: 총계 행은 section_context로 사용하지 않음
+
+  - id: ignore_is_totals_and_profit_lines
+    priority: 1000
+    fs_type: IS
+    exact_any:
+      - 매출총이익
+      - 영업이익
+      - 법인세비용차감전순이익
+      - 당기순이익
+      - 총포괄이익
+      - 총포괄손익
+      - 기본주당이익
+      - 희석주당이익
+    action:
+      type: IGNORE_CONTEXT
+    reason: 손익계산서 성과 계정은 context로 사용하지 않음
+
+  - id: ignore_cf_cash_begin_end
+    priority: 1000
+    fs_type: CF
+    include_any:
+      - 기초의현금및현금성자산
+      - 기말의현금및현금성자산
+      - 현금및현금성자산의증가
+      - 현금및현금성자산의감소
+      - 현금및현금성자산에대한환율변동효과
+    action:
+      type: IGNORE_CONTEXT
+    reason: 현금흐름표 보조 subtotal은 context로 사용하지 않음
+
+  # =========================
+  # IS context
+  # =========================
+
+  - id: is_profit_attribution_parent_header
+    priority: 1005
+    fs_type: IS
+    exact_any:
+      - 당기순이익
+      - 당기순이익손실
+      - 당기순이익(손실)
+      - 당기순손익
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: 당기순이익의귀속
+    reason: 금액 0인 당기순이익 parent 아래의 지배/비지배 귀속 행 판별
+
+  - id: is_comprehensive_attribution_parent_header
+    priority: 1005
+    fs_type: IS
+    exact_any:
+      - 총포괄이익
+      - 총포괄손익
+      - 총포괄이익손실
+      - 총포괄이익(손실)
+      - 당기총포괄손익
+      - 당기총포괄이익손실
+      - 당기총포괄이익(손실)
+      - 세후총포괄손익
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: 총포괄이익의귀속
+    reason: 금액 0인 총포괄손익 parent 아래의 지배/비지배 귀속 행 판별
+
+  - id: is_profit_attribution_section
+    priority: 900
+    fs_type: IS
+    exact_any:
+      - 당기순이익의귀속
+      - 당기순손익의귀속
+      - 당기순이익귀속
+      - 당기순손익귀속
+      - 당기순이익손실의귀속
+      - 당기순이익손실귀속
+    action:
+      type: PUSH_CONTEXT
+      context_label: 당기순이익의귀속
+    reason: 전체 당기순이익 귀속 section만 지배/비지배 귀속 컨텍스트로 사용
+
+  - id: is_comprehensive_attribution_section
+    priority: 900
+    fs_type: IS
+    exact_any:
+      - 총포괄이익의귀속
+      - 총포괄손익의귀속
+      - 총포괄이익귀속
+      - 총포괄손익귀속
+      - 총포괄이익손실의귀속
+      - 총포괄이익손실귀속
+    action:
+      type: PUSH_CONTEXT
+      context_label: 총포괄이익의귀속
+    reason: 총포괄손익 귀속 section
+
+  - id: is_eps_section
+    priority: 800
+    fs_type: IS
+    include_any:
+      - 주당이익
+      - 주당손익
+    action:
+      type: PUSH_CONTEXT
+      context_label: 주당손익
+    reason: 주당손익 section
+
+  - id: is_sgna_section
+    priority: 780
+    fs_type: IS
+    exact_any:
+      - 판매비와관리비
+      - 판매비및관리비
+      - 판매관리비
+      - 판매비
+      - 관리비
+    conditions:
+      has_children: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: 판매비와관리비
+    reason: 금액이 있는 판관비 subtotal도 하위 항목의 문맥으로 사용
+
+  - id: is_operating_expense_section
+    priority: 770
+    fs_type: IS
+    exact_any:
+      - 영업비용
+      - 영업비용합계
+      - 비용의성격별분류
+      - 성격별비용
+      - 비용성격별분류
+    conditions:
+      has_children: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: 영업비용
+    reason: 성격별 비용/영업비용 section에서 애매한 비용 항목을 판별
+
+  - id: is_finance_income_expense_section
+    priority: 760
+    fs_type: IS
+    exact_any:
+      - 금융수익
+      - 금융비용
+      - 금융원가
+      - 금융손익
+    conditions:
+      has_children: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: 금융손익
+    reason: 금융손익 section의 손상/환입 항목을 영업비용으로 오인하지 않도록 구분
+
+  - id: is_other_income_expense_section
+    priority: 760
+    fs_type: IS
+    exact_any:
+      - 기타수익
+      - 기타비용
+      - 기타영업외수익
+      - 기타영업외비용
+    conditions:
+      has_children: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: 기타손익
+    reason: 기타손익 section의 손상/환입 항목을 영업비용으로 오인하지 않도록 구분
+
+  - id: is_oci_reclass_section
+    priority: 700
+    fs_type: IS
+    include_any:
+      - 후속적으로당기손익으로재분류되는
+      - 후속적으로당기손익으로재분류되지않는
+    action:
+      type: PUSH_CONTEXT
+      context_label: SELF
+    reason: 기타포괄손익 하위 section
+
+  # =========================
+  # BS context
+  # =========================
+
+  - id: bs_non_current_liabilities_section
+    priority: 850
+    fs_type: BS
+    exact_any:
+      - 비유동부채
+    action:
+      type: PUSH_CONTEXT
+      context_label: 비유동부채
+    reason: 비유동부채 section
+
+  - id: bs_current_liabilities_section
+    priority: 850
+    fs_type: BS
+    exact_any:
+      - 유동부채
+    action:
+      type: PUSH_CONTEXT
+      context_label: 유동부채
+    reason: 유동부채 section
+
+  - id: bs_non_current_assets_section
+    priority: 850
+    fs_type: BS
+    exact_any:
+      - 비유동자산
+    action:
+      type: PUSH_CONTEXT
+      context_label: 비유동자산
+    reason: 비유동자산 section
+
+  - id: bs_current_assets_section
+    priority: 850
+    fs_type: BS
+    exact_any:
+      - 유동자산
+    action:
+      type: PUSH_CONTEXT
+      context_label: 유동자산
+    reason: 유동자산 section
+
+  - id: bs_assets_section
+    priority: 800
+    fs_type: BS
+    exact_any:
+      - 자산
+    action:
+      type: PUSH_CONTEXT
+      context_label: 자산
+    reason: 자산 section
+
+  - id: bs_liabilities_section
+    priority: 800
+    fs_type: BS
+    exact_any:
+      - 부채
+    action:
+      type: PUSH_CONTEXT
+      context_label: 부채
+    reason: 부채 section
+
+  - id: bs_equity_section
+    priority: 800
+    fs_type: BS
+    exact_any:
+      - 자본
+    action:
+      type: PUSH_CONTEXT
+      context_label: 자본
+    reason: 자본 section
+
+  # =========================
+  # Generic fallback context
+  # =========================
+
+  - id: generic_group_header
+    priority: 100
+    fs_type: ANY
+    conditions:
+      has_children: true
+      amount_is_zero_or_blank: true
+    action:
+      type: PUSH_CONTEXT
+      context_label: SELF
+    reason: 하위 행이 있고 금액이 비어 있거나 0인 일반 그룹 헤더

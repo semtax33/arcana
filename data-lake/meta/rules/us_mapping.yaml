@@ -1,0 +1,687 @@
+companyfacts_rules:
+  - canonical_id: TOTAL_ASSETS
+    fs_type: BS
+    primary_tags: [us-gaap:Assets]
+    label_patterns:
+      - (?i)\btotal\s+assets\b
+    label_exclude_patterns:
+      - (?i)\bunder\s+management\b
+  - canonical_id: TOTAL_EQUITY
+    fs_type: BS
+    primary_tags: [us-gaap:StockholdersEquity]
+    alternate_tags:
+      - us-gaap:StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest
+      - us-gaap:PartnersCapital
+      - us-gaap:CommonStocksIncludingAdditionalPaidInCapital
+    label_patterns:
+      - (?i)\b(stockholders'?|shareholders'?|partners')\s+equity\b
+      - (?i)\bmembers'\s+equity\b
+  - canonical_id: TOTAL_LIABILITIES
+    fs_type: BS
+    primary_tags: [us-gaap:Liabilities]
+    label_patterns:
+      - (?i)\btotal\s+liabilities\b
+  - canonical_id: CURRENT_ASSETS
+    fs_type: BS
+    primary_tags: [us-gaap:AssetsCurrent]
+    label_patterns:
+      - (?i)\bcurrent\s+assets\b
+    label_exclude_patterns:
+      - (?i)\bnon[- ]current\b
+      - (?i)\btotal\s+assets\b
+  - canonical_id: NON_CURRENT_ASSETS
+    fs_type: BS
+    primary_tags:
+      - us-gaap:AssetsNoncurrent
+    label_patterns:
+      - (?i)\bnon[- ]current\s+assets\b
+  - canonical_id: CURRENT_LIABILITIES
+    fs_type: BS
+    primary_tags: [us-gaap:LiabilitiesCurrent]
+    label_patterns:
+      - (?i)\bcurrent\s+liabilities\b
+    label_exclude_patterns:
+      - (?i)\bnon[- ]current\b
+      - (?i)\btotal\s+liabilities\b
+  - canonical_id: NON_CURRENT_LIABILITIES
+    fs_type: BS
+    primary_tags:
+      - us-gaap:LiabilitiesNoncurrent
+    label_patterns:
+      - (?i)\bnon[- ]current\s+liabilities\b
+  - canonical_id: CASH_AND_EQUIVALENTS
+    fs_type: BS
+    primary_tags: [us-gaap:CashAndCashEquivalentsAtCarryingValue]
+    alternate_tags:
+      - us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+      - us-gaap:CashCashEquivalentsAndShortTermInvestments
+      - ifrs-full:CashAndCashEquivalents
+    label_patterns:
+      - (?i)\bcash\s+and\s+cash\s+equivalents\b
+      - (?i)\bcash,\s*cash\s+equivalents\b
+  - canonical_id: INVENTORIES
+    fs_type: BS
+    primary_tags: [us-gaap:InventoryNet]
+    alternate_tags:
+      - us-gaap:InventoryFinishedGoodsNetOfReserves
+      - ifrs-full:Inventories
+    label_patterns:
+      - (?i)\binventor(y|ies)\b
+  - canonical_id: TRADE_RECEIVABLES
+    fs_type: BS
+    primary_tags: [us-gaap:AccountsReceivableNetCurrent]
+    alternate_tags:
+      - us-gaap:ReceivablesNetCurrent
+      - ifrs-full:TradeAndOtherCurrentReceivables
+    label_patterns:
+      - (?i)\baccounts?\s+receivable\b
+      - (?i)\btrade\s+receivables?\b
+  - canonical_id: TRADE_PAYABLES
+    fs_type: BS
+    primary_tags: [us-gaap:AccountsPayableCurrent]
+    alternate_tags:
+      - us-gaap:AccountsPayableAndAccruedLiabilitiesCurrent
+      - ifrs-full:TradeAndOtherCurrentPayables
+    label_patterns:
+      - (?i)\baccounts?\s+payable\b
+      - (?i)\btrade\s+payables?\b
+  - canonical_id: PPE
+    fs_type: BS
+    primary_tags: [us-gaap:PropertyPlantAndEquipmentNet]
+    alternate_tags:
+      - ifrs-full:PropertyPlantAndEquipment
+    label_patterns:
+      - (?i)\bproperty,\s*plant,?\s+and\s+equipment\b
+      - (?i)\bproperty\s+and\s+equipment\b
+    label_exclude_patterns:
+      - (?i)\bpayments?\s+to\s+acquire\b
+      - (?i)\bproceeds?\s+from\s+sale\b
+  - canonical_id: INTANGIBLE_ASSETS
+    fs_type: BS
+    primary_tags: [us-gaap:FiniteLivedIntangibleAssetsNet]
+    alternate_tags:
+      - us-gaap:IntangibleAssetsNetExcludingGoodwill
+      - us-gaap:OtherIntangibleAssetsNet
+      - ifrs-full:IntangibleAssetsOtherThanGoodwill
+    label_patterns:
+      - (?i)\bintangible\s+assets?\b
+    label_exclude_patterns:
+      - (?i)\bgoodwill\b
+  - canonical_id: GOODWILL
+    fs_type: BS
+    primary_tags: [us-gaap:Goodwill]
+    alternate_tags:
+      - ifrs-full:Goodwill
+    label_patterns:
+      - (?i)\bgoodwill\b
+    label_exclude_patterns:
+      - (?i)\bimpairment\b
+  - canonical_id: SHORT_TERM_DEBT
+    fs_type: BS
+    primary_tags: [us-gaap:DebtCurrent]
+    alternate_tags:
+      - us-gaap:ShortTermBorrowings
+      - us-gaap:ShortTermDebt
+      - us-gaap:CurrentPortionOfLongTermDebt
+      - us-gaap:LongTermDebtCurrent
+      - ifrs-full:CurrentPortionOfLongtermBorrowings
+    label_patterns:
+      - (?i)\b(short[- ]term|current)\s+(debt|borrowings?)\b
+      - (?i)\bcurrent\s+portion\s+of\s+long[- ]term\s+(debt|borrowings?)\b
+  - canonical_id: LONG_TERM_DEBT
+    fs_type: BS
+    primary_tags: [us-gaap:LongTermDebtNoncurrent]
+    alternate_tags:
+      - us-gaap:LongTermDebt
+      - us-gaap:LongTermDebtAndFinanceLeaseObligationsNoncurrent
+      - ifrs-full:LongtermBorrowings
+    label_patterns:
+      - (?i)\blong[- ]term\s+(debt|borrowings?)\b
+      - (?i)\bnon[- ]current\s+(debt|borrowings?)\b
+  - canonical_id: LEASE_LIABILITY
+    fs_type: BS
+    primary_tags:
+      - us-gaap:OperatingLeaseLiability
+      - us-gaap:FinanceLeaseLiability
+    alternate_tags:
+      - us-gaap:OperatingLeaseLiabilities
+      - us-gaap:FinanceLeaseLiabilities
+      - us-gaap:LeaseLiability
+      - ifrs-full:LeaseLiabilities
+    label_patterns:
+      - (?i)\blease\s+liabilit(y|ies)\b
+  - canonical_id: CONTRACT_ASSETS
+    fs_type: BS
+    primary_tags:
+      - us-gaap:ContractWithCustomerAsset
+    alternate_tags:
+      - us-gaap:ContractWithCustomerAssetCurrent
+      - us-gaap:ContractWithCustomerAssetNet
+      - ifrs-full:ContractAssets
+    label_patterns:
+      - (?i)\bcontract\s+assets?\b
+  - canonical_id: CONTRACT_LIABILITIES
+    fs_type: BS
+    primary_tags:
+      - us-gaap:ContractWithCustomerLiability
+    alternate_tags:
+      - us-gaap:ContractWithCustomerLiabilityCurrent
+      - us-gaap:DeferredRevenueCurrent
+      - us-gaap:DeferredRevenueAndCreditsCurrent
+      - ifrs-full:ContractLiabilities
+    label_patterns:
+      - (?i)\bcontract\s+liabilit(y|ies)\b
+      - (?i)\bdeferred\s+revenue\b
+  - canonical_id: ADVANCES_FROM_CUSTOMERS
+    fs_type: BS
+    primary_tags:
+      - us-gaap:CustomerAdvancesAndDepositsCurrent
+    alternate_tags:
+      - us-gaap:AdvancesFromCustomers
+      - ifrs-full:AdvancesReceived
+    label_patterns:
+      - (?i)\bcustomer\s+(advances|deposits)\b
+      - (?i)\badvances\s+from\s+customers\b
+  - canonical_id: OTHER_CURRENT_ASSETS
+    fs_type: BS
+    primary_tags:
+      - us-gaap:OtherCurrentAssets
+    alternate_tags:
+      - us-gaap:PrepaidExpenseAndOtherAssetsCurrent
+    label_patterns:
+      - (?i)\bother\s+current\s+assets?\b
+  - canonical_id: OTHER_NON_CURRENT_ASSETS
+    fs_type: BS
+    primary_tags:
+      - us-gaap:OtherAssetsNoncurrent
+    alternate_tags:
+      - us-gaap:OtherAssetsCurrentAndNoncurrent
+    label_patterns:
+      - (?i)\bother\s+non[- ]current\s+assets?\b
+      - (?i)\bother\s+long[- ]term\s+assets?\b
+  - canonical_id: OTHER_CURRENT_LIABILITIES
+    fs_type: BS
+    primary_tags:
+      - us-gaap:OtherCurrentLiabilities
+    alternate_tags:
+      - us-gaap:AccruedLiabilitiesCurrent
+      - us-gaap:AccruedIncomeTaxesCurrent
+    label_patterns:
+      - (?i)\bother\s+current\s+liabilit(y|ies)\b
+      - (?i)\baccrued\s+liabilit(y|ies)\b
+  - canonical_id: OTHER_NON_CURRENT_LIABILITIES
+    fs_type: BS
+    primary_tags:
+      - us-gaap:OtherLiabilitiesNoncurrent
+    label_patterns:
+      - (?i)\bother\s+non[- ]current\s+liabilit(y|ies)\b
+      - (?i)\bother\s+long[- ]term\s+liabilit(y|ies)\b
+  - canonical_id: RETAINED_EARNINGS
+    fs_type: BS
+    primary_tags:
+      - us-gaap:RetainedEarningsAccumulatedDeficit
+    alternate_tags:
+      - us-gaap:RetainedEarningsMember
+    label_patterns:
+      - (?i)\bretained\s+earnings\b
+
+  - canonical_id: REVENUE
+    fs_type: IS
+    primary_tags: [us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax]
+    alternate_tags:
+      - us-gaap:Revenues
+      - us-gaap:SalesRevenueNet
+      - us-gaap:SalesRevenueGoodsNet
+      - us-gaap:SalesRevenueServicesNet
+      - ifrs-full:Revenue
+    label_patterns:
+      - (?i)\b(total\s+)?(net\s+)?(revenue|sales)\b
+    label_exclude_patterns:
+      - (?i)\bcost\b
+      - (?i)\bdeferred\b
+  - canonical_id: COGS
+    fs_type: IS
+    primary_tags: [us-gaap:CostOfRevenue]
+    alternate_tags:
+      - us-gaap:CostOfGoodsAndServicesSold
+      - us-gaap:CostOfGoodsSold
+      - us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization
+      - ifrs-full:CostOfSales
+    label_patterns:
+      - (?i)\bcost\s+of\s+(revenue|sales|goods|services)\b
+  - canonical_id: GROSS_PROFIT
+    fs_type: IS
+    primary_tags: [us-gaap:GrossProfit]
+    alternate_tags:
+      - ifrs-full:GrossProfit
+    label_patterns:
+      - (?i)\bgross\s+profit\b
+  - canonical_id: SGNA
+    fs_type: IS
+    primary_tags: [us-gaap:SellingGeneralAndAdministrativeExpense]
+    alternate_tags:
+      - us-gaap:SellingAndMarketingExpense
+      - us-gaap:GeneralAndAdministrativeExpense
+      - ifrs-full:SellingGeneralAndAdministrativeExpense
+    amount_policy: abs
+    label_patterns:
+      - (?i)\bselling,\s*general\s+and\s+administrative\b
+      - (?i)\bSG&A\b
+      - (?i)\bgeneral\s+and\s+administrative\b
+    label_exclude_patterns:
+      - (?i)\bmember\b
+  - canonical_id: RND
+    fs_type: IS
+    primary_tags: [us-gaap:ResearchAndDevelopmentExpense]
+    alternate_tags:
+      - us-gaap:ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost
+      - us-gaap:InProcessResearchAndDevelopmentExpense
+      - us-gaap:ResearchAndDevelopmentExpenseSoftwareExcludingAcquiredInProcessCost
+      - us-gaap:OtherResearchAndDevelopmentExpense
+    amount_policy: abs
+    label_patterns:
+      - (?i)\bresearch\s+and\s+development\b
+      - (?i)\bR&D\b
+    label_exclude_patterns:
+      - (?i)\bpolicy\b
+      - (?i)\bmember\b
+      - (?i)\boil\s+and\s+gas\s+reserves\b
+      - (?i)\bfuture\s+net\s+cash\s+flows\b
+  - canonical_id: OPERATING_INCOME
+    fs_type: IS
+    primary_tags: [us-gaap:OperatingIncomeLoss]
+    alternate_tags:
+      - ifrs-full:ProfitLossFromOperatingActivities
+    label_patterns:
+      - (?i)\boperating\s+income\s*(\(loss\))?\b
+      - (?i)\bincome\s+from\s+operations\b
+  - canonical_id: PBT
+    fs_type: IS
+    primary_tags:
+      - us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest
+    alternate_tags:
+      - us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments
+      - us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest
+      - ifrs-full:ProfitLossBeforeTax
+    label_patterns:
+      - (?i)\b(income|loss|profit)\s+before\s+(income\s+)?tax(es)?\b
+  - canonical_id: TAX_EXPENSE
+    fs_type: IS
+    primary_tags: [us-gaap:IncomeTaxExpenseBenefit]
+    alternate_tags:
+      - ifrs-full:TaxExpenseIncome
+    label_patterns:
+      - (?i)\bincome\s+tax\s+(expense|benefit)\b
+  - canonical_id: NET_INCOME
+    fs_type: IS
+    primary_tags: [us-gaap:NetIncomeLoss]
+    alternate_tags:
+      - us-gaap:ProfitLoss
+      - ifrs-full:ProfitLoss
+    label_patterns:
+      - (?i)\bnet\s+(income|loss|earnings)\b
+      - (?i)\bprofit\s+\(loss\)\b
+    label_exclude_patterns:
+      - (?i)\battributable\b
+  - canonical_id: NET_INCOME_PARENT
+    fs_type: IS
+    primary_tags:
+      - us-gaap:NetIncomeLossAvailableToCommonStockholdersBasic
+      - us-gaap:NetIncomeLossAttributableToParent
+    alternate_tags: [us-gaap:ProfitLoss]
+    label_patterns:
+      - (?i)\bnet\s+(income|loss)\s+attributable\s+to\s+(parent|common\s+stockholders?)\b
+  - canonical_id: NET_INCOME_NCI
+    fs_type: IS
+    primary_tags:
+      - us-gaap:NetIncomeLossAttributableToNoncontrollingInterest
+    alternate_tags:
+      - us-gaap:NetIncomeLossAttributableToNonredeemableNoncontrollingInterest
+    label_patterns:
+      - (?i)\bnet\s+(income|loss)\s+attributable\s+to\s+noncontrolling\s+interest\b
+  - canonical_id: CONTINUING_OPERATIONS_INCOME
+    fs_type: IS
+    primary_tags:
+      - us-gaap:IncomeLossFromContinuingOperations
+      - us-gaap:IncomeLossFromContinuingOperationsIncludingPortionAttributableToNoncontrollingInterest
+    label_patterns:
+      - (?i)\b(income|loss)\s+from\s+continuing\s+operations\b
+  - canonical_id: DISCONTINUED_OPERATIONS_INCOME
+    fs_type: IS
+    primary_tags:
+      - us-gaap:IncomeLossFromDiscontinuedOperationsNetOfTax
+      - us-gaap:DiscontinuedOperationIncomeLossFromDiscontinuedOperationNetOfTax
+    label_patterns:
+      - (?i)\b(income|loss)\s+from\s+discontinued\s+operations\b
+  - canonical_id: OPERATING_EXPENSES_TOTAL
+    fs_type: IS
+    primary_tags:
+      - us-gaap:OperatingExpenses
+    label_patterns:
+      - (?i)\b(total\s+)?operating\s+expenses\b
+  - canonical_id: OTHER_OPERATING_INCOME
+    fs_type: IS
+    primary_tags:
+      - us-gaap:OtherOperatingIncome
+    alternate_tags:
+      - us-gaap:OtherOperatingIncomeExpenseNet
+    amount_policy: abs
+    label_patterns:
+      - (?i)\bother\s+operating\s+income\b
+  - canonical_id: OTHER_OPERATING_EXPENSES
+    fs_type: IS
+    primary_tags:
+      - us-gaap:OtherOperatingExpenses
+    alternate_tags:
+      - us-gaap:OtherCostAndExpenseOperating
+    amount_policy: abs
+    label_patterns:
+      - (?i)\bother\s+operating\s+(expenses?|loss)\b
+  - canonical_id: OTHER_NON_OPERATING_INCOME
+    fs_type: IS
+    primary_tags:
+      - us-gaap:NonoperatingIncomeExpense
+      - us-gaap:OtherNonoperatingIncomeExpense
+    amount_policy: abs
+    label_patterns:
+      - (?i)\bother\s+non[- ]operating\s+income\b
+  - canonical_id: OTHER_NON_OPERATING_EXPENSES
+    fs_type: IS
+    primary_tags:
+      - us-gaap:OtherNonoperatingExpense
+    amount_policy: abs
+    label_patterns:
+      - (?i)\bother\s+non[- ]operating\s+expenses?\b
+  - canonical_id: BASIC_EPS
+    fs_type: IS
+    primary_tags: [us-gaap:EarningsPerShareBasic]
+    alternate_tags:
+      - ifrs-full:BasicEarningsLossPerShare
+  - canonical_id: DILUTED_EPS
+    fs_type: IS
+    primary_tags: [us-gaap:EarningsPerShareDiluted]
+    alternate_tags:
+      - ifrs-full:DilutedEarningsLossPerShare
+  - canonical_id: OTHER_COMPREHENSIVE_INCOME
+    fs_type: IS
+    primary_tags:
+      - us-gaap:OtherComprehensiveIncomeLossNetOfTax
+      - us-gaap:OtherComprehensiveIncomeLossBeforeTax
+    label_patterns:
+      - (?i)\bother\s+comprehensive\s+(income|loss)\b
+  - canonical_id: TOTAL_COMPREHENSIVE_INCOME
+    fs_type: IS
+    primary_tags:
+      - us-gaap:ComprehensiveIncomeNetOfTax
+      - us-gaap:ComprehensiveIncomeNetOfTaxIncludingPortionAttributableToNoncontrollingInterest
+    label_patterns:
+      - (?i)\btotal\s+comprehensive\s+(income|loss)\b
+  - canonical_id: COMPREHENSIVE_INCOME_PARENT
+    fs_type: IS
+    primary_tags:
+      - us-gaap:ComprehensiveIncomeNetOfTaxAttributableToParent
+    label_patterns:
+      - (?i)\bcomprehensive\s+(income|loss).+attributable\s+to\s+parent\b
+  - canonical_id: COMPREHENSIVE_INCOME_NCI
+    fs_type: IS
+    primary_tags:
+      - us-gaap:ComprehensiveIncomeNetOfTaxAttributableToNoncontrollingInterest
+    label_patterns:
+      - (?i)\bcomprehensive\s+(income|loss).+noncontrolling\s+interest\b
+
+  - canonical_id: CFO
+    fs_type: CF
+    primary_tags: [us-gaap:NetCashProvidedByUsedInOperatingActivities]
+    alternate_tags:
+      - ifrs-full:CashFlowsFromUsedInOperatingActivities
+    label_patterns:
+      - (?i)\bnet\s+cash\s+(provided\s+by|used\s+in)\s+operating\s+activities\b
+  - canonical_id: CFI
+    fs_type: CF
+    primary_tags: [us-gaap:NetCashProvidedByUsedInInvestingActivities]
+    alternate_tags:
+      - ifrs-full:CashFlowsFromUsedInInvestingActivities
+    label_patterns:
+      - (?i)\bnet\s+cash\s+(provided\s+by|used\s+in)\s+investing\s+activities\b
+  - canonical_id: CFF
+    fs_type: CF
+    primary_tags: [us-gaap:NetCashProvidedByUsedInFinancingActivities]
+    alternate_tags:
+      - ifrs-full:CashFlowsFromUsedInFinancingActivities
+    label_patterns:
+      - (?i)\bnet\s+cash\s+(provided\s+by|used\s+in)\s+financing\s+activities\b
+  - canonical_id: CF_CASH_CHANGE
+    fs_type: CF
+    primary_tags:
+      - us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect
+      - us-gaap:CashAndCashEquivalentsPeriodIncreaseDecrease
+    alternate_tags:
+      - ifrs-full:IncreaseDecreaseInCashAndCashEquivalents
+    label_patterns:
+      - (?i)\b(increase|decrease).+cash\s+and\s+cash\s+equivalents\b
+  - canonical_id: CF_CASH_BEGIN
+    fs_type: CF
+    primary_tags:
+      - us-gaap:CashAndCashEquivalentsAtCarryingValue
+      - us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+    label_patterns:
+      - (?i)\bcash.+beginning\s+of\s+(period|year)\b
+  - canonical_id: CF_CASH_END
+    fs_type: CF
+    primary_tags:
+      - us-gaap:CashAndCashEquivalentsAtCarryingValue
+      - us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+    label_patterns:
+      - (?i)\bcash.+end\s+of\s+(period|year)\b
+  - canonical_id: FX_EFFECT_CASH
+    fs_type: CF
+    primary_tags:
+      - us-gaap:EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+      - us-gaap:EffectOfExchangeRateOnCashAndCashEquivalents
+    alternate_tags:
+      - ifrs-full:EffectOfExchangeRateChangesOnCashAndCashEquivalents
+    label_patterns:
+      - (?i)\beffect\s+of\s+exchange\s+rate\b
+  - canonical_id: CAPEX_PPE
+    fs_type: CF
+    primary_tags: [us-gaap:PaymentsToAcquirePropertyPlantAndEquipment]
+    alternate_tags:
+      - us-gaap:PaymentsToAcquireProductiveAssets
+      - us-gaap:PaymentsToAcquirePropertyPlantAndEquipmentAndIntangibleAssets
+      - ifrs-full:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities
+    amount_policy: abs
+    cash_direction: outflow
+    label_patterns:
+      - (?i)\b(payments?|cash\s+paid|purchase)\s+(to\s+acquire|for|of)\s+property,\s*plant,?\s+and\s+equipment\b
+      - (?i)\bcapital\s+expenditures?\b
+    label_exclude_patterns:
+      - (?i)\bproceeds?\b
+      - (?i)\bdisposals?\b
+      - (?i)\badditions?\s+through\s+business\s+combinations\b
+  - canonical_id: CAPEX_INTANG
+    fs_type: CF
+    primary_tags:
+      - us-gaap:PaymentsToAcquireIntangibleAssets
+    alternate_tags:
+      - ifrs-full:PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities
+    amount_policy: abs
+    cash_direction: outflow
+    label_patterns:
+      - (?i)\b(payments?|purchase)\s+(to\s+acquire|for|of)\s+intangible\s+assets?\b
+  - canonical_id: DEPRECIATION_EXPENSE
+    fs_type: CF
+    primary_tags: [us-gaap:DepreciationDepletionAndAmortization]
+    alternate_tags: [us-gaap:Depreciation]
+    amount_policy: abs
+    label_patterns:
+      - (?i)\bdepreciation\b
+  - canonical_id: AMORTIZATION
+    fs_type: CF
+    primary_tags: [us-gaap:AmortizationOfIntangibleAssets]
+    alternate_tags:
+      - us-gaap:FiniteLivedIntangibleAssetsAmortizationExpense
+      - us-gaap:AmortizationOfAcquiredIntangibleAssets
+    amount_policy: abs
+    label_patterns:
+      - (?i)\bamortization\b
+    label_exclude_patterns:
+      - (?i)\bdepreciation\b
+  - canonical_id: PPE_DISPOSAL_PROCEEDS
+    fs_type: CF
+    primary_tags:
+      - us-gaap:ProceedsFromSaleOfPropertyPlantAndEquipment
+      - us-gaap:ProceedsFromSaleOfProductiveAssets
+    alternate_tags:
+      - ifrs-full:ProceedsFromSalesOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities
+    amount_policy: abs
+    cash_direction: inflow
+    label_patterns:
+      - (?i)\bproceeds?\s+from\s+(sale|disposal).+property,\s*plant,?\s+and\s+equipment\b
+  - canonical_id: INTANGIBLE_DISPOSAL_PROCEEDS
+    fs_type: CF
+    primary_tags:
+      - us-gaap:ProceedsFromSaleOfIntangibleAssets
+    amount_policy: abs
+    cash_direction: inflow
+    label_patterns:
+      - (?i)\bproceeds?\s+from\s+(sale|disposal).+intangible\s+assets?\b
+  - canonical_id: INT_PAID
+    fs_type: CF
+    primary_tags: [us-gaap:InterestPaidNet]
+    alternate_tags: [us-gaap:InterestPaid]
+    amount_policy: abs
+    cash_direction: outflow
+    label_patterns:
+      - (?i)\binterest\s+paid\b
+  - canonical_id: TAX_PAID
+    fs_type: CF
+    primary_tags: [us-gaap:IncomeTaxesPaidNet]
+    alternate_tags: [us-gaap:IncomeTaxesPaid]
+    amount_policy: abs
+    cash_direction: outflow
+    label_patterns:
+      - (?i)\bincome\s+tax(es)?\s+paid\b
+  - canonical_id: DIV_PAID
+    fs_type: CF
+    primary_tags: [us-gaap:PaymentsOfDividends]
+    alternate_tags:
+      - us-gaap:PaymentsOfDividendsCommonStock
+      - us-gaap:PaymentsOfOrdinaryDividends
+      - ifrs-full:DividendsPaidClassifiedAsFinancingActivities
+    amount_policy: abs
+    cash_direction: outflow
+    label_patterns:
+      - (?i)\bdividends?\s+paid\b
+  - canonical_id: DEBT_ISSUE
+    fs_type: CF
+    primary_tags: [us-gaap:ProceedsFromIssuanceOfLongTermDebt]
+    alternate_tags:
+      - us-gaap:ProceedsFromBorrowings
+      - us-gaap:ProceedsFromIssuanceOfDebt
+      - us-gaap:ProceedsFromShortTermDebt
+      - ifrs-full:ProceedsFromBorrowingsClassifiedAsFinancingActivities
+    amount_policy: abs
+    cash_direction: inflow
+    label_patterns:
+      - (?i)\bproceeds?\s+from\s+(issuance\s+of\s+)?(debt|borrowings?)\b
+  - canonical_id: DEBT_REPAY
+    fs_type: CF
+    primary_tags: [us-gaap:RepaymentsOfLongTermDebt]
+    alternate_tags:
+      - us-gaap:RepaymentsOfDebt
+      - us-gaap:RepaymentsOfShortTermDebt
+      - ifrs-full:RepaymentsOfBorrowingsClassifiedAsFinancingActivities
+    amount_policy: abs
+    cash_direction: outflow
+    label_patterns:
+      - (?i)\b(repayments?|payments?)\s+of\s+(debt|borrowings?)\b
+      - (?i)\bprincipal\s+payments?\b
+  - canonical_id: EQ_ISSUE
+    fs_type: CF
+    primary_tags: [us-gaap:ProceedsFromIssuanceOfCommonStock]
+    alternate_tags: [us-gaap:ProceedsFromStockOptionsExercised]
+    amount_policy: abs
+    cash_direction: inflow
+    label_patterns:
+      - (?i)\bproceeds?\s+from\s+(issuance\s+of\s+)?(common\s+)?stock\b
+  - canonical_id: BUYBACK
+    fs_type: CF
+    primary_tags: [us-gaap:PaymentsForRepurchaseOfCommonStock]
+    alternate_tags:
+      - us-gaap:PaymentsForRepurchaseOfEquity
+      - us-gaap:PaymentsForRepurchaseOfCommonStock
+    amount_policy: abs
+    cash_direction: outflow
+    label_patterns:
+      - (?i)\bpayments?\s+for\s+repurchase\s+of\s+(common\s+)?stock\b
+      - (?i)\brepurchase\s+of\s+(common\s+)?stock\b
+    label_exclude_patterns:
+      - (?i)\bauthorized\b
+      - (?i)\bnumber\s+of\s+shares\b
+  - canonical_id: LEASE_REPAYMENT
+    fs_type: CF
+    primary_tags:
+      - us-gaap:RepaymentsOfFinanceLeaseObligations
+      - us-gaap:PaymentsOfFinanceLeaseLiabilities
+    amount_policy: abs
+    cash_direction: outflow
+    label_patterns:
+      - (?i)\b(payments?|repayments?)\s+of\s+(finance\s+)?lease\s+(obligations|liabilities)\b
+
+notes_rules:
+  - id: notes_rnd
+    canonical_id: RND
+    fs_type: IS
+    tags:
+      - ResearchAndDevelopmentExpense
+      - ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost
+      - InProcessResearchAndDevelopmentExpense
+    label_patterns:
+      - (?i)research\s+and\s+development
+      - (?i)\bR&D\b
+    report_name_patterns:
+      - (?i)statement
+      - (?i)operations
+      - (?i)income
+    amount_policy: abs
+  - id: notes_amortization
+    canonical_id: AMORTIZATION
+    fs_type: CF
+    tags:
+      - AmortizationOfIntangibleAssets
+      - FiniteLivedIntangibleAssetsAmortizationExpense
+      - AmortizationOfAcquiredIntangibleAssets
+    label_patterns:
+      - (?i)amortization
+    amount_policy: abs
+  - id: notes_depreciation
+    canonical_id: DEPRECIATION_EXPENSE
+    fs_type: CF
+    tags:
+      - DepreciationDepletionAndAmortization
+      - Depreciation
+    label_patterns:
+      - (?i)depreciation
+    amount_policy: abs
+
+edgartools_fallback_rules:
+  - canonical_id: RND
+    fs_type: IS
+    tags:
+      - ResearchAndDevelopmentExpense
+      - ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost
+      - InProcessResearchAndDevelopmentExpense
+    amount_policy: abs
+  - canonical_id: AMORTIZATION
+    fs_type: CF
+    tags:
+      - AmortizationOfIntangibleAssets
+      - FiniteLivedIntangibleAssetsAmortizationExpense
+      - AmortizationOfAcquiredIntangibleAssets
+    amount_policy: abs
+  - canonical_id: DEPRECIATION_EXPENSE
+    fs_type: CF
+    tags:
+      - DepreciationDepletionAndAmortization
+      - Depreciation
+    amount_policy: abs

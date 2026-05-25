@@ -11,6 +11,7 @@ from engine.extractors.filings import (
     download_statement_comments,
     download_statements,
 )
+from engine.extractors.sec_filings import download_sec_company_tickers
 
 
 def _stock_codes() -> list[str]:
@@ -53,12 +54,21 @@ DOWNLOAD_ACTIONS = {
     "dividend": download_all_dividend,
 }
 
+US_DOWNLOAD_ACTIONS = {
+    "sec-tickers": download_sec_company_tickers,
+}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download bronze/source market and DART data.")
-    parser.add_argument("target", choices=sorted(DOWNLOAD_ACTIONS))
+    parser.add_argument("--market", default="kr", choices=["kr", "us"])
+    parser.add_argument("target")
     args = parser.parse_args()
-    DOWNLOAD_ACTIONS[args.target]()
+    actions = US_DOWNLOAD_ACTIONS if args.market == "us" else DOWNLOAD_ACTIONS
+    if args.target not in actions:
+        choices = ", ".join(sorted(actions))
+        raise SystemExit(f"unknown target for market={args.market}: {args.target}; choices: {choices}")
+    actions[args.target]()
 
 
 if __name__ == "__main__":

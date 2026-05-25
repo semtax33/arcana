@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 from concurrent.futures import ProcessPoolExecutor
 from datetime import date
@@ -7,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from engine.core.paths import DATA_LAKE, PROJECT_ROOT, statement_snapshot_name
+from engine.core.paths import DATA_LAKE, PROJECT_ROOT, first_existing_path, statement_snapshot_name
 from engine.transformers.filings import (
     ContextEngine,
     RuleEngine,
@@ -19,10 +20,26 @@ from engine.extractors.market_universe import kospi_kosdaq_corp_list
 
 
 CANONICAL_CSV_PATH = DATA_LAKE.canonical_accounts()
-CONTEXT_RULE_PATH = DATA_LAKE.rules("context_common.yaml")
-MAPPING_RULE_PATH = DATA_LAKE.rules("mapping_common.yaml")
-COMMENT_RULE_PATH = DATA_LAKE.rules("comment_common.yaml")
+CONTEXT_RULE_PATH = (
+    DATA_LAKE.rules("context_kr.yaml")
+    if DATA_LAKE.rules("context_kr.yaml").exists()
+    else DATA_LAKE.rules("context_common.yaml")
+)
+MAPPING_RULE_PATH = first_existing_path(
+    DATA_LAKE.rules("kr_mapping.yaml"),
+    DATA_LAKE.rules("mapping_kr.yaml"),
+    DATA_LAKE.rules("mapping_common.yaml"),
+)
+COMMENT_RULE_PATH = (
+    DATA_LAKE.rules("comment_kr.yaml")
+    if DATA_LAKE.rules("comment_kr.yaml").exists()
+    else DATA_LAKE.rules("comment_common.yaml")
+)
 SIGN_POLICY_PATH = DATA_LAKE.rules("sign_policy_common.yaml")
+US_MAPPING_RULE_PATH = first_existing_path(
+    DATA_LAKE.rules("us_mapping.yaml"),
+    DATA_LAKE.rules("mapping_us.yaml"),
+)
 SAVE_DEBUG = True
 FORCE_REBUILD = False
 MAX_WORKERS = int(os.environ.get("NORMALIZE_MAX_WORKERS") or "0")
@@ -35,6 +52,24 @@ NormalizeResult = tuple[str, str, str, str]
 _WORKER_CANONICAL_DF: pd.DataFrame | None = None
 _WORKER_CONTEXT_ENGINE: ContextEngine | None = None
 _WORKER_MAPPING_ENGINE: RuleEngine | None = None
+
+
+def normalization_dependency_paths() -> list[Path]:
+    paths = [
+        Path(__file__).resolve(),
+        PROJECT_ROOT / "engine" / "transformers" / "filings.py",
+        PROJECT_ROOT / "engine" / "transformers" / "_internal" / "dart_filings.py",
+        CANONICAL_CSV_PATH,
+        CONTEXT_RULE_PATH,
+        MAPPING_RULE_PATH,
+        COMMENT_RULE_PATH,
+        SIGN_POLICY_PATH,
+    ]
+    missing_paths = [path for path in paths if not path.exists()]
+    if missing_paths:
+        missing_text = ", ".join(str(path) for path in missing_paths)
+        raise FileNotFoundError(f"Normalization dependency not found: {missing_text}")
+    return paths
 
 
 def output_is_fresh(
@@ -141,14 +176,7 @@ def normalize_all_statements() -> None:
     end_year = today.year
     start_year = end_year - 10
 
-    dependency_paths = [
-        PROJECT_ROOT / "engine" / "canonical_rule_normalizer.py",
-        CANONICAL_CSV_PATH,
-        CONTEXT_RULE_PATH,
-        MAPPING_RULE_PATH,
-        COMMENT_RULE_PATH,
-        SIGN_POLICY_PATH,
-    ]
+    dependency_paths = normalization_dependency_paths()
     newest_dependency_mtime = max(p.stat().st_mtime for p in dependency_paths)
     tasks, skipped_count, missing_count = build_normalization_tasks(
         stock_codes,
@@ -301,7 +329,39 @@ def _print_progress(
 
 
 def main() -> None:
-    normalize_all_statements()
+    parser = argparse.ArgumentParser(description="Normalize financial statements.")
+    parser.add_argument("--market", default="kr", choices=["kr", "us"])
+    parser.add_argument("--symbols", help="Comma-separated symbols. US examples: AAPL,MSFT")
+    parser.add_argument("--start-year", type=int)
+    parser.add_argument("--end-year", type=int)
+    parser.add_argument("--no-debug", action="store_true")
+    parser.add_argument("--no-notes", action="store_true")
+    parser.add_argument("--no-edgartools", action="store_true")
+    args = parser.parse_args()
+
+    if args.market == "kr":
+        normalize_all_statements()
+        return
+
+    from engine.transformers.sec_filings import normalize_us_sec_filings
+
+    today = date.today()
+    end_year = args.end_year or today.year
+    start_year = args.start_year or end_year - 10
+    symbols = None
+    if args.symbols:
+        symbols = [item.strip() for item in args.symbols.split(",") if item.strip()]
+
+    written = normalize_us_sec_filings(
+        symbols=symbols,
+        start_year=start_year,
+        end_year=end_year,
+        mapping_rule_path=US_MAPPING_RULE_PATH,
+        save_debug=not args.no_debug,
+        use_notes=not args.no_notes,
+        use_edgartools=not args.no_edgartools,
+    )
+    print(f"[DONE] market=us written={len(written)}")
 
 
 if __name__ == "__main__":
