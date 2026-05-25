@@ -1620,6 +1620,39 @@ button {
   font-weight: 900;
 }
 
+.style-profile-control {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 22px;
+}
+
+.style-profile-control span {
+  color: #7f8da3;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.style-profile-control select {
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid #223044;
+  border-radius: 8px;
+  outline: 0;
+  color: #edf4ff;
+  background: #141e2e;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.style-profile-control em {
+  color: #738197;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
 .history-list {
   display: grid;
   gap: 7px;
@@ -3371,6 +3404,7 @@ button {
   .stock-search-box input,
   .manual-stock-form > span,
   .manual-stock-form input,
+  .style-profile-control,
   .history-title,
   .history-list > button span,
   .history-list > button strong {

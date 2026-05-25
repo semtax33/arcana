@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CalendarDays, Database, Search, Star } from "lucide-react";
 import {
   fetchStyleScoreComponentFactors,
@@ -10,6 +10,7 @@ import type {
   StyleScoreFactor,
   StyleScoreGroup,
   StyleScoreStock,
+  StyleProfile,
 } from "../types/styleScores";
 
 const numberFormatter = new Intl.NumberFormat("ko-KR", {
@@ -21,6 +22,24 @@ const percentFormatter = new Intl.NumberFormat("ko-KR", {
   maximumFractionDigits: 1,
   minimumFractionDigits: 0,
 });
+
+const styleProfileOptions: { value: StyleProfile; label: string; description: string }[] = [
+  {
+    value: "DEFAULT",
+    label: "Default",
+    description: "밸류, 퀄리티, 성장, 모멘텀을 균형 있게 반영",
+  },
+  {
+    value: "MINERVINI_ZWEIG",
+    label: "Minervini/Zweig",
+    description: "성장과 모멘텀 비중을 높인 공격형 스타일",
+  },
+  {
+    value: "DIVIDEND_QUALITY",
+    label: "Dividend Quality",
+    description: "배당, 퀄리티, 밸류 비중을 높인 안정형 스타일",
+  },
+];
 
 function formatScore(value: number | null | undefined) {
   return value === null || value === undefined || !Number.isFinite(value) ? "-" : value.toFixed(1);
@@ -166,6 +185,7 @@ export function StyleScorePage() {
   const [selectedStock, setSelectedStock] = useState<StyleScoreStock | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState("composite");
   const [selectedFactors, setSelectedFactors] = useState<StyleScoreFactor[]>([]);
+  const [selectedStyleProfile, setSelectedStyleProfile] = useState<StyleProfile>("DEFAULT");
   const [inputValue, setInputValue] = useState("");
   const [source, setSource] = useState<StyleScoreDataSource>("api");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -174,6 +194,8 @@ export function StyleScorePage() {
 
   const selectedGroup =
     selectedStock?.groups.find((group) => group.id === selectedGroupId) ?? selectedStock?.groups[0] ?? null;
+  const selectedStyleProfileOption =
+    styleProfileOptions.find((option) => option.value === selectedStyleProfile) ?? styleProfileOptions[0];
 
   const visibleRows = useMemo(() => {
     const selectedExists = selectedStock
@@ -183,9 +205,13 @@ export function StyleScorePage() {
     return selectedStock && !selectedExists ? [selectedStock, ...rows] : rows;
   }, [rows, selectedStock]);
 
-  const loadFactors = async (securityId: string, group: StyleScoreGroup) => {
+  const loadFactors = async (
+    securityId: string,
+    group: StyleScoreGroup,
+    styleProfile: StyleProfile = selectedStyleProfile,
+  ) => {
     setIsFactorLoading(true);
-    const result = await fetchStyleScoreComponentFactors(securityId, group.componentKey);
+    const result = await fetchStyleScoreComponentFactors(securityId, group.componentKey, styleProfile);
 
     setSelectedFactors(result.data);
     setSource((current) => (result.source === "mock" ? "mock" : current));
@@ -193,11 +219,11 @@ export function StyleScorePage() {
     setIsFactorLoading(false);
   };
 
-  const loadComponents = async (securityId: string) => {
+  const loadComponents = async (securityId: string, styleProfile: StyleProfile = selectedStyleProfile) => {
     setIsLoading(true);
     setIsFactorLoading(true);
 
-    const result = await fetchStyleScoreComponents(securityId);
+    const result = await fetchStyleScoreComponents(securityId, styleProfile);
     const firstGroup = result.data.groups[0] ?? null;
 
     setSelectedStock(result.data);
@@ -208,7 +234,11 @@ export function StyleScorePage() {
     setIsLoading(false);
 
     if (firstGroup) {
-      const factorResult = await fetchStyleScoreComponentFactors(result.data.securityId, firstGroup.componentKey);
+      const factorResult = await fetchStyleScoreComponentFactors(
+        result.data.securityId,
+        firstGroup.componentKey,
+        styleProfile,
+      );
       setSelectedFactors(factorResult.data);
       setSource((current) => (factorResult.source === "mock" ? "mock" : current));
       setStatusMessage(factorResult.message ?? result.message);
@@ -219,12 +249,33 @@ export function StyleScorePage() {
     setIsFactorLoading(false);
   };
 
+  const loadScores = async (styleProfile: StyleProfile, preferredSecurityId?: string) => {
+    setIsLoading(true);
+    setIsFactorLoading(true);
+    const listResult = await fetchStyleScores(styleProfile);
+    const nextSecurityId = preferredSecurityId || listResult.data[0]?.securityId;
+
+    setRows(listResult.data);
+    setSource(listResult.source);
+    setStatusMessage(listResult.message);
+
+    if (!nextSecurityId) {
+      setSelectedStock(null);
+      setSelectedFactors([]);
+      setIsLoading(false);
+      setIsFactorLoading(false);
+      return;
+    }
+
+    await loadComponents(nextSecurityId, styleProfile);
+  };
+
   useEffect(() => {
     let ignore = false;
 
     const loadInitial = async () => {
       setIsLoading(true);
-      const listResult = await fetchStyleScores();
+      const listResult = await fetchStyleScores(selectedStyleProfile);
 
       if (ignore) {
         return;
@@ -242,7 +293,7 @@ export function StyleScorePage() {
         return;
       }
 
-      await loadComponents(firstStock.securityId);
+      await loadComponents(firstStock.securityId, selectedStyleProfile);
     };
 
     void loadInitial();
@@ -257,15 +308,22 @@ export function StyleScorePage() {
     const securityId = inputValue.trim();
 
     if (securityId.length > 0) {
-      void loadComponents(securityId);
+      void loadComponents(securityId, selectedStyleProfile);
     }
+  };
+
+  const handleStyleProfileChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    const nextStyleProfile = event.target.value as StyleProfile;
+
+    setSelectedStyleProfile(nextStyleProfile);
+    void loadScores(nextStyleProfile, selectedStock?.securityId);
   };
 
   const handleGroupClick = (group: StyleScoreGroup) => {
     setSelectedGroupId(group.id);
 
     if (selectedStock) {
-      void loadFactors(selectedStock.securityId, group);
+      void loadFactors(selectedStock.securityId, group, selectedStyleProfile);
     }
   };
 
@@ -304,6 +362,22 @@ export function StyleScorePage() {
           </div>
         </form>
 
+        <label className="style-profile-control">
+          <span>스타일 프로필</span>
+          <select
+            aria-label="style_profile"
+            value={selectedStyleProfile}
+            onChange={handleStyleProfileChange}
+          >
+            {styleProfileOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <em>{selectedStyleProfileOption.description}</em>
+        </label>
+
         <div className="history-list">
           <div className="history-title">
             <span>종목 목록</span>
@@ -313,7 +387,7 @@ export function StyleScorePage() {
                 const securityId = inputValue || visibleRows[0]?.securityId;
 
                 if (securityId) {
-                  void loadComponents(securityId);
+                  void loadScores(selectedStyleProfile, securityId);
                 }
               }}
             >
@@ -325,7 +399,7 @@ export function StyleScorePage() {
               className={row.securityId === selectedStock?.securityId ? "selected" : ""}
               key={row.securityId}
               type="button"
-              onClick={() => void loadComponents(row.securityId)}
+              onClick={() => void loadComponents(row.securityId, selectedStyleProfile)}
             >
               <strong>{row.name}</strong>
               <span>
@@ -343,6 +417,10 @@ export function StyleScorePage() {
             <h1>{selectedStock?.name ?? "스타일 스코어 분석"}</h1>
           </div>
           <div className="style-score-status">
+            <span>
+              <Star size={14} />
+              {selectedStyleProfileOption.label}
+            </span>
             <span>
               <CalendarDays size={14} />
               {selectedStock?.asOfDate ?? "-"}
@@ -373,7 +451,7 @@ export function StyleScorePage() {
               <strong className={getScoreTone(selectedStock?.compositeScore)}>
                 {formatScore(selectedStock?.compositeScore)}
               </strong>
-              <em>0-100 percentile</em>
+              <em>{selectedStyleProfile}</em>
             </article>
             <article>
               <span>선택 컴포넌트</span>

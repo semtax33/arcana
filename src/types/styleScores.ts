@@ -1,5 +1,7 @@
 export type StyleScoreDataSource = "api" | "mock";
 
+export type StyleProfile = "DEFAULT" | "MINERVINI_ZWEIG" | "DIVIDEND_QUALITY";
+
 export type StyleScoreFactor = {
   factorId: string;
   label: string;
@@ -31,6 +33,7 @@ export type StyleScoreStock = {
   ticker: string;
   name: string;
   country: string;
+  styleProfile?: StyleProfile | string | null;
   asOfDate: string | null;
   compositeScore: number | null;
   groups: StyleScoreGroup[];

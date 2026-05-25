@@ -3,6 +3,7 @@ import type {
   StyleScoreGroup,
   StyleScoreStock,
   StyleScoresResult,
+  StyleProfile,
 } from "../types/styleScores";
 
 const apiBaseUrl = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "").replace(/\/+$/, "");
@@ -11,6 +12,12 @@ const apiPath = (path: string) => `${apiBaseUrl}${path}`;
 const listKeys = ["rows", "data", "items", "results", "style_scores", "styleScores"];
 const componentListKeys = ["components", "rows", "data", "items", "results", "scores", "style_scores", "styleScores"];
 const factorListKeys = ["factors", "rows", "data", "items", "results", "breakdown", "details"];
+
+const defaultStyleProfile: StyleProfile = "DEFAULT";
+
+function buildStyleProfileQuery(styleProfile: StyleProfile = defaultStyleProfile) {
+  return `style_profile=${encodeURIComponent(styleProfile)}`;
+}
 
 type ComponentDefinition = {
   id: string;
@@ -175,6 +182,7 @@ function createMockStock(
     ticker,
     name,
     country,
+    styleProfile: defaultStyleProfile,
     asOfDate,
     compositeScore: scores[0] ?? null,
     groups,
@@ -411,6 +419,7 @@ function normalizeStock(raw: unknown, fallbackIndex: number): StyleScoreStock | 
       pickString(raw, ["name", "stockName", "stock_name", "companyName", "company_name", "company_name_ko"]) ??
       securityId,
     country: pickString(raw, ["country", "market", "domicileCountry", "domicile_country"]) ?? "KR",
+    styleProfile: pickString(raw, ["styleProfile", "style_profile"]) ?? null,
     asOfDate: pickString(raw, ["asOfDate", "as_of_date", "tradeDate", "trade_date", "date"]) ?? null,
     compositeScore: groups.find((group) => group.id === "composite")?.score ?? null,
     groups,
@@ -449,6 +458,7 @@ function normalizeComponentsPayload(securityId: string, payload: unknown): Style
       pickString(baseRecord, ["name", "stockName", "stock_name", "companyName", "company_name", "company_name_ko"]) ??
       `${resolvedTicker} 스타일 스코어`,
     country: resolvedCountry,
+    styleProfile: pickString(baseRecord, ["styleProfile", "style_profile"]) ?? null,
     asOfDate: pickString(baseRecord, ["asOfDate", "as_of_date", "tradeDate", "trade_date", "date"]) ?? fallback?.asOfDate ?? null,
     compositeScore: groups.find((group) => group.id === "composite")?.score ?? null,
     groups,
@@ -474,6 +484,7 @@ function mockList(message: string | null): StyleScoresResult<StyleScoreStock[]> 
 function mockDetail(
   securityId: string,
   message: string | null,
+  styleProfile: StyleProfile = defaultStyleProfile,
   baseDetail?: StyleScoreStock | null,
 ): StyleScoresResult<StyleScoreStock> {
   const template =
@@ -495,6 +506,7 @@ function mockDetail(
           ? baseDetail.name
           : `${resolvedTicker} 스타일 스코어`,
       country: baseDetail?.country ?? template.country,
+      styleProfile: baseDetail?.styleProfile ?? styleProfile,
       asOfDate: baseDetail?.asOfDate ?? template.asOfDate,
     },
     source: "mock",
@@ -541,9 +553,11 @@ async function getJson(path: string) {
   return response.json() as Promise<unknown>;
 }
 
-export async function fetchStyleScores(): Promise<StyleScoresResult<StyleScoreStock[]>> {
+export async function fetchStyleScores(
+  styleProfile: StyleProfile = defaultStyleProfile,
+): Promise<StyleScoresResult<StyleScoreStock[]>> {
   try {
-    const rows = normalizeStockList(await getJson("/api/style-scores"));
+    const rows = normalizeStockList(await getJson(`/api/style-scores?${buildStyleProfileQuery(styleProfile)}`));
 
     if (rows.length === 0) {
       return mockList("스타일 스코어 목록 응답이 비어 있어 더미 데이터를 표시합니다.");
@@ -563,23 +577,28 @@ export async function fetchStyleScores(): Promise<StyleScoresResult<StyleScoreSt
   }
 }
 
-export async function fetchStyleScoreComponents(securityId: string): Promise<StyleScoresResult<StyleScoreStock>> {
+export async function fetchStyleScoreComponents(
+  securityId: string,
+  styleProfile: StyleProfile = defaultStyleProfile,
+): Promise<StyleScoresResult<StyleScoreStock>> {
   try {
     const detail = normalizeComponentsPayload(
       securityId,
-      await getJson(`/api/style-scores/${encodeURIComponent(securityId)}/components`),
+      await getJson(
+        `/api/style-scores/${encodeURIComponent(securityId)}/components?${buildStyleProfileQuery(styleProfile)}`,
+      ),
     );
 
     if (!detail) {
-      return mockDetail(securityId, "스타일 스코어 컴포넌트 응답이 비어 있어 더미 데이터를 표시합니다.");
+      return mockDetail(securityId, "스타일 스코어 컴포넌트 응답이 비어 있어 더미 데이터를 표시합니다.", styleProfile);
     }
 
     if (!hasUsableScore(detail)) {
-      return mockDetail(securityId, "스타일 스코어 컴포넌트 값이 없어 더미 데이터를 표시합니다.", detail);
+      return mockDetail(securityId, "스타일 스코어 컴포넌트 값이 없어 더미 데이터를 표시합니다.", styleProfile, detail);
     }
 
     if (!hasUsableScore(detail)) {
-      return mockDetail(securityId, "스타일 스코어 컴포넌트 값이 없어 더미 데이터를 표시합니다.");
+      return mockDetail(securityId, "스타일 스코어 컴포넌트 값이 없어 더미 데이터를 표시합니다.", styleProfile);
     }
 
     return {
@@ -592,18 +611,19 @@ export async function fetchStyleScoreComponents(securityId: string): Promise<Sty
       error instanceof Error
         ? `스타일 스코어 컴포넌트 API 호출에 실패해 더미 데이터를 표시합니다. (${error.message})`
         : "스타일 스코어 컴포넌트 API 호출에 실패해 더미 데이터를 표시합니다.";
-    return mockDetail(securityId, message);
+    return mockDetail(securityId, message, styleProfile);
   }
 }
 
 export async function fetchStyleScoreComponentFactors(
   securityId: string,
   componentKey: string,
+  styleProfile: StyleProfile = defaultStyleProfile,
 ): Promise<StyleScoresResult<StyleScoreFactor[]>> {
   try {
     const factors = normalizeFactorsPayload(
       await getJson(
-        `/api/style-scores/${encodeURIComponent(securityId)}/components/${encodeURIComponent(componentKey)}`,
+        `/api/style-scores/${encodeURIComponent(securityId)}/components/${encodeURIComponent(componentKey)}?${buildStyleProfileQuery(styleProfile)}`,
       ),
       componentKey,
     );
