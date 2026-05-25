@@ -1,5 +1,5 @@
 import unittest
-from datetime import date
+from datetime import date, datetime
 
 from api.main import app
 from api.service.style_score_service import (
@@ -122,6 +122,28 @@ class FakeClickHouseClient:
         self.closed = True
 
 
+class FakeNaT(datetime):
+    def __str__(self):
+        return "NaT"
+
+    def date(self):
+        return self
+
+    def isoformat(self, *args, **kwargs):
+        return "NaT"
+
+
+class FakeClickHouseClientWithoutAvailableProfile(FakeClickHouseClient):
+    def query_df(self, query, parameters=None):
+        params = parameters or {}
+        self.queries.append((query, params))
+        if "nullIf(max(s.trade_date), toDate(0)) AS available_trade_date" in query:
+            return FakeFrame([{"available_trade_date": FakeNaT(1970, 1, 1)}])
+        if "FROM arcana.fact_daily_style_score AS s FINAL" in query:
+            return FakeFrame([])
+        return FakeFrame([])
+
+
 class StyleScoreServiceTest(unittest.TestCase):
     def test_get_style_scores_returns_rows_and_closes_client(self):
         client = FakeClickHouseClient()
@@ -226,6 +248,19 @@ class StyleScoreServiceTest(unittest.TestCase):
         result = _resolve_available_trade_date(client, date(2026, 5, 24), "DEFAULT")
 
         self.assertEqual(result, date(2026, 5, 22))
+
+    def test_get_style_scores_treats_nat_available_date_as_no_loaded_profile(self):
+        client = FakeClickHouseClientWithoutAvailableProfile()
+
+        result = StyleScoreService(
+            client_factory=lambda: client,
+            today_factory=lambda: date(2026, 5, 24),
+        ).get_style_scores(style_profile="MINERVINI_ZWEIG")
+
+        self.assertEqual(result.trade_date, date(2026, 5, 24))
+        self.assertEqual(result.style_profile, "MINERVINI_ZWEIG")
+        self.assertEqual(result.total_count, 0)
+        self.assertEqual(client.queries[1][1]["trade_date"], "2026-05-24")
 
     def test_style_score_query_uses_sector_and_industry_group_not_industry_code(self):
         query = _build_style_score_list_query(

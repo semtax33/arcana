@@ -247,7 +247,7 @@ WHERE s.trade_date <= {{trade_date:Date}}
     if not rows:
         return requested_date
     value = rows[0].get("available_trade_date")
-    if value is None:
+    if _is_missing_value(value):
         return requested_date
     return _as_date(value)
 
@@ -694,11 +694,31 @@ def _as_string_list(value: Any) -> list[str]:
 
 
 def _as_date(value: Any) -> date:
+    if _is_missing_value(value):
+        raise ValueError("date value is missing")
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
         return value
     return date.fromisoformat(str(value)[:10])
+
+
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if hasattr(value, "item"):
+        try:
+            item = value.item()
+        except Exception:
+            item = value
+        if item is not value:
+            return _is_missing_value(item)
+    try:
+        if math.isnan(value):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip() in {"", "NaT", "NaN", "nan", "None", "<NA>"}
 
 
 def _today_kst() -> date:

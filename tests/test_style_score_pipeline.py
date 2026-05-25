@@ -8,6 +8,7 @@ from engine.transformers.style_score_definitions import canonical_factor_id, fac
 from engine.workflows.score import (
     FactorTableSchema,
     _build_universe_query,
+    build_style_scores,
     build_style_score_range,
     calculate_factor_scores,
     calculate_style_scores,
@@ -131,6 +132,25 @@ class StyleScorePipelineTest(unittest.TestCase):
         self.assertEqual(row["available_factor_count"], 2)
         self.assertIn("roe", row["missing_factor_ids"])
 
+    def test_style_score_decodes_clickhouse_fixed_string_stock_code(self):
+        fixed_stock_code = b"278470" + (b"\x00" * 58)
+        factor_scores = pd.DataFrame(
+            [
+                {
+                    **_factor_score_row("epr", 80.0),
+                    "stock_code": fixed_stock_code,
+                }
+            ]
+        )
+
+        result = calculate_style_scores(
+            factor_scores,
+            trade_date="2026-05-24",
+            style_profile="DEFAULT",
+        )
+
+        self.assertEqual(result.loc[0, "stock_code"], "278470")
+
     def test_dividend_style_score_uses_shareholder_return_factors(self):
         factor_scores = pd.DataFrame(
             [
@@ -232,6 +252,21 @@ class StyleScorePipelineTest(unittest.TestCase):
         self.assertEqual(factor_build.call_args_list[0].kwargs["factor_asof_mode"], "asof")
         self.assertTrue(client.closed)
 
+    def test_build_style_scores_omits_columns_missing_from_clickhouse_table(self):
+        client = _StyleScoreInsertClient()
+
+        build_style_scores(
+            "2026-05-24",
+            style_profile="DEFAULT",
+            client_factory=lambda: client,
+        )
+
+        self.assertEqual(client.insert_table, "fact_daily_style_score")
+        self.assertNotIn("country", client.insert_columns)
+        self.assertNotIn("market_mic", client.insert_columns)
+        self.assertIn("security_id", client.insert_columns)
+        self.assertEqual(list(client.insert_frame.columns), client.insert_columns)
+
 
 def _universe(items):
     return pd.DataFrame(
@@ -321,6 +356,37 @@ class _RangeQueryClient:
         if "FROM arcana.fact_daily_style_score FINAL" in query:
             return pd.DataFrame({"trade_date": pd.to_datetime(["2026-05-21"])})
         return pd.DataFrame()
+
+    def close(self):
+        self.closed = True
+
+
+class _StyleScoreInsertClient:
+    def __init__(self):
+        self.insert_table = None
+        self.insert_frame = None
+        self.insert_columns = None
+        self.closed = False
+
+    def query_df(self, query, parameters=None):
+        if query.startswith("DESCRIBE TABLE"):
+            columns = [
+                column
+                for column in calculate_style_scores(
+                    pd.DataFrame([_factor_score_row("epr", 80.0)]),
+                    trade_date="2026-05-24",
+                ).columns
+                if column not in {"country", "market_mic"}
+            ]
+            return pd.DataFrame({"name": columns})
+        if "FROM arcana.fact_daily_factor_score FINAL" in query:
+            return pd.DataFrame([_factor_score_row("epr", 80.0)])
+        return pd.DataFrame()
+
+    def insert_df(self, table, df, column_names=None):
+        self.insert_table = table
+        self.insert_frame = df.copy()
+        self.insert_columns = list(column_names or [])
 
     def close(self):
         self.closed = True

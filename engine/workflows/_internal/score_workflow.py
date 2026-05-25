@@ -96,17 +96,9 @@ def build_factor_scores(
         )
         snapshot = build_industry_snapshot(factor_scores)
         if not factor_scores.empty:
-            client.insert_df(
-                "fact_daily_factor_score",
-                factor_scores,
-                column_names=list(factor_scores.columns),
-            )
+            _insert_df_matching_table(client, "fact_daily_factor_score", factor_scores)
         if not snapshot.empty:
-            client.insert_df(
-                "industry_factor_daily_snapshot",
-                snapshot,
-                column_names=list(snapshot.columns),
-            )
+            _insert_df_matching_table(client, "industry_factor_daily_snapshot", snapshot)
     finally:
         close = getattr(client, "close", None)
         if callable(close):
@@ -138,11 +130,7 @@ WHERE trade_date = {trade_date:Date}
             style_profile=style_profile,
         )
         if not style_scores.empty:
-            client.insert_df(
-                "fact_daily_style_score",
-                style_scores,
-                column_names=list(style_scores.columns),
-            )
+            _insert_df_matching_table(client, "fact_daily_style_score", style_scores)
     finally:
         close = getattr(client, "close", None)
         if callable(close):
@@ -871,7 +859,7 @@ def _format_factor_score_frame(frame: pd.DataFrame, trade_date: date) -> pd.Data
     for column in ["issuer_id", "stock_code", "country", "market_mic", "company_name", "industry_schema"]:
         if column not in result.columns:
             result[column] = ""
-        result[column] = result[column].fillna("").astype(str)
+        result[column] = result[column].map(_string_or_empty)
     result["source_trade_date"] = pd.to_datetime(result["source_trade_date"], errors="coerce").dt.date
     result["source_trade_date"] = result["source_trade_date"].fillna(trade_date)
     return result[_factor_score_columns()].reset_index(drop=True)
@@ -1041,12 +1029,43 @@ def _records(frame: Any) -> list[dict[str, Any]]:
     return list(frame)
 
 
+def _insert_df_matching_table(client: Any, table_name: str, frame: pd.DataFrame) -> None:
+    columns = _insertable_columns(client, table_name, frame)
+    client.insert_df(table_name, frame.loc[:, columns], column_names=columns)
+
+
+def _insertable_columns(client: Any, table_name: str, frame: pd.DataFrame) -> list[str]:
+    table_columns = _table_column_names(client, table_name)
+    if not table_columns:
+        return list(frame.columns)
+    return [column for column in frame.columns if column in table_columns]
+
+
+def _table_column_names(client: Any, table_name: str) -> set[str]:
+    try:
+        rows = _records(client.query_df(f"DESCRIBE TABLE {_validate_table_name(table_name)}"))
+    except Exception:
+        return set()
+    names: set[str] = set()
+    for row in rows:
+        name = row.get("name") or row.get("column") or row.get("Column") or row.get("Name")
+        if name:
+            names.add(str(name))
+    return names
+
+
 def _string_or_empty(value: Any) -> str:
     if value is None:
         return ""
     if hasattr(value, "item"):
         value = value.item()
-    return str(value)
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).rstrip(b"\x00").decode("utf-8", errors="replace")
+    if pd.isna(value):
+        return ""
+    return str(value).rstrip("\x00")
 
 
 def _now_kst_naive() -> datetime:
