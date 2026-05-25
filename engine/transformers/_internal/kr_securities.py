@@ -10,6 +10,8 @@ import yaml
 from engine.core.paths import DATA_LAKE
 from engine.core.identifiers import issuer_id_of, security_id_of
 from engine.markets.kr import KR_MARKET_CONFIG, normalize_kr_stock_code
+from engine.markets.registry import market_config
+from engine.transformers._internal.sec_filings import load_sec_ticker_map
 
 
 DEFAULT_GICS_RULES_PATH = DATA_LAKE.rules("gics_rules.yaml")
@@ -410,7 +412,16 @@ def extract_review_targets(
     ].copy()
 
 
-def get_normalized_sector_and_issuer() -> pd.DataFrame:
+def get_normalized_sector_and_issuer(market: str = "kr") -> pd.DataFrame:
+    market = _normalize_market(market)
+    if market == "kr":
+        return _get_kr_normalized_sector_and_issuer()
+    if market == "us":
+        return _get_us_normalized_sector_and_issuer()
+    raise ValueError(f"unsupported market: {market}")
+
+
+def _get_kr_normalized_sector_and_issuer() -> pd.DataFrame:
     config = load_gics_config(DEFAULT_GICS_RULES_PATH)
     fetch_sector, kospi_kosdaq_corp_list = _load_company_functions()
     df = fetch_sector()
@@ -446,7 +457,16 @@ def get_normalized_sector_and_issuer() -> pd.DataFrame:
     )
 
 
-def get_normalized_security_master() -> pd.DataFrame:
+def get_normalized_security_master(market: str = "kr") -> pd.DataFrame:
+    market = _normalize_market(market)
+    if market == "kr":
+        return _get_kr_normalized_security_master()
+    if market == "us":
+        return _get_us_normalized_security_master()
+    raise ValueError(f"unsupported market: {market}")
+
+
+def _get_kr_normalized_security_master() -> pd.DataFrame:
     fetch_sector, _ = _load_company_functions()
     df = fetch_sector()
     stock_codes = df["종목코드"].astype(str).str.strip().map(
@@ -473,7 +493,16 @@ def get_normalized_security_master() -> pd.DataFrame:
     )
 
 
-def get_normalized_identifier() -> pd.DataFrame:
+def get_normalized_identifier(market: str = "kr") -> pd.DataFrame:
+    market = _normalize_market(market)
+    if market == "kr":
+        return _get_kr_normalized_identifier()
+    if market == "us":
+        return _get_us_normalized_identifier()
+    raise ValueError(f"unsupported market: {market}")
+
+
+def _get_kr_normalized_identifier() -> pd.DataFrame:
     fetch_sector, kospi_kosdaq_corp_list = _load_company_functions()
     df = fetch_sector()
     market_df = kospi_kosdaq_corp_list()
@@ -494,3 +523,100 @@ def get_normalized_identifier() -> pd.DataFrame:
             "is_primary": True,
         }
     )
+
+
+def _get_us_ticker_map() -> pd.DataFrame:
+    df = load_sec_ticker_map()
+    if not df.empty:
+        return df.loc[df["ticker"].astype(str).str.strip().ne("")].drop_duplicates("ticker").reset_index(drop=True)
+
+    universe_path = DATA_LAKE.bronze("yfinance", "universe", "us_equity_universe.csv")
+    if not universe_path.exists():
+        return pd.DataFrame(columns=["cik", "ticker", "title"])
+
+    universe = pd.read_csv(universe_path, dtype=str).fillna("")
+    if "ticker" not in universe.columns:
+        return pd.DataFrame(columns=["cik", "ticker", "title"])
+
+    title = universe["security_name"] if "security_name" in universe.columns else universe["ticker"]
+    fallback = pd.DataFrame(
+        {
+            "cik": "",
+            "ticker": universe["ticker"],
+            "title": title,
+        }
+    )
+    return fallback.loc[fallback["ticker"].astype(str).str.strip().ne("")].drop_duplicates("ticker").reset_index(drop=True)
+
+
+def _get_us_normalized_sector_and_issuer() -> pd.DataFrame:
+    config = market_config("us")
+    ticker_map = _get_us_ticker_map()
+    tickers = ticker_map["ticker"].map(config.normalize_symbol)
+    titles = ticker_map["title"].fillna("").astype(str)
+
+    return pd.DataFrame(
+        {
+            "issuer_id": tickers.map(lambda ticker: issuer_id_of(ticker, config)),
+            "legal_name_ko": "",
+            "legal_name_en": titles.where(titles.str.strip().ne(""), tickers),
+            "domicile_country": config.country,
+            "region": "",
+            "industry_schema": "GICS",
+            "sector_code": UNMAPPED,
+            "industry_group_code": UNMAPPED,
+            "industry_group_name": UNMAPPED,
+            "is_active": True,
+        }
+    )
+
+
+def _get_us_normalized_security_master() -> pd.DataFrame:
+    config = market_config("us")
+    ticker_map = _get_us_ticker_map()
+    tickers = ticker_map["ticker"].map(config.normalize_symbol)
+
+    return pd.DataFrame(
+        {
+            "security_id": tickers.map(lambda ticker: security_id_of(ticker, config)),
+            "issuer_id": tickers.map(lambda ticker: issuer_id_of(ticker, config)),
+            "sec_type": "COMMON",
+            "asset_subtype": "US_COMMON",
+            "share_class": "ORD",
+            "country": config.country,
+            "primary_market_mic": config.default_market_mic,
+            "currency": config.currency,
+            "is_active": True,
+        }
+    )
+
+
+def _get_us_normalized_identifier() -> pd.DataFrame:
+    config = market_config("us")
+    ticker_map = _get_us_ticker_map()
+    tickers = ticker_map["ticker"].map(config.normalize_symbol)
+    ticker_rows = pd.DataFrame(
+        {
+            "security_id": tickers.map(lambda ticker: security_id_of(ticker, config)),
+            "id_type": "TICKER",
+            "id_value": tickers,
+            "market_mic": config.default_market_mic,
+            "is_primary": True,
+        }
+    )
+
+    cik_rows = pd.DataFrame(
+        {
+            "security_id": tickers.map(lambda ticker: security_id_of(ticker, config)),
+            "id_type": "CIK",
+            "id_value": ticker_map["cik"].fillna("").astype(str),
+            "market_mic": config.default_market_mic,
+            "is_primary": False,
+        }
+    )
+    cik_rows = cik_rows.loc[cik_rows["id_value"].str.strip().ne("")]
+    return pd.concat([ticker_rows, cik_rows], ignore_index=True)
+
+
+def _normalize_market(market: str) -> str:
+    return str(market or "kr").strip().lower()

@@ -14,6 +14,9 @@ from engine.core.paths import (
     market_csv_name,
     statement_snapshot_name,
 )
+from engine.core.identifiers import security_id_of
+from engine.extractors._internal.yfinance_market_prices import normalize_yfinance_ticker
+from engine.markets.us import US_MARKET_CONFIG
 
 base_dir = DATA_LAKE.silver("dart", "normalized")
 dividend_base_dir = DATA_LAKE.bronze("dart", "dividend")
@@ -24,6 +27,7 @@ legacy_silver_dividend_company_summary_path = silver_dividend_dir / "kr_dividend
 silver_dividend_company_summary_path = silver_dividend_dir / market_csv_name("dividend_company_summary")
 price_file_path = DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price"))
 krx_price_file_path = DATA_LAKE.silver("krx", "price", "kr_normalized_price.csv")
+us_price_base_dir = DATA_LAKE.bronze("yfinance", "price")
 
 COMMON_STOCK_KIND_LABELS = {"보통주", "보통주식", "common", "ordinary"}
 REPORT_ORDER = {
@@ -948,6 +952,96 @@ def get_daily_stock_prices(stock_code, path=None):
     return price_df.sort_values("trade_date").reset_index(drop=True)
 
 
+def _dividend_schema_columns():
+    return [
+        "security_id",
+        "trade_date",
+        "dividend",
+        "payout_ratio",
+        "dividend_percent",
+        "currency",
+        "updated_at",
+    ]
+
+
+def _pick_column(df, candidates, required=True):
+    normalized = {str(column).strip().lower(): column for column in df.columns}
+    for candidate in candidates:
+        column = normalized.get(str(candidate).lower())
+        if column is not None:
+            return column
+    if required:
+        raise ValueError(f"missing required column: {candidates[0]}")
+    return None
+
+
+def _read_yfinance_dividend_frame(file_path, price_column="Close"):
+    file_path = Path(file_path)
+    ticker = normalize_yfinance_ticker(file_path.stem)
+    raw = pd.read_csv(file_path)
+    if raw.empty:
+        return pd.DataFrame(columns=_dividend_schema_columns())
+
+    date_col = _pick_column(raw, ["Date", "Datetime", "trade_date", "date", "index"])
+    dividend_col = _pick_column(raw, ["Dividends", "dividends", "dividend"], required=False)
+    close_col = _pick_column(raw, [price_column, "Close", "close", "Adj Close", "adj_close"], required=False)
+    if dividend_col is None:
+        return pd.DataFrame(columns=_dividend_schema_columns())
+
+    close_values = (
+        pd.to_numeric(raw[close_col], errors="coerce")
+        if close_col
+        else pd.Series([pd.NA] * len(raw), index=raw.index)
+    )
+    df = pd.DataFrame(
+        {
+            "security_id": security_id_of(ticker, US_MARKET_CONFIG),
+            "trade_date": pd.to_datetime(raw[date_col], errors="coerce"),
+            "dividend": pd.to_numeric(raw[dividend_col], errors="coerce"),
+            "_close": close_values,
+        }
+    )
+    df = df.dropna(subset=["trade_date", "dividend"])
+    df = df.loc[df["dividend"] > 0].copy()
+    if df.empty:
+        return pd.DataFrame(columns=_dividend_schema_columns())
+
+    updated_at = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    df["payout_ratio"] = pd.NA
+    df["dividend_percent"] = (df["dividend"] / df["_close"]) * 100
+    df.loc[pd.to_numeric(df["_close"], errors="coerce") <= 0, "dividend_percent"] = pd.NA
+    df["currency"] = US_MARKET_CONFIG.currency
+    df["updated_at"] = updated_at
+    df = df[_dividend_schema_columns()]
+    return coerce_dividend_result_dtypes(df).sort_values(["security_id", "trade_date"]).reset_index(drop=True)
+
+
+def create_us_stock_dividend_dataframe(
+    stock_code=None,
+    *,
+    path=None,
+    price_column="Close",
+):
+    schema_columns = _dividend_schema_columns()
+    if path is not None:
+        files = [Path(path)]
+    elif stock_code is not None:
+        files = [us_price_base_dir / f"{normalize_yfinance_ticker(stock_code)}.csv"]
+    else:
+        files = sorted(us_price_base_dir.glob("*.csv"))
+
+    frames = []
+    for file_path in files:
+        if not file_path.exists():
+            continue
+        frames.append(_read_yfinance_dividend_frame(file_path, price_column=price_column))
+
+    non_empty = [frame for frame in frames if frame is not None and not frame.empty]
+    if not non_empty:
+        return pd.DataFrame(columns=schema_columns)
+    return pd.concat(non_empty, ignore_index=True).sort_values(["security_id", "trade_date"]).reset_index(drop=True)
+
+
 def calculate_daily_dividend_yield(
     stock_code,
     year,
@@ -998,21 +1092,21 @@ def create_stock_dividend_dataframe(
     share_type="보통주식",
     price_column="close",
     path=None,
+    *,
+    market="kr",
 ):
     import pandas as pd
+
+    market = str(market or "kr").strip().lower()
+    if market == "us":
+        return create_us_stock_dividend_dataframe(stock_code, path=path, price_column=price_column)
+    if market != "kr":
+        raise ValueError(f"unsupported market: {market}")
 
     stock_code = normalize_stock_code(stock_code)
     price_df = get_daily_stock_prices(stock_code, path)
 
-    schema_columns = [
-        "security_id",
-        "trade_date",
-        "dividend",
-        "payout_ratio",
-        "dividend_percent",
-        "currency",
-        "updated_at",
-    ]
+    schema_columns = _dividend_schema_columns()
 
     if price_df.empty:
         return pd.DataFrame(columns=schema_columns)
@@ -1062,24 +1156,25 @@ def create_stock_dividend_dataframe(
 def create_all_stock_dividend_dataframe(
     share_type="보통주식",
     price_column="close",
+    *,
+    market="kr",
+    path=None,
 ):
+    market = str(market or "kr").strip().lower()
+    if market == "us":
+        return create_us_stock_dividend_dataframe(path=path, price_column=price_column)
+    if market != "kr":
+        raise ValueError(f"unsupported market: {market}")
+
     from engine.extractors.market_universe import kospi_kosdaq_corp_list
 
-    schema_columns = [
-        "security_id",
-        "trade_date",
-        "dividend",
-        "payout_ratio",
-        "dividend_percent",
-        "currency",
-        "updated_at",
-    ]
+    schema_columns = _dividend_schema_columns()
     corps_list = kospi_kosdaq_corp_list()
     stock_codes = sorted(
         normalize_stock_code(stock_code)
         for stock_code in corps_list["stock_code"].dropna().tolist()
     )
-    resolved_path = resolve_price_file_path()
+    resolved_path = resolve_price_file_path(path)
 
     if not resolved_path.exists():
         print(f"[SKIP] 파일 없음: {resolved_path}")
