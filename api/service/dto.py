@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from api.service.style_score_catalog import DEFAULT_FACTOR_SCREEN_STYLE_PROFILE
+
 
 ConditionMode = Literal["top_percent", "threshold"]
 MatchMode = Literal["all", "any"]
@@ -212,7 +214,7 @@ class FactorScreenRequestDto(BaseModel):
     conditions: list[FactorConditionDto] = Field(..., min_length=1)
     as_of_date: date | None = None
     financial_basis: str | None = "annual"
-    style_profile: StyleProfile = "DEFAULT"
+    style_profile: StyleProfile = DEFAULT_FACTOR_SCREEN_STYLE_PROFILE
     sector_codes: list[str] | None = None
     industry_group_codes: list[str] | None = None
     match_mode: MatchMode = "all"

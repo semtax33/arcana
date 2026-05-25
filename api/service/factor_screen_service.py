@@ -18,6 +18,8 @@ from api.repository.factor_screen_query import (
 )
 from api.service.dto import FactorConditionDto, FactorScreenRequestDto
 from api.service.style_score_catalog import (
+    DEFAULT_FACTOR_SCREEN_STYLE_PROFILE,
+    DEFAULT_SCREEN_STYLE_PROFILE,
     canonical_style_score_factor_id,
     is_style_score_factor,
     style_score_factor_metadata,
@@ -49,7 +51,7 @@ class FactorScreenService:
                 conditions,
                 as_of_date=request.as_of_date,
                 financial_basis=request.financial_basis or DEFAULT_FINANCIAL_BASIS,
-                style_profile=request.style_profile,
+                style_profile=_resolve_style_profile(request.style_profile, conditions),
                 sector_codes=request.sector_codes,
                 industry_group_codes=request.industry_group_codes,
                 match_mode=request.match_mode,
@@ -113,6 +115,19 @@ WHERE has({factor_ids:Array(String)}, factor_id)
     rows = client.query_df(query, parameters={"factor_ids": factor_ids}).to_dict("records")
     metadata.update({str(row["factor_id"]): row for row in rows})
     return metadata
+
+
+def _resolve_style_profile(
+    requested_profile: str | None,
+    conditions: list[FactorCondition],
+) -> str | None:
+    if not any(is_style_score_factor(condition.factor_id) for condition in conditions):
+        return requested_profile
+
+    profile = str(requested_profile or "").strip().upper()
+    if not profile or profile == DEFAULT_SCREEN_STYLE_PROFILE:
+        return DEFAULT_FACTOR_SCREEN_STYLE_PROFILE
+    return profile
 
 
 def _build_factor_columns(

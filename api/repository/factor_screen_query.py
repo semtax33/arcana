@@ -8,7 +8,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from api.service.style_score_catalog import (
-    DEFAULT_SCREEN_STYLE_PROFILE,
+    DEFAULT_FACTOR_SCREEN_STYLE_PROFILE,
     STYLE_SCORE_FACTORS,
     canonical_style_score_factor_id,
     is_style_score_factor,
@@ -206,7 +206,7 @@ def build_factor_screen_query(
     *,
     as_of_date: str | date | None = None,
     financial_basis: str | None = DEFAULT_FINANCIAL_BASIS,
-    style_profile: str | None = DEFAULT_SCREEN_STYLE_PROFILE,
+    style_profile: str | None = DEFAULT_FACTOR_SCREEN_STYLE_PROFILE,
     sector_codes: list[str] | None = None,
     industry_group_codes: list[str] | None = None,
     match_mode: MatchMode = "all",
@@ -497,7 +497,7 @@ def screen_stocks_by_factors(
     *,
     as_of_date: str | date | None = None,
     financial_basis: str | None = DEFAULT_FINANCIAL_BASIS,
-    style_profile: str | None = DEFAULT_SCREEN_STYLE_PROFILE,
+    style_profile: str | None = DEFAULT_FACTOR_SCREEN_STYLE_PROFILE,
     sector_codes: list[str] | None = None,
     industry_group_codes: list[str] | None = None,
     match_mode: MatchMode = "all",
@@ -656,7 +656,7 @@ def _validate_style_score_column(column_name: str) -> str:
 
 
 def _normalize_style_profile(value: str | None) -> str:
-    return str(value or DEFAULT_SCREEN_STYLE_PROFILE).strip().upper()
+    return str(value or DEFAULT_FACTOR_SCREEN_STYLE_PROFILE).strip().upper()
 
 
 def _escape_sql_string(value: str) -> str:

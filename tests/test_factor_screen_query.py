@@ -151,6 +151,7 @@ class FactorScreenQueryTest(unittest.TestCase):
 
         self.assertEqual(params["factor_ids"], ["style_total_score"])
         self.assertEqual(params["condition_0_factor_id"], "style_total_score")
+        self.assertEqual(params["style_profile"], "MINERVINI_ZWEIG")
         self.assertNotIn("selected_catalog AS", query)
         self.assertIn("FROM arcana.fact_daily_style_score AS s", query)
 

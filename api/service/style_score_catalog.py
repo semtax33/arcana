@@ -5,6 +5,7 @@ from typing import Any
 
 
 DEFAULT_SCREEN_STYLE_PROFILE = "DEFAULT"
+DEFAULT_FACTOR_SCREEN_STYLE_PROFILE = "MINERVINI_ZWEIG"
 
 
 @dataclass(frozen=True)
