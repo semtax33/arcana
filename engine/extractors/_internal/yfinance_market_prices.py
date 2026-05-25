@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import StringIO
 from pathlib import Path
+import re
 import ssl
 from time import sleep
 from typing import Iterable
@@ -29,8 +30,37 @@ INCLUDED_EQUITY_PATTERN = (
     r"\b(?:common stock|common shares?|ordinary shares?|ordinary stock|"
     r"american depositary|adr|ads|preferred|preference|depositary shares?)\b"
 )
-CLASS_STOCK_PATTERN = r"\bclass\s+(?:a|b|c|d|e|f|g|h|i|ii|iii|iv|v)\b"
 PREFERRED_OR_ADR_PATTERN = r"\b(?:preferred|preference|american depositary|adr|ads|depositary shares?)\b"
+SHARE_CLASS_PATTERN = re.compile(
+    r"\bclass\s+(?P<class>iii|ii|iv|v|a|b|c|d|e|f|g|h|i)\b",
+    flags=re.IGNORECASE,
+)
+SYMBOL_CLASS_PATTERN = re.compile(r"[./-](?P<class>[A-Z])$")
+NON_VOTING_PATTERN = re.compile(
+    r"\b(?:non[- ]?voting|no voting|without voting)\b",
+    flags=re.IGNORECASE,
+)
+LIMITED_VOTING_PATTERN = re.compile(
+    r"\b(?:limited voting|restricted voting|low voting)\b",
+    flags=re.IGNORECASE,
+)
+# NasdaqTrader names rarely expose exact votes. This keeps explicit non-voting first,
+# then uses a conservative US dual-class heuristic for public share classes.
+CLASS_VOTING_PRIORITY = {
+    "C": 0,
+    "A": 1,
+    "B": 2,
+    "D": 3,
+    "E": 4,
+    "F": 5,
+    "G": 6,
+    "H": 7,
+    "I": 8,
+    "II": 9,
+    "III": 10,
+    "IV": 11,
+    "V": 12,
+}
 
 
 def download_us_price_histories(
@@ -148,11 +178,6 @@ def filter_us_equity_universe(nasdaq: pd.DataFrame, other: pd.DataFrame) -> pd.D
         regex=True,
         na=False,
     )
-    is_class_stock = combined["security_name_lower"].str.contains(
-        CLASS_STOCK_PATTERN,
-        regex=True,
-        na=False,
-    )
     has_included_equity_text = combined["security_name_lower"].str.contains(
         INCLUDED_EQUITY_PATTERN,
         regex=True,
@@ -170,9 +195,9 @@ def filter_us_equity_universe(nasdaq: pd.DataFrame, other: pd.DataFrame) -> pd.D
         & combined["test_issue"].ne("Y")
         & has_included_equity_text
         & (~has_excluded_instrument_text | preferred_or_adr)
-        & (~is_class_stock | preferred_or_adr)
     )
     result = combined.loc[keep, _universe_columns()].copy()
+    result = _keep_lowest_voting_share_classes(result)
     result = result.drop_duplicates("ticker", keep="first")
     return result.sort_values("ticker").reset_index(drop=True)
 
@@ -225,6 +250,81 @@ def _universe_columns() -> list[str]:
         "is_etf",
         "test_issue",
     ]
+
+
+def _keep_lowest_voting_share_classes(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+
+    ranked = frame.copy()
+    ranked["_share_class"] = ranked.apply(_share_class_of_row, axis=1)
+    class_mask = ranked["_share_class"].ne("")
+    if not class_mask.any():
+        return ranked.drop(columns=["_share_class"])
+
+    ranked["_issuer_key"] = ranked.apply(_issuer_group_key_of_row, axis=1)
+    ranked["_voting_rank"] = ranked.apply(_voting_rank_of_row, axis=1)
+
+    keep_indexes = set(ranked.index[~class_mask])
+    class_rows = ranked.loc[class_mask].copy()
+    for _, group in class_rows.groupby("_issuer_key", sort=False):
+        ordered = group.sort_values(["_voting_rank", "ticker"], kind="stable")
+        keep_indexes.add(ordered.index[0])
+
+    return (
+        ranked.loc[sorted(keep_indexes)]
+        .drop(columns=["_share_class", "_issuer_key", "_voting_rank"])
+        .reset_index(drop=True)
+    )
+
+
+def _share_class_of_row(row: pd.Series) -> str:
+    security_name = str(row.get("security_name", ""))
+    if re.search(PREFERRED_OR_ADR_PATTERN, security_name, flags=re.IGNORECASE):
+        return ""
+
+    name_match = SHARE_CLASS_PATTERN.search(security_name)
+    if name_match:
+        return name_match.group("class").upper()
+
+    raw_symbol = str(row.get("raw_symbol", ""))
+    symbol_match = SYMBOL_CLASS_PATTERN.search(raw_symbol.upper())
+    if symbol_match:
+        return symbol_match.group("class").upper()
+
+    return ""
+
+
+def _issuer_group_key_of_row(row: pd.Series) -> str:
+    name = str(row.get("security_name", "")).lower()
+    name = SHARE_CLASS_PATTERN.sub("", name)
+    name = re.sub(r"\([^)]*\)", " ", name)
+    name = re.sub(
+        r"\b(?:common|ordinary|capital)\s+(?:stock|shares?)\b",
+        " ",
+        name,
+    )
+    name = re.sub(r"\b(?:stock|shares?)\b", " ", name)
+    name = re.sub(
+        r"\b(?:new|incorporated|inc|corp|corporation|plc|ltd|limited|company|co)\b",
+        " ",
+        name,
+    )
+    name = re.sub(r"[^a-z0-9]+", " ", name).strip()
+    if name:
+        return name
+    return normalize_yfinance_ticker(row.get("raw_symbol", ""))
+
+
+def _voting_rank_of_row(row: pd.Series) -> int:
+    security_name = str(row.get("security_name", ""))
+    if NON_VOTING_PATTERN.search(security_name):
+        return -2
+    if LIMITED_VOTING_PATTERN.search(security_name):
+        return -1
+
+    share_class = str(row.get("_share_class", "")).upper()
+    return CLASS_VOTING_PRIORITY.get(share_class, 99)
 
 
 def _download_text(url: str) -> str:

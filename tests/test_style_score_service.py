@@ -98,7 +98,7 @@ class FakeClickHouseClient:
                         "score_confidence": 1.0,
                     },
                     {
-                        "factor_id": "sharehold_div_yield",
+                        "factor_id": "fcf_dividend_coverage",
                         "style_group": "DIVIDEND",
                         "factor_direction": 1,
                         "raw_factor_value": 3.0,
@@ -206,7 +206,7 @@ class StyleScoreServiceTest(unittest.TestCase):
         self.assertEqual(by_key["QUALITY"].score, 80.0)
         self.assertEqual(by_key["DIVIDEND"].label, "Dividend & Shareholder Return")
         self.assertEqual(by_key["DIVIDEND"].score, 55.0)
-        self.assertEqual(by_key["DIVIDEND"].required_factor_count, 5)
+        self.assertEqual(by_key["DIVIDEND"].required_factor_count, 12)
         self.assertEqual(by_key["DIVIDEND"].available_factor_count, 2)
         self.assertGreater(by_key["VALUE"].required_factor_count, 1)
 
@@ -237,10 +237,11 @@ class StyleScoreServiceTest(unittest.TestCase):
         by_factor = {factor.factor_id: factor for factor in result.factors}
         self.assertIn("dividend_yield", by_factor)
         self.assertEqual(by_factor["dividend_yield"].label, "DIVIDEND_YIELD")
-        self.assertAlmostEqual(by_factor["dividend_yield"].factor_weight, 0.30)
-        self.assertAlmostEqual(by_factor["dividend_yield"].weighted_score, 24.0)
-        self.assertAlmostEqual(by_factor["sharehold_div_yield"].factor_weight, 0.15)
-        self.assertEqual(by_factor["sharehold_net_buyback_yield"].label, "NET_BUYBACK_YIELD")
+        self.assertAlmostEqual(by_factor["dividend_yield"].factor_weight, 0.14)
+        self.assertAlmostEqual(by_factor["dividend_yield"].weighted_score, 11.2)
+        self.assertAlmostEqual(by_factor["fcf_dividend_coverage"].factor_weight, 0.12)
+        self.assertEqual(by_factor["fcf_dividend_coverage"].label, "FCF_DIVIDEND_COVERAGE")
+        self.assertEqual(by_factor["fcf_payout_ratio"].label, "FCF_PAYOUT_RATIO")
 
     def test_resolve_available_trade_date_returns_latest_loaded_date(self):
         client = FakeClickHouseClient()

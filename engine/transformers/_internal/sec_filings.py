@@ -5,6 +5,8 @@ import json
 import math
 import os
 import re
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -77,10 +79,26 @@ class SecFactCandidate:
         return SOURCE_PRIORITY.get(self.source, 99)
 
 
+@dataclass(frozen=True)
+class CompanyFactsExtractResult:
+    path: str
+    symbol: str
+    cik: str
+    entity_name: str
+    candidates: list[SecFactCandidate]
+    has_usable_facts: bool
+    error: str = ""
+
+
 EdgarToolsProvider = Callable[
     [str, str, str, list[dict[str, Any]], int, int],
     list[dict[str, Any]],
 ]
+
+_COMPANYFACTS_WORKER_RULES: list[dict[str, Any]] = []
+_COMPANYFACTS_WORKER_CANONICAL_NAMES: dict[str, str] = {}
+_COMPANYFACTS_WORKER_START_YEAR = 0
+_COMPANYFACTS_WORKER_END_YEAR = 0
 
 
 def load_us_mapping_rules(path: str | Path = US_MAPPING_RULE_PATH) -> dict[str, Any]:
@@ -352,6 +370,28 @@ def extract_companyfacts_candidates(
 ) -> list[SecFactCandidate]:
     path = Path(companyfacts_path)
     data = json.loads(path.read_text(encoding="utf-8"))
+    return extract_companyfacts_candidates_from_data(
+        data,
+        companyfacts_path=path,
+        symbol=symbol,
+        rules=rules,
+        canonical_names=canonical_names,
+        start_year=start_year,
+        end_year=end_year,
+    )
+
+
+def extract_companyfacts_candidates_from_data(
+    data: dict[str, Any],
+    *,
+    companyfacts_path: str | Path,
+    symbol: str,
+    rules: list[dict[str, Any]],
+    canonical_names: dict[str, str],
+    start_year: int,
+    end_year: int,
+) -> list[SecFactCandidate]:
+    path = Path(companyfacts_path)
     cik = normalize_cik(data.get("cik")) or normalize_cik(path.stem)
     entity_name = safe_str(data.get("entityName"))
     facts = data.get("facts", {}) or {}
@@ -395,12 +435,7 @@ def extract_companyfacts_candidates(
     return candidates
 
 
-def companyfacts_has_usable_facts(companyfacts_path: str | Path) -> bool:
-    try:
-        data = json.loads(Path(companyfacts_path).read_text(encoding="utf-8"))
-    except Exception:
-        return False
-
+def companyfacts_data_has_usable_facts(data: dict[str, Any]) -> bool:
     facts = data.get("facts")
     if not isinstance(facts, dict):
         return False
@@ -409,6 +444,218 @@ def companyfacts_has_usable_facts(companyfacts_path: str | Path) -> bool:
         isinstance(namespace_facts, dict) and bool(namespace_facts)
         for namespace_facts in facts.values()
     )
+
+
+def companyfacts_has_usable_facts(companyfacts_path: str | Path) -> bool:
+    try:
+        data = json.loads(Path(companyfacts_path).read_text(encoding="utf-8"))
+    except Exception:
+        return False
+
+    return companyfacts_data_has_usable_facts(data)
+
+
+def extract_companyfacts_file(
+    path: str | Path,
+    symbol: str,
+    cik: str,
+    rules: list[dict[str, Any]],
+    canonical_names: dict[str, str],
+    start_year: int,
+    end_year: int,
+) -> CompanyFactsExtractResult:
+    path = Path(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        candidates = extract_companyfacts_candidates_from_data(
+            data,
+            companyfacts_path=path,
+            symbol=symbol,
+            rules=rules,
+            canonical_names=canonical_names,
+            start_year=start_year,
+            end_year=end_year,
+        )
+    except Exception as exc:
+        return CompanyFactsExtractResult(
+            path=str(path),
+            symbol=symbol,
+            cik=cik,
+            entity_name="",
+            candidates=[],
+            has_usable_facts=False,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+    entity_name = ""
+    if candidates:
+        entity_name = candidates[0].entity_name
+    else:
+        entity_name = safe_str(data.get("entityName"))
+
+    return CompanyFactsExtractResult(
+        path=str(path),
+        symbol=symbol,
+        cik=cik,
+        entity_name=entity_name,
+        candidates=candidates,
+        has_usable_facts=companyfacts_data_has_usable_facts(data),
+    )
+
+
+def _init_companyfacts_worker(
+    rules: list[dict[str, Any]],
+    canonical_names: dict[str, str],
+    start_year: int,
+    end_year: int,
+) -> None:
+    global _COMPANYFACTS_WORKER_RULES
+    global _COMPANYFACTS_WORKER_CANONICAL_NAMES
+    global _COMPANYFACTS_WORKER_START_YEAR
+    global _COMPANYFACTS_WORKER_END_YEAR
+
+    _COMPANYFACTS_WORKER_RULES = rules
+    _COMPANYFACTS_WORKER_CANONICAL_NAMES = canonical_names
+    _COMPANYFACTS_WORKER_START_YEAR = start_year
+    _COMPANYFACTS_WORKER_END_YEAR = end_year
+
+
+def _extract_companyfacts_file_worker(args: tuple[Path, str, str]) -> CompanyFactsExtractResult:
+    path, symbol, cik = args
+    return extract_companyfacts_file(
+        path,
+        symbol,
+        cik,
+        _COMPANYFACTS_WORKER_RULES,
+        _COMPANYFACTS_WORKER_CANONICAL_NAMES,
+        _COMPANYFACTS_WORKER_START_YEAR,
+        _COMPANYFACTS_WORKER_END_YEAR,
+    )
+
+
+def _resolve_worker_count(workers: int | None) -> int:
+    if workers is None:
+        return 1
+    workers = int(workers)
+    if workers == 0:
+        return max(1, os.cpu_count() or 1)
+    return max(1, workers)
+
+
+def _should_log_progress(processed_count: int, total_count: int, progress_interval: int) -> bool:
+    if not total_count:
+        return False
+    if processed_count == total_count:
+        return True
+    return progress_interval > 0 and processed_count % progress_interval == 0
+
+
+def _log_companyfacts_progress(
+    *,
+    processed_count: int,
+    total_count: int,
+    candidate_count: int,
+    empty_count: int,
+    failed_count: int,
+    started_at: float,
+    progress_interval: int,
+) -> None:
+    if not _should_log_progress(processed_count, total_count, progress_interval):
+        return
+
+    elapsed = time.monotonic() - started_at
+    print(
+        "[PROGRESS] companyfacts "
+        f"processed={processed_count}/{total_count}, "
+        f"candidates={candidate_count}, empty={empty_count}, "
+        f"failed={failed_count}, elapsed={elapsed:.1f}s"
+    )
+
+
+def extract_companyfacts_files(
+    files: list[tuple[Path, str, str]],
+    *,
+    rules: list[dict[str, Any]],
+    canonical_names: dict[str, str],
+    start_year: int,
+    end_year: int,
+    workers: int = 1,
+    log_progress: bool = True,
+    progress_interval: int = 100,
+) -> list[CompanyFactsExtractResult]:
+    total_count = len(files)
+    if not total_count:
+        return []
+
+    started_at = time.monotonic()
+    worker_count = min(_resolve_worker_count(workers), total_count)
+    tasks = [(path, symbol, cik) for path, symbol, cik in files]
+    if log_progress:
+        mode = "multiprocess" if worker_count > 1 else "single-process"
+        print(
+            "[INFO] companyfacts extraction start "
+            f"files={total_count}, workers={worker_count}, mode={mode}"
+        )
+
+    results: list[CompanyFactsExtractResult] = []
+    processed_count = 0
+    candidate_count = 0
+    empty_count = 0
+    failed_count = 0
+
+    def collect(result: CompanyFactsExtractResult) -> None:
+        nonlocal processed_count, candidate_count, empty_count, failed_count
+        results.append(result)
+        processed_count += 1
+        candidate_count += len(result.candidates)
+        if result.error:
+            failed_count += 1
+            print(f"[WARN] companyfacts skipped: {result.path} ({result.error})")
+        elif not result.has_usable_facts:
+            empty_count += 1
+        if log_progress:
+            _log_companyfacts_progress(
+                processed_count=processed_count,
+                total_count=total_count,
+                candidate_count=candidate_count,
+                empty_count=empty_count,
+                failed_count=failed_count,
+                started_at=started_at,
+                progress_interval=progress_interval,
+            )
+
+    if worker_count <= 1:
+        for path, symbol, cik in tasks:
+            collect(
+                extract_companyfacts_file(
+                    path,
+                    symbol,
+                    cik,
+                    rules,
+                    canonical_names,
+                    start_year,
+                    end_year,
+                )
+            )
+    else:
+        with ProcessPoolExecutor(
+            max_workers=worker_count,
+            initializer=_init_companyfacts_worker,
+            initargs=(rules, canonical_names, start_year, end_year),
+        ) as executor:
+            futures = [executor.submit(_extract_companyfacts_file_worker, task) for task in tasks]
+            for future in as_completed(futures):
+                collect(future.result())
+
+    if log_progress:
+        elapsed = time.monotonic() - started_at
+        print(
+            "[INFO] companyfacts extraction done "
+            f"files={total_count}, candidates={candidate_count}, "
+            f"empty={empty_count}, failed={failed_count}, elapsed={elapsed:.1f}s"
+        )
+
+    return results
 
 
 def _compile_patterns(values: Any) -> list[re.Pattern[str]]:
@@ -737,10 +984,14 @@ def extract_edgartools_candidates(
     start_year: int,
     end_year: int,
     provider: EdgarToolsProvider | None = None,
+    log_progress: bool = False,
+    progress_interval: int = 100,
 ) -> list[SecFactCandidate]:
     provider = provider or default_edgartools_provider
     candidates: list[SecFactCandidate] = []
-    for symbol in symbols:
+    total_count = len(symbols)
+    started_at = time.monotonic()
+    for index, symbol in enumerate(symbols, start=1):
         cik = cik_by_symbol.get(symbol, "")
         entity_name = name_by_symbol.get(symbol, "")
         for row in provider(symbol, cik, entity_name, rules, start_year, end_year):
@@ -776,6 +1027,13 @@ def extract_edgartools_candidates(
                     amount_policy=amount_policy,
                     cash_direction=safe_str(row.get("cash_direction")),
                 )
+            )
+        if log_progress and _should_log_progress(index, total_count, progress_interval):
+            elapsed = time.monotonic() - started_at
+            print(
+                "[PROGRESS] edgartools "
+                f"processed={index}/{total_count}, "
+                f"candidates={len(candidates)}, elapsed={elapsed:.1f}s"
             )
     return candidates
 
@@ -987,11 +1245,23 @@ def normalize_us_sec_filings(
     use_notes: bool = True,
     use_edgartools: bool = True,
     edgartools_provider: EdgarToolsProvider | None = None,
+    workers: int = 1,
+    log_progress: bool = True,
+    progress_interval: int = 100,
 ) -> list[Path]:
+    started_at = time.monotonic()
     rules = load_us_mapping_rules(mapping_rule_path)
     canonical_names = canonical_name_map(canonical_csv_path)
     ticker_map = load_sec_ticker_map(ticker_map_path)
     files = resolve_companyfacts_files(companyfacts_dir, symbols=symbols, ticker_map=ticker_map)
+    worker_count = min(_resolve_worker_count(workers), len(files) or 1)
+    if log_progress:
+        print(
+            "[INFO] US SEC normalize start "
+            f"symbols={len(symbols) if symbols else 'ALL'}, "
+            f"companyfacts_files={len(files)}, years={start_year}-{end_year}, "
+            f"workers={worker_count}, notes={use_notes}, edgartools={use_edgartools}"
+        )
     if ticker_map.empty:
         print(
             f"[WARN] SEC ticker map not found or empty: {ticker_map_path}. "
@@ -1008,45 +1278,53 @@ def normalize_us_sec_filings(
     symbol_to_name: dict[str, str] = {}
     symbols_with_local_facts: set[str] = set()
 
-    for path, symbol, cik in files:
-        if companyfacts_has_usable_facts(path):
-            symbols_with_local_facts.add(symbol)
+    companyfacts_results = extract_companyfacts_files(
+        files,
+        rules=rules.get("companyfacts_rules", []),
+        canonical_names=canonical_names,
+        start_year=start_year,
+        end_year=end_year,
+        workers=worker_count,
+        log_progress=log_progress,
+        progress_interval=progress_interval,
+    )
 
-        try:
-            company_candidates = extract_companyfacts_candidates(
-                path,
-                symbol=symbol,
-                rules=rules.get("companyfacts_rules", []),
-                canonical_names=canonical_names,
-                start_year=start_year,
-                end_year=end_year,
-            )
-        except Exception as exc:
-            print(f"[WARN] companyfacts skipped: {path} ({type(exc).__name__}: {exc})")
+    for result in companyfacts_results:
+        if result.error:
             continue
-
-        entity_name = ""
-        if company_candidates:
-            entity_name = company_candidates[0].entity_name
-            candidates.extend(company_candidates)
-        cik_to_symbol[cik] = symbol
-        symbol_to_cik[symbol] = cik
-        if entity_name:
-            cik_to_name[cik] = entity_name
-            symbol_to_name[symbol] = entity_name
+        if result.has_usable_facts:
+            symbols_with_local_facts.add(result.symbol)
+        if result.candidates:
+            candidates.extend(result.candidates)
+        cik_to_symbol[result.cik] = result.symbol
+        symbol_to_cik[result.symbol] = result.cik
+        if result.entity_name:
+            cik_to_name[result.cik] = result.entity_name
+            symbol_to_name[result.symbol] = result.entity_name
 
     if use_notes:
-        candidates.extend(
-            extract_notes_candidates(
-                notes_root,
-                cik_to_symbol=cik_to_symbol,
-                cik_to_name=cik_to_name,
-                rules=rules.get("notes_rules", []),
-                canonical_names=canonical_names,
-                start_year=start_year,
-                end_year=end_year,
+        notes_started_at = time.monotonic()
+        if log_progress:
+            print(
+                "[INFO] notes extraction start "
+                f"ciks={len(cik_to_symbol)}, root={notes_root}"
             )
+        notes_candidates = extract_notes_candidates(
+            notes_root,
+            cik_to_symbol=cik_to_symbol,
+            cik_to_name=cik_to_name,
+            rules=rules.get("notes_rules", []),
+            canonical_names=canonical_names,
+            start_year=start_year,
+            end_year=end_year,
         )
+        candidates.extend(notes_candidates)
+        if log_progress:
+            elapsed = time.monotonic() - notes_started_at
+            print(
+                "[INFO] notes extraction done "
+                f"candidates={len(notes_candidates)}, elapsed={elapsed:.1f}s"
+            )
 
     if use_edgartools:
         edgartools_symbols = sorted(symbol_to_cik)
@@ -1062,20 +1340,41 @@ def normalize_us_sec_filings(
                     f"{skipped_count} symbols with empty local SEC companyfacts files"
                 )
 
-        candidates.extend(
-            extract_edgartools_candidates(
-                symbols=edgartools_symbols,
-                cik_by_symbol=symbol_to_cik,
-                name_by_symbol=symbol_to_name,
-                rules=rules.get("edgartools_fallback_rules", []),
-                canonical_names=canonical_names,
-                start_year=start_year,
-                end_year=end_year,
-                provider=edgartools_provider,
-            )
+        edgartools_started_at = time.monotonic()
+        if log_progress:
+            print(f"[INFO] edgartools fallback start symbols={len(edgartools_symbols)}")
+        edgartools_candidates = extract_edgartools_candidates(
+            symbols=edgartools_symbols,
+            cik_by_symbol=symbol_to_cik,
+            name_by_symbol=symbol_to_name,
+            rules=rules.get("edgartools_fallback_rules", []),
+            canonical_names=canonical_names,
+            start_year=start_year,
+            end_year=end_year,
+            provider=edgartools_provider,
+            log_progress=log_progress,
+            progress_interval=progress_interval,
         )
+        candidates.extend(edgartools_candidates)
+        if log_progress:
+            elapsed = time.monotonic() - edgartools_started_at
+            print(
+                "[INFO] edgartools fallback done "
+                f"candidates={len(edgartools_candidates)}, elapsed={elapsed:.1f}s"
+            )
 
+    if log_progress:
+        print(f"[INFO] dedupe start candidates={len(candidates)}")
     deduped = dedupe_candidates(candidates)
+    if log_progress:
+        print(f"[INFO] dedupe done candidates={len(deduped)}")
+        print(f"[INFO] write outputs start output_dir={output_dir}")
     written = write_symbol_outputs(deduped, output_dir=output_dir, save_debug=save_debug)
     write_report_metadata(deduped, report_metadata_path)
+    if log_progress:
+        elapsed = time.monotonic() - started_at
+        print(
+            "[DONE] US SEC normalize "
+            f"written={len(written)}, elapsed={elapsed:.1f}s"
+        )
     return written

@@ -337,6 +337,18 @@ def main() -> None:
     parser.add_argument("--no-debug", action="store_true")
     parser.add_argument("--no-notes", action="store_true")
     parser.add_argument("--no-edgartools", action="store_true")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="US companyfacts worker processes. Use 1 for single process, 0 for CPU count.",
+    )
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=100,
+        help="US normalize progress log interval by processed symbols/files.",
+    )
     args = parser.parse_args()
 
     if args.market == "kr":
@@ -360,6 +372,8 @@ def main() -> None:
         save_debug=not args.no_debug,
         use_notes=not args.no_notes,
         use_edgartools=not args.no_edgartools,
+        workers=args.workers,
+        progress_interval=args.progress_interval,
     )
     print(f"[DONE] market=us written={len(written)}")
 

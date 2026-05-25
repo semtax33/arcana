@@ -58,7 +58,22 @@ FACTOR_ALIASES = {
     "SHAREHOLDER_DIVIDEND_YIELD": "sharehold_div_yield",
     "NET_BUYBACK_YIELD": "sharehold_net_buyback_yield",
     "SHAREHOLDER_RETURN": "sharehold_return",
+    "SHAREHOLDER_YIELD": "shareholder_yield",
     "PAYOUT_RATIO": "payout_ratio",
+    "EARNINGS_PAYOUT_RATIO": "earnings_payout_ratio",
+    "FCF_PAYOUT_RATIO": "fcf_payout_ratio",
+    "FCF_DIVIDEND_COVERAGE": "fcf_dividend_coverage",
+    "FCF_AFTER_DIVIDENDS": "fcf_after_dividends",
+    "FCF_AFTER_DIVIDENDS_TO_MARKET_CAP": "fcf_after_dividends_to_market_cap_pct",
+    "SHAREHOLDER_RETURN_FCF_COVERAGE": "shareholder_return_fcf_coverage",
+    "FCFE_DIVIDEND_COVERAGE": "fcfe_dividend_coverage",
+    "FCFE_PAYOUT_RATIO": "fcfe_payout_ratio",
+    "FCF_YIELD_DIVIDEND_YIELD_SPREAD": "fcf_yield_dividend_yield_spread",
+    "EPS_DIVIDEND_COVERAGE": "eps_dividend_coverage",
+    "DPS_CAGR_5Y": "dps_cagr_5y",
+    "DIVIDEND_CONSISTENCY_STREAK": "dividend_consistency_streak",
+    "DPS_VOLATILITY_5Y": "dps_volatility_5y",
+    "DIVIDEND_CUT": "dividend_cut",
 }
 
 
@@ -99,11 +114,18 @@ STYLE_WEIGHTS = {
         "mdd1yr_12_1_pct": 0.20,
     },
     STYLE_DIVIDEND: {
-        "dividend_yield": 0.30,
-        "sharehold_div_yield": 0.15,
-        "sharehold_net_buyback_yield": 0.19,
-        "sharehold_return": 0.21,
-        "payout_ratio": 0.15,
+        "dividend_yield": 0.14,
+        "shareholder_yield": 0.12,
+        "fcf_dividend_coverage": 0.12,
+        "shareholder_return_fcf_coverage": 0.10,
+        "fcfe_dividend_coverage": 0.08,
+        "fcf_payout_ratio": 0.10,
+        "payout_ratio": 0.07,
+        "fcf_yield_dividend_yield_spread": 0.08,
+        "dps_cagr_5y": 0.07,
+        "dividend_consistency_streak": 0.05,
+        "dps_volatility_5y": 0.04,
+        "dividend_cut": 0.03,
     },
 }
 
@@ -140,6 +162,14 @@ LOWER_BETTER_FACTORS = {
     "debt_to_equity",
     "net_debt_to_ebitda",
     "vol_12_1_ann",
+    "payout_ratio",
+    "earnings_payout_ratio",
+    "fcf_payout_ratio",
+    "fcfe_payout_ratio",
+    "dps_volatility_5y",
+    "dps_volatility_10y",
+    "dividend_cut",
+    "special_dividend_ratio_pct",
 }
 
 
@@ -156,7 +186,20 @@ VALUE_LIMITS = {
     "dividend_yield": (0.0, 100.0),
     "sharehold_net_buyback_yield": (-100.0, 100.0),
     "sharehold_return": (-100.0, 100.0),
+    "shareholder_yield": (-100.0, 100.0),
     "payout_ratio": (0.0, 300.0),
+    "earnings_payout_ratio": (0.0, 300.0),
+    "fcf_payout_ratio": (0.0, 300.0),
+    "fcfe_payout_ratio": (0.0, 300.0),
+    "fcf_dividend_coverage": (-50.0, 100.0),
+    "shareholder_return_fcf_coverage": (-50.0, 100.0),
+    "fcfe_dividend_coverage": (-50.0, 100.0),
+    "fcf_yield_dividend_yield_spread": (-100.0, 100.0),
+    "eps_dividend_coverage": (-50.0, 100.0),
+    "dps_cagr_5y": (-100.0, 500.0),
+    "dividend_consistency_streak": (0.0, 100.0),
+    "dps_volatility_5y": (0.0, 1_000_000_000.0),
+    "dividend_cut": (0.0, 1.0),
 }
 
 

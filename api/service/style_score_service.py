@@ -48,7 +48,17 @@ FACTOR_LABELS = {
     "sharehold_div_yield": "SHAREHOLDER_DIVIDEND_YIELD",
     "sharehold_net_buyback_yield": "NET_BUYBACK_YIELD",
     "sharehold_return": "SHAREHOLDER_RETURN",
+    "shareholder_yield": "SHAREHOLDER_YIELD",
     "payout_ratio": "PAYOUT_RATIO",
+    "fcf_payout_ratio": "FCF_PAYOUT_RATIO",
+    "fcf_dividend_coverage": "FCF_DIVIDEND_COVERAGE",
+    "shareholder_return_fcf_coverage": "SHAREHOLDER_RETURN_FCF_COVERAGE",
+    "fcfe_dividend_coverage": "FCFE_DIVIDEND_COVERAGE",
+    "fcf_yield_dividend_yield_spread": "FCF_YIELD_DIVIDEND_YIELD_SPREAD",
+    "dps_cagr_5y": "DPS_CAGR_5Y",
+    "dividend_consistency_streak": "DIVIDEND_CONSISTENCY_STREAK",
+    "dps_volatility_5y": "DPS_VOLATILITY_5Y",
+    "dividend_cut": "DIVIDEND_CUT",
 }
 
 

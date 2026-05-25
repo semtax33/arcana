@@ -24,9 +24,13 @@ class StyleScorePipelineTest(unittest.TestCase):
         self.assertEqual(canonical_factor_id("DIVIDEND_YIELD"), "dividend_yield")
         self.assertEqual(canonical_factor_id("MARKET_DIVIDEND_YIELD"), "dividend_yield")
         self.assertEqual(canonical_factor_id("SHAREHOLDER_RETURN"), "sharehold_return")
+        self.assertEqual(canonical_factor_id("FCF_DIVIDEND_COVERAGE"), "fcf_dividend_coverage")
+        self.assertEqual(canonical_factor_id("SHAREHOLDER_YIELD"), "shareholder_yield")
         self.assertEqual(canonical_factor_id("roe"), "roe")
         self.assertEqual(factor_direction("EARNINGS_YIELD"), 1)
         self.assertEqual(factor_direction("DEBT_TO_EQUITY"), -1)
+        self.assertEqual(factor_direction("FCF_PAYOUT_RATIO"), -1)
+        self.assertEqual(factor_direction("DIVIDEND_CUT"), -1)
 
     def test_universe_query_uses_current_industry_columns(self):
         query = _build_universe_query()
@@ -155,10 +159,17 @@ class StyleScorePipelineTest(unittest.TestCase):
         factor_scores = pd.DataFrame(
             [
                 _factor_score_row("dividend_yield", 90.0, style_group="DIVIDEND"),
-                _factor_score_row("sharehold_div_yield", 80.0, style_group="DIVIDEND"),
-                _factor_score_row("sharehold_net_buyback_yield", 20.0, style_group="DIVIDEND"),
-                _factor_score_row("sharehold_return", 70.0, style_group="DIVIDEND"),
-                _factor_score_row("payout_ratio", 60.0, style_group="DIVIDEND"),
+                _factor_score_row("shareholder_yield", 70.0, style_group="DIVIDEND"),
+                _factor_score_row("fcf_dividend_coverage", 80.0, style_group="DIVIDEND"),
+                _factor_score_row("shareholder_return_fcf_coverage", 75.0, style_group="DIVIDEND"),
+                _factor_score_row("fcfe_dividend_coverage", 65.0, style_group="DIVIDEND"),
+                _factor_score_row("fcf_payout_ratio", 60.0, style_group="DIVIDEND"),
+                _factor_score_row("payout_ratio", 50.0, style_group="DIVIDEND"),
+                _factor_score_row("fcf_yield_dividend_yield_spread", 85.0, style_group="DIVIDEND"),
+                _factor_score_row("dps_cagr_5y", 55.0, style_group="DIVIDEND"),
+                _factor_score_row("dividend_consistency_streak", 95.0, style_group="DIVIDEND"),
+                _factor_score_row("dps_volatility_5y", 40.0, style_group="DIVIDEND"),
+                _factor_score_row("dividend_cut", 100.0, style_group="DIVIDEND"),
             ]
         )
 
@@ -169,9 +180,9 @@ class StyleScorePipelineTest(unittest.TestCase):
         )
 
         row = result.iloc[0]
-        self.assertAlmostEqual(row["dividend_score"], 66.5)
-        self.assertAlmostEqual(row["total_score"], 66.5)
-        self.assertEqual(row["available_factor_count"], 5)
+        self.assertAlmostEqual(row["dividend_score"], 72.8)
+        self.assertAlmostEqual(row["total_score"], 72.8)
+        self.assertEqual(row["available_factor_count"], 12)
 
     def test_dividend_style_score_includes_market_dividend_yield(self):
         factor_scores = pd.DataFrame(
@@ -190,7 +201,7 @@ class StyleScorePipelineTest(unittest.TestCase):
         self.assertAlmostEqual(row["dividend_score"], 80.0)
         self.assertAlmostEqual(row["total_score"], 80.0)
         self.assertEqual(row["available_factor_count"], 1)
-        self.assertIn("sharehold_div_yield", row["missing_factor_ids"])
+        self.assertIn("fcf_dividend_coverage", row["missing_factor_ids"])
 
     def test_load_trade_dates_uses_price_calendar(self):
         client = _RangeQueryClient()

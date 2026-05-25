@@ -117,6 +117,20 @@ class FactorEltTest(unittest.TestCase):
         factor_ids = [
             "rnd_margin",
             "fcf_margin",
+            "fcf_payout_ratio",
+            "fcf_dividend_coverage",
+            "fcf_after_dividends",
+            "fcf_yield",
+            "fcf_yield_dividend_yield_spread",
+            "fcf_negative_freq_5y_pct",
+            "capex_to_sales_pct",
+            "net_debt_to_fcf",
+            "fcf_interest_coverage",
+            "eps_dividend_coverage",
+            "dps_cagr_5y",
+            "dividend_consistency_streak",
+            "dividend_cut",
+            "shareholder_yield",
             "sales_cagr_3y",
             "rnd_to_sales",
             "operating_profit_margin",
@@ -141,6 +155,22 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(row_by_id.loc["rnd_margin", "factor_type"], "quality")
         self.assertEqual(row_by_id.loc["rnd_margin", "unit"], "percent")
         self.assertEqual(row_by_id.loc["fcf_margin", "factor_type"], "quality")
+        self.assertEqual(row_by_id.loc["fcf_payout_ratio", "factor_type"], "shareholder")
+        self.assertEqual(row_by_id.loc["fcf_payout_ratio", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["fcf_payout_ratio", "value_direction"], "LOWER_BETTER")
+        self.assertEqual(row_by_id.loc["fcf_dividend_coverage", "unit"], "times")
+        self.assertEqual(row_by_id.loc["fcf_after_dividends", "unit"], "krw")
+        self.assertEqual(row_by_id.loc["fcf_yield", "factor_type"], "valuation")
+        self.assertEqual(row_by_id.loc["fcf_yield", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["fcf_negative_freq_5y_pct", "factor_type"], "risk")
+        self.assertEqual(row_by_id.loc["capex_to_sales_pct", "value_direction"], "LOWER_BETTER")
+        self.assertEqual(row_by_id.loc["net_debt_to_fcf", "unit"], "times")
+        self.assertEqual(row_by_id.loc["fcf_interest_coverage", "unit"], "times")
+        self.assertEqual(row_by_id.loc["eps_dividend_coverage", "factor_type"], "shareholder")
+        self.assertEqual(row_by_id.loc["dps_cagr_5y", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["dividend_consistency_streak", "unit"], "years")
+        self.assertEqual(row_by_id.loc["dividend_cut", "unit"], "flag")
+        self.assertEqual(row_by_id.loc["shareholder_yield", "unit"], "percent")
         self.assertEqual(row_by_id.loc["sales_cagr_3y", "factor_type"], "growth")
         self.assertEqual(row_by_id.loc["sales_cagr_3y", "unit"], "percent")
         self.assertEqual(row_by_id.loc["net_income_growth_5y", "factor_type"], "growth")
@@ -149,8 +179,20 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(row_by_id.loc["total_asset_turnover", "unit"], "times")
         self.assertEqual(row_by_id.loc["rnd_to_market_cap", "factor_type"], "valuation")
         self.assertEqual(row_by_id.loc["rnd_to_market_cap", "unit"], "percent")
+        higher_better_factor_ids = [
+            factor_id
+            for factor_id in factor_ids
+            if factor_id
+            not in {
+                "fcf_payout_ratio",
+                "fcf_negative_freq_5y_pct",
+                "capex_to_sales_pct",
+                "net_debt_to_fcf",
+                "dividend_cut",
+            }
+        ]
         self.assertTrue(
-            (row_by_id.loc[factor_ids, "value_direction"] == "HIGHER_BETTER").all()
+            (row_by_id.loc[higher_better_factor_ids, "value_direction"] == "HIGHER_BETTER").all()
         )
 
 

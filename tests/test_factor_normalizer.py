@@ -158,6 +158,52 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["operating_income_growth_3y"], 100.0)
         self.assertAlmostEqual(latest["operating_income_growth_5y"], 500.0)
 
+    def test_fcf_dividend_sustainability_factors_are_calculated(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2021 + index,
+                    "financial_period": f"{2021 + index}-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "CASH_AND_EQUIVALENTS": 50,
+                    "LONG_TERM_DEBT": 300,
+                    "REVENUE": 1_000,
+                    "NET_INCOME": 100,
+                    "NET_INCOME_PARENT": 100,
+                    "OPERATING_INCOME": 150,
+                    "CFO": 100,
+                    "CAPEX_PPE": 20,
+                    "DIV_PAID": 20,
+                    "DEBT_ISSUE": 30,
+                    "DEBT_REPAY": 20,
+                    "BUYBACK": 30,
+                    "EQ_ISSUE": 10,
+                    "INT_PAID": 5,
+                    "PBT": 100,
+                    "TAX_EXPENSE": 25,
+                }
+                for index in range(5)
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+        latest = result.iloc[-1]
+
+        self.assertEqual(latest["fcf"], 80)
+        self.assertEqual(latest["fcfe"], 90)
+        self.assertAlmostEqual(latest["fcf_payout_ratio"], 25.0)
+        self.assertAlmostEqual(latest["fcf_dividend_coverage"], 4.0)
+        self.assertAlmostEqual(latest["fcf_after_dividends"], 60.0)
+        self.assertAlmostEqual(latest["shareholder_return_fcf_coverage"], 2.0)
+        self.assertAlmostEqual(latest["fcfe_payout_ratio"], 20 / 90 * 100)
+        self.assertAlmostEqual(latest["capex_to_sales_pct"], 2.0)
+        self.assertAlmostEqual(latest["capex_to_cfo_pct"], 20.0)
+        self.assertAlmostEqual(latest["net_debt_to_fcf"], 250 / 80)
+        self.assertAlmostEqual(latest["interest_expense_to_fcf_pct"], 5 / 80 * 100)
+        self.assertAlmostEqual(latest["fcf_interest_coverage"], 16.0)
+        self.assertAlmostEqual(latest["fcf_negative_freq_5y_pct"], 0.0)
+
     def test_rnd_to_market_cap_factor_is_percent_of_market_cap(self):
         daily_df = pd.DataFrame(
             {
@@ -174,6 +220,40 @@ class FactorNormalizerTest(unittest.TestCase):
 
         self.assertAlmostEqual(result["rpr"].iat[0], 0.05)
         self.assertAlmostEqual(result["rnd_to_market_cap"].iat[0], 5.0)
+
+    def test_daily_fcf_shareholder_return_factors_use_cash_dividends(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2025-01-02"]),
+                "close": [100],
+                "volume": [100],
+                "shares": [10],
+                "market_cap": [1_000],
+                "fcf": [200],
+                "fcfe": [220],
+                "sale": [1_000],
+                "at": [5_000],
+                "total_dividend_amount": [50],
+                "sharehold_div_yield": [2],
+                "tdpr": [25],
+                "dvpsx": [2],
+                "eps": [5],
+                "prstkc": [30],
+                "sstk": [10],
+            }
+        )
+
+        result = add_daily_market_valuation_factors(daily_df)
+
+        self.assertAlmostEqual(result["fcf_yield"].iat[0], 20.0)
+        self.assertAlmostEqual(result["fcf_payout_ratio"].iat[0], 25.0)
+        self.assertAlmostEqual(result["fcf_dividend_coverage"].iat[0], 4.0)
+        self.assertAlmostEqual(result["fcf_after_dividends"].iat[0], 150.0)
+        self.assertAlmostEqual(result["fcf_after_dividends_to_market_cap_pct"].iat[0], 15.0)
+        self.assertAlmostEqual(result["shareholder_return_fcf_coverage"].iat[0], 200 / 70)
+        self.assertAlmostEqual(result["fcfe_payout_ratio"].iat[0], 50 / 220 * 100)
+        self.assertAlmostEqual(result["fcf_yield_dividend_yield_spread"].iat[0], 18.0)
+        self.assertAlmostEqual(result["eps_dividend_coverage"].iat[0], 2.5)
 
     def test_dividend_payout_factor_is_empty_without_disclosure_events(self):
         daily_df = pd.DataFrame(
@@ -238,6 +318,32 @@ class FactorNormalizerTest(unittest.TestCase):
 
         self.assertEqual(result["tdpr"].iat[0], 25.0)
         self.assertEqual(valued["payout_ratio"].iat[0], 25.0)
+
+    def test_us_dividend_factors_are_built_from_silver_dividend_events(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2025-01-02", "2025-01-03"]),
+                "close": [100, 100],
+                "shares": [10, 10],
+            }
+        )
+        events = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_AAPL"],
+                "trade_date": pd.to_datetime(["2025-01-02"]),
+                "dividend": [1.0],
+                "payout_ratio": [None],
+                "dividend_percent": [1.0],
+            }
+        )
+
+        with patch("engine.transformers.factors.read_stock_dividends", return_value=events):
+            result = add_dividend_factors(daily_df, "AAPL", market="us")
+
+        self.assertEqual(result["dvpsx"].iat[0], 1.0)
+        self.assertEqual(result["dvpsx"].iat[1], 1.0)
+        self.assertAlmostEqual(result["sharehold_div_yield"].iat[1], 1.0)
+        self.assertEqual(result["total_dividend_amount"].iat[1], 10.0)
 
     def test_mdd_uses_returns_not_growth_multipliers(self):
         close = [100.0] * 21 + [100.0] * 80 + [50.0] * 80 + [75.0] * 180
@@ -316,7 +422,7 @@ class FactorNormalizerTest(unittest.TestCase):
             patch("engine.transformers.factors.read_stock_prices", return_value=price_df),
             patch("engine.transformers.factors.read_stock_shares", return_value=pd.DataFrame()),
             patch("engine.transformers.factors.read_annual_financials", return_value=financial_df),
-            patch("engine.transformers.factors.add_dividend_factors", side_effect=lambda df, stock_code: df),
+            patch("engine.transformers.factors.add_dividend_factors", side_effect=lambda df, stock_code, **kwargs: df),
             patch("engine.transformers.factors.add_daily_market_valuation_factors", side_effect=lambda df: df),
             patch("engine.transformers.factors.add_price_momentum_factors", side_effect=lambda df: df),
         ):

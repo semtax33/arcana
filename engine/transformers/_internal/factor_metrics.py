@@ -61,6 +61,8 @@ NON_FACTOR_COLUMNS = set(BASE_COLUMNS) | {
 }
 PERCENT_RATIO_FACTOR_COLUMNS = {
     "fcf_margin",
+    "fcf_payout_ratio",
+    "fcfe_payout_ratio",
     "gpm",
     "net_margin",
     "opm",
@@ -207,6 +209,15 @@ def sanitize_temporal_amount_outliers(df, max_neighbor_multiple=100):
     return result
 
 
+def positive_denominator(series):
+    values = pd.to_numeric(series, errors="coerce")
+    return values.where(values > 0)
+
+
+def safe_series_div(numerator, denominator):
+    return pd.to_numeric(numerator, errors="coerce") / positive_denominator(denominator)
+
+
 def read_stock_csv_by_security_id(path, security_id, chunksize=500_000):
     path = Path(path)
     if not path.exists():
@@ -267,6 +278,41 @@ def read_stock_shares(stock_code, path=None, market="kr"):
         shares_df[column] = pd.to_numeric(shares_df[column], errors="coerce")
 
     return shares_df.sort_values("trade_date").reset_index(drop=True)
+
+
+def dividend_path_for_market(market="kr"):
+    market = str(market or "kr").strip().lower()
+    if market == "us":
+        return DATA_LAKE.silver(
+            "us",
+            "dividend",
+            market_csv_name("dividend_normalized", market="us"),
+        )
+    return DATA_LAKE.silver("dart", "dividend", "dividend_normalized.csv")
+
+
+def read_stock_dividends(stock_code, path=None, market="kr"):
+    market = str(market or "kr").strip().lower()
+    stock_code = normalize_symbol_for_market(stock_code, market)
+    security_id = security_id_for_market(stock_code, market)
+    dividend_df = read_stock_csv_by_security_id(
+        dividend_path_for_market(market) if path is None else path,
+        security_id,
+    )
+
+    if dividend_df.empty:
+        return dividend_df
+
+    dividend_df["trade_date"] = pd.to_datetime(dividend_df["trade_date"], errors="coerce")
+    for column in ["dividend", "payout_ratio", "dividend_percent"]:
+        if column in dividend_df.columns:
+            dividend_df[column] = pd.to_numeric(dividend_df[column], errors="coerce")
+
+    return (
+        dividend_df.dropna(subset=["trade_date"])
+        .sort_values("trade_date")
+        .reset_index(drop=True)
+    )
 
 
 def parse_period_from_filename(path):
@@ -531,8 +577,13 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["ffo"] = df["ni"] + df["dp"].fillna(0)
     df["sstk"] = numeric_column(df, "EQ_ISSUE")
     df["prstkc"] = numeric_column(df, "BUYBACK")
+    df["div_paid"] = numeric_column(df, "DIV_PAID").abs()
     df["debt_issue"] = numeric_column(df, "DEBT_ISSUE")
     df["debt_repay"] = numeric_column(df, "DEBT_REPAY")
+    df["net_borrowing"] = first_value_frame(df, "DEBT_NET_BORROWING")
+    df["net_borrowing"] = df["net_borrowing"].fillna(
+        df["debt_issue"].fillna(0) - df["debt_repay"].fillna(0)
+    )
 
     df["avg_assets"] = (df["at"] + df["at"].shift(lag)) / 2
     df["avg_equity"] = (df["seq"] + df["seq"].shift(lag)) / 2
@@ -593,10 +644,32 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     )
     df["fcfe"] = (
         df["fcf"]
-        + df["debt_issue"].fillna(0)
-        - df["debt_repay"].fillna(0)
-        + df["sstk"].fillna(0)
-        - df["prstkc"].fillna(0)
+        + df["net_borrowing"].fillna(0)
+    )
+    shareholder_return_amount = df["div_paid"].fillna(0) + (
+        df["prstkc"].fillna(0) - df["sstk"].fillna(0)
+    )
+    positive_shareholder_return = shareholder_return_amount.where(shareholder_return_amount > 0)
+    df["fcf_payout_ratio"] = df["div_paid"] / positive_denominator(df["fcf"])
+    df["fcf_dividend_coverage"] = df["fcf"] / positive_denominator(df["div_paid"])
+    df["fcf_after_dividends"] = df["fcf"] - df["div_paid"].fillna(0)
+    df["fcf_after_dividends_to_sales_pct"] = df["fcf_after_dividends"] / df["sale"] * 100
+    df["fcf_after_dividends_to_assets_pct"] = df["fcf_after_dividends"] / df["at"] * 100
+    df["shareholder_return_fcf_coverage"] = df["fcf"] / positive_shareholder_return
+    df["fcfe_dividend_coverage"] = df["fcfe"] / positive_denominator(df["div_paid"])
+    df["fcfe_payout_ratio"] = df["div_paid"] / positive_denominator(df["fcfe"])
+    df["capex_to_sales_pct"] = df["capx"] / df["sale"] * 100
+    df["capex_to_cfo_pct"] = df["capx"] / positive_denominator(df["oancf"]) * 100
+    df["net_debt_to_fcf"] = df["net_debt"] / positive_denominator(df["fcf"])
+    df["interest_expense_to_fcf_pct"] = df["xint"].abs() / positive_denominator(df["fcf"]) * 100
+    df["fcf_interest_coverage"] = df["fcf"] / positive_denominator(df["xint"].abs())
+    df["fcf_volatility_5y"] = df["fcf"].rolling(lag * 5, min_periods=2).std()
+    df["fcf_negative_freq_5y_pct"] = (
+        (df["fcf"] < 0).rolling(lag * 5, min_periods=1).mean() * 100
+    )
+    df["fcf_volatility_10y"] = df["fcf"].rolling(lag * 10, min_periods=2).std()
+    df["fcf_negative_freq_10y_pct"] = (
+        (df["fcf"] < 0).rolling(lag * 10, min_periods=1).mean() * 100
     )
 
     df["sales_yoy_pct"] = yoy_pct(df["sale"], periods=lag)
@@ -694,12 +767,161 @@ def calculate_piotroski_f_score(df, periods=1):
     return score
 
 
-def add_dividend_factors(daily_df, stock_code):
+DIVIDEND_FACTOR_COLUMNS = [
+    "dvpsx",
+    "dvpsp",
+    "sharehold_div_yield",
+    "tdpr",
+    "total_dividend_amount",
+    "forward_dividend_yield",
+    "earnings_payout_ratio",
+    "eps_dividend_coverage",
+    "dps_yoy_pct",
+    "dps_cagr_3y",
+    "dps_cagr_5y",
+    "dps_cagr_10y",
+    "dividend_consistency_streak",
+    "dividend_growth_streak",
+    "dps_volatility_5y",
+    "dps_volatility_10y",
+    "dividend_cut",
+    "dividend_change_momentum",
+    "shareholder_yield",
+    "special_dividend",
+    "special_dividend_ratio_pct",
+]
+
+
+def empty_dividend_factors(df):
+    result = df.copy()
+    for column in DIVIDEND_FACTOR_COLUMNS:
+        result[column] = math.nan
+    result["dividend_fiscal_year"] = math.nan
+    return result
+
+
+def dividend_history_metrics(events):
+    if events.empty or "bsns_year" not in events.columns:
+        return pd.DataFrame()
+
+    history = events.copy()
+    history["dividend_fiscal_year"] = pd.to_numeric(history["bsns_year"], errors="coerce")
+    history["annual_dividend_per_share"] = pd.to_numeric(
+        history.get("annual_dividend_per_share"),
+        errors="coerce",
+    )
+    history["total_dividend_amount"] = pd.to_numeric(
+        history.get("total_dividend_amount"),
+        errors="coerce",
+    )
+    if "report_date" in history.columns:
+        history["report_date"] = pd.to_datetime(history["report_date"], errors="coerce")
+    else:
+        history["report_date"] = pd.NaT
+    if "report_name" not in history.columns:
+        history["report_name"] = ""
+
+    history = (
+        history.dropna(subset=["dividend_fiscal_year"])
+        .sort_values(["dividend_fiscal_year", "report_date"])
+        .groupby("dividend_fiscal_year", as_index=False)
+        .agg(
+            {
+                "annual_dividend_per_share": "last",
+                "total_dividend_amount": "last",
+                "report_name": "last",
+            }
+        )
+        .sort_values("dividend_fiscal_year")
+        .reset_index(drop=True)
+    )
+    if history.empty:
+        return history
+
+    dps = pd.to_numeric(history["annual_dividend_per_share"], errors="coerce")
+    history["dps_yoy_pct"] = growth_pct(dps, periods=1)
+    history["dps_cagr_3y"] = cagr_pct(dps, years=3)
+    history["dps_cagr_5y"] = cagr_pct(dps, years=5)
+    history["dps_cagr_10y"] = cagr_pct(dps, years=10)
+    history["dps_volatility_5y"] = dps.rolling(5, min_periods=2).std()
+    history["dps_volatility_10y"] = dps.rolling(10, min_periods=2).std()
+    history["dividend_cut"] = ((dps.shift(1) > 0) & (dps < dps.shift(1))).astype(float)
+    history["dividend_change_momentum"] = history["dps_yoy_pct"]
+    report_name = history["report_name"].fillna("").astype(str)
+    history["special_dividend"] = report_name.str.contains(
+        r"special|특별",
+        case=False,
+        regex=True,
+    ).astype(float)
+    history["special_dividend_ratio_pct"] = history["special_dividend"].where(
+        history["special_dividend"] > 0,
+        0.0,
+    ) * 100
+
+    consistency_streak = []
+    growth_streak = []
+    current_consistency = 0
+    current_growth = 0
+    previous_dps = math.nan
+    for value in dps:
+        if pd.notna(value) and value > 0:
+            current_consistency += 1
+            if pd.notna(previous_dps) and previous_dps > 0 and value > previous_dps:
+                current_growth += 1
+            else:
+                current_growth = 0
+        else:
+            current_consistency = 0
+            current_growth = 0
+        consistency_streak.append(current_consistency)
+        growth_streak.append(current_growth)
+        previous_dps = value
+
+    history["dividend_consistency_streak"] = consistency_streak
+    history["dividend_growth_streak"] = growth_streak
+
+    keep_columns = [
+        "dividend_fiscal_year",
+        "dps_yoy_pct",
+        "dps_cagr_3y",
+        "dps_cagr_5y",
+        "dps_cagr_10y",
+        "dividend_consistency_streak",
+        "dividend_growth_streak",
+        "dps_volatility_5y",
+        "dps_volatility_10y",
+        "dividend_cut",
+        "dividend_change_momentum",
+        "special_dividend",
+        "special_dividend_ratio_pct",
+    ]
+    return history[keep_columns]
+
+
+def merge_dividend_history(df, events):
+    metrics = dividend_history_metrics(events)
+    if metrics.empty or "dividend_fiscal_year" not in df.columns:
+        for column in DIVIDEND_FACTOR_COLUMNS:
+            if column not in df.columns:
+                df[column] = math.nan
+        return df
+
+    result = df.merge(metrics, on="dividend_fiscal_year", how="left")
+    for column in DIVIDEND_FACTOR_COLUMNS:
+        if column not in result.columns:
+            result[column] = math.nan
+    return result
+
+
+def add_kr_dividend_factors(daily_df, stock_code):
     df = daily_df.copy()
     dividend_events = silver_dividend_asof_events(stock_code)
     if not dividend_events.empty:
         events = dividend_events.copy()
         events["report_date"] = pd.to_datetime(events["report_date"], errors="coerce")
+        for column in ["bsns_year", "report_name"]:
+            if column not in events.columns:
+                events[column] = math.nan if column == "bsns_year" else ""
         events = events.dropna(subset=["report_date"]).sort_values("report_date")
         if not events.empty:
             df = pd.merge_asof(
@@ -707,6 +929,8 @@ def add_dividend_factors(daily_df, stock_code):
                 events[
                     [
                         "report_date",
+                        "bsns_year",
+                        "report_name",
                         "annual_dividend_per_share",
                         "payout_ratio",
                         "total_dividend_amount",
@@ -716,6 +940,7 @@ def add_dividend_factors(daily_df, stock_code):
                 right_on="report_date",
                 direction="backward",
             )
+            df["dividend_fiscal_year"] = pd.to_numeric(df["bsns_year"], errors="coerce")
             df["dvpsx"] = pd.to_numeric(df["annual_dividend_per_share"], errors="coerce")
             df["dvpsp"] = math.nan
             df["sharehold_div_yield"] = df["dvpsx"] / df["close"] * 100
@@ -729,22 +954,81 @@ def add_dividend_factors(daily_df, stock_code):
                 df["total_dividend_amount"],
                 errors="coerce",
             )
+            df["forward_dividend_yield"] = df["dvpsp"] / df["close"] * 100
+            df["earnings_payout_ratio"] = df["tdpr"]
+            df["eps_dividend_coverage"] = numeric_column(df, "eps") / positive_denominator(df["dvpsx"])
+            df["shareholder_yield"] = math.nan
+            df = merge_dividend_history(df, events)
             return df.drop(
                 columns=[
                     "report_date",
+                    "bsns_year",
+                    "report_name",
                     "annual_dividend_per_share",
                     "payout_ratio",
                 ],
                 errors="ignore",
             )
 
-    df["dvpsx"] = math.nan
-    df["dvpsp"] = math.nan
-    df["sharehold_div_yield"] = math.nan
-    df["tdpr"] = math.nan
-    df["total_dividend_amount"] = math.nan
+    df = empty_dividend_factors(df)
 
     return df
+
+
+def add_us_dividend_factors(daily_df, stock_code):
+    df = daily_df.sort_values("trade_date").copy()
+    dividends = read_stock_dividends(stock_code, market="us")
+    if dividends.empty:
+        return empty_dividend_factors(df)
+
+    events = dividends.loc[pd.to_numeric(dividends.get("dividend"), errors="coerce") > 0].copy()
+    if events.empty:
+        return empty_dividend_factors(df)
+
+    events["dividend"] = pd.to_numeric(events["dividend"], errors="coerce")
+    events = events.sort_values("trade_date")
+    event_series = (
+        events.groupby("trade_date")["dividend"]
+        .sum()
+        .reindex(df["trade_date"])
+        .fillna(0)
+    )
+    rolling_dps = event_series.rolling("365D", min_periods=1).sum()
+    df["dvpsx"] = rolling_dps.to_numpy()
+    df.loc[df["dvpsx"] <= 0, "dvpsx"] = math.nan
+    df["dvpsp"] = math.nan
+    df["sharehold_div_yield"] = df["dvpsx"] / df["close"] * 100
+    df["tdpr"] = math.nan
+    df["total_dividend_amount"] = df["dvpsx"] * numeric_column(df, "shares")
+    df["dividend_fiscal_year"] = df["trade_date"].dt.year
+    df["forward_dividend_yield"] = math.nan
+    df["earnings_payout_ratio"] = math.nan
+    df["eps_dividend_coverage"] = numeric_column(df, "eps") / positive_denominator(df["dvpsx"])
+    df["dps_yoy_pct"] = yoy_pct(pd.to_numeric(df["dvpsx"], errors="coerce"), periods=252)
+    df["dps_cagr_3y"] = cagr_pct(pd.to_numeric(df["dvpsx"], errors="coerce"), years=3, periods_per_year=252)
+    df["dps_cagr_5y"] = cagr_pct(pd.to_numeric(df["dvpsx"], errors="coerce"), years=5, periods_per_year=252)
+    df["dps_cagr_10y"] = cagr_pct(pd.to_numeric(df["dvpsx"], errors="coerce"), years=10, periods_per_year=252)
+    df["dps_volatility_5y"] = pd.to_numeric(df["dvpsx"], errors="coerce").rolling(252 * 5, min_periods=2).std()
+    df["dps_volatility_10y"] = pd.to_numeric(df["dvpsx"], errors="coerce").rolling(252 * 10, min_periods=2).std()
+    df["dividend_cut"] = (
+        (pd.to_numeric(df["dvpsx"], errors="coerce").shift(252) > 0)
+        & (pd.to_numeric(df["dvpsx"], errors="coerce") < pd.to_numeric(df["dvpsx"], errors="coerce").shift(252))
+    ).astype(float)
+    df["dividend_change_momentum"] = df["dps_yoy_pct"]
+    df["dividend_consistency_streak"] = math.nan
+    df["dividend_growth_streak"] = math.nan
+    df["shareholder_yield"] = math.nan
+    df["special_dividend"] = math.nan
+    df["special_dividend_ratio_pct"] = math.nan
+
+    return df
+
+
+def add_dividend_factors(daily_df, stock_code, market="kr"):
+    market = str(market or "kr").strip().lower()
+    if market == "us":
+        return add_us_dividend_factors(daily_df, stock_code)
+    return add_kr_dividend_factors(daily_df, stock_code)
 
 
 def max_drawdown(returns):
@@ -907,6 +1191,14 @@ def add_daily_market_valuation_factors(daily_df):
     sharehold_div_yield = sharehold_div_yield.where(
         (sharehold_div_yield >= 0) & (sharehold_div_yield <= 100)
     )
+    fcf = numeric_column(df, "fcf")
+    fcfe = numeric_column(df, "fcfe")
+    sale_for_fcf = numeric_column(df, "sale")
+    total_dividend_amount = numeric_column(df, "total_dividend_amount")
+    div_paid = numeric_column(df, "div_paid")
+    cash_dividends = total_dividend_amount.combine_first(div_paid).where(
+        total_dividend_amount.combine_first(div_paid) > 0
+    )
 
     df["mcap_mil"] = market_cap / 1_000_000
     df["trading_value"] = close * volume
@@ -930,11 +1222,13 @@ def add_daily_market_valuation_factors(daily_df):
     df["spr"] = df["sps"] / close
     df["cpr"] = df["cps"] / close
     df["fcfpr"] = df["fcfe"] / market_cap
+    df["fcf_yield"] = fcf / positive_denominator(market_cap) * 100
     df["npr"] = (che - debt) / market_cap
     df["rpr"] = xrd / market_cap
     df["rnd_to_market_cap"] = xrd / market_cap * 100
     df["enterprise_value"] = market_cap + debt.fillna(0) - che.fillna(0)
     df["ebitda_to_ev"] = oibdp / df["enterprise_value"]
+    df["fcf_to_ev_yield"] = fcf / positive_denominator(df["enterprise_value"]) * 100
     df["ev_to_ebitda"] = df["enterprise_value"] / oibdp
     df["ev_to_nopat"] = df["enterprise_value"] / nopat
     df["net_debt_to_ocf"] = net_debt / oancf
@@ -948,12 +1242,31 @@ def add_daily_market_valuation_factors(daily_df):
     df["debt_ratio"] = debt / at
     df["dividend_yield"] = sharehold_div_yield
     df["payout_ratio"] = tdpr
+    df["earnings_payout_ratio"] = tdpr
     df["peg"] = df["per"] / eps_yoy_pct
     df.loc[eps_yoy_pct <= 0, "peg"] = math.nan
     df["sharehold_net_buyback_yield"] = (
         (prstkc.fillna(0) - sstk.fillna(0)) / market_cap * 100
     )
     df["sharehold_return"] = sharehold_div_yield.fillna(0) + df["sharehold_net_buyback_yield"].fillna(0)
+    df["shareholder_yield"] = df["sharehold_return"]
+    net_buyback_amount = prstkc.fillna(0) - sstk.fillna(0)
+    shareholder_return_amount = cash_dividends.fillna(0) + net_buyback_amount
+    positive_shareholder_return = shareholder_return_amount.where(shareholder_return_amount > 0)
+    df["fcf_payout_ratio"] = cash_dividends / positive_denominator(fcf) * 100
+    df["fcf_dividend_coverage"] = fcf / positive_denominator(cash_dividends)
+    df["fcf_after_dividends"] = fcf - cash_dividends.fillna(0)
+    df["fcf_after_dividends_to_sales_pct"] = df["fcf_after_dividends"] / sale_for_fcf * 100
+    df["fcf_after_dividends_to_assets_pct"] = df["fcf_after_dividends"] / at * 100
+    df["fcf_after_dividends_to_market_cap_pct"] = (
+        df["fcf_after_dividends"] / positive_denominator(market_cap) * 100
+    )
+    df["shareholder_return_fcf_coverage"] = fcf / positive_shareholder_return
+    df["fcfe_dividend_coverage"] = fcfe / positive_denominator(cash_dividends)
+    df["fcfe_payout_ratio"] = cash_dividends / positive_denominator(fcfe) * 100
+    df["fcf_yield_dividend_yield_spread"] = df["fcf_yield"] - df["dividend_yield"]
+    df["forward_dividend_yield"] = numeric_column(df, "dvpsp") / positive_denominator(close) * 100
+    df["eps_dividend_coverage"] = df["eps"] / positive_denominator(numeric_column(df, "dvpsx"))
 
     return df
 
@@ -1048,14 +1361,7 @@ def create_stock_factor_dataframe(
 
     daily_df = daily_df.drop(columns=["security_id_fin", "stock_code_fin"], errors="ignore")
     daily_df["stock_code"] = stock_code
-    if market == "kr":
-        daily_df = add_dividend_factors(daily_df, stock_code)
-    else:
-        daily_df["dvpsx"] = math.nan
-        daily_df["dvpsp"] = math.nan
-        daily_df["sharehold_div_yield"] = math.nan
-        daily_df["tdpr"] = math.nan
-        daily_df["total_dividend_amount"] = math.nan
+    daily_df = add_dividend_factors(daily_df, stock_code, market=market)
     daily_df = add_daily_market_valuation_factors(daily_df)
     daily_df = add_price_momentum_factors(daily_df)
     daily_df["updated_at"] = datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
@@ -1100,10 +1406,12 @@ def preferred_factor_columns():
         "fcff",
         "fcfe",
         "ffo",
+        "div_paid",
         "dvpsp",
         "dvpsx",
         "sstk",
         "prstkc",
+        "net_borrowing",
         "eps",
         "bps",
         "sps",
@@ -1118,6 +1426,27 @@ def preferred_factor_columns():
         "npm",
         "net_margin",
         "fcf_margin",
+        "fcf_payout_ratio",
+        "fcf_dividend_coverage",
+        "fcf_after_dividends",
+        "fcf_after_dividends_to_sales_pct",
+        "fcf_after_dividends_to_assets_pct",
+        "fcf_after_dividends_to_market_cap_pct",
+        "shareholder_return_fcf_coverage",
+        "fcfe_dividend_coverage",
+        "fcfe_payout_ratio",
+        "fcf_yield",
+        "fcf_to_ev_yield",
+        "fcf_yield_dividend_yield_spread",
+        "fcf_volatility_5y",
+        "fcf_negative_freq_5y_pct",
+        "fcf_volatility_10y",
+        "fcf_negative_freq_10y_pct",
+        "capex_to_sales_pct",
+        "capex_to_cfo_pct",
+        "net_debt_to_fcf",
+        "interest_expense_to_fcf_pct",
+        "fcf_interest_coverage",
         "rnd_margin",
         "tax_rate",
         "nopat",
@@ -1213,7 +1542,23 @@ def preferred_factor_columns():
         "sharehold_div_yield",
         "sharehold_net_buyback_yield",
         "sharehold_return",
+        "shareholder_yield",
         "tdpr",
+        "forward_dividend_yield",
+        "earnings_payout_ratio",
+        "eps_dividend_coverage",
+        "dps_yoy_pct",
+        "dps_cagr_3y",
+        "dps_cagr_5y",
+        "dps_cagr_10y",
+        "dividend_consistency_streak",
+        "dividend_growth_streak",
+        "dps_volatility_5y",
+        "dps_volatility_10y",
+        "dividend_cut",
+        "dividend_change_momentum",
+        "special_dividend",
+        "special_dividend_ratio_pct",
         "per",
         "pbr",
         "pcr",
