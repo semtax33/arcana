@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -351,6 +352,37 @@ class SecFilingsNormalizerTest(unittest.TestCase):
 
             self.assertEqual(float(df.loc[df["canonical_account_id"].eq("RND"), "normalized_amount"].iat[0]), 50)
             self.assertEqual(debug.loc[debug["canonical_account_id"].eq("RND"), "source"].iat[0], "edgartools")
+
+    def test_default_edgartools_skips_empty_local_companyfacts(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companyfacts = root / "companyfacts"
+            output = root / "out"
+            companyfacts.mkdir()
+            canonical = root / "canonical.csv"
+            ticker_map = root / "tickers.csv"
+            metadata = root / "metadata.csv"
+            write_canonical(canonical)
+            write_ticker_map(ticker_map)
+            write_companyfacts(companyfacts / "CIK0000320193.json", {})
+
+            with patch(
+                "engine.transformers._internal.sec_filings.default_edgartools_provider",
+                side_effect=AssertionError("default edgartools provider should not be called"),
+            ):
+                written = normalize_us_sec_filings(
+                    symbols=["AAPL"],
+                    start_year=2025,
+                    end_year=2025,
+                    companyfacts_dir=companyfacts,
+                    notes_root=root / "missing-notes",
+                    output_dir=output,
+                    ticker_map_path=ticker_map,
+                    canonical_csv_path=canonical,
+                    report_metadata_path=metadata,
+                )
+
+            self.assertEqual(written, [])
 
 
 if __name__ == "__main__":

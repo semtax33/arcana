@@ -395,6 +395,22 @@ def extract_companyfacts_candidates(
     return candidates
 
 
+def companyfacts_has_usable_facts(companyfacts_path: str | Path) -> bool:
+    try:
+        data = json.loads(Path(companyfacts_path).read_text(encoding="utf-8"))
+    except Exception:
+        return False
+
+    facts = data.get("facts")
+    if not isinstance(facts, dict):
+        return False
+
+    return any(
+        isinstance(namespace_facts, dict) and bool(namespace_facts)
+        for namespace_facts in facts.values()
+    )
+
+
 def _compile_patterns(values: Any) -> list[re.Pattern[str]]:
     raw_values = values if isinstance(values, list) else [values]
     return [re.compile(safe_str(value)) for value in raw_values if safe_str(value).strip()]
@@ -976,7 +992,7 @@ def normalize_us_sec_filings(
     canonical_names = canonical_name_map(canonical_csv_path)
     ticker_map = load_sec_ticker_map(ticker_map_path)
     files = resolve_companyfacts_files(companyfacts_dir, symbols=symbols, ticker_map=ticker_map)
-    if symbols and ticker_map.empty:
+    if ticker_map.empty:
         print(
             f"[WARN] SEC ticker map not found or empty: {ticker_map_path}. "
             "Run `python -m engine.workflows.download --market us sec-tickers` first, "
@@ -990,8 +1006,12 @@ def normalize_us_sec_filings(
     cik_to_name: dict[str, str] = {}
     symbol_to_cik: dict[str, str] = {}
     symbol_to_name: dict[str, str] = {}
+    symbols_with_local_facts: set[str] = set()
 
     for path, symbol, cik in files:
+        if companyfacts_has_usable_facts(path):
+            symbols_with_local_facts.add(symbol)
+
         try:
             company_candidates = extract_companyfacts_candidates(
                 path,
@@ -1029,9 +1049,22 @@ def normalize_us_sec_filings(
         )
 
     if use_edgartools:
+        edgartools_symbols = sorted(symbol_to_cik)
+        if edgartools_provider is None:
+            original_count = len(edgartools_symbols)
+            edgartools_symbols = [
+                symbol for symbol in edgartools_symbols if symbol in symbols_with_local_facts
+            ]
+            skipped_count = original_count - len(edgartools_symbols)
+            if skipped_count:
+                print(
+                    "[INFO] edgartools fallback skipped for "
+                    f"{skipped_count} symbols with empty local SEC companyfacts files"
+                )
+
         candidates.extend(
             extract_edgartools_candidates(
-                symbols=sorted(symbol_to_cik),
+                symbols=edgartools_symbols,
                 cik_by_symbol=symbol_to_cik,
                 name_by_symbol=symbol_to_name,
                 rules=rules.get("edgartools_fallback_rules", []),
