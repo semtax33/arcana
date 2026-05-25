@@ -210,6 +210,33 @@ class FinancialStatementsServiceTest(unittest.TestCase):
         self.assertEqual(result.account.account_name, "자산총계")
         self.assertEqual(result.account.statistics.latest, 5000)
 
+    def test_local_csv_fallback_reads_consolidated_statement_file(self):
+        client = FakeClickHouseClient([])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            normalized_dir = root / "normalized"
+            normalized_dir.mkdir()
+            (normalized_dir / "kr_normalized_236200.csv").write_text(
+                "\n".join(
+                    [
+                        "canonical_account_id,canonical_account_name,original_account_name,statement_type,period,normalized_amount,fiscal_year,fiscal_month,fiscal_quarter",
+                        "REVENUE,Revenue,Revenue,IS,2025.12,1200,2025,12,4",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = FinancialStatementsService(
+                client_factory=lambda: client,
+                today_factory=lambda: date(2026, 5, 21),
+                canonical_accounts_path=_catalog_path(temp_dir),
+                normalized_statement_dir=normalized_dir,
+            ).get_statements("236200", period="annual", statement="IS")
+
+        self.assertEqual(result.columns[0].key, "2025-12-31")
+        self.assertEqual(result.sections[0].accounts[0].values[0].value, 1200)
+
 
 def _row(statement_type, canonical_id, fiscal_year, fiscal_month, value):
     return {

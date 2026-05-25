@@ -12,11 +12,11 @@ from engine.core.paths import (
     PROJECT_ROOT,
     first_existing_path,
     market_csv_name,
-    statement_snapshot_name,
 )
 from engine.core.identifiers import security_id_of
 from engine.extractors._internal.yfinance_market_prices import normalize_yfinance_ticker
 from engine.markets.us import US_MARKET_CONFIG
+from engine.transformers._internal.statement_files import read_statement_period_frames
 
 base_dir = DATA_LAKE.silver("dart", "normalized")
 dividend_base_dir = DATA_LAKE.bronze("dart", "dividend")
@@ -89,19 +89,24 @@ def normalize_stock_code(stock_code):
 
 
 def calculate_net_income(stock_code, year, month):
-    import pandas as pd
-
     stock_code = normalize_stock_code(stock_code)
-    file_path = first_existing_path(
-        base_dir / statement_snapshot_name(stock_code, year, month),
-        base_dir / f"normalized_{stock_code}_{year}.{month:02d}.csv",
-    )
+    frames = [
+        frame
+        for frame_year, frame_month, frame in read_statement_period_frames(
+            stock_code,
+            base_dir,
+            market="kr",
+            months={int(month)},
+        )
+        if int(frame_year) == int(year) and int(frame_month) == int(month)
+    ]
+    file_path = f"{stock_code} {year}.{int(month):02d}"
 
-    if not file_path.exists():
+    if not frames:
         print(f"[SKIP] 파일 없음: {file_path}")
         return None
     
-    statement_df = pd.read_csv(file_path)
+    statement_df = pd.concat(frames, ignore_index=True)
     net_income_matched = statement_df.loc[statement_df["canonical_account_id"] == "NET_INCOME", "normalized_amount"]
     if not net_income_matched.empty:
         net_income = net_income_matched.iloc[0]

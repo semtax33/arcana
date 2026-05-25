@@ -148,6 +148,28 @@ class StatementPeriodizerTest(unittest.TestCase):
         self.assertEqual(result["report_date"].dt.strftime("%Y-%m-%d").tolist(), ["2025-05-15", "2025-06-30"])
         self.assertEqual(result["rcept_no"].iloc[0], "20250515000001")
 
+    def test_read_period_snapshots_prefers_consolidated_symbol_file(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            financial_dir = root / "financials"
+            financial_dir.mkdir()
+
+            (financial_dir / "kr_normalized_005930.csv").write_text(
+                "\n".join(
+                    [
+                        "canonical_account_id,canonical_account_name,original_account_name,statement_type,period,normalized_amount,fiscal_year,fiscal_month,fiscal_quarter",
+                        "REVENUE,Revenue,Revenue,IS,2025.03,100,2025,3,1",
+                        "REVENUE,Revenue,Revenue,IS,2025.06,250,2025,6,2",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = read_period_snapshots("005930", financial_dir=financial_dir)
+
+        self.assertEqual(result["fiscal_month"].tolist(), [3, 6])
+        self.assertEqual(result["REVENUE"].tolist(), [100, 250])
+
 
 if __name__ == "__main__":
     unittest.main()

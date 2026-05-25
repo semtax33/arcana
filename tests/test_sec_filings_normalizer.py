@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -22,7 +22,6 @@ CANONICAL_ROWS = [
         "is_derived": "FALSE",
         "formula": "",
         "description": "",
-        "비고": "",
         "鍮꾧퀬": "",
     },
     {
@@ -32,7 +31,6 @@ CANONICAL_ROWS = [
         "is_derived": "FALSE",
         "formula": "",
         "description": "",
-        "비고": "",
         "鍮꾧퀬": "",
     },
 ]
@@ -155,9 +153,14 @@ class SecFilingsNormalizerTest(unittest.TestCase):
                 ],
             )
 
-            df = pd.read_csv(output / "us_normalized_AAPL_2025.12.csv")
-            debug = pd.read_csv(output / "us_normalized_AAPL_2025.12.debug.csv")
+            df = pd.read_csv(output / "us_normalized_AAPL.csv")
+            debug = pd.read_csv(output / "us_normalized_AAPL.debug.csv")
 
+            self.assertEqual(df["fiscal_year"].iat[0], 2025)
+            self.assertEqual(df["fiscal_month"].iat[0], 12)
+            self.assertEqual(df["fiscal_quarter"].iat[0], 4)
+            self.assertFalse((output / "us_normalized_AAPL_2025.12.csv").exists())
+            self.assertFalse((output / "us_normalized_AAPL_2025.12.debug.csv").exists())
             self.assertEqual(float(df.loc[df["canonical_account_id"].eq("RND"), "normalized_amount"].iat[0]), 10)
             self.assertEqual(debug.loc[debug["canonical_account_id"].eq("RND"), "source"].iat[0], "companyfacts_primary")
             self.assertEqual(debug.loc[debug["canonical_account_id"].eq("RND"), "cik"].astype(str).iat[0], "320193")
@@ -191,7 +194,7 @@ class SecFilingsNormalizerTest(unittest.TestCase):
                 use_edgartools=False,
             )
 
-            df = pd.read_csv(output / "us_normalized_AAPL_2025.12.csv")
+            df = pd.read_csv(output / "us_normalized_AAPL.csv")
             self.assertEqual(float(df.loc[df["canonical_account_id"].eq("RND"), "normalized_amount"].iat[0]), 20)
 
     def test_companyfacts_label_rule_maps_non_us_gaap_custom_fact(self):
@@ -231,8 +234,8 @@ class SecFilingsNormalizerTest(unittest.TestCase):
                 use_edgartools=False,
             )
 
-            df = pd.read_csv(output / "us_normalized_AAPL_2025.12.csv")
-            debug = pd.read_csv(output / "us_normalized_AAPL_2025.12.debug.csv")
+            df = pd.read_csv(output / "us_normalized_AAPL.csv")
+            debug = pd.read_csv(output / "us_normalized_AAPL.debug.csv")
 
             self.assertEqual(float(df.loc[df["canonical_account_id"].eq("RND"), "normalized_amount"].iat[0]), 25)
             self.assertEqual(debug.loc[debug["canonical_account_id"].eq("RND"), "source"].iat[0], "companyfacts_label")
@@ -304,8 +307,8 @@ class SecFilingsNormalizerTest(unittest.TestCase):
                 ],
             )
 
-            df = pd.read_csv(output / "us_normalized_AAPL_2025.12.csv")
-            debug = pd.read_csv(output / "us_normalized_AAPL_2025.12.debug.csv")
+            df = pd.read_csv(output / "us_normalized_AAPL.csv")
+            debug = pd.read_csv(output / "us_normalized_AAPL.debug.csv")
 
             self.assertEqual(float(df.loc[df["canonical_account_id"].eq("RND"), "normalized_amount"].iat[0]), 40)
             self.assertEqual(debug.loc[debug["canonical_account_id"].eq("RND"), "source"].iat[0], "notes")
@@ -347,8 +350,8 @@ class SecFilingsNormalizerTest(unittest.TestCase):
                 ],
             )
 
-            df = pd.read_csv(output / "us_normalized_AAPL_2025.12.csv")
-            debug = pd.read_csv(output / "us_normalized_AAPL_2025.12.debug.csv")
+            df = pd.read_csv(output / "us_normalized_AAPL.csv")
+            debug = pd.read_csv(output / "us_normalized_AAPL.debug.csv")
 
             self.assertEqual(float(df.loc[df["canonical_account_id"].eq("RND"), "normalized_amount"].iat[0]), 50)
             self.assertEqual(debug.loc[debug["canonical_account_id"].eq("RND"), "source"].iat[0], "edgartools")

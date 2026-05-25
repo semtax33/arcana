@@ -6,11 +6,17 @@ from typing import Any
 
 import pandas as pd
 
+from engine.core.identifiers import security_id_of as market_security_id_of
 from engine.core.paths import (
     DATA_LAKE,
     first_existing_path,
     market_csv_name,
     parse_statement_snapshot_filename,
+)
+from engine.markets.registry import market_config
+from engine.transformers._internal.statement_files import (
+    legacy_statement_snapshot_files,
+    read_statement_period_frames,
 )
 
 FINANCIAL_DIR = DATA_LAKE.silver("dart", "normalized")
@@ -29,6 +35,20 @@ def normalize_stock_code(stock_code: Any) -> str:
 
 def security_id_of(stock_code: Any) -> str:
     return f"SEC_KR_{normalize_stock_code(stock_code)}"
+
+
+def normalize_symbol_for_market(stock_code: Any, market: str = "kr") -> str:
+    market = str(market or "kr").strip().lower()
+    if market == "kr":
+        return normalize_stock_code(stock_code)
+    return market_config(market).normalize_symbol(stock_code)
+
+
+def security_id_for_market(stock_code: Any, market: str = "kr") -> str:
+    market = str(market or "kr").strip().lower()
+    if market == "kr":
+        return security_id_of(stock_code)
+    return market_security_id_of(stock_code, market_config(market))
 
 
 def parse_period_from_filename(path: str | Path) -> dict[str, int | str] | None:
@@ -117,23 +137,14 @@ def attach_report_metadata(
     return df
 
 
-def financial_files(stock_code: Any, financial_dir: str | Path = FINANCIAL_DIR) -> list[Path]:
-    stock_code = normalize_stock_code(stock_code)
-    paths_by_period: dict[tuple[int, int], Path] = {}
-
-    for path in Path(financial_dir).glob(f"*normalized_{stock_code}_*.csv"):
-        if ".debug" in path.name or ".validation" in path.name:
-            continue
-        meta = parse_period_from_filename(path)
-        if meta and meta["month"] in {3, 6, 9, 12}:
-            key = (int(meta["year"]), int(meta["month"]))
-            if key not in paths_by_period or path.name.startswith("kr_"):
-                paths_by_period[key] = path
-
-    return sorted(
-        paths_by_period.values(),
-        key=lambda p: (parse_period_from_filename(p)["year"], parse_period_from_filename(p)["month"]),
-    )
+def financial_files(
+    stock_code: Any,
+    financial_dir: str | Path = FINANCIAL_DIR,
+    *,
+    market: str = "kr",
+) -> list[Path]:
+    stock_code = normalize_symbol_for_market(stock_code, market)
+    return legacy_statement_snapshot_files(stock_code, financial_dir, market=market)
 
 
 def pick_largest_abs(series: pd.Series) -> float:
@@ -204,15 +215,17 @@ def read_period_snapshots(
     stock_code: Any,
     financial_dir: str | Path = FINANCIAL_DIR,
     report_metadata_path: str | Path = REPORT_METADATA_PATH,
+    *,
+    market: str = "kr",
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
+    stock_code = normalize_symbol_for_market(stock_code, market)
 
-    for path in financial_files(stock_code, financial_dir):
-        meta = parse_period_from_filename(path)
-        if meta is None:
-            continue
-
-        df = pd.read_csv(path)
+    for year, month, df in read_statement_period_frames(
+        stock_code,
+        financial_dir,
+        market=market,
+    ):
         if df.empty:
             continue
 
@@ -228,11 +241,11 @@ def read_period_snapshots(
         )
 
         values: dict[str, Any] = {
-            "stock_code": normalize_stock_code(stock_code),
-            "security_id": security_id_of(stock_code),
-            "fiscal_year": meta["year"],
-            "fiscal_month": meta["month"],
-            "financial_period": period_end_date(meta["year"], meta["month"]),
+            "stock_code": stock_code,
+            "security_id": security_id_for_market(stock_code, market),
+            "fiscal_year": year,
+            "fiscal_month": month,
+            "financial_period": period_end_date(year, month),
         }
 
         fs_type_by_id: dict[str, str] = {}
@@ -343,9 +356,10 @@ def ttm_financial_frame(
     financial_dir: str | Path = FINANCIAL_DIR,
     cumulative_statement_types: set[str] | None = None,
     report_metadata_path: str | Path = REPORT_METADATA_PATH,
+    market: str = "kr",
 ) -> pd.DataFrame:
     periodized = add_quarter_and_ttm_amounts(
-        read_period_snapshots(stock_code, financial_dir, report_metadata_path),
+        read_period_snapshots(stock_code, financial_dir, report_metadata_path, market=market),
         cumulative_statement_types=cumulative_statement_types,
     )
     if periodized.empty:
@@ -371,9 +385,10 @@ def quarterly_financial_frame(
     financial_dir: str | Path = FINANCIAL_DIR,
     cumulative_statement_types: set[str] | None = None,
     report_metadata_path: str | Path = REPORT_METADATA_PATH,
+    market: str = "kr",
 ) -> pd.DataFrame:
     periodized = add_quarter_and_ttm_amounts(
-        read_period_snapshots(stock_code, financial_dir, report_metadata_path),
+        read_period_snapshots(stock_code, financial_dir, report_metadata_path, market=market),
         cumulative_statement_types=cumulative_statement_types,
     )
     if periodized.empty:

@@ -6,8 +6,11 @@ from engine.core.paths import (
     first_existing_path,
     market_csv_name,
     market_symbol_csv_name,
+    parse_statement_symbol_filename,
     parse_statement_snapshot_filename,
+    fiscal_quarter_from_month,
     statement_snapshot_name,
+    statement_symbol_name,
 )
 
 
@@ -25,6 +28,17 @@ class CorePathsTest(unittest.TestCase):
             parse_statement_snapshot_filename(name),
             {"market": "kr", "stock_code": "005930", "year": 2025, "month": 12},
         )
+
+    def test_statement_symbol_name_and_parse_include_market_prefix(self):
+        name = statement_symbol_name("5930")
+
+        self.assertEqual(name, "kr_normalized_005930.csv")
+        self.assertEqual(
+            parse_statement_symbol_filename(name),
+            {"market": "kr", "stock_code": "005930"},
+        )
+        self.assertEqual(statement_symbol_name("AAPL", market="us"), "us_normalized_AAPL.csv")
+        self.assertEqual(fiscal_quarter_from_month(9), 3)
 
     def test_parse_statement_snapshot_filename_accepts_legacy_name(self):
         self.assertEqual(

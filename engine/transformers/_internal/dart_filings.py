@@ -14,9 +14,14 @@ import yaml
 from bs4 import BeautifulSoup, Tag
 
 from engine.core.paths import parse_statement_snapshot_filename
+from engine.transformers._internal.statement_files import (
+    STATEMENT_PERIOD_COLUMNS,
+    add_statement_period_columns,
+    statement_output_columns,
+)
 
 # amount는 하위 호환용으로 normalized_amount와 동일하게 저장한다.
-EXPECTED_HEADER = [
+BASE_EXPECTED_HEADER = [
     "canonical_account_id",
     "canonical_account_name",
     "original_account_name",
@@ -29,6 +34,7 @@ EXPECTED_HEADER = [
     "amount_policy",
     "cash_direction",
 ]
+EXPECTED_HEADER = statement_output_columns(BASE_EXPECTED_HEADER)
 
 DEBUG_COLUMNS = [
     "rule_id",
@@ -2138,7 +2144,7 @@ def _reference_amounts_for_unit_repair(output_path: Path) -> dict[tuple[str, str
         return {}
 
     candidates: list[tuple[int, Path]] = []
-    for path in output_path.parent.glob(f"normalized_{meta['stock_code']}_*.csv"):
+    for path in output_path.parent.glob(f"*normalized_{meta['stock_code']}_*.csv"):
         if ".debug" in path.name or path.name == output_path.name:
             continue
         candidate_meta = _normalized_output_meta(path)
@@ -2403,6 +2409,24 @@ def normalize_financial_statement_rule_based(
         mapped_df,
         output_path,
     )
+    output_meta = parse_statement_snapshot_filename(output_path)
+    if output_meta is not None:
+        mapped_df = add_statement_period_columns(
+            mapped_df,
+            int(output_meta["year"]),
+            int(output_meta["month"]),
+        )
+    else:
+        period_match = re.match(r"^\s*(\d{4})[._](\d{1,2})\s*$", safe_str(period))
+        if period_match:
+            mapped_df = add_statement_period_columns(
+                mapped_df,
+                int(period_match.group(1)),
+                int(period_match.group(2)),
+            )
+        else:
+            for column in STATEMENT_PERIOD_COLUMNS:
+                mapped_df[column] = pd.NA
 
     errors = validate_mapped_df(mapped_df, canonical_df)
 

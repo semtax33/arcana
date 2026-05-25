@@ -78,10 +78,25 @@ def statement_snapshot_name(
     )
 
 
+def statement_symbol_name(stock_code: Any, market: str = DEFAULT_MARKET) -> str:
+    normalized_market = _normalize_market(market)
+    stock_code_text = str(stock_code).strip()
+    if normalized_market == DEFAULT_MARKET and stock_code_text.isdigit():
+        stock_code_text = stock_code_text.zfill(6)
+    stock_code_text = _safe_filename_part(stock_code_text)
+    return f"{normalized_market}_normalized_{stock_code_text}.csv"
+
+
 _STATEMENT_SNAPSHOT_RE = re.compile(
     r"(?:(?P<market>[a-z][a-z0-9]*)_)?normalized_"
     r"(?P<stock_code>.+?)_"
     r"(?P<year>\d{4})[._](?P<month>\d{2})\.csv$",
+    re.IGNORECASE,
+)
+
+_STATEMENT_SYMBOL_RE = re.compile(
+    r"(?:(?P<market>[a-z][a-z0-9]*)_)?normalized_"
+    r"(?P<stock_code>.+?)\.csv$",
     re.IGNORECASE,
 )
 
@@ -96,6 +111,23 @@ def parse_statement_snapshot_filename(path: str | Path) -> dict[str, int | str] 
         "year": int(match.group("year")),
         "month": int(match.group("month")),
     }
+
+
+def parse_statement_symbol_filename(path: str | Path) -> dict[str, str] | None:
+    path_name = Path(path).name
+    if _STATEMENT_SNAPSHOT_RE.match(path_name):
+        return None
+    match = _STATEMENT_SYMBOL_RE.match(path_name)
+    if not match:
+        return None
+    return {
+        "market": (match.group("market") or DEFAULT_MARKET).lower(),
+        "stock_code": match.group("stock_code"),
+    }
+
+
+def fiscal_quarter_from_month(month: int) -> int:
+    return ((int(month) - 1) // 3) + 1
 
 
 def first_existing_path(primary: str | Path, *legacy_paths: str | Path) -> Path:

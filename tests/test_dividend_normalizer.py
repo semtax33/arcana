@@ -30,6 +30,27 @@ class DividendNormalizerTest(unittest.TestCase):
             dividend_normalizer.calculate_silver_total_dividend_amount = original_total
             dividend_normalizer.calculate_net_income = original_income
 
+    def test_calculate_net_income_reads_consolidated_statement_file(self):
+        original_base_dir = dividend_normalizer.base_dir
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            (base_dir / "kr_normalized_005930.csv").write_text(
+                "\n".join(
+                    [
+                        "canonical_account_id,canonical_account_name,original_account_name,statement_type,period,normalized_amount,fiscal_year,fiscal_month,fiscal_quarter",
+                        "NET_INCOME,Net Income,Net Income,IS,2025.12,1234,2025,12,4",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            try:
+                dividend_normalizer.base_dir = base_dir
+                result = dividend_normalizer.calculate_net_income("005930", 2025, 12)
+            finally:
+                dividend_normalizer.base_dir = original_base_dir
+
+        self.assertEqual(result, 1234)
+
     def test_silver_dividend_calculations_use_latest_common_report(self):
         original_by_kind_path = dividend_normalizer.silver_dividend_by_stock_kind_path
         original_summary_path = dividend_normalizer.silver_dividend_company_summary_path

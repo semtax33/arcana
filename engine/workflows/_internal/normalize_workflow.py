@@ -8,13 +8,25 @@ from pathlib import Path
 
 import pandas as pd
 
-from engine.core.paths import DATA_LAKE, PROJECT_ROOT, first_existing_path, statement_snapshot_name
+from engine.core.paths import (
+    DATA_LAKE,
+    PROJECT_ROOT,
+    first_existing_path,
+    parse_statement_snapshot_filename,
+    statement_snapshot_name,
+    statement_symbol_name,
+)
 from engine.transformers.filings import (
     ContextEngine,
+    EXPECTED_HEADER,
     RuleEngine,
     infer_comment_html_path,
     load_canonical_accounts,
     normalize_financial_statement_rule_based,
+)
+from engine.transformers._internal.statement_files import (
+    consolidate_statement_debug_snapshots,
+    consolidate_statement_snapshots,
 )
 from engine.extractors.market_universe import kospi_kosdaq_corp_list
 
@@ -54,11 +66,21 @@ _WORKER_CONTEXT_ENGINE: ContextEngine | None = None
 _WORKER_MAPPING_ENGINE: RuleEngine | None = None
 
 
+def normalized_statement_output_dir() -> Path:
+    return DATA_LAKE.silver("dart", "normalized")
+
+
+def normalized_statement_snapshot_dir() -> Path:
+    return DATA_LAKE.silver("dart", "normalized-snapshots")
+
+
 def normalization_dependency_paths() -> list[Path]:
     paths = [
         Path(__file__).resolve(),
         PROJECT_ROOT / "engine" / "transformers" / "filings.py",
         PROJECT_ROOT / "engine" / "transformers" / "_internal" / "dart_filings.py",
+        PROJECT_ROOT / "engine" / "transformers" / "_internal" / "statement_files.py",
+        PROJECT_ROOT / "engine" / "core" / "paths.py",
         CANONICAL_CSV_PATH,
         CONTEXT_RULE_PATH,
         MAPPING_RULE_PATH,
@@ -131,7 +153,7 @@ def build_normalization_tasks(
                 )
                 period = f"{year}.{month}"
                 output_csv_path = (
-                    DATA_LAKE.silver("dart", "normalized")
+                    normalized_statement_snapshot_dir()
                     / statement_snapshot_name(stock_code, year, month)
                 )
                 comment_html_path = infer_comment_html_path(
@@ -237,6 +259,59 @@ def normalize_all_statements() -> None:
         f"[DONE] processed={processed_count}, "
         f"skipped={skipped_count}, missing={missing_count}, failed={failed_count}"
     )
+
+    snapshot_dir = normalized_statement_snapshot_dir()
+    normalized_dir = normalized_statement_output_dir()
+    consolidated_count = 0
+    for stock_code in stock_codes:
+        if consolidate_statement_snapshots(
+            stock_code,
+            snapshot_dir,
+            market="kr",
+            columns=EXPECTED_HEADER,
+            output_dir=normalized_dir,
+        ):
+            consolidated_count += 1
+        if SAVE_DEBUG:
+            consolidate_statement_debug_snapshots(
+                stock_code,
+                snapshot_dir,
+                market="kr",
+                output_dir=normalized_dir,
+            )
+    removed_count = remove_legacy_statement_snapshots(normalized_dir)
+    print(f"[DONE] consolidated statement files={consolidated_count}")
+    if removed_count:
+        print(f"[DONE] removed legacy statement snapshot files={removed_count}")
+
+
+def remove_legacy_statement_snapshots(normalized_dir: str | Path) -> int:
+    normalized_dir = Path(normalized_dir)
+    if not normalized_dir.exists():
+        return 0
+
+    removed_count = 0
+    for path in normalized_dir.glob("*normalized_*_*.csv"):
+        if ".debug" in path.name or ".validation" in path.name:
+            continue
+
+        meta = parse_statement_snapshot_filename(path)
+        if meta is None:
+            continue
+
+        consolidated_path = normalized_dir / statement_symbol_name(
+            meta["stock_code"],
+            market=str(meta["market"]),
+        )
+        if not consolidated_path.exists():
+            continue
+
+        for candidate in [path, path.with_suffix(".debug.csv")]:
+            if candidate.exists():
+                candidate.unlink()
+                removed_count += 1
+
+    return removed_count
 
 
 def _init_normalize_worker() -> None:

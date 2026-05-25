@@ -1,9 +1,11 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
 from engine.loaders.factors import (
     FACT_DAILY_FACTOR_COLUMNS,
+    create_daily_factor_rows,
     create_factor_catalog_dataframe,
     prepare_daily_factor_rows,
 )
@@ -58,6 +60,64 @@ class FactorEltTest(unittest.TestCase):
 
         self.assertEqual(list(result.columns), FACT_DAILY_FACTOR_COLUMNS)
         self.assertTrue(result.empty)
+
+    def test_create_daily_factor_rows_reuses_market_data_cache(self):
+        wide_df = pd.DataFrame(
+            [
+                {
+                    "security_id": "SEC_KR_005930",
+                    "trade_date": "2026-01-02",
+                    "roe": 10.0,
+                    "currency": "KRW",
+                }
+            ]
+        )
+        cache = object()
+
+        with (
+            patch("engine.loaders.factors.FactorMarketDataCache", return_value=cache) as cache_factory,
+            patch("engine.loaders.factors._resolve_stock_codes", return_value=["005930", "000660"]),
+            patch("engine.loaders.factors.create_stock_factor_dataframe", return_value=wide_df) as create_wide,
+        ):
+            result = create_daily_factor_rows(
+                stock_codes=["005930", "000660"],
+                start_date="2026-01-01",
+                end_date="2026-01-31",
+                reader_mode="cached",
+            )
+
+        cache_factory.assert_called_once()
+        self.assertEqual(create_wide.call_count, 2)
+        self.assertTrue(
+            all(call.kwargs["market_data_cache"] is cache for call in create_wide.call_args_list)
+        )
+        self.assertEqual(len(result), 2)
+
+    def test_create_daily_factor_rows_can_use_csv_reader_mode(self):
+        wide_df = pd.DataFrame(
+            [
+                {
+                    "security_id": "SEC_KR_005930",
+                    "trade_date": "2026-01-02",
+                    "roe": 10.0,
+                    "currency": "KRW",
+                }
+            ]
+        )
+
+        with (
+            patch("engine.loaders.factors.FactorMarketDataCache") as cache_factory,
+            patch("engine.loaders.factors._resolve_stock_codes", return_value=["005930"]),
+            patch("engine.loaders.factors.create_stock_factor_dataframe", return_value=wide_df) as create_wide,
+        ):
+            result = create_daily_factor_rows(
+                stock_codes=["005930"],
+                reader_mode="csv",
+            )
+
+        cache_factory.assert_not_called()
+        self.assertIsNone(create_wide.call_args.kwargs["market_data_cache"])
+        self.assertEqual(len(result), 1)
 
     def test_create_factor_catalog_dataframe_marks_technical_factors(self):
         catalog_df = create_factor_catalog_dataframe(

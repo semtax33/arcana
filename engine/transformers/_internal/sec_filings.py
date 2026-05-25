@@ -15,8 +15,13 @@ import pandas as pd
 import yaml
 
 from engine.core.identifiers import security_id_of
-from engine.core.paths import DATA_LAKE, first_existing_path, statement_snapshot_name
+from engine.core.paths import DATA_LAKE, first_existing_path, statement_symbol_name
 from engine.markets.us import US_MARKET_CONFIG
+from engine.transformers._internal.statement_files import (
+    add_statement_period_columns,
+    consolidated_statement_path,
+    legacy_statement_snapshot_files,
+)
 from engine.transformers._internal.dart_filings import (
     DEBUG_COLUMNS,
     EXPECTED_HEADER,
@@ -1080,6 +1085,9 @@ def candidate_to_rows(candidate: SecFactCandidate) -> tuple[dict[str, Any], dict
         "cash_effect_amount": format_amount(cash_effect_amount),
         "amount_policy": candidate.amount_policy,
         "cash_direction": candidate.cash_direction,
+        "fiscal_year": candidate.fiscal_year,
+        "fiscal_month": candidate.fiscal_month,
+        "fiscal_quarter": (candidate.fiscal_month - 1) // 3 + 1,
     }
     debug = dict(base)
     debug.update(
@@ -1125,20 +1133,25 @@ def write_symbol_outputs(
     output_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
 
-    by_period: dict[tuple[str, int, int], list[SecFactCandidate]] = {}
+    by_symbol: dict[str, list[SecFactCandidate]] = {}
     for candidate in candidates:
-        by_period.setdefault((candidate.symbol, candidate.fiscal_year, candidate.fiscal_month), []).append(candidate)
+        by_symbol.setdefault(candidate.symbol, []).append(candidate)
 
-    for (symbol, year, month), rows in sorted(by_period.items()):
+    for symbol, rows in sorted(by_symbol.items()):
         normalized_rows: list[dict[str, Any]] = []
         debug_rows: list[dict[str, Any]] = []
-        for candidate in rows:
+        for candidate in sorted(rows, key=lambda row: (row.fiscal_year, row.fiscal_month, row.statement_type, row.canonical_id)):
             normalized, debug = candidate_to_rows(candidate)
             normalized_rows.append(normalized)
             debug_rows.append(debug)
 
-        output_path = output_dir / statement_snapshot_name(symbol, year, month, market="us")
-        pd.DataFrame(normalized_rows, columns=EXPECTED_HEADER).to_csv(
+        output_path = output_dir / statement_symbol_name(symbol, market="us")
+        output_frame = _merged_symbol_normalized_frame(
+            output_dir=output_dir,
+            symbol=symbol,
+            normalized_rows=normalized_rows,
+        )
+        output_frame.to_csv(
             output_path,
             index=False,
             encoding="utf-8-sig",
@@ -1161,6 +1174,7 @@ def write_symbol_outputs(
                 "fp",
                 "source",
             ]
+            debug_columns = list(dict.fromkeys(debug_columns))
             output_path.with_suffix(".debug.csv").write_text("", encoding="utf-8-sig")
             pd.DataFrame(debug_rows).reindex(columns=debug_columns).to_csv(
                 output_path.with_suffix(".debug.csv"),
@@ -1168,8 +1182,55 @@ def write_symbol_outputs(
                 encoding="utf-8-sig",
                 quoting=csv.QUOTE_ALL,
             )
+        _remove_legacy_symbol_outputs(output_dir, symbol)
 
     return written
+
+
+def _merged_symbol_normalized_frame(
+    *,
+    output_dir: Path,
+    symbol: str,
+    normalized_rows: list[dict[str, Any]],
+) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    consolidated_path = consolidated_statement_path(output_dir, symbol, market="us")
+    if consolidated_path.exists():
+        frames.append(pd.read_csv(consolidated_path))
+
+    for path in legacy_statement_snapshot_files(symbol, output_dir, market="us"):
+        meta = path.name
+        parsed = re.match(r"us_normalized_.+_(\d{4})[._](\d{2})\.csv$", meta, re.IGNORECASE)
+        if parsed is None:
+            continue
+        frames.append(
+            add_statement_period_columns(
+                pd.read_csv(path),
+                int(parsed.group(1)),
+                int(parsed.group(2)),
+            )
+        )
+
+    if normalized_rows:
+        frames.append(pd.DataFrame(normalized_rows))
+
+    if not frames:
+        return pd.DataFrame(columns=EXPECTED_HEADER)
+
+    output = pd.concat(frames, ignore_index=True)
+    output = output.drop_duplicates(
+        ["fiscal_year", "fiscal_month", "canonical_account_id"],
+        keep="last",
+    )
+    output = output.sort_values(["fiscal_year", "fiscal_month", "statement_type", "canonical_account_id"], kind="stable")
+    return output.reindex(columns=EXPECTED_HEADER)
+
+
+def _remove_legacy_symbol_outputs(output_dir: Path, symbol: str) -> None:
+    for path in legacy_statement_snapshot_files(symbol, output_dir, market="us"):
+        debug_path = path.with_suffix(".debug.csv")
+        path.unlink(missing_ok=True)
+        debug_path.unlink(missing_ok=True)
 
 
 def write_report_metadata(candidates: list[SecFactCandidate], path: str | Path = US_REPORT_METADATA_PATH) -> None:

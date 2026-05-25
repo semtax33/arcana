@@ -6,12 +6,16 @@ from unittest.mock import patch
 import pandas as pd
 
 from engine.transformers.factors import (
+    FactorMarketDataCache,
     add_annual_financial_factors,
     add_daily_market_valuation_factors,
     add_dividend_factors,
     add_price_momentum_factors,
     create_stock_factor_dataframe,
     read_annual_financials,
+    read_stock_dividends,
+    read_stock_prices,
+    read_stock_shares,
 )
 
 
@@ -464,6 +468,123 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertEqual(result["fiscal_month"].iat[0], 12)
         self.assertEqual(result["report_date"].dt.strftime("%Y-%m-%d").iat[0], "2026-03-15")
         self.assertEqual(result["rcept_no"].iat[0], "20260315000001")
+
+    def test_read_annual_financials_prefers_consolidated_symbol_file(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            financial_dir = root / "financials"
+            financial_dir.mkdir()
+
+            (financial_dir / "kr_normalized_005930.csv").write_text(
+                "\n".join(
+                    [
+                        "canonical_account_id,canonical_account_name,original_account_name,statement_type,period,normalized_amount,fiscal_year,fiscal_month,fiscal_quarter",
+                        "TOTAL_ASSETS,Assets,Assets,BS,2024.12,900,2024,12,4",
+                        "TOTAL_ASSETS,Assets,Assets,BS,2025.12,1000,2025,12,4",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = read_annual_financials("005930", financial_dir=financial_dir)
+
+        self.assertEqual(result["fiscal_year"].tolist(), [2024, 2025])
+        self.assertEqual(result["at"].tolist(), [900, 1000])
+
+    def test_market_data_cache_matches_stock_readers(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            price_path = root / "prices.csv"
+            shares_path = root / "shares.csv"
+            dividend_path = root / "dividends.csv"
+
+            price_path.write_text(
+                "\n".join(
+                    [
+                        "security_id,trade_date,open,high,low,close,volume,adj_close",
+                        "SEC_US_AAPL,2026-01-02,10,11,9,10,100,10",
+                        "SEC_US_MSFT,2026-01-02,20,21,19,20,200,20",
+                        "SEC_US_AAPL,2026-01-03,12,13,11,12,120,12",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            shares_path.write_text(
+                "\n".join(
+                    [
+                        "security_id,trade_date,shares,market_cap",
+                        "SEC_US_AAPL,2026-01-02,1000,10000",
+                        "SEC_US_MSFT,2026-01-02,2000,40000",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            dividend_path.write_text(
+                "\n".join(
+                    [
+                        "security_id,trade_date,dividend,payout_ratio,dividend_percent",
+                        "SEC_US_AAPL,2026-01-02,0.2,0.3,2",
+                        "SEC_US_MSFT,2026-01-02,0.1,0.2,1",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            cache = FactorMarketDataCache(
+                market="us",
+                price_path=price_path,
+                shares_path=shares_path,
+                dividend_path=dividend_path,
+            )
+
+            pd.testing.assert_frame_equal(
+                cache.prices("SEC_US_AAPL", stock_code="AAPL"),
+                read_stock_prices("AAPL", path=price_path, market="us"),
+            )
+            pd.testing.assert_frame_equal(
+                cache.shares("SEC_US_AAPL"),
+                read_stock_shares("AAPL", path=shares_path, market="us"),
+            )
+            pd.testing.assert_frame_equal(
+                cache.dividends("SEC_US_AAPL"),
+                read_stock_dividends("AAPL", path=dividend_path, market="us"),
+            )
+
+    def test_market_data_cache_filters_dates_with_warmup_and_handles_missing_files(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            price_path = root / "prices.csv"
+            missing_path = root / "missing.csv"
+
+            price_path.write_text(
+                "\n".join(
+                    [
+                        "security_id,trade_date,close,volume",
+                        "SEC_US_AAPL,2025-12-31,9,90",
+                        "SEC_US_AAPL,2026-01-01,10,100",
+                        "SEC_US_AAPL,2026-01-02,11,110",
+                        "SEC_US_AAPL,2026-01-03,12,120",
+                        "SEC_US_AAPL,2026-01-04,13,130",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            cache = FactorMarketDataCache(
+                market="us",
+                price_path=price_path,
+                shares_path=missing_path,
+                dividend_path=missing_path,
+                start_date="2026-01-02",
+                end_date="2026-01-03",
+                start_warmup_days=1,
+            )
+
+            result = cache.prices("SEC_US_AAPL", stock_code="AAPL")
+
+        self.assertEqual(result["trade_date"].dt.strftime("%Y-%m-%d").tolist(), ["2026-01-01", "2026-01-02", "2026-01-03"])
+        self.assertTrue(cache.shares("SEC_US_AAPL").empty)
+        self.assertTrue(cache.dividends("SEC_US_AAPL").empty)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,8 @@ import re
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from api.config.clickhouse import get_clickhouse_client
 from api.model.financials import (
     FinancialAccountDetailResponse,
@@ -21,7 +23,8 @@ from api.model.financials import (
     FinancialStatementSection,
     FinancialStatementsResponse,
 )
-from engine.core.paths import DATA_LAKE, parse_statement_snapshot_filename
+from engine.core.paths import DATA_LAKE
+from engine.transformers._internal.statement_files import read_statement_period_frames
 
 
 DEFAULT_CANONICAL_ACCOUNTS_PATH = DATA_LAKE.canonical_accounts()
@@ -323,26 +326,16 @@ def _load_normalized_statement_rows(
     if not normalized_statement_dir.exists():
         return rows
 
-    paths_by_period: dict[tuple[int, int], Path] = {}
-    for path in normalized_statement_dir.glob(f"*normalized_{stock_code}_*.csv"):
-        meta = parse_statement_snapshot_filename(path)
-        if meta is None:
-            continue
-        fiscal_year = int(meta["year"])
-        fiscal_month = int(meta["month"])
+    for fiscal_year, fiscal_month, frame in read_statement_period_frames(
+        stock_code,
+        normalized_statement_dir,
+        market="kr",
+    ):
         if fiscal_year < start_year or fiscal_month not in {3, 6, 9, 12}:
             continue
-        key = (fiscal_year, fiscal_month)
-        if key not in paths_by_period or path.name.startswith("kr_"):
-            paths_by_period[key] = path
-
-    for path in sorted(paths_by_period.values()):
-        meta = parse_statement_snapshot_filename(path)
-        fiscal_year = int(meta["year"])
-        fiscal_month = int(meta["month"])
         rows.extend(
-            _load_normalized_file_rows(
-                path=path,
+            _load_normalized_frame_rows(
+                frame=frame,
                 fiscal_year=fiscal_year,
                 fiscal_month=fiscal_month,
                 statement_filter=statement_filter,
@@ -359,34 +352,48 @@ def _load_normalized_file_rows(
     fiscal_month: int,
     statement_filter: str,
 ) -> list[RawStatementRow]:
-    grouped: dict[tuple[str, str], dict[str, Any]] = {}
     try:
-        with path.open("r", encoding="utf-8-sig", newline="") as file:
-            reader = csv.DictReader(file)
-            for row in reader:
-                canonical_id = _optional_str(row.get("canonical_account_id"))
-                if not canonical_id or canonical_id == "UNMAPPED":
-                    continue
-                statement_type = _visible_statement_type(_optional_str(row.get("statement_type")) or "")
-                if statement_type not in STATEMENT_TYPES:
-                    continue
-                if statement_filter != "all" and statement_type != statement_filter:
-                    continue
-
-                value = _float_or_none(row.get("normalized_amount") or row.get("amount"))
-                if value is None:
-                    continue
-                key = (statement_type, canonical_id)
-                current = grouped.get(key)
-                if current is None or abs(value) > abs(current["value"]):
-                    grouped[key] = {
-                        "statement_type": statement_type,
-                        "canonical_id": canonical_id,
-                        "account_name": _optional_str(row.get("canonical_account_name")) or canonical_id,
-                        "value": value,
-                    }
+        return _load_normalized_frame_rows(
+            frame=pd.read_csv(path),
+            fiscal_year=fiscal_year,
+            fiscal_month=fiscal_month,
+            statement_filter=statement_filter,
+        )
     except FileNotFoundError:
         return []
+
+
+def _load_normalized_frame_rows(
+    *,
+    frame: Any,
+    fiscal_year: int,
+    fiscal_month: int,
+    statement_filter: str,
+) -> list[RawStatementRow]:
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    records = frame.to_dict("records") if hasattr(frame, "to_dict") else list(frame)
+    for row in records:
+        canonical_id = _optional_str(row.get("canonical_account_id"))
+        if not canonical_id or canonical_id == "UNMAPPED":
+            continue
+        statement_type = _visible_statement_type(_optional_str(row.get("statement_type")) or "")
+        if statement_type not in STATEMENT_TYPES:
+            continue
+        if statement_filter != "all" and statement_type != statement_filter:
+            continue
+
+        value = _float_or_none(row.get("normalized_amount") or row.get("amount"))
+        if value is None:
+            continue
+        key = (statement_type, canonical_id)
+        current = grouped.get(key)
+        if current is None or abs(value) > abs(current["value"]):
+            grouped[key] = {
+                "statement_type": statement_type,
+                "canonical_id": canonical_id,
+                "account_name": _optional_str(row.get("canonical_account_name")) or canonical_id,
+                "value": value,
+            }
 
     period_end_date = _period_end_date(fiscal_year, fiscal_month)
     return [

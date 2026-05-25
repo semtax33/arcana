@@ -8,8 +8,9 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from engine.core.clickhouse import get_clickhouse_client
-from engine.core.paths import DATA_LAKE
+from engine.core.paths import DATA_LAKE, parse_statement_snapshot_filename, parse_statement_symbol_filename
 from engine.transformers.factors import (
+    FactorMarketDataCache,
     create_stock_factor_dataframe,
     factor_columns,
     normalize_stock_code,
@@ -444,8 +445,24 @@ def create_daily_factor_rows(
     start_date: str | None = None,
     end_date: str | None = None,
     market: str = "kr",
+    reader_mode: str = "cached",
     **kwargs,
 ) -> pd.DataFrame:
+    reader_mode = str(reader_mode or "cached").strip().lower()
+    if reader_mode not in {"cached", "csv"}:
+        raise ValueError("reader_mode must be 'cached' or 'csv'")
+
+    market_data_cache = kwargs.pop("market_data_cache", None)
+    if reader_mode == "cached" and market_data_cache is None:
+        market_data_cache = FactorMarketDataCache(
+            market=market,
+            price_path=kwargs.get("price_path"),
+            shares_path=kwargs.get("shares_path"),
+            dividend_path=kwargs.get("dividend_path"),
+            start_date=start_date,
+            end_date=end_date,
+        )
+
     frames = []
     for stock_code in _resolve_stock_codes(stock_codes, market=market):
         wide_df = create_stock_factor_dataframe(
@@ -454,6 +471,7 @@ def create_daily_factor_rows(
             start_date=start_date,
             end_date=end_date,
             market=market,
+            market_data_cache=market_data_cache,
             **kwargs,
         )
         factor_df = prepare_daily_factor_rows(
@@ -485,9 +503,13 @@ def _resolve_stock_codes(stock_codes: list[str] | None, market: str = "kr") -> l
             for path in financial_dir.glob(f"{market}_normalized_*.csv"):
                 if ".debug" in path.name:
                     continue
-                parts = path.name.split("_")
-                if len(parts) >= 4:
-                    symbols.add("_".join(parts[2:-1]))
+                symbol_meta = parse_statement_symbol_filename(path)
+                if symbol_meta is not None:
+                    symbols.add(str(symbol_meta["stock_code"]))
+                    continue
+                snapshot_meta = parse_statement_snapshot_filename(path)
+                if snapshot_meta is not None:
+                    symbols.add(str(snapshot_meta["stock_code"]))
         return sorted(symbols)
 
     from engine.extractors.market_universe import kospi_kosdaq_corp_list
@@ -745,8 +767,24 @@ def insert_daily_factors(
     client=None,
     insert_batch_size: int = 25,
     insert_max_rows: int = 2_000_000,
+    reader_mode: str = "cached",
     **kwargs,
 ) -> pd.DataFrame:
+    reader_mode = str(reader_mode or "cached").strip().lower()
+    if reader_mode not in {"cached", "csv"}:
+        raise ValueError("reader_mode must be 'cached' or 'csv'")
+
+    market_data_cache = kwargs.pop("market_data_cache", None)
+    if reader_mode == "cached" and market_data_cache is None:
+        market_data_cache = FactorMarketDataCache(
+            market=market,
+            price_path=kwargs.get("price_path"),
+            shares_path=kwargs.get("shares_path"),
+            dividend_path=kwargs.get("dividend_path"),
+            start_date=start_date,
+            end_date=end_date,
+        )
+
     if dry_run:
         factor_df = create_daily_factor_rows(
             stock_codes=stock_codes,
@@ -754,6 +792,8 @@ def insert_daily_factors(
             start_date=start_date,
             end_date=end_date,
             market=market,
+            reader_mode=reader_mode,
+            market_data_cache=market_data_cache,
             **kwargs,
         )
         return factor_df
@@ -778,6 +818,7 @@ def insert_daily_factors(
                 start_date=start_date,
                 end_date=end_date,
                 market=market,
+                market_data_cache=market_data_cache,
                 **kwargs,
             )
             factor_df = prepare_daily_factor_rows(
@@ -842,6 +883,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--insert-batch-size", type=int, default=25)
     parser.add_argument("--insert-max-rows", type=int, default=2_000_000)
+    parser.add_argument("--reader-mode", default="cached", choices=["cached", "csv"])
     args = parser.parse_args()
 
     factor_df = insert_daily_factors(
@@ -854,6 +896,7 @@ def main() -> None:
         dry_run=args.dry_run,
         insert_batch_size=args.insert_batch_size,
         insert_max_rows=args.insert_max_rows,
+        reader_mode=args.reader_mode,
     )
     print(
         "prepared rows="

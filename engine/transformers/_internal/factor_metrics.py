@@ -21,6 +21,10 @@ from engine.transformers.filing_periods import (
     quarterly_financial_frame,
     ttm_financial_frame,
 )
+from engine.transformers._internal.statement_files import (
+    legacy_statement_snapshot_files,
+    read_statement_period_frames,
+)
 
 
 FINANCIAL_DIR = DATA_LAKE.silver("dart", "normalized")
@@ -241,6 +245,126 @@ def read_stock_csv_by_security_id(path, security_id, chunksize=500_000):
     return pd.concat(chunks, ignore_index=True)
 
 
+def _drop_unnamed_columns(df):
+    return df.drop(
+        columns=[column for column in df.columns if str(column).startswith("Unnamed")],
+        errors="ignore",
+    )
+
+
+class FactorMarketDataCache:
+    def __init__(
+        self,
+        market="kr",
+        price_path=None,
+        shares_path=None,
+        dividend_path=None,
+        start_date=None,
+        end_date=None,
+        start_warmup_days=366 * 11,
+    ):
+        self.market = str(market or "kr").strip().lower()
+        self.price_path = resolve_price_path(price_path, market=self.market)
+        self.shares_path = shares_path_for_market(self.market) if shares_path is None else Path(shares_path)
+        self.dividend_path = dividend_path_for_market(self.market) if dividend_path is None else Path(dividend_path)
+        self.start_date = pd.Timestamp(start_date) if start_date is not None else None
+        self.end_date = pd.Timestamp(end_date) if end_date is not None else None
+        self.start_warmup_days = int(start_warmup_days)
+        self._price_groups = None
+        self._shares_groups = None
+        self._dividend_groups = None
+
+    def prices(self, security_id, stock_code=None):
+        price_df = self._stock_frame("price", security_id)
+        if price_df.empty:
+            return price_df
+
+        price_df["trade_date"] = pd.to_datetime(price_df["trade_date"])
+        for column in ["open", "high", "low", "close", "volume", "adj_close"]:
+            if column in price_df.columns:
+                price_df[column] = pd.to_numeric(price_df[column], errors="coerce")
+        if "currency" not in price_df.columns:
+            price_df["currency"] = market_config(self.market).currency
+        if stock_code is not None:
+            price_df["stock_code"] = stock_code
+
+        return price_df.sort_values("trade_date").reset_index(drop=True)
+
+    def shares(self, security_id):
+        shares_df = self._stock_frame("shares", security_id)
+        if shares_df.empty:
+            return shares_df
+
+        shares_df["trade_date"] = pd.to_datetime(shares_df["trade_date"])
+        for column in ["shares", "market_cap"]:
+            if column in shares_df.columns:
+                shares_df[column] = pd.to_numeric(shares_df[column], errors="coerce")
+
+        return shares_df.sort_values("trade_date").reset_index(drop=True)
+
+    def dividends(self, security_id):
+        dividend_df = self._stock_frame("dividend", security_id)
+        if dividend_df.empty:
+            return dividend_df
+
+        dividend_df["trade_date"] = pd.to_datetime(dividend_df["trade_date"], errors="coerce")
+        for column in ["dividend", "payout_ratio", "dividend_percent"]:
+            if column in dividend_df.columns:
+                dividend_df[column] = pd.to_numeric(dividend_df[column], errors="coerce")
+
+        return (
+            dividend_df.dropna(subset=["trade_date"])
+            .sort_values("trade_date")
+            .reset_index(drop=True)
+        )
+
+    def _stock_frame(self, dataset, security_id):
+        frame, groups = self._groups(dataset)
+        if not groups:
+            return pd.DataFrame()
+        row_index = groups.get(security_id)
+        if row_index is None:
+            return pd.DataFrame()
+        return frame.loc[row_index].copy()
+
+    def _groups(self, dataset):
+        if dataset == "price":
+            if self._price_groups is None:
+                self._price_groups = self._read_groups(self.price_path, filter_dates=True)
+            return self._price_groups
+        if dataset == "shares":
+            if self._shares_groups is None:
+                self._shares_groups = self._read_groups(
+                    self.shares_path,
+                    filter_dates=True,
+                    use_start_warmup=False,
+                )
+            return self._shares_groups
+        if self._dividend_groups is None:
+            self._dividend_groups = self._read_groups(self.dividend_path, filter_dates=True)
+        return self._dividend_groups
+
+    def _read_groups(self, path, filter_dates=False, use_start_warmup=True):
+        path = Path(path)
+        if not path.exists():
+            return pd.DataFrame(), {}
+
+        df = _drop_unnamed_columns(pd.read_csv(path))
+        if "security_id" not in df.columns:
+            return pd.DataFrame(), {}
+
+        if filter_dates and "trade_date" in df.columns:
+            df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+            if use_start_warmup and self.start_date is not None:
+                warmup_start = self.start_date - pd.Timedelta(days=self.start_warmup_days)
+                df = df.loc[df["trade_date"] >= warmup_start].copy()
+            if self.end_date is not None:
+                df = df.loc[df["trade_date"] <= self.end_date].copy()
+
+        groups = df.groupby("security_id", sort=False).groups
+        return df, groups
+
+
 def read_stock_prices(stock_code, path=None, market="kr"):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
@@ -335,18 +459,12 @@ def annual_financial_files(stock_code, financial_dir=None, market="kr"):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
     financial_dir = Path(financial_dir) if financial_dir is not None else financial_dir_for_market(market)
-    paths_by_year = {}
-
-    for path in Path(financial_dir).glob(f"*normalized_{stock_code}_*.csv"):
-        if ".debug" in path.name or ".validation" in path.name:
-            continue
-        meta = parse_period_from_filename(path)
-        if meta and meta["month"] == ANNUAL_MONTH:
-            year = int(meta["year"])
-            if year not in paths_by_year or path.name.startswith(f"{market}_"):
-                paths_by_year[year] = path
-
-    return sorted(paths_by_year.values(), key=lambda p: parse_period_from_filename(p)["year"])
+    return legacy_statement_snapshot_files(
+        stock_code,
+        financial_dir,
+        market=market,
+        months={ANNUAL_MONTH},
+    )
 
 
 def pick_largest_abs(series):
@@ -419,9 +537,13 @@ def read_annual_financials(
     stock_code = normalize_symbol_for_market(stock_code, market)
     rows = []
 
-    for path in annual_financial_files(stock_code, financial_dir=financial_dir, market=market):
-        meta = parse_period_from_filename(path)
-        df = pd.read_csv(path)
+    financial_dir = Path(financial_dir) if financial_dir is not None else financial_dir_for_market(market)
+    for year, month, df in read_statement_period_frames(
+        stock_code,
+        financial_dir,
+        market=market,
+        months={ANNUAL_MONTH},
+    ):
         if df.empty:
             continue
 
@@ -437,9 +559,9 @@ def read_annual_financials(
             {
                 "stock_code": stock_code,
                 "security_id": security_id_for_market(stock_code, market),
-                "fiscal_year": meta["year"],
-                "fiscal_month": meta["month"],
-                "financial_period": period_end_date(meta["year"], meta["month"]),
+                "fiscal_year": year,
+                "fiscal_month": month,
+                "financial_period": period_end_date(year, month),
             }
         )
         rows.append(values)
@@ -466,6 +588,7 @@ def read_ttm_financials(
         financial_dir,
         cumulative_statement_types=cumulative_statement_types,
         report_metadata_path=report_metadata_path,
+        market=market,
     )
     if financial_df.empty:
         return financial_df
@@ -486,6 +609,7 @@ def read_quarterly_financials(
         financial_dir,
         cumulative_statement_types=cumulative_statement_types,
         report_metadata_path=report_metadata_path,
+        market=market,
     )
     if financial_df.empty:
         return financial_df
@@ -642,80 +766,86 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
         - df["capx"].fillna(0)
         - (df["working_capital"] - df["working_capital"].shift(lag)).fillna(0)
     )
-    df["fcfe"] = (
-        df["fcf"]
-        + df["net_borrowing"].fillna(0)
-    )
+    fcfe = df["fcf"] + df["net_borrowing"].fillna(0)
     shareholder_return_amount = df["div_paid"].fillna(0) + (
         df["prstkc"].fillna(0) - df["sstk"].fillna(0)
     )
     positive_shareholder_return = shareholder_return_amount.where(shareholder_return_amount > 0)
-    df["fcf_payout_ratio"] = df["div_paid"] / positive_denominator(df["fcf"])
-    df["fcf_dividend_coverage"] = df["fcf"] / positive_denominator(df["div_paid"])
-    df["fcf_after_dividends"] = df["fcf"] - df["div_paid"].fillna(0)
-    df["fcf_after_dividends_to_sales_pct"] = df["fcf_after_dividends"] / df["sale"] * 100
-    df["fcf_after_dividends_to_assets_pct"] = df["fcf_after_dividends"] / df["at"] * 100
-    df["shareholder_return_fcf_coverage"] = df["fcf"] / positive_shareholder_return
-    df["fcfe_dividend_coverage"] = df["fcfe"] / positive_denominator(df["div_paid"])
-    df["fcfe_payout_ratio"] = df["div_paid"] / positive_denominator(df["fcfe"])
-    df["capex_to_sales_pct"] = df["capx"] / df["sale"] * 100
-    df["capex_to_cfo_pct"] = df["capx"] / positive_denominator(df["oancf"]) * 100
-    df["net_debt_to_fcf"] = df["net_debt"] / positive_denominator(df["fcf"])
-    df["interest_expense_to_fcf_pct"] = df["xint"].abs() / positive_denominator(df["fcf"]) * 100
-    df["fcf_interest_coverage"] = df["fcf"] / positive_denominator(df["xint"].abs())
-    df["fcf_volatility_5y"] = df["fcf"].rolling(lag * 5, min_periods=2).std()
-    df["fcf_negative_freq_5y_pct"] = (
-        (df["fcf"] < 0).rolling(lag * 5, min_periods=1).mean() * 100
-    )
-    df["fcf_volatility_10y"] = df["fcf"].rolling(lag * 10, min_periods=2).std()
-    df["fcf_negative_freq_10y_pct"] = (
-        (df["fcf"] < 0).rolling(lag * 10, min_periods=1).mean() * 100
-    )
-
-    df["sales_yoy_pct"] = yoy_pct(df["sale"], periods=lag)
-    df["op_yoy_pct"] = yoy_pct(df["oiadp"], periods=lag)
-    df["sales_growth_1y"] = growth_pct(df["sale"], periods=lag)
-    df["sales_growth_3y"] = growth_pct(df["sale"], periods=lag * 3)
-    df["sales_growth_5y"] = growth_pct(df["sale"], periods=lag * 5)
-    df["sales_cagr_3y"] = cagr_pct(df["sale"], years=3, periods_per_year=lag)
-    df["net_income_growth_1y"] = growth_pct(df["ni"], periods=lag)
-    df["net_income_growth_3y"] = growth_pct(df["ni"], periods=lag * 3)
-    df["net_income_growth_5y"] = growth_pct(df["ni"], periods=lag * 5)
-    df["operating_income_growth_1y"] = growth_pct(df["oiadp"], periods=lag)
-    df["operating_income_growth_3y"] = growth_pct(df["oiadp"], periods=lag * 3)
-    df["operating_income_growth_5y"] = growth_pct(df["oiadp"], periods=lag * 5)
-    df["sales_change_mil"] = (df["sale"] - df["sale"].shift(lag)) / 1_000_000
-    df["op_change_mil"] = (df["oiadp"] - df["oiadp"].shift(lag)) / 1_000_000
-    df["rdsr_pct"] = df["xrd"] / df["sale"] * 100
-    df["eps"] = first_value_frame(df, "BASIC_EPS", "DILUTED_EPS")
-    df["eps"] = df["eps"].fillna(df["ni_parent"] / numeric_column(df, "shares"))
-    df["eps_yoy_pct"] = yoy_pct(df["eps"], periods=lag)
-    df["asset_yoy_pct"] = yoy_pct(df["at"], periods=lag)
-    df["cfo_yoy_pct"] = yoy_pct(df["oancf"], periods=lag)
-    df["fcf_yoy_pct"] = yoy_pct(df["fcf"], periods=lag)
-    df["ffo_yoy_pct"] = yoy_pct(df["ffo"], periods=lag)
-
-    df["net_debt_to_ebitda"] = df["net_debt"] / df["oibdp"]
-    df["fc_to_ndr"] = df["fcf"] / df["net_debt"]
-    df["icr_times"] = df["oancf"] / df["xint"].abs()
-    df["interest_coverage"] = df["oiadp"] / df["xint"].abs()
-    df["current_ratio"] = df["act"] / df["lct"]
-    df["debt_to_equity"] = df["debt"] / df["seq"]
-    df["cash_to_debt"] = df["che"] / df["debt"]
-
-    df["retained_earnings"] = first_value_frame(
+    fcf_after_dividends = df["fcf"] - df["div_paid"].fillna(0)
+    eps = first_value_frame(df, "BASIC_EPS", "DILUTED_EPS")
+    eps = eps.fillna(df["ni_parent"] / numeric_column(df, "shares"))
+    retained_earnings = first_value_frame(
         df,
         "RETAINED_EARNINGS",
         "RETAINED_EARNINGS_FALLBACK",
     )
-    df["altman_z_score"] = (
+    tail_columns = pd.DataFrame(
+        {
+            "fcfe": fcfe,
+            "fcf_payout_ratio": df["div_paid"] / positive_denominator(df["fcf"]),
+            "fcf_dividend_coverage": df["fcf"] / positive_denominator(df["div_paid"]),
+            "fcf_after_dividends": fcf_after_dividends,
+            "fcf_after_dividends_to_sales_pct": fcf_after_dividends / df["sale"] * 100,
+            "fcf_after_dividends_to_assets_pct": fcf_after_dividends / df["at"] * 100,
+            "shareholder_return_fcf_coverage": df["fcf"] / positive_shareholder_return,
+            "fcfe_dividend_coverage": fcfe / positive_denominator(df["div_paid"]),
+            "fcfe_payout_ratio": df["div_paid"] / positive_denominator(fcfe),
+            "capex_to_sales_pct": df["capx"] / df["sale"] * 100,
+            "capex_to_cfo_pct": df["capx"] / positive_denominator(df["oancf"]) * 100,
+            "net_debt_to_fcf": df["net_debt"] / positive_denominator(df["fcf"]),
+            "interest_expense_to_fcf_pct": df["xint"].abs() / positive_denominator(df["fcf"]) * 100,
+            "fcf_interest_coverage": df["fcf"] / positive_denominator(df["xint"].abs()),
+            "fcf_volatility_5y": df["fcf"].rolling(lag * 5, min_periods=2).std(),
+            "fcf_negative_freq_5y_pct": (df["fcf"] < 0).rolling(lag * 5, min_periods=1).mean() * 100,
+            "fcf_volatility_10y": df["fcf"].rolling(lag * 10, min_periods=2).std(),
+            "fcf_negative_freq_10y_pct": (df["fcf"] < 0).rolling(lag * 10, min_periods=1).mean() * 100,
+            "sales_yoy_pct": yoy_pct(df["sale"], periods=lag),
+            "op_yoy_pct": yoy_pct(df["oiadp"], periods=lag),
+            "sales_growth_1y": growth_pct(df["sale"], periods=lag),
+            "sales_growth_3y": growth_pct(df["sale"], periods=lag * 3),
+            "sales_growth_5y": growth_pct(df["sale"], periods=lag * 5),
+            "sales_cagr_3y": cagr_pct(df["sale"], years=3, periods_per_year=lag),
+            "net_income_growth_1y": growth_pct(df["ni"], periods=lag),
+            "net_income_growth_3y": growth_pct(df["ni"], periods=lag * 3),
+            "net_income_growth_5y": growth_pct(df["ni"], periods=lag * 5),
+            "operating_income_growth_1y": growth_pct(df["oiadp"], periods=lag),
+            "operating_income_growth_3y": growth_pct(df["oiadp"], periods=lag * 3),
+            "operating_income_growth_5y": growth_pct(df["oiadp"], periods=lag * 5),
+            "sales_change_mil": (df["sale"] - df["sale"].shift(lag)) / 1_000_000,
+            "op_change_mil": (df["oiadp"] - df["oiadp"].shift(lag)) / 1_000_000,
+            "rdsr_pct": df["xrd"] / df["sale"] * 100,
+            "eps": eps,
+            "eps_yoy_pct": yoy_pct(eps, periods=lag),
+            "asset_yoy_pct": yoy_pct(df["at"], periods=lag),
+            "cfo_yoy_pct": yoy_pct(df["oancf"], periods=lag),
+            "fcf_yoy_pct": yoy_pct(df["fcf"], periods=lag),
+            "ffo_yoy_pct": yoy_pct(df["ffo"], periods=lag),
+            "net_debt_to_ebitda": df["net_debt"] / df["oibdp"],
+            "fc_to_ndr": df["fcf"] / df["net_debt"],
+            "icr_times": df["oancf"] / df["xint"].abs(),
+            "interest_coverage": df["oiadp"] / df["xint"].abs(),
+            "current_ratio": df["act"] / df["lct"],
+            "debt_to_equity": df["debt"] / df["seq"],
+            "cash_to_debt": df["che"] / df["debt"],
+            "retained_earnings": retained_earnings,
+            "altman_z_score": (
         1.2 * ((df["act"] - df["lct"]) / df["at"])
-        + 1.4 * (df["retained_earnings"] / df["at"])
+        + 1.4 * (retained_earnings / df["at"])
         + 3.3 * (df["oiadp"] / df["at"])
         + 1.0 * (df["sale"] / df["at"])
+            ),
+        },
+        index=df.index,
     )
-    df["beneish_m_score"] = calculate_beneish_m_score(df, periods=lag)
-    df["f_score"] = calculate_piotroski_f_score(df, periods=lag)
+    df = pd.concat([df, tail_columns], axis=1)
+    score_columns = pd.DataFrame(
+        {
+            "beneish_m_score": calculate_beneish_m_score(df, periods=lag),
+            "f_score": calculate_piotroski_f_score(df, periods=lag),
+        },
+        index=df.index,
+    )
+    df = pd.concat([df, score_columns], axis=1)
 
     df = convert_ratio_columns_to_percent(df, PERCENT_RATIO_FACTOR_COLUMNS)
     return df
@@ -975,9 +1105,13 @@ def add_kr_dividend_factors(daily_df, stock_code):
     return df
 
 
-def add_us_dividend_factors(daily_df, stock_code):
+def add_us_dividend_factors(daily_df, stock_code, market_data_cache=None):
     df = daily_df.sort_values("trade_date").copy()
-    dividends = read_stock_dividends(stock_code, market="us")
+    if market_data_cache is not None:
+        security_id = security_id_for_market(stock_code, "us")
+        dividends = market_data_cache.dividends(security_id)
+    else:
+        dividends = read_stock_dividends(stock_code, market="us")
     if dividends.empty:
         return empty_dividend_factors(df)
 
@@ -1024,10 +1158,10 @@ def add_us_dividend_factors(daily_df, stock_code):
     return df
 
 
-def add_dividend_factors(daily_df, stock_code, market="kr"):
+def add_dividend_factors(daily_df, stock_code, market="kr", market_data_cache=None):
     market = str(market or "kr").strip().lower()
     if market == "us":
-        return add_us_dividend_factors(daily_df, stock_code)
+        return add_us_dividend_factors(daily_df, stock_code, market_data_cache=market_data_cache)
     return add_kr_dividend_factors(daily_df, stock_code)
 
 
@@ -1196,9 +1330,8 @@ def add_daily_market_valuation_factors(daily_df):
     sale_for_fcf = numeric_column(df, "sale")
     total_dividend_amount = numeric_column(df, "total_dividend_amount")
     div_paid = numeric_column(df, "div_paid")
-    cash_dividends = total_dividend_amount.combine_first(div_paid).where(
-        total_dividend_amount.combine_first(div_paid) > 0
-    )
+    cash_dividends = total_dividend_amount.where(total_dividend_amount.notna(), div_paid)
+    cash_dividends = cash_dividends.where(cash_dividends > 0)
 
     df["mcap_mil"] = market_cap / 1_000_000
     df["trading_value"] = close * volume
@@ -1277,11 +1410,13 @@ def create_stock_factor_dataframe(
     end_date=None,
     price_path=None,
     shares_path=None,
+    dividend_path=None,
     financial_basis="annual",
     cumulative_statement_types=None,
     report_metadata_path=REPORT_METADATA_PATH,
     market="kr",
     financial_dir=None,
+    market_data_cache=None,
 ):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
@@ -1291,8 +1426,13 @@ def create_stock_factor_dataframe(
         report_metadata_path = DATA_LAKE.silver("sec", "us_report_metadata.csv")
     output_start_date = pd.Timestamp(start_date) if start_date is not None else None
     output_end_date = pd.Timestamp(end_date) if end_date is not None else None
-    price_df = read_stock_prices(stock_code, price_path, market=market)
-    shares_df = read_stock_shares(stock_code, shares_path, market=market)
+    security_id = security_id_for_market(stock_code, market)
+    if market_data_cache is not None:
+        price_df = market_data_cache.prices(security_id, stock_code=stock_code)
+        shares_df = market_data_cache.shares(security_id)
+    else:
+        price_df = read_stock_prices(stock_code, price_path, market=market)
+        shares_df = read_stock_shares(stock_code, shares_path, market=market)
     if financial_basis == "quarterly":
         financial_df = read_quarterly_financials(
             stock_code,
@@ -1361,7 +1501,12 @@ def create_stock_factor_dataframe(
 
     daily_df = daily_df.drop(columns=["security_id_fin", "stock_code_fin"], errors="ignore")
     daily_df["stock_code"] = stock_code
-    daily_df = add_dividend_factors(daily_df, stock_code, market=market)
+    daily_df = add_dividend_factors(
+        daily_df,
+        stock_code,
+        market=market,
+        market_data_cache=market_data_cache,
+    )
     daily_df = add_daily_market_valuation_factors(daily_df)
     daily_df = add_price_momentum_factors(daily_df)
     daily_df["updated_at"] = datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
