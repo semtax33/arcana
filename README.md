@@ -102,6 +102,8 @@ python -m engine.workflows.download comments
 python -m engine.workflows.download metadata
 python -m engine.workflows.download dividend
 python -m engine.workflows.download --market us sec-tickers
+python -m engine.workflows.download --market us prices --symbols AAPL,MSFT --limit 2
+python -m engine.workflows.download --market us prices --offset 100 --limit 500 --sleep-seconds 0.2
 ```
 
 `prices`와 `shares`는 KRX bronze CSV를 `data-lake/bronze/krx/...` 아래에
@@ -116,6 +118,10 @@ Financial Statement and Notes Data Sets 파일은 아래 위치를 사용합니�
 data-lake/bronze/sec/companyfacts/
 data-lake/bronze/sec/financial-statement-and-notes-data-set/
 ```
+
+US price downloads use NasdaqTrader symbol directories for the universe and yfinance
+`period=max` history files under `data-lake/bronze/yfinance/price/{TICKER}.csv`.
+Install yfinance first if needed: `pip install yfinance`.
 
 ### 2. Transform / Normalize
 
@@ -163,6 +169,8 @@ python -c "from engine.loaders.benchmarks import normalize_downloaded_benchmark_
 
 ```powershell
 python -m engine.loaders.market_data
+python -m engine.loaders.market_data --market us --target prices --source bronze --dry-run
+python -m engine.loaders.market_data --market us --target prices --source bronze
 ```
 
 정규화된 KRX price/share 데이터를 ClickHouse의 `price_daily`,

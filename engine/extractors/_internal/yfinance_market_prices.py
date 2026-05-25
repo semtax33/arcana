@@ -1,0 +1,308 @@
+from __future__ import annotations
+
+from io import StringIO
+from pathlib import Path
+import ssl
+from time import sleep
+from typing import Iterable
+from urllib.error import URLError
+from urllib.request import Request, urlopen
+
+import pandas as pd
+
+from engine.core.paths import DATA_LAKE
+
+
+NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
+OTHER_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
+BRONZE_YFINANCE_PRICE_DIR = DATA_LAKE.bronze("yfinance", "price")
+BRONZE_YFINANCE_UNIVERSE_DIR = DATA_LAKE.bronze("yfinance", "universe")
+FILTERED_UNIVERSE_PATH = BRONZE_YFINANCE_UNIVERSE_DIR / "us_equity_universe.csv"
+
+EXCLUDED_INSTRUMENT_PATTERN = (
+    r"\b(?:"
+    r"warrants?|rights?|units?|funds?|etfs?|etns?|notes?|bonds?|debentures?|"
+    r"trusts?|closed end|closed-end|index|option|calls?|puts?"
+    r")\b"
+)
+INCLUDED_EQUITY_PATTERN = (
+    r"\b(?:common stock|common shares?|ordinary shares?|ordinary stock|"
+    r"american depositary|adr|ads|preferred|preference|depositary shares?)\b"
+)
+CLASS_STOCK_PATTERN = r"\bclass\s+(?:a|b|c|d|e|f|g|h|i|ii|iii|iv|v)\b"
+PREFERRED_OR_ADR_PATTERN = r"\b(?:preferred|preference|american depositary|adr|ads|depositary shares?)\b"
+
+
+def download_us_price_histories(
+    *,
+    symbols: Iterable[str] | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+    force: bool = False,
+    sleep_seconds: float = 0.0,
+    output_dir: str | Path = BRONZE_YFINANCE_PRICE_DIR,
+) -> list[Path]:
+    resolved_symbols = _resolve_download_symbols(symbols)
+    selected_symbols = resolved_symbols[max(offset, 0):]
+    if limit is not None:
+        selected_symbols = selected_symbols[: max(limit, 0)]
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+
+    for index, ticker in enumerate(selected_symbols, start=max(offset, 0)):
+        out_path = output_dir / f"{ticker}.csv"
+        if out_path.exists() and not force:
+            print(f"skipping {ticker} (download_offset : {index})")
+            continue
+
+        print(f"downloading {ticker} (download_offset : {index})....")
+        frame = fetch_yfinance_price(ticker)
+        if frame.empty:
+            print(f"empty yfinance result: {ticker}")
+            continue
+
+        frame.to_csv(out_path, index=False, encoding="utf-8-sig")
+        written.append(out_path)
+        if sleep_seconds > 0:
+            sleep(sleep_seconds)
+
+    return written
+
+
+def fetch_yfinance_price(ticker: str) -> pd.DataFrame:
+    yf = _import_yfinance()
+    ticker = normalize_yfinance_ticker(ticker)
+    frame = yf.download(
+        ticker,
+        period="max",
+        interval="1d",
+        auto_adjust=False,
+        actions=True,
+        repair=True,
+        progress=False,
+    )
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+
+    frame = _flatten_yfinance_columns(frame)
+    if frame.index.name is not None or not isinstance(frame.index, pd.RangeIndex):
+        frame = frame.reset_index()
+    return frame
+
+
+def download_us_equity_universe(
+    *,
+    output_dir: str | Path = BRONZE_YFINANCE_UNIVERSE_DIR,
+) -> pd.DataFrame:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    nasdaq = parse_nasdaq_symbol_directory_text(
+        _download_text(NASDAQ_LISTED_URL),
+        source="nasdaqlisted",
+    )
+    other = parse_nasdaq_symbol_directory_text(
+        _download_text(OTHER_LISTED_URL),
+        source="otherlisted",
+    )
+
+    nasdaq.to_csv(output_dir / "nasdaqlisted.csv", index=False, encoding="utf-8-sig")
+    other.to_csv(output_dir / "otherlisted.csv", index=False, encoding="utf-8-sig")
+    universe = filter_us_equity_universe(nasdaq, other)
+    universe.to_csv(output_dir / "us_equity_universe.csv", index=False, encoding="utf-8-sig")
+    return universe
+
+
+def parse_nasdaq_symbol_directory_text(text: str, *, source: str) -> pd.DataFrame:
+    rows = [
+        line
+        for line in str(text).splitlines()
+        if line.strip() and not line.startswith("File Creation Time")
+    ]
+    if not rows:
+        return pd.DataFrame()
+
+    frame = pd.read_csv(StringIO("\n".join(rows)), sep="|", dtype=str).fillna("")
+    frame["source"] = source
+    return frame
+
+
+def filter_us_equity_universe(nasdaq: pd.DataFrame, other: pd.DataFrame) -> pd.DataFrame:
+    frames = [
+        _standardize_symbol_directory_frame(nasdaq, symbol_col="Symbol", source="nasdaqlisted"),
+        _standardize_symbol_directory_frame(other, symbol_col="ACT Symbol", source="otherlisted"),
+    ]
+    combined = pd.concat([frame for frame in frames if not frame.empty], ignore_index=True)
+    if combined.empty:
+        return pd.DataFrame(columns=_universe_columns())
+
+    combined["ticker"] = combined["raw_symbol"].map(normalize_yfinance_ticker)
+    combined["security_name_lower"] = combined["security_name"].str.lower()
+    combined["is_etf"] = combined["is_etf"].str.upper()
+    combined["test_issue"] = combined["test_issue"].str.upper()
+
+    preferred_or_adr = combined["security_name_lower"].str.contains(
+        PREFERRED_OR_ADR_PATTERN,
+        regex=True,
+        na=False,
+    )
+    is_class_stock = combined["security_name_lower"].str.contains(
+        CLASS_STOCK_PATTERN,
+        regex=True,
+        na=False,
+    )
+    has_included_equity_text = combined["security_name_lower"].str.contains(
+        INCLUDED_EQUITY_PATTERN,
+        regex=True,
+        na=False,
+    )
+    has_excluded_instrument_text = combined["security_name_lower"].str.contains(
+        EXCLUDED_INSTRUMENT_PATTERN,
+        regex=True,
+        na=False,
+    )
+
+    keep = (
+        combined["ticker"].ne("")
+        & combined["is_etf"].ne("Y")
+        & combined["test_issue"].ne("Y")
+        & has_included_equity_text
+        & (~has_excluded_instrument_text | preferred_or_adr)
+        & (~is_class_stock | preferred_or_adr)
+    )
+    result = combined.loc[keep, _universe_columns()].copy()
+    result = result.drop_duplicates("ticker", keep="first")
+    return result.sort_values("ticker").reset_index(drop=True)
+
+
+def normalize_yfinance_ticker(symbol: object) -> str:
+    ticker = str(symbol or "").strip().upper()
+    for old, new in ((".", "-"), ("/", "-"), ("^", "-"), ("$", "-")):
+        ticker = ticker.replace(old, new)
+    return "".join(ticker.split())
+
+
+def _resolve_download_symbols(symbols: Iterable[str] | None) -> list[str]:
+    if symbols is not None:
+        return sorted({normalize_yfinance_ticker(symbol) for symbol in symbols if str(symbol).strip()})
+
+    universe = download_us_equity_universe()
+    return universe["ticker"].dropna().astype(str).tolist()
+
+
+def _standardize_symbol_directory_frame(
+    frame: pd.DataFrame,
+    *,
+    symbol_col: str,
+    source: str,
+) -> pd.DataFrame:
+    if frame is None or frame.empty or symbol_col not in frame.columns:
+        return pd.DataFrame(columns=_universe_columns())
+
+    exchange = frame["Exchange"] if "Exchange" in frame.columns else _default_series(frame, "XNAS")
+    return pd.DataFrame(
+        {
+            "ticker": "",
+            "raw_symbol": frame[symbol_col].astype(str).str.strip(),
+            "security_name": _column_or_default(frame, "Security Name").astype(str).str.strip(),
+            "exchange": exchange,
+            "source": _column_or_default(frame, "source", source).astype(str),
+            "is_etf": _column_or_default(frame, "ETF").astype(str).str.strip(),
+            "test_issue": _column_or_default(frame, "Test Issue").astype(str).str.strip(),
+        }
+    )
+
+
+def _universe_columns() -> list[str]:
+    return [
+        "ticker",
+        "raw_symbol",
+        "security_name",
+        "exchange",
+        "source",
+        "is_etf",
+        "test_issue",
+    ]
+
+
+def _download_text(url: str) -> str:
+    request = Request(url, headers={"User-Agent": "StatementParsing yfinance universe loader"})
+    try:
+        return _read_url_text(request)
+    except URLError as exc:
+        if not _is_ssl_certificate_error(exc):
+            raise
+
+        context = _certifi_ssl_context()
+        if context is None:
+            raise RuntimeError(
+                "SSL certificate verification failed while downloading NasdaqTrader symbols. "
+                "Install certifi or fix the local Python certificate store: pip install certifi"
+            ) from exc
+
+        return _read_url_text(request, context=context)
+
+
+def _read_url_text(request: Request, *, context: ssl.SSLContext | None = None) -> str:
+    kwargs = {"timeout": 60}
+    if context is not None:
+        kwargs["context"] = context
+    with urlopen(request, **kwargs) as response:
+        return response.read().decode("utf-8")
+
+
+def _is_ssl_certificate_error(exc: URLError) -> bool:
+    reason = getattr(exc, "reason", exc)
+    return isinstance(reason, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(exc)
+
+
+def _certifi_ssl_context() -> ssl.SSLContext | None:
+    try:
+        import certifi
+    except ImportError:
+        return None
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+def _column_or_default(frame: pd.DataFrame, column: str, default: str = "") -> pd.Series:
+    if column in frame.columns:
+        return frame[column]
+    return _default_series(frame, default)
+
+
+def _default_series(frame: pd.DataFrame, value: str) -> pd.Series:
+    return pd.Series([value] * len(frame), index=frame.index)
+
+
+def _import_yfinance():
+    try:
+        import yfinance as yf
+    except ImportError as exc:
+        raise ImportError(
+            "yfinance is required for US price downloads. Install it with: pip install yfinance"
+        ) from exc
+    return yf
+
+
+def _flatten_yfinance_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(frame.columns, pd.MultiIndex):
+        return frame
+
+    flattened = frame.copy()
+    known_columns = {
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Adj Close",
+        "Volume",
+        "Dividends",
+        "Stock Splits",
+    }
+    flattened.columns = [
+        next((str(part) for part in column if str(part) in known_columns), str(column[-1]))
+        for column in flattened.columns
+    ]
+    return flattened
