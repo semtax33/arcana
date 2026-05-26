@@ -255,6 +255,19 @@ python -m engine.workflows.score_cli debug-single-security-score --trade-date 20
 
 ## Tests
 
+US mapping coverage validator:
+
+```powershell
+python -m engine.us_mapping_coverage_validator --input-dir data-lake\silver\sec\normalized --rules data-lake\meta\rules\us_mapping.yaml --out-dir data-lake\silver\sec\mapping_coverage --start-year 2020 --end-year 2025
+python -m engine.us_mapping_coverage_validator --symbols AAPL,MSFT --min-required-coverage-pct 80 --min-rule-hit-pct 10 --progress-interval 1 --strict
+```
+
+`us_mapping.yaml`의 companyfacts/notes/edgartools rule을 SEC normalized/debug
+CSV output과 비교하고 `mapping_coverage_validation.json`,
+`canonical_coverage.csv`, `source_contribution.csv`, `rule_coverage.csv`를
+생성합니다. 진행상황은 stderr에 출력되며 `--progress-interval 0`으로 끌 수
+있습니다. `--strict`를 붙이면 WARN/FAIL verdict에서 non-zero exit code로 종료합니다.
+
 ```powershell
 python -m unittest discover
 python -m unittest tests.test_sec_filings_normalizer

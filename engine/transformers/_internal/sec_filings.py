@@ -49,6 +49,7 @@ SOURCE_PRIORITY = {
     "edgartools": 4,
 }
 EPS_CANONICAL_IDS = {"BASIC_EPS", "DILUTED_EPS"}
+DEFAULT_LABEL_EXCLUDE_NAMESPACES = {"us-gaap", "srt", "dei", "country", "exch"}
 
 
 @dataclass(frozen=True)
@@ -234,8 +235,11 @@ def _fact_units_for_rule(fact: dict[str, Any], canonical_id: str) -> list[tuple[
 
 def _find_company_fact(facts: dict[str, Any], tag_spec: str) -> tuple[str, str, dict[str, Any]] | None:
     namespace, tag = split_tag_spec(tag_spec)
-    if namespace and isinstance(facts.get(namespace), dict) and tag in facts[namespace]:
-        return namespace, tag, facts[namespace][tag]
+    if namespace:
+        namespace_facts = facts.get(namespace)
+        if isinstance(namespace_facts, dict) and tag in namespace_facts:
+            return namespace, tag, namespace_facts[tag]
+        return None
 
     for ns, ns_facts in facts.items():
         if isinstance(ns_facts, dict) and tag in ns_facts:
@@ -267,13 +271,19 @@ def _fact_matches_label_rule(
     if not label_patterns:
         return False
 
+    excluded_namespaces = {
+        safe_str(item).strip()
+        for item in (rule.get("label_exclude_namespaces") or DEFAULT_LABEL_EXCLUDE_NAMESPACES)
+        if safe_str(item).strip()
+    }
+    if namespace in excluded_namespaces:
+        return False
+
     namespaces = rule.get("label_namespaces")
     if namespaces:
         allowed_namespaces = {safe_str(item).strip() for item in namespaces if safe_str(item).strip()}
         if namespace not in allowed_namespaces:
             return False
-    elif namespace == "us-gaap":
-        return False
 
     label_text = _label_text_for_fact(namespace, tag, fact)
     if not any(pattern.search(label_text) for pattern in label_patterns):
@@ -672,12 +682,20 @@ def _notes_rule_tag_patterns(rule: dict[str, Any]) -> list[re.Pattern[str]]:
     return _compile_patterns(rule.get("tag_patterns", []))
 
 
+def _notes_rule_tag_exclude_patterns(rule: dict[str, Any]) -> list[re.Pattern[str]]:
+    return _compile_patterns(rule.get("tag_exclude_patterns", []))
+
+
 def _notes_rule_matches_tag(
     rule: dict[str, Any],
     tag: Any,
     tag_patterns: list[re.Pattern[str]] | None = None,
 ) -> bool:
     normalized_tag = normalize_tag_name(tag)
+    exclude_patterns = _notes_rule_tag_exclude_patterns(rule)
+    if exclude_patterns and any(pattern.search(normalized_tag) for pattern in exclude_patterns):
+        return False
+
     exact_tags = {
         normalize_tag_name(value)
         for value in (rule.get("tags", []) or [])

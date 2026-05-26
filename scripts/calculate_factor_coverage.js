@@ -1,4 +1,4 @@
-const fs = require("fs");
+﻿const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
 
@@ -26,9 +26,17 @@ const SHARES_PATH = path.join(
   "shares",
   "kr_normalized_shares.csv",
 );
+const DIVIDEND_PATH = path.join(
+  ROOT,
+  "data-lake",
+  "silver",
+  "dart",
+  "dividend",
+  "kr_dividend_normalized.csv",
+);
 const DIVIDEND_DIR = path.join(ROOT, "data-lake", "bronze", "dart", "dividend");
 const OUT_DIR = path.join(ROOT, "data-lake", "gold", "factor_coverage");
-const OUT_CSV = path.join(OUT_DIR, "factor_coverage_all_stocks.csv");
+const OUT_CSV = path.join(OUT_DIR, "kr_factor_coverage_all_stocks.csv");
 const OUT_SUMMARY = path.join(OUT_DIR, "factor_coverage_summary.json");
 
 function todaySeoulText() {
@@ -204,11 +212,39 @@ function parseCsvLine(line) {
 
 function readCsv(filePath) {
   const text = fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
-  const lines = text.split(/\r?\n/).filter((line) => line.length > 0);
-  if (lines.length === 0) return [];
-  const headers = parseCsvLine(lines[0]);
-  return lines.slice(1).map((line) => {
-    const cells = parseCsvLine(line);
+  const records = [];
+  let record = [];
+  let value = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      if (inQuotes && text[i + 1] === '"') {
+        value += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === "," && !inQuotes) {
+      record.push(value);
+      value = "";
+    } else if ((ch === "\n" || ch === "\r") && !inQuotes) {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      record.push(value);
+      value = "";
+      if (record.length > 1 || record[0] !== "") records.push(record);
+      record = [];
+    } else {
+      value += ch;
+    }
+  }
+  if (value.length || record.length) {
+    record.push(value);
+    if (record.length > 1 || record[0] !== "") records.push(record);
+  }
+  if (records.length === 0) return [];
+  const headers = records[0];
+  return records.slice(1).map((cells) => {
     const row = {};
     headers.forEach((h, i) => {
       row[h] = cells[i] ?? "";
@@ -289,12 +325,22 @@ function extractAmountByName(
 }
 
 function financialFileMeta(name) {
+  const consolidated = name.match(/^kr_normalized_(\d{6})\.csv$/);
+  if (consolidated) {
+    return {
+      stockCode: consolidated[1],
+      year: null,
+      month: null,
+      consolidated: true,
+    };
+  }
   const match = name.match(/^normalized_(\d{6})_(\d{4})\.(\d{2})\.csv$/);
   if (!match) return null;
   return {
     stockCode: match[1],
     year: Number(match[2]),
     month: Number(match[3]),
+    consolidated: false,
   };
 }
 
@@ -303,7 +349,7 @@ function discoverAnnualFiles() {
   for (const name of fs.readdirSync(FINANCIAL_DIR)) {
     if (name.includes(".debug") || name.includes(".validation")) continue;
     const meta = financialFileMeta(name);
-    if (!meta || meta.month !== 12) continue;
+    if (!meta || (!meta.consolidated && meta.month !== 12)) continue;
     if (!byStock.has(meta.stockCode)) byStock.set(meta.stockCode, []);
     byStock
       .get(meta.stockCode)
@@ -318,59 +364,39 @@ function readAnnualFinancials(stockCode, files) {
   for (const file of files) {
     const csvRows = readCsv(file.path);
     if (csvRows.length === 0) continue;
-    const grouped = new Map();
+    const annualRowsByYear = new Map();
     for (const row of csvRows) {
-      const account = row.canonical_account_id;
-      if (!account) continue;
-      if (!grouped.has(account)) grouped.set(account, []);
-      grouped.get(account).push(num(row.normalized_amount));
+      const year = file.consolidated ? Number(row.fiscal_year) : file.year;
+      const month = file.consolidated ? Number(row.fiscal_month) : file.month;
+      if (!year || month !== 12) continue;
+      if (!annualRowsByYear.has(year)) annualRowsByYear.set(year, []);
+      annualRowsByYear.get(year).push(row);
     }
-    const values = {};
-    for (const [account, accountValues] of grouped.entries()) {
-      values[account] = pickLargestAbs(accountValues);
+    for (const [year, annualRows] of annualRowsByYear.entries()) {
+      const grouped = new Map();
+      for (const row of annualRows) {
+        const account = row.canonical_account_id;
+        if (!account || account === "UNMAPPED") continue;
+        if (!grouped.has(account)) grouped.set(account, []);
+        grouped.get(account).push(num(row.normalized_amount));
+      }
+      const values = {};
+      for (const [account, accountValues] of grouped.entries()) {
+        values[account] = pickLargestAbs(accountValues);
+      }
+      values.stock_code = stockCode;
+      values.security_id = securityId(stockCode);
+      values.fiscal_year = year;
+      values.financial_period_ts = Date.parse(
+        `${year}-12-31T00:00:00+09:00`,
+      );
+      rows.push(values);
     }
-    values.RETAINED_EARNINGS_FALLBACK = extractAmountByName(
-      csvRows,
-      [/이익\s*잉여금/u, /결손금/u],
-      ["BS"],
-    );
-    values.LONG_TERM_DEBT_FALLBACK = extractAmountByName(
-      csvRows,
-      [/장기\s*차입/u, /사채/u],
-      ["BS"],
-      true,
-    );
-    values.INTEREST_EXPENSE_FALLBACK = extractAmountByName(
-      csvRows,
-      [/이자\s*비용/u],
-      ["CF", "IS", "CIS"],
-      true,
-    );
-    values.INTEREST_PAID_FALLBACK = extractAmountByName(
-      csvRows,
-      [/이자\s*지급/u],
-      ["CF", "IS", "CIS"],
-      true,
-    );
-    values.FINANCE_COST_FALLBACK = extractAmountByName(
-      csvRows,
-      [/금융\s*비용/u],
-      ["CF", "IS", "CIS"],
-      true,
-    );
-    values.stock_code = stockCode;
-    values.security_id = securityId(stockCode);
-    values.fiscal_year = file.year;
-    values.financial_period_ts = Date.parse(
-      `${file.year}-12-31T00:00:00+09:00`,
-    );
-    rows.push(values);
   }
   return addAnnualFinancialFactors(
     rows.sort((a, b) => a.financial_period_ts - b.financial_period_ts),
   );
 }
-
 function addAnnualFinancialFactors(rows) {
   const result = [];
   for (let i = 0; i < rows.length; i++) {
@@ -628,144 +654,8 @@ function piotroski(r, prev) {
   return score;
 }
 
-function normalizeDividendAmount(value) {
-  if (value === null || value === undefined) return 0;
-  const text = String(value).trim();
-  if (!text || text === "-") return 0;
-  const match = text.match(/-?\d[\d,]*(?:\.\d+)?/);
-  if (!match) return 0;
-  const n = Number(match[0].replace(/,/g, ""));
-  return Number.isNaN(n) ? 0 : n;
-}
-
-function normalizeNumericAmount(value) {
-  if (value === null || value === undefined) return null;
-  const text = String(value).trim();
-  if (!text || text === "-") return null;
-  const normalized = text.replace(/[^0-9.-]/g, "");
-  if (
-    !normalized ||
-    normalized === "-" ||
-    normalized === "." ||
-    normalized === "-."
-  )
-    return null;
-  const n = Number(normalized);
-  return Number.isNaN(n) ? null : n;
-}
-
-function loadDividendCache(stockCode) {
-  const dir = path.join(DIVIDEND_DIR, stockCode);
-  const recordsByYear = new Map();
-  if (!fs.existsSync(dir)) return new Map();
-  for (const name of fs.readdirSync(dir)) {
-    if (
-      !name.startsWith("finance_statement_dividend_") ||
-      !name.endsWith(".json")
-    )
-      continue;
-    try {
-      const data = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
-      const baseDate = String(data["배당기준일"] ?? "");
-      const year = Number(baseDate.slice(0, 4));
-      if (!year) continue;
-      const dpsData = data["1주당배당금"];
-      const dps =
-        typeof dpsData === "object" && dpsData !== null
-          ? dpsData["보통주식"]
-          : dpsData;
-      if (!recordsByYear.has(year)) recordsByYear.set(year, []);
-      recordsByYear.get(year).push({
-        type: String(data["배당구분"] ?? ""),
-        baseDate,
-        disclosureDate: String(data["배당공시일"] ?? ""),
-        sourceFile: name,
-        dps: normalizeDividendAmount(dps),
-        amount: normalizeDividendAmount(data["배당금총액"]),
-      });
-    } catch (_) {
-      continue;
-    }
-  }
-  const byYear = new Map();
-  for (const [year, records] of recordsByYear.entries()) {
-    const latest = new Map();
-    for (const record of records) {
-      const key = `${record.baseDate}|${record.type || record.sourceFile}`;
-      const prev = latest.get(key);
-      if (
-        !prev ||
-        `${record.disclosureDate}|${record.sourceFile}` >=
-          `${prev.disclosureDate}|${prev.sourceFile}`
-      ) {
-        latest.set(key, record);
-      }
-    }
-    const deduped = [...latest.values()];
-    byYear.set(year, {
-      records: deduped.length,
-      dps: deduped.reduce((sum, row) => sum + row.dps, 0),
-      amount: deduped.reduce((sum, row) => sum + row.amount, 0),
-    });
-  }
-  return byYear;
-}
-
-const payoutNetIncomeCache = new Map();
-
-function getNetIncomeForPayout(financialByStock, stockCode, year) {
-  const cacheKey = `${stockCode}:${year}`;
-  if (payoutNetIncomeCache.has(cacheKey))
-    return payoutNetIncomeCache.get(cacheKey);
-  const file = (financialByStock.get(stockCode) ?? []).find(
-    (item) => item.year === year,
-  );
-  if (!file) {
-    payoutNetIncomeCache.set(cacheKey, null);
-    return null;
-  }
-  const rows = readCsv(file.path);
-  const matched = rows.find((row) => row.canonical_account_id === "NET_INCOME");
-  const value = matched
-    ? normalizeNumericAmount(matched.normalized_amount)
-    : null;
-  payoutNetIncomeCache.set(cacheKey, value);
-  return value;
-}
-
-function dividendMaps(financialByStock, stockCode, years) {
-  const cache = loadDividendCache(stockCode);
-  const dvpsx = new Map();
-  const tdpr = new Map();
-  for (const year of years) {
-    let dps = 0;
-    for (let y = year; y >= 2015; y--) {
-      const row = cache.get(y);
-      if (row && row.records > 0) {
-        dps = row.dps;
-        break;
-      }
-    }
-    dvpsx.set(year, dps);
-
-    let payout = null;
-    for (let y = year; y >= 2015; y--) {
-      const row = cache.get(y);
-      if (!row || row.records === 0) continue;
-      const ni = getNetIncomeForPayout(financialByStock, stockCode, y);
-      if (isCovered(row.amount) && isCovered(ni) && ni !== 0) {
-        const candidate = row.amount / ni;
-        if (candidate >= 0) {
-          payout = candidate;
-          break;
-        }
-      }
-    }
-    tdpr.set(year, payout);
-  }
-  return { dvpsx, tdpr };
-}
-
+// Dividend coverage is read from silver/dart/dividend/kr_dividend_normalized.csv.
+// Legacy bronze dividend JSON helpers were removed from this calculation path.
 async function loadGroupedCsv(filePath, wantedSecurities, columns) {
   const grouped = new Map();
   const stream = fs.createReadStream(filePath, { encoding: "utf8" });
@@ -945,18 +835,16 @@ function mergeStockRows(
   stockCode,
   priceRows,
   sharesRows,
+  dividendRows,
   financialRows,
-  financialByStock,
 ) {
   priceRows.sort((a, b) => a._ts - b._ts);
   sharesRows.sort((a, b) => a._ts - b._ts);
+  dividendRows.sort((a, b) => a._ts - b._ts);
   financialRows.sort((a, b) => a.financial_period_ts - b.financial_period_ts);
-  const years = [
-    ...new Set(priceRows.map((r) => Number(String(r.trade_date).slice(0, 4)))),
-  ];
-  const { dvpsx, tdpr } = dividendMaps(financialByStock, stockCode, years);
   const rows = [];
   let shareIdx = -1;
+  let dividendIdx = -1;
   let finIdx = -1;
   const financialAsofRows = financialRows.map((r) => ({
     ...r,
@@ -965,10 +853,11 @@ function mergeStockRows(
   for (const price of priceRows) {
     if (price._ts > TODAY) continue;
     shareIdx = asofIndex(sharesRows, price._ts, shareIdx);
+    dividendIdx = asofIndex(dividendRows, price._ts, dividendIdx);
     finIdx = asofIndex(financialAsofRows, price._ts, finIdx);
     const share = shareIdx >= 0 ? sharesRows[shareIdx] : {};
+    const dividend = dividendIdx >= 0 ? dividendRows[dividendIdx] : {};
     const fin = finIdx >= 0 ? financialRows[finIdx] : {};
-    const year = Number(String(price.trade_date).slice(0, 4));
     const row = { ...fin };
     row.security_id = securityId(stockCode);
     row.stock_code = stockCode;
@@ -977,16 +866,18 @@ function mergeStockRows(
     row.volume = price.volume;
     row.shares = share.shares ?? null;
     row.market_cap = share.market_cap ?? null;
-    row.dvpsx = dvpsx.get(year) ?? 0;
+    row.dvpsx = dividend.dividend ?? null;
     row.dvpsp = null;
-    row.sharehold_div_yield = mul(div(row.dvpsx, row.close), 100);
+    row.sharehold_div_yield = dividend.dividend_percent ?? null;
     if (
       isCovered(row.sharehold_div_yield) &&
       (row.sharehold_div_yield < 0 || row.sharehold_div_yield > 100)
     ) {
       row.sharehold_div_yield = null;
     }
-    row.tdpr = tdpr.get(year) ?? null;
+    row.tdpr = isCovered(dividend.payout_ratio)
+      ? dividend.payout_ratio * 100
+      : null;
     rows.push(row);
   }
   addDailyFactors(rows);
@@ -1017,6 +908,19 @@ function prepareShareRows(rows) {
     .filter((row) => row.security_id && isCovered(row._ts));
 }
 
+function prepareDividendRows(rows) {
+  return rows
+    .map((row) => ({
+      security_id: row.security_id,
+      trade_date: row.trade_date,
+      _ts: Date.parse(`${row.trade_date}T00:00:00+09:00`),
+      dividend: num(row.dividend),
+      payout_ratio: num(row.payout_ratio),
+      dividend_percent: num(row.dividend_percent),
+    }))
+    .filter((row) => row.security_id && isCovered(row._ts));
+}
+
 function csvEscape(value) {
   const text = String(value ?? "");
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -1032,7 +936,7 @@ async function main() {
     `[INFO] annual-financial stocks=${financialByStock.size.toLocaleString()}\n`,
   );
 
-  const [priceGroupedRaw, shareGroupedRaw] = await Promise.all([
+  const [priceGroupedRaw, shareGroupedRaw, dividendGroupedRaw] = await Promise.all([
     loadGroupedCsv(PRICE_PATH, wantedSecurities, [
       "security_id",
       "trade_date",
@@ -1044,6 +948,13 @@ async function main() {
       "trade_date",
       "shares",
       "market_cap",
+    ]),
+    loadGroupedCsv(DIVIDEND_PATH, wantedSecurities, [
+      "security_id",
+      "trade_date",
+      "dividend",
+      "payout_ratio",
+      "dividend_percent",
     ]),
   ]);
 
@@ -1062,13 +973,14 @@ async function main() {
     }
     try {
       const shareRows = prepareShareRows(shareGroupedRaw.get(sid) ?? []);
+      const dividendRows = prepareDividendRows(dividendGroupedRaw.get(sid) ?? []);
       const financialRows = readAnnualFinancials(stockCode, files);
       const rows = mergeStockRows(
         stockCode,
         priceRows,
         shareRows,
+        dividendRows,
         financialRows,
-        financialByStock,
       );
       for (const row of rows) {
         rowCount++;
@@ -1164,3 +1076,5 @@ main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+
+

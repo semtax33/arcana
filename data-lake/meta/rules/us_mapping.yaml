@@ -2,6 +2,8 @@ companyfacts_rules:
   - canonical_id: TOTAL_ASSETS
     fs_type: BS
     primary_tags: [us-gaap:Assets]
+    alternate_tags:
+      - ifrs-full:Assets
     label_patterns:
       - (?i)\btotal\s+assets\b
     label_exclude_patterns:
@@ -19,6 +21,8 @@ companyfacts_rules:
   - canonical_id: TOTAL_LIABILITIES
     fs_type: BS
     primary_tags: [us-gaap:Liabilities]
+    alternate_tags:
+      - ifrs-full:Liabilities
     label_patterns:
       - (?i)\btotal\s+liabilities\b
   - canonical_id: CURRENT_ASSETS
@@ -126,6 +130,10 @@ companyfacts_rules:
       - us-gaap:LongTermDebtCurrent
       - us-gaap:LongTermDebtAndFinanceLeaseObligationsCurrent
       - us-gaap:DebtAndFinanceLeaseObligationsCurrent
+      - us-gaap:CommercialPaper
+      - us-gaap:OtherShortTermBorrowings
+      - us-gaap:ShortTermBankLoansAndNotesPayable
+      - us-gaap:OtherLongTermDebtCurrent
       - ifrs-full:CurrentPortionOfLongtermBorrowings
     label_patterns:
       - (?i)\b(short[- ]term|current)\s+(debt|borrowings?)\b
@@ -137,6 +145,8 @@ companyfacts_rules:
       - us-gaap:LongTermDebt
       - us-gaap:LongTermDebtAndFinanceLeaseObligationsNoncurrent
       - us-gaap:DebtAndFinanceLeaseObligationsNoncurrent
+      - us-gaap:OtherLongTermDebtNoncurrent
+      - us-gaap:LongTermDebtAndCapitalLeaseObligations
       - ifrs-full:LongtermBorrowings
     label_patterns:
       - (?i)\blong[- ]term\s+(debt|borrowings?)\b
@@ -191,6 +201,7 @@ companyfacts_rules:
       - us-gaap:OtherCurrentAssets
     alternate_tags:
       - us-gaap:PrepaidExpenseAndOtherAssetsCurrent
+      - ifrs-full:OtherCurrentAssets
     label_patterns:
       - (?i)\bother\s+current\s+assets?\b
   - canonical_id: OTHER_NON_CURRENT_ASSETS
@@ -253,6 +264,8 @@ companyfacts_rules:
       - ifrs-full:CostOfSales
     label_patterns:
       - (?i)\bcost\s+of\s+(revenue|sales|goods|services)\b
+      - (?i)\bcost\s+of\s+products?\s+sold\b
+      - (?i)\bcosts?\s+and\s+expenses?\s+applicable\s+to\s+revenue\b
   - canonical_id: GROSS_PROFIT
     fs_type: IS
     primary_tags: [us-gaap:GrossProfit]
@@ -287,6 +300,7 @@ companyfacts_rules:
       - (?i)\bresearch\s+and\s+development\b
       - (?i)\bR&D\b
       - (?i)\b(product|technology|software)\s+development\s+(expense|costs?)\b
+      - (?i)\bresearch\s+and\s+product\s+development\b
     label_exclude_patterns:
       - (?i)\bpolicy\b
       - (?i)\bmember\b
@@ -578,11 +592,14 @@ companyfacts_rules:
     alternate_tags:
       - us-gaap:PaymentsOfDividendsCommonStock
       - us-gaap:PaymentsOfOrdinaryDividends
+      - us-gaap:PaymentsOfDividendsPreferredStockAndPreferenceStock
       - ifrs-full:DividendsPaidClassifiedAsFinancingActivities
     amount_policy: abs
     cash_direction: outflow
     label_patterns:
       - (?i)\bdividends?\s+paid\b
+      - (?i)\bpayments?\s+of\s+(ordinary\s+)?dividends?\b
+      - (?i)\bcash\s+dividends?\s+paid\b
   - canonical_id: DEBT_ISSUE
     fs_type: CF
     primary_tags: [us-gaap:ProceedsFromIssuanceOfLongTermDebt]
@@ -621,11 +638,17 @@ companyfacts_rules:
     alternate_tags:
       - us-gaap:PaymentsForRepurchaseOfEquity
       - us-gaap:PaymentsForRepurchaseOfCommonStock
+      - us-gaap:PaymentsForRepurchaseOfPreferredStockAndPreferenceStock
+      - us-gaap:PaymentsForRepurchaseOfRedeemablePreferredStock
     amount_policy: abs
     cash_direction: outflow
     label_patterns:
       - (?i)\bpayments?\s+for\s+repurchase\s+of\s+(common\s+)?stock\b
-      - (?i)\brepurchase\s+of\s+(common\s+)?stock\b
+      - (?i)\bpayments?\s+for\s+repurchase\s+of\s+.*stock\b
+      - (?i)\bpayments?\s+for\s+repurchase\s+of\s+(equity|shares?)\b
+      - (?i)\brepurchase\s+of\s+(common\s+)?(stock|shares?)\b
+      - (?i)\brepurchase\s+of\s+.*stock\b
+      - (?i)\btreasury\s+stock\s+(purchase|repurchase|acquired)\b
     label_exclude_patterns:
       - (?i)\bauthorized\b
       - (?i)\bnumber\s+of\s+shares\b
@@ -649,9 +672,21 @@ notes_rules:
       - InProcessResearchAndDevelopmentExpense
       - ResearchAndDevelopmentExpenseSoftwareExcludingAcquiredInProcessCost
       - OtherResearchAndDevelopmentExpense
+      - ProductDevelopmentExpense
+      - ResearchAndDevelopmentExpenses
+      - ResearchAndDevelopmentAndEngineeringExpense
+      - ResearchDevelopmentAndPatentExpense
+      - ResearchAndDevelopmentExpenseNetOfGrantReimbursement
     tag_patterns:
       - (?i)(researchanddevelopment|researchdevelopment).*(expense|cost)
       - (?i)(product|technology|software)development(expense|cost)
+    tag_exclude_patterns:
+      - (?i)deferredtax
+      - (?i)capitalized
+      - (?i)amortiz
+      - (?i)stockbasedcompensation
+      - (?i)(selling|administrative|costofrevenue).*(researchanddevelopment|researchdevelopment)
+      - (?i)(researchanddevelopment|researchdevelopment).*(selling|administrative|costofrevenue)
     label_patterns:
       - (?i)research\s+and\s+development
       - (?i)\bR&D\b
@@ -744,11 +779,19 @@ notes_rules:
       - PaymentsToAcquirePropertyPlantAndEquipment
       - PaymentsToAcquireProductiveAssets
       - PaymentsToAcquirePropertyPlantAndEquipmentAndIntangibleAssets
+      - PaymentsToAcquireOtherPropertyPlantAndEquipment
+      - PaymentsToAcquireOtherProductiveAssets
+      - PaymentsToAcquirePropertyPlantAndEquipmentNet
+      - PaymentsToAcquirePropertyPlantandEquipmentandSoftware
+      - PaymentsToAcquirePropertyPlantAndEquipmentIncludingSoftware
+      - PaymentsToAcquirePropertyPlantAndEquipmentAndInternalUseSoftware
     tag_patterns:
       - (?i)paymentstoacquire.*(propertyplantandequipment|productiveassets)
     label_patterns:
       - (?i)\b(payments?|cash\s+paid|purchase)\s+(to\s+acquire|for|of)\s+property,\s*plant,?\s+and\s+equipment\b
       - (?i)\bcapital\s+expenditures?\b
+      - (?i)\b(acquisition|purchase)\s+of\s+property\s+and\s+equipment\b
+      - (?i)\bpurchases?\s+of\s+property,\s*plant\s+and\s+equipment\b
     label_exclude_patterns:
       - (?i)\bproceeds?\b
       - (?i)\bdisposals?\b
@@ -785,6 +828,8 @@ notes_rules:
       - InterestPaid
     label_patterns:
       - (?i)\binterest\s+paid\b
+      - (?i)\bcash\s+paid\s+for\s+interest\b
+      - (?i)\binterest\s+payments?\b
     report_name_patterns:
       - (?i)cash\s+flows?
       - (?i)supplemental
@@ -798,6 +843,8 @@ notes_rules:
       - IncomeTaxesPaid
     label_patterns:
       - (?i)\bincome\s+tax(es)?\s+paid\b
+      - (?i)\bcash\s+paid\s+for\s+(income\s+)?tax(es)?\b
+      - (?i)\b(income\s+)?tax\s+payments?\b
     report_name_patterns:
       - (?i)cash\s+flows?
       - (?i)supplemental
@@ -810,11 +857,21 @@ notes_rules:
       - PaymentsOfDividends
       - PaymentsOfDividendsCommonStock
       - PaymentsOfOrdinaryDividends
+      - PaymentsOfDividendsPreferredStockAndPreferenceStock
+      - PaymentsOfOrdinaryDividendsCommonStockAndPreferredStock
+      - PaymentsOfOrdinaryDividendsAndSpecialDividends
+      - PaymentsOfDividendsCommonAndPreferredStock
     tag_patterns:
       - (?i)paymentsof.*dividends
+    tag_exclude_patterns:
+      - (?i)(minority|noncontrolling)
+      - (?i)dividendequivalent
+      - (?i)equitableadjust
     label_patterns:
       - (?i)\bdividends?\s+paid\b
       - (?i)\bpayments?\s+of\s+dividends?\b
+      - (?i)\bcash\s+dividends?\s+paid\b
+      - (?i)\bpayments?\s+of\s+(ordinary\s+)?dividends?\b
     label_exclude_patterns:
       - (?i)\bdeclared\b
       - (?i)\bpayable\b
@@ -830,11 +887,28 @@ notes_rules:
     tags:
       - PaymentsForRepurchaseOfCommonStock
       - PaymentsForRepurchaseOfEquity
+      - PaymentsForRepurchaseOfPreferredStockAndPreferenceStock
+      - PaymentsForRepurchaseOfRedeemablePreferredStock
+      - PaymentsForRepurchaseOfRedeemableConvertiblePreferredStock
+      - PaymentsForRepurchaseOfConvertiblePreferredStock
+      - PaymentsForRepurchaseOfOtherEquity
+      - PaymentsForRepurchaseOfTreasuryStock
     tag_patterns:
       - (?i)paymentsforrepurchaseof.*(stock|equity)
+    tag_exclude_patterns:
+      - (?i)taxwithholding
+      - (?i)equityaward
+      - (?i)restrictedstock
+      - (?i)stockoptions?
+      - (?i)deferredcompensation
+      - (?i)payrolltax
     label_patterns:
       - (?i)\bpayments?\s+for\s+repurchase\s+of\s+(common\s+)?stock\b
-      - (?i)\brepurchase\s+of\s+(common\s+)?stock\b
+      - (?i)\bpayments?\s+for\s+repurchase\s+of\s+.*stock\b
+      - (?i)\bpayments?\s+for\s+repurchase\s+of\s+(equity|shares?)\b
+      - (?i)\brepurchase\s+of\s+(common\s+)?(stock|shares?)\b
+      - (?i)\brepurchase\s+of\s+.*stock\b
+      - (?i)\btreasury\s+stock\s+(purchase|repurchase|acquired)\b
     label_exclude_patterns:
       - (?i)\bauthorized\b
       - (?i)\bnumber\s+of\s+shares\b
@@ -936,6 +1010,7 @@ edgartools_fallback_rules:
       - PaymentsOfDividends
       - PaymentsOfDividendsCommonStock
       - PaymentsOfOrdinaryDividends
+      - PaymentsOfDividendsPreferredStockAndPreferenceStock
     amount_policy: abs
     cash_direction: outflow
   - canonical_id: BUYBACK
@@ -943,5 +1018,7 @@ edgartools_fallback_rules:
     tags:
       - PaymentsForRepurchaseOfCommonStock
       - PaymentsForRepurchaseOfEquity
+      - PaymentsForRepurchaseOfPreferredStockAndPreferenceStock
+      - PaymentsForRepurchaseOfRedeemablePreferredStock
     amount_policy: abs
     cash_direction: outflow
