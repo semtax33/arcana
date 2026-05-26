@@ -1,0 +1,350 @@
+sectors:
+  "10": Energy
+  "15": Materials
+  "20": Industrials
+  "25": Consumer Discretionary
+  "30": Consumer Staples
+  "35": Health Care
+  "40": Financials
+  "45": Information Technology
+  "50": Communication Services
+  "55": Utilities
+  "60": Real Estate
+industry_groups:
+  "1010": Energy
+  "1510": Materials
+  "2010": Capital Goods
+  "2020": Commercial & Professional Services
+  "2030": Transportation
+  "2510": Automobiles & Components
+  "2520": Consumer Durables & Apparel
+  "2530": Consumer Services
+  "2550": Consumer Discretionary Distribution & Retail
+  "3010": Consumer Staples Distribution & Retail
+  "3020": Food, Beverage & Tobacco
+  "3030": Household & Personal Products
+  "3510": Health Care Equipment & Services
+  "3520": Pharmaceuticals, Biotechnology & Life Sciences
+  "4010": Banks
+  "4020": Financial Services
+  "4030": Insurance
+  "4510": Software & Services
+  "4520": Technology Hardware & Equipment
+  "4530": Semiconductors & Semiconductor Equipment
+  "5010": Telecommunication Services
+  "5020": Media & Entertainment
+  "5510": Utilities
+  "6010": Equity Real Estate Investment Trusts (REITs)
+  "6020": Real Estate Management & Development
+weights:
+  industry: 2.0
+  product: 1.0
+  any_text: 2.0
+  confidence_denominator: 5.0
+industry_group_weights:
+  industry: 2.0
+  product: 1.0
+  any_text: 2.0
+  confidence_denominator: 5.0
+sector_priority:
+  - "45"
+  - "35"
+  - "40"
+  - "50"
+  - "20"
+  - "25"
+  - "30"
+  - "15"
+  - "55"
+  - "60"
+  - "10"
+industry_group_priority:
+  - "4530"
+  - "4510"
+  - "4520"
+  - "3520"
+  - "3510"
+  - "4010"
+  - "4020"
+  - "4030"
+  - "5020"
+  - "5010"
+  - "2010"
+  - "2030"
+  - "2020"
+  - "2510"
+  - "2550"
+  - "2530"
+  - "2520"
+  - "3010"
+  - "3020"
+  - "3030"
+  - "1510"
+  - "5510"
+  - "6010"
+  - "6020"
+  - "1010"
+sector_rules:
+  "10":
+    any_text_patterns:
+      - "Energy|Oil|Petroleum|Natural Gas|LNG|Coal|Drilling|Exploration|Production|Midstream|Pipeline|Refining|Resources"
+      - "\\bExxon\\b|Chevron|Conoco|Occidental|Schlumberger|Halliburton|EOG|Marathon Petroleum|Valero|Phillips 66"
+  "15":
+    any_text_patterns:
+      - "Materials|Chemical|Chemicals|Specialty Materials|Steel|Aluminum|Copper|Mining|Gold|Silver|Lithium|Fertilizer|Packaging|Paper|Forest Products|Cement|Concrete"
+      - "DuPont|Dow Inc|Linde|Sherwin|Nucor|Freeport|Newmont|Albemarle|Corteva|Mosaic|International Paper"
+  "20":
+    any_text_patterns:
+      - "Industrial|Industrials|Machinery|Equipment|Aerospace|Defense|Construction|Engineering|Electrical|Automation|Tools|Manufacturing|Commercial Services|Professional Services|Waste|Environmental"
+      - "Transportation|Logistics|Railroad|Airline|Air Lines|Trucking|Shipping|Marine|Delivery|Parcel|Freight"
+      - "Boeing|Caterpillar|Deere|Honeywell|Lockheed|Northrop|RTX|General Electric|Eaton|Parker|Union Pacific|FedEx|United Parcel|Delta Air|United Airlines"
+  "25":
+    any_text_patterns:
+      - "Automotive|Automobile|Motor|Vehicle|Electric Vehicle|EV|Tire|Consumer Discretionary|Retail|E-Commerce|Marketplace|Home Improvement|Restaurant|Travel|Leisure|Hotel|Resort|Casino|Apparel|Footwear|Luxury|Entertainment Resort"
+      - "Tesla|Ford|General Motors|Amazon|Home Depot|Lowe's|McDonald's|Starbucks|Nike|Booking|Airbnb|Carnival|Royal Caribbean|Marriott|Hilton|Las Vegas Sands"
+  "30":
+    any_text_patterns:
+      - "Consumer Staples|Food|Beverage|Tobacco|Grocery|Supermarket|Wholesale|Household Products|Personal Products|Packaged Goods|Agriculture"
+      - "Walmart|Costco|Target|Kroger|Coca-Cola|PepsiCo|Mondelez|General Mills|Kellogg|Philip Morris|Altria|Procter|Colgate|Clorox|Estee Lauder"
+  "35":
+    any_text_patterns:
+      - "Health Care|Healthcare|Medical|Hospital|Diagnostics|Laboratory|Surgical|Device|Equipment|Therapeutics|Therapy|Pharmaceutical|Biopharmaceutical|Biotechnology|Biotech|Biosciences|Life Sciences|Oncology|Vaccine|Drug"
+      - "UnitedHealth|Elevance|Cigna|Humana|HCA|Medtronic|Abbott|Intuitive Surgical|Thermo Fisher|Danaher|Pfizer|Merck|Johnson & Johnson|Eli Lilly|Bristol-Myers|Amgen|Gilead|Moderna|Regeneron|Vertex"
+  "40":
+    any_text_patterns:
+      - "Bank|Bancorp|Bancshares|Financial|Finance|Capital|Securities|Broker|Asset Management|Investment|Exchange|Holdings|Payments|Credit|Mortgage|Insurance|Assurance|Reinsurance"
+      - "JPMorgan|Bank of America|Citigroup|Wells Fargo|Goldman Sachs|Morgan Stanley|BlackRock|Blackstone|Charles Schwab|Visa|Mastercard|American Express|PayPal|Aflac|Chubb|Marsh|Progressive"
+  "45":
+    any_text_patterns:
+      - "Information Technology|Technology|Software|Cloud|SaaS|Data|Cybersecurity|Security|Analytics|Application|Digital|Platform|Systems|Semiconductor|Chip|Micro Devices|Memory|Foundry|Hardware|Computer|Electronic|Networking|Communication Equipment"
+      - "Apple|Microsoft|NVIDIA|Broadcom|Advanced Micro Devices|Intel|Qualcomm|Texas Instruments|Micron|Applied Materials|Lam Research|KLA|Synopsys|Cadence|Oracle|Salesforce|Adobe|ServiceNow|Intuit|Palo Alto|Fortinet|Cisco|Arista|Dell|HP Inc"
+  "50":
+    any_text_patterns:
+      - "Communication Services|Telecommunication|Telecom|Wireless|Broadband|Cable|Media|Entertainment|Streaming|Interactive|Internet|Search|Social|Advertising|Broadcasting|Publishing|Gaming|Game"
+      - "Alphabet|Google|Meta Platforms|Netflix|Walt Disney|Comcast|Charter|Warner Bros|Electronic Arts|Take-Two|Verizon|AT&T|T-Mobile"
+  "55":
+    any_text_patterns:
+      - "Utilities|Utility|Electric|Power|Water|Gas Utility|Renewable|Solar Utility|Grid|Generation"
+      - "NextEra|Duke Energy|Southern Company|Dominion|Exelon|Sempra|American Electric Power|Xcel|Consolidated Edison|Public Service Enterprise"
+  "60":
+    any_text_patterns:
+      - "REIT|Real Estate Investment Trust|Realty Trust|Real Estate|Properties|Property|Residential|Apartment|Industrial Realty|Data Center Realty|Mall|Office"
+      - "Prologis|American Tower|Equinix|Realty Income|Simon Property|Public Storage|AvalonBay|Welltower|Digital Realty"
+industry_group_rules:
+  "1010":
+    sector_code: "10"
+    any_text_patterns:
+      - "Energy|Oil|Petroleum|Natural Gas|LNG|Coal|Drilling|Exploration|Production|Midstream|Pipeline|Refining|Exxon|Chevron|Conoco|Schlumberger|Halliburton|EOG|Valero"
+  "1510":
+    sector_code: "15"
+    any_text_patterns:
+      - "Materials|Chemical|Chemicals|Steel|Aluminum|Copper|Mining|Gold|Lithium|Fertilizer|Packaging|Paper|Cement|DuPont|Dow Inc|Linde|Nucor|Freeport|Newmont|Albemarle|Mosaic"
+  "2010":
+    sector_code: "20"
+    any_text_patterns:
+      - "Machinery|Equipment|Aerospace|Defense|Construction|Engineering|Electrical|Automation|Manufacturing|Boeing|Caterpillar|Deere|Honeywell|Lockheed|Northrop|RTX|Eaton"
+  "2020":
+    sector_code: "20"
+    any_text_patterns:
+      - "Commercial Services|Professional Services|Consulting|Research|Staffing|Facility|Security Services|Waste|Environmental|Republic Services|Waste Management|Cintas|Equifax|TransUnion|Verisk"
+  "2030":
+    sector_code: "20"
+    any_text_patterns:
+      - "Transportation|Logistics|Railroad|Airline|Air Lines|Trucking|Shipping|Marine|Delivery|Parcel|Freight|Union Pacific|FedEx|United Parcel|Delta Air|United Airlines|CSX|Norfolk Southern"
+  "2510":
+    sector_code: "25"
+    any_text_patterns:
+      - "Automotive|Automobile|Motor|Vehicle|Electric Vehicle|EV|Tire|Tesla|Ford|General Motors|Rivian|Lucid|Aptiv|BorgWarner|Goodyear"
+  "2520":
+    sector_code: "25"
+    any_text_patterns:
+      - "Apparel|Footwear|Luxury|Home Furnishings|Furniture|Appliance|Consumer Durables|Nike|Lululemon|Tapestry|Ralph Lauren|Whirlpool|Garmin"
+  "2530":
+    sector_code: "25"
+    any_text_patterns:
+      - "Restaurant|Travel|Leisure|Hotel|Resort|Casino|Cruise|Education|Booking|Airbnb|McDonald's|Starbucks|Marriott|Hilton|Carnival|Royal Caribbean|Las Vegas Sands"
+  "2550":
+    sector_code: "25"
+    any_text_patterns:
+      - "Retail|E-Commerce|Marketplace|Home Improvement|Specialty Retail|Department Store|Amazon|Home Depot|Lowe's|TJX|AutoZone|O'Reilly|eBay|Etsy|Wayfair"
+  "3010":
+    sector_code: "30"
+    any_text_patterns:
+      - "Grocery|Supermarket|Food Retail|Wholesale|Consumer Staples Distribution|Walmart|Costco|Target|Kroger|Sysco|Dollar General|Dollar Tree"
+  "3020":
+    sector_code: "30"
+    any_text_patterns:
+      - "Food|Beverage|Tobacco|Packaged Foods|Agriculture|Coca-Cola|PepsiCo|Mondelez|General Mills|Kellogg|Tyson|Conagra|Philip Morris|Altria"
+  "3030":
+    sector_code: "30"
+    any_text_patterns:
+      - "Household Products|Personal Products|Beauty|Cosmetics|Procter|Colgate|Clorox|Kimberly-Clark|Estee Lauder|Church & Dwight"
+  "3510":
+    sector_code: "35"
+    any_text_patterns:
+      - "Health Care Equipment|Healthcare Service|Health Care Service|Medical Device|Hospital|Diagnostics|Laboratory|Surgical|UnitedHealth|Elevance|Cigna|Humana|HCA|Medtronic|Abbott|Intuitive Surgical|Thermo Fisher|Danaher"
+  "3520":
+    sector_code: "35"
+    any_text_patterns:
+      - "Pharmaceutical|Biopharmaceutical|Biotechnology|Biotech|Biosciences|Life Sciences|Therapeutics|Therapy|Oncology|Vaccine|Drug|Pfizer|Merck|Eli Lilly|Bristol-Myers|Amgen|Gilead|Moderna|Regeneron|Vertex"
+  "4010":
+    sector_code: "40"
+    any_text_patterns:
+      - "Bank|Bancorp|Bancshares|JPMorgan|Bank of America|Citigroup|Wells Fargo|US Bancorp|PNC|Truist|M&T Bank|Fifth Third"
+  "4020":
+    sector_code: "40"
+    any_text_patterns:
+      - "Financial|Finance|Capital|Securities|Broker|Asset Management|Investment|Exchange|Payments|Credit|Mortgage|Goldman Sachs|Morgan Stanley|BlackRock|Blackstone|Charles Schwab|Visa|Mastercard|American Express|PayPal|Intercontinental Exchange|CME"
+  "4030":
+    sector_code: "40"
+    any_text_patterns:
+      - "Insurance|Assurance|Reinsurance|Aflac|Chubb|Marsh|Progressive|Travelers|Allstate|Hartford|MetLife|Prudential"
+  "4510":
+    sector_code: "45"
+    any_text_patterns:
+      - "Software|Cloud|SaaS|Data|Cybersecurity|Security|Analytics|Application|Digital|Platform|Systems|Microsoft|Oracle|Salesforce|Adobe|ServiceNow|Intuit|Palo Alto|Fortinet|Synopsys|Cadence"
+  "4520":
+    sector_code: "45"
+    any_text_patterns:
+      - "Hardware|Computer|Electronic|Networking|Communication Equipment|Devices|Apple|Cisco|Arista|Dell|HP Inc|Hewlett Packard|Motorola Solutions|Keysight|Trimble"
+  "4530":
+    sector_code: "45"
+    any_text_patterns:
+      - "Semiconductor|Chip|Micro Devices|Memory|Foundry|NVIDIA|Broadcom|Advanced Micro Devices|Intel|Qualcomm|Texas Instruments|Micron|Applied Materials|Lam Research|KLA|Marvell|ON Semiconductor"
+  "5010":
+    sector_code: "50"
+    any_text_patterns:
+      - "Telecommunication|Telecom|Wireless|Broadband|Cable|Verizon|AT&T|T-Mobile|Charter|Comcast"
+  "5020":
+    sector_code: "50"
+    any_text_patterns:
+      - "Media|Entertainment|Streaming|Interactive|Internet|Search|Social|Advertising|Broadcasting|Publishing|Gaming|Alphabet|Google|Meta Platforms|Netflix|Walt Disney|Warner Bros|Electronic Arts|Take-Two|Roblox"
+  "5510":
+    sector_code: "55"
+    any_text_patterns:
+      - "Utilities|Utility|Electric|Power|Water|Gas Utility|Renewable|Grid|Generation|NextEra|Duke Energy|Southern Company|Dominion|Exelon|Sempra|American Electric Power|Xcel"
+  "6010":
+    sector_code: "60"
+    any_text_patterns:
+      - "REIT|Real Estate Investment Trust|Realty Trust|Prologis|American Tower|Equinix|Realty Income|Simon Property|Public Storage|AvalonBay|Welltower|Digital Realty"
+  "6020":
+    sector_code: "60"
+    any_text_patterns:
+      - "Real Estate|Properties|Property|Residential|Apartment|Office|Development|Management|CBRE|Jones Lang|CoStar|Zillow"
+manual_overrides:
+  AAPL:
+    industry_group_code: "4520"
+    industry_group_name: Technology Hardware & Equipment
+    reason: "Apple hardware and devices"
+  MSFT:
+    industry_group_code: "4510"
+    industry_group_name: Software & Services
+    reason: "Microsoft software and cloud"
+  NVDA:
+    industry_group_code: "4530"
+    industry_group_name: Semiconductors & Semiconductor Equipment
+    reason: "NVIDIA semiconductor designer"
+  AVGO:
+    industry_group_code: "4530"
+    industry_group_name: Semiconductors & Semiconductor Equipment
+    reason: "Broadcom semiconductor products"
+  AMD:
+    industry_group_code: "4530"
+    industry_group_name: Semiconductors & Semiconductor Equipment
+    reason: "Advanced Micro Devices semiconductor products"
+  INTC:
+    industry_group_code: "4530"
+    industry_group_name: Semiconductors & Semiconductor Equipment
+    reason: "Intel semiconductor products"
+  GOOGL:
+    industry_group_code: "5020"
+    industry_group_name: Media & Entertainment
+    reason: "Alphabet search, advertising, media platforms"
+  GOOG:
+    industry_group_code: "5020"
+    industry_group_name: Media & Entertainment
+    reason: "Alphabet search, advertising, media platforms"
+  META:
+    industry_group_code: "5020"
+    industry_group_name: Media & Entertainment
+    reason: "Meta social and advertising platforms"
+  AMZN:
+    industry_group_code: "2550"
+    industry_group_name: Consumer Discretionary Distribution & Retail
+    reason: "Amazon online retail marketplace"
+  TSLA:
+    industry_group_code: "2510"
+    industry_group_name: Automobiles & Components
+    reason: "Tesla electric vehicles"
+  JPM:
+    industry_group_code: "4010"
+    industry_group_name: Banks
+    reason: "JPMorgan Chase bank"
+  BAC:
+    industry_group_code: "4010"
+    industry_group_name: Banks
+    reason: "Bank of America bank"
+  V:
+    industry_group_code: "4020"
+    industry_group_name: Financial Services
+    reason: "Visa payment network"
+  MA:
+    industry_group_code: "4020"
+    industry_group_name: Financial Services
+    reason: "Mastercard payment network"
+  XOM:
+    industry_group_code: "1010"
+    industry_group_name: Energy
+    reason: "Exxon Mobil integrated energy"
+  CVX:
+    industry_group_code: "1010"
+    industry_group_name: Energy
+    reason: "Chevron integrated energy"
+  JNJ:
+    industry_group_code: "3520"
+    industry_group_name: Pharmaceuticals, Biotechnology & Life Sciences
+    reason: "Johnson & Johnson pharmaceutical and health products"
+  LLY:
+    industry_group_code: "3520"
+    industry_group_name: Pharmaceuticals, Biotechnology & Life Sciences
+    reason: "Eli Lilly pharmaceutical products"
+  UNH:
+    industry_group_code: "3510"
+    industry_group_name: Health Care Equipment & Services
+    reason: "UnitedHealth managed health care"
+  WMT:
+    industry_group_code: "3010"
+    industry_group_name: Consumer Staples Distribution & Retail
+    reason: "Walmart staples retail"
+  COST:
+    industry_group_code: "3010"
+    industry_group_name: Consumer Staples Distribution & Retail
+    reason: "Costco staples wholesale retail"
+  PG:
+    industry_group_code: "3030"
+    industry_group_name: Household & Personal Products
+    reason: "Procter & Gamble household and personal products"
+  KO:
+    industry_group_code: "3020"
+    industry_group_name: Food, Beverage & Tobacco
+    reason: "Coca-Cola beverage products"
+  PEP:
+    industry_group_code: "3020"
+    industry_group_name: Food, Beverage & Tobacco
+    reason: "PepsiCo food and beverage products"
+  HD:
+    industry_group_code: "2550"
+    industry_group_name: Consumer Discretionary Distribution & Retail
+    reason: "Home Depot home improvement retail"
+  MCD:
+    industry_group_code: "2530"
+    industry_group_name: Consumer Services
+    reason: "McDonald's restaurants"
+  NEE:
+    industry_group_code: "5510"
+    industry_group_name: Utilities
+    reason: "NextEra utility and power generation"
+  PLD:
+    industry_group_code: "6010"
+    industry_group_name: Equity Real Estate Investment Trusts (REITs)
+    reason: "Prologis industrial REIT"

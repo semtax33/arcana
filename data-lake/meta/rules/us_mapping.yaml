@@ -124,6 +124,8 @@ companyfacts_rules:
       - us-gaap:ShortTermDebt
       - us-gaap:CurrentPortionOfLongTermDebt
       - us-gaap:LongTermDebtCurrent
+      - us-gaap:LongTermDebtAndFinanceLeaseObligationsCurrent
+      - us-gaap:DebtAndFinanceLeaseObligationsCurrent
       - ifrs-full:CurrentPortionOfLongtermBorrowings
     label_patterns:
       - (?i)\b(short[- ]term|current)\s+(debt|borrowings?)\b
@@ -134,6 +136,7 @@ companyfacts_rules:
     alternate_tags:
       - us-gaap:LongTermDebt
       - us-gaap:LongTermDebtAndFinanceLeaseObligationsNoncurrent
+      - us-gaap:DebtAndFinanceLeaseObligationsNoncurrent
       - ifrs-full:LongtermBorrowings
     label_patterns:
       - (?i)\blong[- ]term\s+(debt|borrowings?)\b
@@ -229,6 +232,7 @@ companyfacts_rules:
     fs_type: IS
     primary_tags: [us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax]
     alternate_tags:
+      - us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax
       - us-gaap:Revenues
       - us-gaap:SalesRevenueNet
       - us-gaap:SalesRevenueGoodsNet
@@ -282,9 +286,14 @@ companyfacts_rules:
     label_patterns:
       - (?i)\bresearch\s+and\s+development\b
       - (?i)\bR&D\b
+      - (?i)\b(product|technology|software)\s+development\s+(expense|costs?)\b
     label_exclude_patterns:
       - (?i)\bpolicy\b
       - (?i)\bmember\b
+      - (?i)\btable\b
+      - (?i)\bschedule\b
+      - (?i)\brollforward\b
+      - (?i)\breserve\b
       - (?i)\boil\s+and\s+gas\s+reserves\b
       - (?i)\bfuture\s+net\s+cash\s+flows\b
   - canonical_id: OPERATING_INCOME
@@ -316,6 +325,7 @@ companyfacts_rules:
     fs_type: IS
     primary_tags: [us-gaap:NetIncomeLoss]
     alternate_tags:
+      - us-gaap:NetIncomeLossIncludingPortionAttributableToNoncontrollingInterest
       - us-gaap:ProfitLoss
       - ifrs-full:ProfitLoss
     label_patterns:
@@ -433,6 +443,7 @@ companyfacts_rules:
     fs_type: CF
     primary_tags: [us-gaap:NetCashProvidedByUsedInOperatingActivities]
     alternate_tags:
+      - us-gaap:NetCashProvidedByUsedInOperatingActivitiesContinuingOperations
       - ifrs-full:CashFlowsFromUsedInOperatingActivities
     label_patterns:
       - (?i)\bnet\s+cash\s+(provided\s+by|used\s+in)\s+operating\s+activities\b
@@ -636,14 +647,117 @@ notes_rules:
       - ResearchAndDevelopmentExpense
       - ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost
       - InProcessResearchAndDevelopmentExpense
+      - ResearchAndDevelopmentExpenseSoftwareExcludingAcquiredInProcessCost
+      - OtherResearchAndDevelopmentExpense
+    tag_patterns:
+      - (?i)(researchanddevelopment|researchdevelopment).*(expense|cost)
+      - (?i)(product|technology|software)development(expense|cost)
     label_patterns:
       - (?i)research\s+and\s+development
       - (?i)\bR&D\b
+      - (?i)\b(product|technology|software)\s+development\s+(expense|costs?)\b
+    label_exclude_patterns:
+      - (?i)\bpolicy\b
+      - (?i)\bmember\b
+      - (?i)\btable\b
+      - (?i)\bschedule\b
+      - (?i)\brollforward\b
+      - (?i)\breserve\b
+      - (?i)\boil\s+and\s+gas\s+reserves\b
+      - (?i)\bfuture\s+net\s+cash\s+flows\b
     report_name_patterns:
       - (?i)statement
       - (?i)operations
       - (?i)income
     amount_policy: abs
+  - id: notes_revenue
+    canonical_id: REVENUE
+    fs_type: IS
+    tags:
+      - RevenueFromContractWithCustomerExcludingAssessedTax
+      - RevenueFromContractWithCustomerIncludingAssessedTax
+      - Revenues
+      - SalesRevenueNet
+      - SalesRevenueGoodsNet
+      - SalesRevenueServicesNet
+    label_patterns:
+      - (?i)\b(total\s+)?(net\s+)?(revenue|sales)\b
+    label_exclude_patterns:
+      - (?i)\bcost\b
+      - (?i)\bdeferred\b
+    report_name_patterns:
+      - (?i)statement
+      - (?i)operations
+      - (?i)income
+  - id: notes_cogs
+    canonical_id: COGS
+    fs_type: IS
+    tags:
+      - CostOfRevenue
+      - CostOfGoodsAndServicesSold
+      - CostOfGoodsSold
+      - CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization
+    label_patterns:
+      - (?i)\bcost\s+of\s+(revenue|sales|goods|services)\b
+    report_name_patterns:
+      - (?i)statement
+      - (?i)operations
+      - (?i)income
+  - id: notes_gross_profit
+    canonical_id: GROSS_PROFIT
+    fs_type: IS
+    tags:
+      - GrossProfit
+    label_patterns:
+      - (?i)\bgross\s+profit\b
+    report_name_patterns:
+      - (?i)statement
+      - (?i)operations
+      - (?i)income
+  - id: notes_operating_income
+    canonical_id: OPERATING_INCOME
+    fs_type: IS
+    tags:
+      - OperatingIncomeLoss
+    label_patterns:
+      - (?i)\boperating\s+income\s*(\(loss\))?\b
+      - (?i)\bincome\s+from\s+operations\b
+    report_name_patterns:
+      - (?i)statement
+      - (?i)operations
+      - (?i)income
+  - id: notes_cfo
+    canonical_id: CFO
+    fs_type: CF
+    tags:
+      - NetCashProvidedByUsedInOperatingActivities
+      - NetCashProvidedByUsedInOperatingActivitiesContinuingOperations
+    label_patterns:
+      - (?i)\bnet\s+cash\s+(provided\s+by|used\s+in)\s+operating\s+activities\b
+    report_name_patterns:
+      - (?i)cash\s+flows?
+    amount_policy: as_reported
+  - id: notes_capex_ppe
+    canonical_id: CAPEX_PPE
+    fs_type: CF
+    tags:
+      - PaymentsToAcquirePropertyPlantAndEquipment
+      - PaymentsToAcquireProductiveAssets
+      - PaymentsToAcquirePropertyPlantAndEquipmentAndIntangibleAssets
+    tag_patterns:
+      - (?i)paymentstoacquire.*(propertyplantandequipment|productiveassets)
+    label_patterns:
+      - (?i)\b(payments?|cash\s+paid|purchase)\s+(to\s+acquire|for|of)\s+property,\s*plant,?\s+and\s+equipment\b
+      - (?i)\bcapital\s+expenditures?\b
+    label_exclude_patterns:
+      - (?i)\bproceeds?\b
+      - (?i)\bdisposals?\b
+      - (?i)\badditions?\s+through\s+business\s+combinations\b
+    report_name_patterns:
+      - (?i)cash\s+flows?
+      - (?i)investing
+    amount_policy: abs
+    cash_direction: outflow
   - id: notes_amortization
     canonical_id: AMORTIZATION
     fs_type: CF
@@ -663,15 +777,132 @@ notes_rules:
     label_patterns:
       - (?i)depreciation
     amount_policy: abs
+  - id: notes_interest_paid
+    canonical_id: INT_PAID
+    fs_type: CF
+    tags:
+      - InterestPaidNet
+      - InterestPaid
+    label_patterns:
+      - (?i)\binterest\s+paid\b
+    report_name_patterns:
+      - (?i)cash\s+flows?
+      - (?i)supplemental
+    amount_policy: abs
+    cash_direction: outflow
+  - id: notes_tax_paid
+    canonical_id: TAX_PAID
+    fs_type: CF
+    tags:
+      - IncomeTaxesPaidNet
+      - IncomeTaxesPaid
+    label_patterns:
+      - (?i)\bincome\s+tax(es)?\s+paid\b
+    report_name_patterns:
+      - (?i)cash\s+flows?
+      - (?i)supplemental
+    amount_policy: abs
+    cash_direction: outflow
+  - id: notes_dividends_paid
+    canonical_id: DIV_PAID
+    fs_type: CF
+    tags:
+      - PaymentsOfDividends
+      - PaymentsOfDividendsCommonStock
+      - PaymentsOfOrdinaryDividends
+    tag_patterns:
+      - (?i)paymentsof.*dividends
+    label_patterns:
+      - (?i)\bdividends?\s+paid\b
+      - (?i)\bpayments?\s+of\s+dividends?\b
+    label_exclude_patterns:
+      - (?i)\bdeclared\b
+      - (?i)\bpayable\b
+      - (?i)\bper\s+share\b
+    report_name_patterns:
+      - (?i)cash\s+flows?
+      - (?i)financing
+    amount_policy: abs
+    cash_direction: outflow
+  - id: notes_buyback
+    canonical_id: BUYBACK
+    fs_type: CF
+    tags:
+      - PaymentsForRepurchaseOfCommonStock
+      - PaymentsForRepurchaseOfEquity
+    tag_patterns:
+      - (?i)paymentsforrepurchaseof.*(stock|equity)
+    label_patterns:
+      - (?i)\bpayments?\s+for\s+repurchase\s+of\s+(common\s+)?stock\b
+      - (?i)\brepurchase\s+of\s+(common\s+)?stock\b
+    label_exclude_patterns:
+      - (?i)\bauthorized\b
+      - (?i)\bnumber\s+of\s+shares\b
+      - (?i)\bshares\s+repurchased\b
+    report_name_patterns:
+      - (?i)cash\s+flows?
+      - (?i)financing
+    amount_policy: abs
+    cash_direction: outflow
 
 edgartools_fallback_rules:
+  - canonical_id: REVENUE
+    fs_type: IS
+    tags:
+      - RevenueFromContractWithCustomerExcludingAssessedTax
+      - RevenueFromContractWithCustomerIncludingAssessedTax
+      - Revenues
+      - SalesRevenueNet
+  - canonical_id: COGS
+    fs_type: IS
+    tags:
+      - CostOfRevenue
+      - CostOfGoodsAndServicesSold
+      - CostOfGoodsSold
+      - CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization
+  - canonical_id: GROSS_PROFIT
+    fs_type: IS
+    tags:
+      - GrossProfit
   - canonical_id: RND
     fs_type: IS
     tags:
       - ResearchAndDevelopmentExpense
       - ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost
       - InProcessResearchAndDevelopmentExpense
+      - ResearchAndDevelopmentExpenseSoftwareExcludingAcquiredInProcessCost
     amount_policy: abs
+  - canonical_id: OPERATING_INCOME
+    fs_type: IS
+    tags:
+      - OperatingIncomeLoss
+  - canonical_id: TAX_EXPENSE
+    fs_type: IS
+    tags:
+      - IncomeTaxExpenseBenefit
+  - canonical_id: PBT
+    fs_type: IS
+    tags:
+      - IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest
+      - IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments
+  - canonical_id: NET_INCOME
+    fs_type: IS
+    tags:
+      - NetIncomeLoss
+      - NetIncomeLossIncludingPortionAttributableToNoncontrollingInterest
+  - canonical_id: CFO
+    fs_type: CF
+    tags:
+      - NetCashProvidedByUsedInOperatingActivities
+      - NetCashProvidedByUsedInOperatingActivitiesContinuingOperations
+  - canonical_id: CAPEX_PPE
+    fs_type: CF
+    tags:
+      - PaymentsToAcquirePropertyPlantAndEquipment
+      - PaymentsToAcquireProductiveAssets
+      - PaymentsToAcquirePropertyPlantAndEquipmentAndIntangibleAssets
+    amount_policy: abs
+    cash_direction: outflow
   - canonical_id: AMORTIZATION
     fs_type: CF
     tags:
@@ -685,3 +916,32 @@ edgartools_fallback_rules:
       - DepreciationDepletionAndAmortization
       - Depreciation
     amount_policy: abs
+  - canonical_id: INT_PAID
+    fs_type: CF
+    tags:
+      - InterestPaidNet
+      - InterestPaid
+    amount_policy: abs
+    cash_direction: outflow
+  - canonical_id: TAX_PAID
+    fs_type: CF
+    tags:
+      - IncomeTaxesPaidNet
+      - IncomeTaxesPaid
+    amount_policy: abs
+    cash_direction: outflow
+  - canonical_id: DIV_PAID
+    fs_type: CF
+    tags:
+      - PaymentsOfDividends
+      - PaymentsOfDividendsCommonStock
+      - PaymentsOfOrdinaryDividends
+    amount_policy: abs
+    cash_direction: outflow
+  - canonical_id: BUYBACK
+    fs_type: CF
+    tags:
+      - PaymentsForRepurchaseOfCommonStock
+      - PaymentsForRepurchaseOfEquity
+    amount_policy: abs
+    cash_direction: outflow
