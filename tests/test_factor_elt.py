@@ -1,4 +1,5 @@
 import unittest
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import pandas as pd
@@ -7,6 +8,7 @@ from engine.loaders.factors import (
     FACT_DAILY_FACTOR_COLUMNS,
     create_daily_factor_rows,
     create_factor_catalog_dataframe,
+    insert_daily_factors,
     prepare_daily_factor_rows,
 )
 
@@ -118,6 +120,18 @@ class FactorEltTest(unittest.TestCase):
         cache_factory.assert_not_called()
         self.assertIsNone(create_wide.call_args.kwargs["market_data_cache"])
         self.assertEqual(len(result), 1)
+
+    def test_insert_daily_factors_fails_fast_when_price_file_is_missing(self):
+        with TemporaryDirectory() as temp_dir:
+            missing_price_path = f"{temp_dir}/missing_prices.csv"
+
+            with self.assertRaisesRegex(FileNotFoundError, "price data is required"):
+                insert_daily_factors(
+                    stock_codes=["AAPL"],
+                    market="us",
+                    price_path=missing_price_path,
+                    insert_catalog=False,
+                )
 
     def test_create_factor_catalog_dataframe_marks_technical_factors(self):
         catalog_df = create_factor_catalog_dataframe(

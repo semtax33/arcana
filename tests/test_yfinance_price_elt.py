@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import io
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 import ssl
 import sys
+import tempfile
 import unittest
 from urllib.error import URLError
 from unittest.mock import patch
@@ -10,8 +14,10 @@ import pandas as pd
 
 from engine.extractors.market_prices import filter_us_equity_universe
 from engine.extractors._internal import yfinance_market_prices
+from engine.loaders import market_data
+from engine.loaders import securities as securities_loader
 from engine.loaders.market_data import PRICE_TABLE, insert_price
-from engine.transformers.market_data import normalize_yfinance_price_frame
+from engine.transformers.market_data import normalize_us_price, normalize_yfinance_price_frame
 from engine.workflows._internal import download_workflow
 
 
@@ -163,6 +169,26 @@ class YFinancePriceEltTest(unittest.TestCase):
         self.assertEqual(result["adj_close"].tolist(), [104.5])
         self.assertEqual(result["volume"].tolist(), [1000])
 
+    def test_normalizer_drops_dates_outside_clickhouse_date_range(self):
+        raw = pd.DataFrame(
+            {
+                "Date": ["1969-12-31", "1970-01-01", "2149-06-06", "2149-06-07"],
+                "Open": [100, 101, 102, 103],
+                "High": [110, 111, 112, 113],
+                "Low": [90, 91, 92, 93],
+                "Close": [105, 106, 107, 108],
+                "Adj Close": [104.5, 105.5, 106.5, 107.5],
+                "Volume": [1000, 1001, 1002, 1003],
+            }
+        )
+
+        result = normalize_yfinance_price_frame(raw, ticker="AAPL")
+
+        self.assertEqual(
+            result["trade_date"].dt.strftime("%Y-%m-%d").tolist(),
+            ["1970-01-01", "2149-06-06"],
+        )
+
     def test_insert_us_prices_inserts_monthly_partitions(self):
         price_df = pd.DataFrame(
             {
@@ -188,6 +214,151 @@ class YFinancePriceEltTest(unittest.TestCase):
         for _, inserted_df, columns in client.inserted:
             self.assertNotIn("_partition", inserted_df.columns)
             self.assertEqual(columns, list(price_df.columns))
+
+    def test_insert_us_prices_skips_dates_outside_clickhouse_date_range(self):
+        price_df = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_AAPL", "SEC_US_AAPL", "SEC_US_AAPL"],
+                "trade_date": pd.to_datetime(["1969-12-31", "2026-01-31", "2149-06-07"]),
+                "open": [90, 100, 110],
+                "high": [91, 101, 111],
+                "low": [89, 99, 109],
+                "close": [90.5, 100.5, 110.5],
+                "volume": [900, 1000, 1100],
+                "adj_close": [90.0, 100.0, 110.0],
+                "currency": ["USD", "USD", "USD"],
+            }
+        )
+        client = FakeClickHouseClient()
+
+        with patch("engine.loaders.market_data.create_price_dataframe", return_value=price_df):
+            result = insert_price(market="us", client=client)
+
+        self.assertEqual(result.attrs["inserted_rows"], 1)
+        self.assertEqual(len(client.inserted), 1)
+        self.assertEqual(
+            client.inserted[0][1]["trade_date"].tolist(),
+            [pd.Timestamp("2026-01-31").date()],
+        )
+
+    def test_us_market_data_cli_loads_securities_before_prices(self):
+        price_df = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_AAPL"],
+                "trade_date": pd.to_datetime(["2026-01-31"]),
+                "open": [100],
+                "high": [101],
+                "low": [99],
+                "close": [100.5],
+                "volume": [1000],
+                "adj_close": [100.0],
+                "currency": ["USD"],
+            }
+        )
+
+        with (
+            patch.object(sys, "argv", ["prog", "--market", "us", "--target", "prices", "--dry-run"]),
+            patch.object(
+                market_data,
+                "insert_securities",
+                return_value={"issuers": 1, "security-master": 1, "identifiers": 2},
+            ) as insert_securities_mock,
+            patch.object(market_data, "insert_price", return_value=price_df) as insert_price_mock,
+        ):
+            market_data.main()
+
+        insert_securities_mock.assert_called_once_with(market="us", target="all", dry_run=True)
+        insert_price_mock.assert_called_once()
+
+    def test_us_securities_cli_uses_same_loader_as_kr_entrypoint(self):
+        stdout = io.StringIO()
+        with (
+            patch.object(sys, "argv", ["prog", "--market", "us", "--dry-run"]),
+            patch.object(
+                securities_loader,
+                "insert_securities",
+                return_value={"issuers": 1, "security-master": 1, "identifiers": 2},
+            ) as insert_securities_mock,
+            redirect_stdout(stdout),
+        ):
+            securities_loader.main()
+
+        insert_securities_mock.assert_called_once_with(market="us", target="all", dry_run=True)
+        self.assertIn("prepared issuers market=us rows=1", stdout.getvalue())
+
+    def test_us_market_data_securities_target_is_removed(self):
+        stderr = io.StringIO()
+        with (
+            patch.object(sys, "argv", ["prog", "--market", "us", "--target", "securities", "--dry-run"]),
+            patch.object(market_data, "insert_securities") as insert_securities_mock,
+            redirect_stderr(stderr),
+        ):
+            with self.assertRaises(SystemExit):
+                market_data.main()
+
+        insert_securities_mock.assert_not_called()
+        self.assertIn("invalid choice: 'securities'", stderr.getvalue())
+
+    def test_us_market_data_cli_all_skips_unsupported_shares(self):
+        price_df = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_AAPL"],
+                "trade_date": pd.to_datetime(["2026-01-31"]),
+                "open": [100],
+                "high": [101],
+                "low": [99],
+                "close": [100.5],
+                "volume": [1000],
+                "adj_close": [100.0],
+                "currency": ["USD"],
+            }
+        )
+
+        with (
+            patch.object(sys, "argv", ["prog", "--market", "us", "--target", "all", "--dry-run"]),
+            patch.object(
+                market_data,
+                "insert_securities",
+                return_value={"issuers": 1, "security-master": 1, "identifiers": 2},
+            ),
+            patch.object(market_data, "insert_price", return_value=price_df) as insert_price_mock,
+            patch.object(market_data, "insert_shares") as insert_shares_mock,
+        ):
+            market_data.main()
+
+        insert_price_mock.assert_called_once()
+        insert_shares_mock.assert_not_called()
+
+    def test_normalize_us_price_logs_file_progress(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            for ticker in ["AAPL", "MSFT"]:
+                pd.DataFrame(
+                    {
+                        "Date": ["2026-01-02"],
+                        "Open": [100],
+                        "High": [101],
+                        "Low": [99],
+                        "Close": [100.5],
+                        "Adj Close": [100.0],
+                        "Volume": [1000],
+                    }
+                ).to_csv(tmp_path / f"{ticker}.csv", index=False)
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                result = normalize_us_price(
+                    tmp_path / "*.csv",
+                    output_path=None,
+                    progress_interval=1,
+                )
+
+        output = stdout.getvalue()
+        self.assertEqual(len(result), 2)
+        self.assertIn("normalizing US price files count=2", output)
+        self.assertIn("normalizing price file ticker=AAPL (1/2)", output)
+        self.assertIn("normalizing price file ticker=MSFT (2/2)", output)
+        self.assertIn("normalized US price rows=2", output)
 
     def test_download_workflow_routes_us_prices_and_preserves_kr_prices(self):
         with (

@@ -21,10 +21,12 @@ DEFAULT_GICS_RULES_PATH = DATA_LAKE.rules("gics_rules.yaml")
 FACTOR_TABLES = ("fact_daily_factor", "fact_daily_factors")
 FACTOR_VALUE_COLUMNS = ("factor_value", "value")
 DEFAULT_FINANCIAL_BASIS = "annual"
+DEFAULT_MARKET = "kr"
 DEFAULT_NEAR_HIGH_PCT = 3.0
 DEFAULT_SORT_BY = "strong_stock_ratio"
 DEFAULT_LEVEL = "industry_group"
 LEVELS = {"sector", "industry_group"}
+MARKETS = {"kr", "us"}
 SORTABLE_METRICS = {
     "strong_stock_ratio",
     "eps_expected_growth",
@@ -54,7 +56,7 @@ class SectorLeaderService:
         self,
         client_factory: Callable[[], Any] = get_clickhouse_client,
         today_factory: Callable[[], date] | None = None,
-        gics_rules_path: Path = DEFAULT_GICS_RULES_PATH,
+        gics_rules_path: Path | None = None,
     ) -> None:
         self._client_factory = client_factory
         self._today_factory = today_factory or _today_kst
@@ -67,6 +69,7 @@ class SectorLeaderService:
         sort_by: str = DEFAULT_SORT_BY,
         direction: str | None = None,
         limit: int | None = None,
+        market: str = DEFAULT_MARKET,
         near_high_pct: float = DEFAULT_NEAR_HIGH_PCT,
         financial_basis: str = DEFAULT_FINANCIAL_BASIS,
         level: str = DEFAULT_LEVEL,
@@ -76,12 +79,13 @@ class SectorLeaderService:
         normalized_sort_by = _normalize_sort_by(sort_by)
         normalized_direction = _normalize_direction(direction, normalized_sort_by)
         normalized_limit = _normalize_limit(limit)
+        normalized_market = _normalize_market(market)
         normalized_near_high_pct = _normalize_near_high_pct(near_high_pct)
         normalized_financial_basis = str(financial_basis or DEFAULT_FINANCIAL_BASIS).strip()
         if not normalized_financial_basis:
             normalized_financial_basis = DEFAULT_FINANCIAL_BASIS
 
-        sector_names = self._load_classification_names(normalized_level)
+        sector_names = self._load_classification_names(normalized_level, normalized_market)
         client = self._client_factory()
         try:
             eps_factor_id = _select_eps_growth_factor_id(client)
@@ -92,6 +96,7 @@ class SectorLeaderService:
                 financial_basis=normalized_financial_basis,
                 eps_factor_id=eps_factor_id,
                 level=normalized_level,
+                market=normalized_market,
             )
         finally:
             close = getattr(client, "close", None)
@@ -109,6 +114,7 @@ class SectorLeaderService:
 
         return SectorLeaderResponse(
             as_of_date=as_of,
+            market=normalized_market.upper(),
             level=normalized_level,
             sort_by=normalized_sort_by,
             direction=normalized_direction,
@@ -119,8 +125,9 @@ class SectorLeaderService:
             rows=leader_rows,
         )
 
-    def _load_classification_names(self, level: str) -> dict[str, str]:
-        with self._gics_rules_path.open("r", encoding="utf-8") as file:
+    def _load_classification_names(self, level: str, market: str) -> dict[str, str]:
+        rules_path = self._gics_rules_path or _gics_rules_path_for_market(market)
+        with rules_path.open("r", encoding="utf-8") as file:
             config = yaml.safe_load(file) or {}
         key = "industry_groups" if level == "industry_group" else "sectors"
         names = config.get(key, {})
@@ -158,6 +165,7 @@ def _load_metric_rows(
     financial_basis: str,
     eps_factor_id: str,
     level: str,
+    market: str,
 ) -> tuple[list[dict[str, Any]], str]:
     factor_ids = ["roe", "per", "pbr", eps_factor_id]
     last_source = FACTOR_TABLES[0]
@@ -177,6 +185,7 @@ def _load_metric_rows(
                         ),
                         parameters={
                             "as_of_date": as_of_date.isoformat(),
+                            "market_country": market.upper(),
                             "near_high_ratio": 1 - (near_high_pct / 100),
                             "financial_basis": financial_basis,
                             "factor_ids": factor_ids,
@@ -228,9 +237,13 @@ def _build_sector_leader_query(
     return f"""
 WITH
 latest_market_date AS (
-    SELECT max(trade_date) AS latest_trade_date
-    FROM price_daily
-    WHERE trade_date <= {{as_of_date:Date}}
+    SELECT max(pd.trade_date) AS latest_trade_date
+    FROM price_daily AS pd
+    INNER JOIN security_master AS sm
+        ON sm.security_id = pd.security_id
+    WHERE pd.trade_date <= {{as_of_date:Date}}
+        AND sm.is_active
+        AND sm.country = {{market_country:String}}
 ),
 universe AS (
     SELECT
@@ -240,6 +253,7 @@ universe AS (
     INNER JOIN issuers AS iss
         ON iss.issuer_id = sm.issuer_id
     WHERE sm.is_active
+        AND sm.country = {{market_country:String}}
         AND iss.is_active
         AND iss.industry_schema = 'GICS'
         AND {classification_column} != ''
@@ -468,6 +482,21 @@ def _normalize_level(value: str) -> str:
         allowed = ", ".join(sorted(LEVELS))
         raise ValueError(f"level must be one of: {allowed}")
     return normalized
+
+
+def _normalize_market(value: str) -> str:
+    normalized = str(value or DEFAULT_MARKET).strip().lower()
+    if normalized not in MARKETS:
+        allowed = ", ".join(sorted(MARKETS))
+        raise ValueError(f"market must be one of: {allowed}")
+    return normalized
+
+
+def _gics_rules_path_for_market(market: str) -> Path:
+    market_path = DATA_LAKE.rules(f"gics_rules_{market}.yaml")
+    if market_path.exists():
+        return market_path
+    return DEFAULT_GICS_RULES_PATH
 
 
 def _normalize_sort_by(value: str) -> str:

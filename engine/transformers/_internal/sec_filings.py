@@ -668,6 +668,28 @@ def _compile_patterns(values: Any) -> list[re.Pattern[str]]:
     return [re.compile(safe_str(value)) for value in raw_values if safe_str(value).strip()]
 
 
+def _notes_rule_tag_patterns(rule: dict[str, Any]) -> list[re.Pattern[str]]:
+    return _compile_patterns(rule.get("tag_patterns", []))
+
+
+def _notes_rule_matches_tag(
+    rule: dict[str, Any],
+    tag: Any,
+    tag_patterns: list[re.Pattern[str]] | None = None,
+) -> bool:
+    normalized_tag = normalize_tag_name(tag)
+    exact_tags = {
+        normalize_tag_name(value)
+        for value in (rule.get("tags", []) or [])
+        if safe_str(value).strip()
+    }
+    if normalized_tag in exact_tags:
+        return True
+
+    patterns = tag_patterns if tag_patterns is not None else _notes_rule_tag_patterns(rule)
+    return any(pattern.search(normalized_tag) for pattern in patterns)
+
+
 def _read_tsv_if_exists(path: Path, **kwargs) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
@@ -755,11 +777,15 @@ def extract_notes_candidates(
 
     ciks = set(cik_to_symbol)
     tag_to_rules: dict[str, list[dict[str, Any]]] = {}
+    pattern_rules: list[tuple[dict[str, Any], list[re.Pattern[str]]]] = []
     for rule in rules:
         for tag in rule.get("tags", []) or []:
             tag_to_rules.setdefault(normalize_tag_name(tag), []).append(rule)
+        tag_patterns = _notes_rule_tag_patterns(rule)
+        if tag_patterns:
+            pattern_rules.append((rule, tag_patterns))
     needed_tags = set(tag_to_rules)
-    if not ciks or not needed_tags:
+    if not ciks or (not needed_tags and not pattern_rules):
         return []
 
     candidates: list[SecFactCandidate] = []
@@ -783,9 +809,19 @@ def extract_notes_candidates(
             chunksize=250_000,
             usecols=lambda column: column in {"adsh", "tag", "version", "ddate", "uom", "dimh", "value"},
         ):
+            tag_series = chunk["tag"].map(normalize_tag_name)
+            tag_mask = tag_series.isin(needed_tags)
+            if pattern_rules:
+                pattern_mask = pd.Series(False, index=chunk.index)
+                for _, tag_patterns in pattern_rules:
+                    pattern_mask |= tag_series.map(
+                        lambda value: any(pattern.search(value) for pattern in tag_patterns)
+                    )
+                tag_mask |= pattern_mask
+
             part = chunk.loc[
                 chunk["adsh"].isin(needed_adsh)
-                & chunk["tag"].isin(needed_tags)
+                & tag_mask
                 & chunk["uom"].eq("USD")
                 & chunk["dimh"].isin({"0x00000000", "0"})
             ].copy()
@@ -811,7 +847,18 @@ def extract_notes_candidates(
             if not symbol:
                 continue
 
-            for rule in tag_to_rules.get(safe_str(row.get("tag")), []):
+            normalized_tag = normalize_tag_name(row.get("tag"))
+            matched_rules = list(tag_to_rules.get(normalized_tag, []))
+            for rule, tag_patterns in pattern_rules:
+                if _notes_rule_matches_tag(rule, normalized_tag, tag_patterns):
+                    matched_rules.append(rule)
+
+            seen_rule_ids: set[int] = set()
+            for rule in matched_rules:
+                rule_identity = id(rule)
+                if rule_identity in seen_rule_ids:
+                    continue
+                seen_rule_ids.add(rule_identity)
                 if not _notes_rule_matches(rule, row):
                     continue
                 try:
@@ -872,8 +919,16 @@ def _notes_rule_matches(rule: dict[str, Any], row: dict[str, Any]) -> bool:
     if label_patterns and not any(pattern.search(label_text) for pattern in label_patterns):
         return False
 
+    label_exclude_patterns = _compile_patterns(rule.get("label_exclude_patterns", []))
+    if label_exclude_patterns and any(pattern.search(label_text) for pattern in label_exclude_patterns):
+        return False
+
     report_patterns = _compile_patterns(rule.get("report_name_patterns", []))
     if report_patterns and not any(pattern.search(report_text) for pattern in report_patterns):
+        return False
+
+    report_exclude_patterns = _compile_patterns(rule.get("report_name_exclude_patterns", []))
+    if report_exclude_patterns and any(pattern.search(report_text) for pattern in report_exclude_patterns):
         return False
 
     return True

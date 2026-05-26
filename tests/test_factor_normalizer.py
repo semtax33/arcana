@@ -436,6 +436,18 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertEqual(result.loc[result["trade_date"] == pd.Timestamp("2025-04-15"), "at"].iat[0], 1_000)
         self.assertEqual(result.loc[result["trade_date"] == pd.Timestamp("2025-04-16"), "at"].iat[0], 1_000)
 
+    def test_create_stock_factor_dataframe_skips_financial_read_when_prices_are_missing(self):
+        with (
+            patch("engine.transformers.factors.read_stock_prices", return_value=pd.DataFrame()),
+            patch("engine.transformers.factors.read_stock_shares") as read_shares,
+            patch("engine.transformers.factors.read_annual_financials") as read_financials,
+        ):
+            result = create_stock_factor_dataframe("005930", financial_basis="annual")
+
+        self.assertTrue(result.empty)
+        read_shares.assert_not_called()
+        read_financials.assert_not_called()
+
     def test_read_annual_financials_includes_fiscal_month_for_report_metadata_join(self):
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

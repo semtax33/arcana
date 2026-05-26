@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import math
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -15,6 +16,7 @@ from engine.transformers.factors import (
     factor_columns,
     normalize_stock_code,
     preferred_factor_columns,
+    resolve_price_path,
 )
 
 
@@ -533,7 +535,7 @@ def _insert_daily_factor_rows_by_partition(client, factor_df: pd.DataFrame) -> i
             column_names=list(chunk.columns),
         )
         inserted_count += len(chunk)
-        print(f"inserted partition={partition}, rows={len(chunk):,}")
+        print(f"inserted partition={partition}, rows={len(chunk):,}", flush=True)
 
     return inserted_count
 
@@ -550,9 +552,41 @@ def _flush_daily_factor_batch(
     batch_df = pd.concat(batch_frames, ignore_index=True)
     print(
         f"flushing batch={batch_index}, "
-        f"stocks={len(batch_frames):,}, rows={len(batch_df):,}"
+        f"stocks={len(batch_frames):,}, rows={len(batch_df):,}",
+        flush=True,
     )
     return _insert_daily_factor_rows_by_partition(client, batch_df)
+
+
+def _validate_required_price_data(
+    *,
+    market: str,
+    reader_mode: str,
+    market_data_cache,
+    price_path,
+) -> None:
+    resolved_price_path = None
+    if market_data_cache is not None and hasattr(market_data_cache, "price_path"):
+        resolved_price_path = Path(market_data_cache.price_path)
+    elif price_path is not None:
+        resolved_price_path = Path(price_path)
+    elif reader_mode in {"cached", "csv"}:
+        resolved_price_path = resolve_price_path(market=market)
+
+    if resolved_price_path is None or resolved_price_path.exists():
+        return
+
+    raise FileNotFoundError(
+        "price data is required before loading daily factors: "
+        f"market={market}, expected_path={resolved_price_path}. "
+        "Run the market data loader first or pass --price-path to an existing normalized price CSV."
+    )
+
+
+def _should_log_progress(stock_index: int, total_stocks: int, progress_interval: int) -> bool:
+    if stock_index in {1, total_stocks}:
+        return True
+    return progress_interval > 0 and stock_index % progress_interval == 0
 
 
 def create_factor_catalog_dataframe(factor_ids: list[str] | None = None) -> pd.DataFrame:
@@ -767,6 +801,7 @@ def insert_daily_factors(
     client=None,
     insert_batch_size: int = 25,
     insert_max_rows: int = 2_000_000,
+    progress_interval: int = 25,
     reader_mode: str = "cached",
     **kwargs,
 ) -> pd.DataFrame:
@@ -784,6 +819,13 @@ def insert_daily_factors(
             start_date=start_date,
             end_date=end_date,
         )
+
+    _validate_required_price_data(
+        market=market,
+        reader_mode=reader_mode,
+        market_data_cache=market_data_cache,
+        price_path=kwargs.get("price_path"),
+    )
 
     if dry_run:
         factor_df = create_daily_factor_rows(
@@ -811,7 +853,22 @@ def insert_daily_factors(
             insert_factor_catalog(client, factor_ids=preferred_factor_columns())
 
         resolved_stock_codes = _resolve_stock_codes(stock_codes, market=market)
+        total_stocks = len(resolved_stock_codes)
+        print(
+            "loading daily factors "
+            f"market={market}, stocks={total_stocks:,}, financial_basis={financial_basis}, "
+            f"start_date={start_date or '-'}, end_date={end_date or '-'}, "
+            f"insert_batch_size={insert_batch_size:,}, insert_max_rows={insert_max_rows:,}",
+            flush=True,
+        )
         for stock_index, stock_code in enumerate(resolved_stock_codes, start=1):
+            if _should_log_progress(stock_index, total_stocks, progress_interval):
+                print(
+                    f"processing stock={stock_code} ({stock_index:,}/{total_stocks:,}), "
+                    f"current_batch_stocks={len(batch_frames):,}, current_batch_rows={batch_rows:,}, "
+                    f"inserted_rows={inserted_count:,}",
+                    flush=True,
+                )
             wide_df = create_stock_factor_dataframe(
                 stock_code,
                 financial_basis=financial_basis,
@@ -827,11 +884,22 @@ def insert_daily_factors(
                 sort_rows=False,
             )
             if factor_df.empty:
+                if _should_log_progress(stock_index, total_stocks, progress_interval):
+                    print(
+                        f"skipped stock={stock_code} ({stock_index:,}/{total_stocks:,}), no factor rows",
+                        flush=True,
+                    )
                 continue
 
             seen_factor_ids.update(factor_df["factor_id"].unique())
             batch_frames.append(factor_df)
             batch_rows += len(factor_df)
+            if _should_log_progress(stock_index, total_stocks, progress_interval):
+                print(
+                    f"prepared stock={stock_code} ({stock_index:,}/{total_stocks:,}), "
+                    f"rows={len(factor_df):,}, current_batch_rows={batch_rows:,}",
+                    flush=True,
+                )
 
             should_flush = (
                 len(batch_frames) >= insert_batch_size
@@ -883,7 +951,11 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--insert-batch-size", type=int, default=25)
     parser.add_argument("--insert-max-rows", type=int, default=2_000_000)
+    parser.add_argument("--progress-interval", type=int, default=25)
     parser.add_argument("--reader-mode", default="cached", choices=["cached", "csv"])
+    parser.add_argument("--price-path")
+    parser.add_argument("--shares-path")
+    parser.add_argument("--dividend-path")
     args = parser.parse_args()
 
     factor_df = insert_daily_factors(
@@ -896,7 +968,11 @@ def main() -> None:
         dry_run=args.dry_run,
         insert_batch_size=args.insert_batch_size,
         insert_max_rows=args.insert_max_rows,
+        progress_interval=args.progress_interval,
         reader_mode=args.reader_mode,
+        price_path=args.price_path,
+        shares_path=args.shares_path,
+        dividend_path=args.dividend_path,
     )
     print(
         "prepared rows="

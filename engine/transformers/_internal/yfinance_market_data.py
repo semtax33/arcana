@@ -30,21 +30,38 @@ US_PRICE_COLUMNS = [
     "adj_close",
     "currency",
 ]
+CLICKHOUSE_DATE_MIN = pd.Timestamp("1970-01-01")
+CLICKHOUSE_DATE_MAX = pd.Timestamp("2149-06-06")
 
 
 def normalize_us_price(
     path: str | Path | None = None,
     *,
     output_path: str | Path | None = SILVER_US_PRICE_PATH,
+    log_progress: bool = True,
+    progress_interval: int = 100,
 ) -> pd.DataFrame:
-    files = _glob_files(str(path or (BRONZE_YFINANCE_PRICE_DIR / "*.csv")))
+    files = sorted(_glob_files(str(path or (BRONZE_YFINANCE_PRICE_DIR / "*.csv"))))
     if not files:
         raise FileNotFoundError("yfinance price CSV files were not found")
 
+    total_files = len(files)
+    if log_progress:
+        print(
+            f"normalizing US price files count={total_files:,}, "
+            f"output_path={output_path or '-'}",
+            flush=True,
+        )
+
     frames = []
-    for file in files:
+    for file_index, file in enumerate(files, start=1):
         file_path = Path(file)
         ticker = normalize_yfinance_ticker(file_path.stem)
+        if log_progress and _should_log_progress(file_index, total_files, progress_interval):
+            print(
+                f"normalizing price file ticker={ticker} ({file_index:,}/{total_files:,})",
+                flush=True,
+            )
         frame = pd.read_csv(file_path)
         frames.append(normalize_yfinance_price_frame(frame, ticker=ticker))
 
@@ -53,6 +70,10 @@ def normalize_us_price(
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
         result.to_csv(output, index=False, encoding="utf-8-sig")
+        if log_progress:
+            print(f"saved normalized US price rows={len(result):,}, path={output}", flush=True)
+    elif log_progress:
+        print(f"normalized US price rows={len(result):,}", flush=True)
     return result
 
 
@@ -96,6 +117,7 @@ def normalize_yfinance_price_frame(frame: pd.DataFrame, *, ticker: str) -> pd.Da
         }
     )
     result = result.dropna(subset=["trade_date", "close"])
+    result = _drop_clickhouse_date_out_of_range(result, ticker=ticker)
     result = result.sort_values(["security_id", "trade_date"])
     result = result.drop_duplicates(["security_id", "trade_date"], keep="last")
     return result[US_PRICE_COLUMNS].reset_index(drop=True)
@@ -106,7 +128,9 @@ def read_normalized_us_price(path: str | Path = SILVER_US_PRICE_PATH) -> pd.Data
     if frame.empty:
         return pd.DataFrame(columns=US_PRICE_COLUMNS)
     frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce")
-    return frame.dropna(subset=["trade_date"])[US_PRICE_COLUMNS].reset_index(drop=True)
+    frame = frame.dropna(subset=["trade_date"])
+    frame = _drop_clickhouse_date_out_of_range(frame)
+    return frame[US_PRICE_COLUMNS].reset_index(drop=True)
 
 
 def _concat_price_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
@@ -134,6 +158,12 @@ def _glob_files(path: str) -> list[str]:
     return files
 
 
+def _should_log_progress(item_index: int, total_items: int, progress_interval: int) -> bool:
+    if item_index in {1, total_items}:
+        return True
+    return progress_interval > 0 and item_index % progress_interval == 0
+
+
 def _pick_column(df: pd.DataFrame, candidates: list[str], *, required: bool = True) -> str | None:
     normalized = {str(column).strip().lower(): column for column in df.columns}
     for candidate in candidates:
@@ -147,3 +177,19 @@ def _pick_column(df: pd.DataFrame, candidates: list[str], *, required: bool = Tr
 
 def _numeric(series: Any) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
+
+
+def _drop_clickhouse_date_out_of_range(frame: pd.DataFrame, *, ticker: str | None = None) -> pd.DataFrame:
+    valid_dates = frame["trade_date"].between(CLICKHOUSE_DATE_MIN, CLICKHOUSE_DATE_MAX)
+    if valid_dates.all():
+        return frame
+
+    invalid = frame.loc[~valid_dates, "trade_date"]
+    ticker_msg = f" ticker={ticker}" if ticker else ""
+    print(
+        "dropped US price rows with ClickHouse Date out of range"
+        f"{ticker_msg}, rows={len(invalid):,}, "
+        f"min={invalid.min().date()}, max={invalid.max().date()}",
+        flush=True,
+    )
+    return frame.loc[valid_dates].copy()

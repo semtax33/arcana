@@ -1429,10 +1429,24 @@ def create_stock_factor_dataframe(
     security_id = security_id_for_market(stock_code, market)
     if market_data_cache is not None:
         price_df = market_data_cache.prices(security_id, stock_code=stock_code)
-        shares_df = market_data_cache.shares(security_id)
     else:
         price_df = read_stock_prices(stock_code, price_path, market=market)
+
+    if price_df.empty:
+        return pd.DataFrame()
+
+    today = pd.Timestamp(datetime.now(ZoneInfo("Asia/Seoul")).date())
+    price_df = price_df.loc[price_df["trade_date"] <= today].copy()
+    if output_end_date is not None:
+        price_df = price_df.loc[price_df["trade_date"] <= output_end_date].copy()
+    if price_df.empty:
+        return pd.DataFrame()
+
+    if market_data_cache is not None:
+        shares_df = market_data_cache.shares(security_id)
+    else:
         shares_df = read_stock_shares(stock_code, shares_path, market=market)
+
     if financial_basis == "quarterly":
         financial_df = read_quarterly_financials(
             stock_code,
@@ -1458,14 +1472,6 @@ def create_stock_factor_dataframe(
         )
     else:
         raise ValueError("financial_basis must be 'annual', 'ttm', or 'quarterly'")
-
-    if price_df.empty:
-        return pd.DataFrame()
-
-    today = pd.Timestamp(datetime.now(ZoneInfo("Asia/Seoul")).date())
-    price_df = price_df.loc[price_df["trade_date"] <= today].copy()
-    if output_end_date is not None:
-        price_df = price_df.loc[price_df["trade_date"] <= output_end_date].copy()
 
     daily_df = price_df.sort_values("trade_date").copy()
 

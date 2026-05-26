@@ -175,14 +175,23 @@ python -m engine.loaders.market_data --market us --target prices --source bronze
 
 정규화된 KRX price/share 데이터를 ClickHouse의 `price_daily`,
 `stock_shares` 같은 테이블에 적재합니다.
+US `prices`/`all` 적재는 SEC/yfinance symbol universe 기반 `issuers`,
+`security_master`, `identifiers` 참조 데이터도 먼저 적재합니다. 가격만 다시
+적재하려면 `--skip-securities`를 사용합니다.
 
 ### 4. Load Filings / Securities / Dividends
 
 ```powershell
 python -m engine.loaders.filings
 python -m engine.loaders.securities
+python -m engine.loaders.securities --market us
 python -m engine.loaders.dividends
 ```
+
+`securities` 적재는 시장별 GICS 규칙을 적용해 `issuers`의 `sector_code`,
+`industry_group_code`, `industry_group_name`을 함께 채웁니다. KR 규칙은
+`data-lake/meta/rules/gics_rules_kr.yaml`, US 규칙은
+`data-lake/meta/rules/gics_rules_us.yaml`을 사용합니다.
 
 ### 5. Load Factors
 
@@ -212,12 +221,14 @@ python -m engine.loaders.factors --market us --stock-codes AAPL --financial-basi
 --dry-run
 --insert-batch-size 100
 --insert-max-rows 2000000
+--progress-interval 25
+--price-path data-lake\silver\us\price\us_normalized_price.csv
 ```
 
 US 팩터 적재는 `data-lake/silver/sec/normalized/` 재무 CSV와
-`data-lake/silver/us/price/us_normalized_price.csv`,
-`data-lake/silver/us/shares/us_normalized_shares.csv`가 있을 때 daily factor
-rows를 생성합니다.
+`data-lake/silver/us/price/us_normalized_price.csv`가 있을 때 daily factor
+rows를 생성합니다. `data-lake/silver/us/shares/us_normalized_shares.csv`가
+있으면 shares/market cap 기반 팩터까지 함께 계산합니다.
 
 ### 6. Load Benchmarks
 

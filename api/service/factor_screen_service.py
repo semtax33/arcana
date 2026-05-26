@@ -50,6 +50,7 @@ class FactorScreenService:
                 client,
                 conditions,
                 as_of_date=request.as_of_date,
+                market=request.market,
                 financial_basis=request.financial_basis or DEFAULT_FINANCIAL_BASIS,
                 style_profile=_resolve_style_profile(request.style_profile, conditions),
                 sector_codes=request.sector_codes,

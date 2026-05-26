@@ -22,6 +22,7 @@ SectorLeaderSortBy = Literal[
     "pbr",
 ]
 SectorLeaderLevel = Literal["sector", "industry_group"]
+SectorLeaderMarket = Literal["KR", "US"]
 SortDirection = Literal["asc", "desc"]
 StyleProfile = Literal["DEFAULT", "MINERVINI_ZWEIG", "DIVIDEND_QUALITY"]
 StyleScoreComponentKey = Literal[
@@ -71,6 +72,7 @@ class SectorLeaderRowDto(BaseModel):
 
 class SectorLeaderResponseDto(BaseModel):
     as_of_date: date
+    market: SectorLeaderMarket = "KR"
     level: SectorLeaderLevel = "industry_group"
     sort_by: SectorLeaderSortBy
     direction: SortDirection
@@ -213,6 +215,7 @@ class FactorConditionDto(BaseModel):
 class FactorScreenRequestDto(BaseModel):
     conditions: list[FactorConditionDto] = Field(..., min_length=1)
     as_of_date: date | None = None
+    market: str | None = None
     financial_basis: str | None = "annual"
     style_profile: StyleProfile = DEFAULT_FACTOR_SCREEN_STYLE_PROFILE
     sector_codes: list[str] | None = None

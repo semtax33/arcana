@@ -25,6 +25,7 @@ def get_sector_leaders(
     sort_by: SectorLeaderSortBy = Query(default="strong_stock_ratio"),
     direction: SortDirection | None = Query(default=None),
     limit: int | None = Query(default=None, gt=0),
+    market: str = Query(default="KR"),
     near_high_pct: float = Query(default=3.0, ge=0, lt=100),
     financial_basis: str = Query(default="annual"),
     level: SectorLeaderLevel = Query(default="industry_group"),
@@ -35,6 +36,7 @@ def get_sector_leaders(
             sort_by=sort_by,
             direction=direction,
             limit=limit,
+            market=market,
             near_high_pct=near_high_pct,
             financial_basis=financial_basis,
             level=level,
@@ -46,6 +48,7 @@ def get_sector_leaders(
 
     return SectorLeaderResponseDto(
         as_of_date=result.as_of_date,
+        market=result.market,
         level=result.level,
         sort_by=result.sort_by,
         direction=result.direction,

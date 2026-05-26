@@ -25,6 +25,15 @@ CANONICAL_ROWS = [
         "鍮꾧퀬": "",
     },
     {
+        "canonical_id": "CAPEX_PPE",
+        "canonical_nm": "Capex",
+        "fs_type": "CF",
+        "is_derived": "FALSE",
+        "formula": "",
+        "description": "",
+        "鍮꾧퀬": "",
+    },
+    {
         "canonical_id": "RND",
         "canonical_nm": "R&D",
         "fs_type": "IS",
@@ -240,6 +249,81 @@ class SecFilingsNormalizerTest(unittest.TestCase):
             self.assertEqual(float(df.loc[df["canonical_account_id"].eq("RND"), "normalized_amount"].iat[0]), 25)
             self.assertEqual(debug.loc[debug["canonical_account_id"].eq("RND"), "source"].iat[0], "companyfacts_label")
 
+    def test_companyfacts_label_rule_rejects_rnd_policy_extension(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companyfacts = root / "companyfacts"
+            output = root / "out"
+            companyfacts.mkdir()
+            canonical = root / "canonical.csv"
+            ticker_map = root / "tickers.csv"
+            metadata = root / "metadata.csv"
+            write_canonical(canonical)
+            write_ticker_map(ticker_map)
+            write_companyfacts_namespaces(
+                companyfacts / "CIK0000320193.json",
+                {
+                    "aapl": {
+                        "CustomResearchAndDevelopmentPolicy": fact(
+                            "Research and Development Policy",
+                            25,
+                            "custompolicy",
+                        )
+                    }
+                },
+            )
+
+            written = normalize_us_sec_filings(
+                symbols=["AAPL"],
+                start_year=2025,
+                end_year=2025,
+                companyfacts_dir=companyfacts,
+                notes_root=root / "missing-notes",
+                output_dir=output,
+                ticker_map_path=ticker_map,
+                canonical_csv_path=canonical,
+                report_metadata_path=metadata,
+                use_edgartools=False,
+            )
+
+            self.assertEqual(written, [])
+
+    def test_cash_flow_direction_survives_companyfacts_mapping(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companyfacts = root / "companyfacts"
+            output = root / "out"
+            companyfacts.mkdir()
+            canonical = root / "canonical.csv"
+            ticker_map = root / "tickers.csv"
+            metadata = root / "metadata.csv"
+            write_canonical(canonical)
+            write_ticker_map(ticker_map)
+            write_companyfacts(
+                companyfacts / "CIK0000320193.json",
+                {"PaymentsToAcquireProductiveAssets": fact("Capital expenditures", -12, "capex")},
+            )
+
+            normalize_us_sec_filings(
+                symbols=["AAPL"],
+                start_year=2025,
+                end_year=2025,
+                companyfacts_dir=companyfacts,
+                notes_root=root / "missing-notes",
+                output_dir=output,
+                ticker_map_path=ticker_map,
+                canonical_csv_path=canonical,
+                report_metadata_path=metadata,
+                use_edgartools=False,
+            )
+
+            df = pd.read_csv(output / "us_normalized_AAPL.csv")
+            debug = pd.read_csv(output / "us_normalized_AAPL.debug.csv")
+
+            self.assertEqual(float(df.loc[df["canonical_account_id"].eq("CAPEX_PPE"), "normalized_amount"].iat[0]), 12)
+            self.assertEqual(float(df.loc[df["canonical_account_id"].eq("CAPEX_PPE"), "cash_effect_amount"].iat[0]), -12)
+            self.assertEqual(debug.loc[debug["canonical_account_id"].eq("CAPEX_PPE"), "cash_direction"].iat[0], "outflow")
+
     def test_notes_and_edgartools_fill_missing_values(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -312,6 +396,61 @@ class SecFilingsNormalizerTest(unittest.TestCase):
 
             self.assertEqual(float(df.loc[df["canonical_account_id"].eq("RND"), "normalized_amount"].iat[0]), 40)
             self.assertEqual(debug.loc[debug["canonical_account_id"].eq("RND"), "source"].iat[0], "notes")
+
+    def test_notes_tag_pattern_requires_statement_context(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companyfacts = root / "companyfacts"
+            notes = root / "notes" / "2025_12_notes"
+            output = root / "out"
+            companyfacts.mkdir()
+            notes.mkdir(parents=True)
+            canonical = root / "canonical.csv"
+            ticker_map = root / "tickers.csv"
+            metadata = root / "metadata.csv"
+            write_canonical(canonical)
+            write_ticker_map(ticker_map)
+            write_companyfacts(companyfacts / "CIK0000320193.json", {})
+            (notes / "sub.tsv").write_text(
+                "adsh\tcik\tname\tform\tperiod\tfy\tfp\tfiled\n"
+                "0000320193-26-000001\t320193\tApple Inc.\t10-K\t20251231\t2025\tFY\t20260130\n",
+                encoding="utf-8",
+            )
+            (notes / "num.tsv").write_text(
+                "adsh\ttag\tversion\tddate\tuom\tdimh\tvalue\n"
+                "0000320193-26-000001\tCustomResearchAndDevelopmentExpense\taapl/2025\t20251231\tUSD\t0x00000000\t40\n",
+                encoding="utf-8",
+            )
+            (notes / "tag.tsv").write_text(
+                "tag\tversion\tcustom\tabstract\tdatatype\tiord\tcrdr\ttlabel\tdoc\n"
+                "CustomResearchAndDevelopmentExpense\taapl/2025\t1\t0\tmonetaryItemType\tI\tD\tResearch and Development\tR&D\n",
+                encoding="utf-8",
+            )
+            (notes / "pre.tsv").write_text(
+                "adsh\treport\tline\tstmt\tinpth\ttag\tversion\tprole\tplabel\tnegating\n"
+                "0000320193-26-000001\t2\t1\tBS\t0\tCustomResearchAndDevelopmentExpense\taapl/2025\tterseLabel\tResearch and Development\t0\n",
+                encoding="utf-8",
+            )
+            (notes / "ren.tsv").write_text(
+                "adsh\treport\trfile\tmenucat\tshortname\tlongname\troleuri\tparentroleuri\tparentreport\tultparentrpt\n"
+                "0000320193-26-000001\t2\tH\tS\tBalance Sheet\tBalance Sheet\trole\t\t\t\n",
+                encoding="utf-8",
+            )
+
+            written = normalize_us_sec_filings(
+                symbols=["AAPL"],
+                start_year=2025,
+                end_year=2025,
+                companyfacts_dir=companyfacts,
+                notes_root=root / "notes",
+                output_dir=output,
+                ticker_map_path=ticker_map,
+                canonical_csv_path=canonical,
+                report_metadata_path=metadata,
+                use_edgartools=False,
+            )
+
+            self.assertEqual(written, [])
 
     def test_edgartools_fills_when_sec_sources_missing(self):
         with TemporaryDirectory() as tmp:

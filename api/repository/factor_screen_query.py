@@ -205,6 +205,7 @@ def build_factor_screen_query(
     conditions: list[FactorCondition | dict[str, Any]],
     *,
     as_of_date: str | date | None = None,
+    market: str | None = None,
     financial_basis: str | None = DEFAULT_FINANCIAL_BASIS,
     style_profile: str | None = DEFAULT_FACTOR_SCREEN_STYLE_PROFILE,
     sector_codes: list[str] | None = None,
@@ -238,6 +239,7 @@ def build_factor_screen_query(
     normalized_industry_group_codes = (
         _validate_sector_codes(industry_group_codes) if industry_group_codes else None
     )
+    normalized_market = _normalize_market(market)
     factor_ids = _validate_factor_ids(
         sorted({condition.factor_id for condition in normalized_conditions})
     )
@@ -259,18 +261,28 @@ def build_factor_screen_query(
         params["sector_codes"] = normalized_sector_codes
     if normalized_industry_group_codes:
         params["industry_group_codes"] = normalized_industry_group_codes
+    if normalized_market:
+        params["market_country"] = normalized_market.upper()
     if limit is not None:
         params["limit"] = int(limit)
 
     basis_filter = ""
     basis_date_filter = ""
+    mcap_basis_filter = ""
     if financial_basis:
         basis_filter = "\n        AND f.financial_basis = {financial_basis:String}"
         basis_date_filter = "\n        AND financial_basis = {financial_basis:String}"
+        mcap_basis_filter = "\n            AND financial_basis = {financial_basis:String}"
+    latest_date_factor_filter = (
+        f"\n        AND has({{{regular_factor_param}:Array(String)}}, factor_id)"
+        if regular_factor_ids
+        else "\n        AND factor_id = 'mcap_mil'"
+    )
 
     needs_security_universe = bool(
         normalized_sector_codes
         or normalized_industry_group_codes
+        or normalized_market
         or include_security_metadata
     )
     security_universe_cte = ""
@@ -286,14 +298,17 @@ def build_factor_screen_query(
             industry_group_filter = (
                 "\n        AND has({industry_group_codes:Array(String)}, iss.industry_group_code)"
             )
+        market_filter = ""
+        if normalized_market:
+            market_filter = "\n        AND sm.country = {market_country:String}"
         security_universe_cte = f""",
 security_universe AS (
     SELECT
         sm.security_id AS security_id,
         any(id.ticker) AS ticker,
-        any(iss.legal_name_ko) AS issuer_name,
+        if(empty(any(iss.legal_name_ko)), any(iss.legal_name_en), any(iss.legal_name_ko)) AS issuer_name,
         any(iss.legal_name_en) AS issuer_name_en,
-        any(iss.domicile_country) AS country,
+        any(sm.country) AS country,
         any(iss.sector_code) AS sector_code,
         any(iss.industry_group_code) AS industry_group_code,
         any(iss.industry_group_name) AS industry_group_name,
@@ -317,12 +332,13 @@ security_universe AS (
             argMax(factor_value, tuple(trade_date, updated_at)) AS market_cap
         FROM {_validate_table_name(factor_table)}
         WHERE factor_id = 'mcap_mil'
-            AND trade_date = (SELECT trade_date FROM latest_trade_date)
+            AND trade_date <= (SELECT latest_date FROM latest_trade_date)
             AND isFinite(factor_value)
+            {mcap_basis_filter.strip()}
         GROUP BY security_id
     ) AS mcap
         ON mcap.security_id = sm.security_id
-    WHERE sm.is_active{sector_filter}{industry_group_filter}
+    WHERE sm.is_active{market_filter}{sector_filter}{industry_group_filter}
     GROUP BY sm.security_id
 )"""
         regular_security_universe_join = (
@@ -379,11 +395,9 @@ security_universe AS (
         f"""
 latest_trade_date AS (
     SELECT
-        trade_date AS trade_date
+        max(trade_date) AS latest_date
     FROM {_validate_table_name(factor_table)}
-    WHERE trade_date <= {{as_of_date:Date}}{basis_date_filter}
-    ORDER BY trade_date DESC
-    LIMIT 1
+    WHERE trade_date <= {{as_of_date:Date}}{latest_date_factor_filter}{basis_date_filter}
 )""".strip()
     ]
     if regular_factor_ids:
@@ -408,12 +422,10 @@ selected_catalog AS (
             f"""
 latest_style_trade_date AS (
     SELECT
-        trade_date AS trade_date
+        max(trade_date) AS latest_date
     FROM {_validate_table_name(style_score_table)}
     WHERE trade_date <= {{as_of_date:Date}}
         AND style_profile = {{style_profile:String}}
-    ORDER BY trade_date DESC
-    LIMIT 1
 )
 """.strip()
         )
@@ -432,7 +444,7 @@ latest_style_trade_date AS (
     FROM {_validate_table_name(factor_table)} AS f
     INNER JOIN selected_catalog AS c
         ON c.factor_id = f.factor_id{regular_security_universe_join}
-    WHERE f.trade_date = (SELECT trade_date FROM latest_trade_date)
+    WHERE f.trade_date <= (SELECT latest_date FROM latest_trade_date)
         AND has({{{regular_factor_param}:Array(String)}}, f.factor_id)
         AND isFinite(f.factor_value){basis_filter}
     GROUP BY
@@ -496,6 +508,7 @@ def screen_stocks_by_factors(
     conditions: list[FactorCondition | dict[str, Any]],
     *,
     as_of_date: str | date | None = None,
+    market: str | None = None,
     financial_basis: str | None = DEFAULT_FINANCIAL_BASIS,
     style_profile: str | None = DEFAULT_FACTOR_SCREEN_STYLE_PROFILE,
     sector_codes: list[str] | None = None,
@@ -515,6 +528,7 @@ def screen_stocks_by_factors(
     query, params = build_factor_screen_query(
         conditions,
         as_of_date=as_of_date,
+        market=market,
         financial_basis=financial_basis,
         style_profile=style_profile,
         sector_codes=sector_codes,
@@ -635,14 +649,15 @@ def _build_style_score_value_sources(
         '{definition.factor_id}' AS factor_id,
         '{_escape_sql_string(definition.factor_name)}' AS factor_name,
         '{definition.value_direction}' AS value_direction,
-        toFloat64(s.{column_name}) AS factor_value,
-        s.trade_date AS trade_date
+        argMax(toFloat64(s.{column_name}), tuple(s.trade_date, s.updated_at)) AS factor_value,
+        max(s.trade_date) AS trade_date
     FROM {_validate_table_name(style_score_table)} AS s{security_universe_join}
-    WHERE s.trade_date = (SELECT trade_date FROM latest_style_trade_date)
+    WHERE s.trade_date <= (SELECT latest_date FROM latest_style_trade_date)
         AND s.style_profile = {{style_profile:String}}
         AND s.{column_name} IS NOT NULL
         AND isFinite(toFloat64(s.{column_name}))
         AND toFloat64(s.{column_name}) >= 0
+    GROUP BY s.security_id
 """.strip()
         )
     return sources
@@ -657,6 +672,15 @@ def _validate_style_score_column(column_name: str) -> str:
 
 def _normalize_style_profile(value: str | None) -> str:
     return str(value or DEFAULT_FACTOR_SCREEN_STYLE_PROFILE).strip().upper()
+
+
+def _normalize_market(value: str | None) -> str | None:
+    market = str(value or "").strip().lower()
+    if not market or market == "all":
+        return None
+    if market not in {"kr", "us"}:
+        raise ValueError("market must be one of: all, kr, us")
+    return market
 
 
 def _escape_sql_string(value: str) -> str:

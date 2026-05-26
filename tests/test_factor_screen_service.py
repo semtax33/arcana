@@ -85,6 +85,31 @@ class FactorScreenServiceTest(unittest.TestCase):
         _, params = screen_queries[0]
         self.assertEqual(params["style_profile"], "MINERVINI_ZWEIG")
 
+    def test_screen_passes_market_filter_to_repository_query(self):
+        client = FakeClickHouseClient()
+        request = FactorScreenRequestDto(
+            conditions=[
+                FactorConditionDto(
+                    factor_id="roe",
+                    mode="top_percent",
+                    top_percent=30,
+                )
+            ],
+            market="us",
+        )
+
+        FactorScreenService(client_factory=lambda: client).screen_stocks(request)
+
+        screen_queries = [
+            (query, params)
+            for query, params in client.queries
+            if "latest_factor_values AS" in query
+        ]
+        self.assertEqual(len(screen_queries), 1)
+        query, params = screen_queries[0]
+        self.assertEqual(params["market_country"], "US")
+        self.assertIn("AND sm.country = {market_country:String}", query)
+
 
 if __name__ == "__main__":
     unittest.main()

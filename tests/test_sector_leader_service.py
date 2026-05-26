@@ -73,6 +73,7 @@ class SectorLeaderServiceTest(unittest.TestCase):
             ).get_sector_leaders(level="sector")
 
         self.assertEqual(result.as_of_date, date(2026, 5, 23))
+        self.assertEqual(result.market, "KR")
         self.assertEqual(result.level, "sector")
         self.assertEqual(result.sort_by, "strong_stock_ratio")
         self.assertEqual(result.direction, "desc")
@@ -88,8 +89,28 @@ class SectorLeaderServiceTest(unittest.TestCase):
             params for query, params in client.queries if "FROM fact_daily_factor AS f" in query
         )
         self.assertEqual(metric_query_params["as_of_date"], "2026-05-23")
+        self.assertEqual(metric_query_params["market_country"], "KR")
         self.assertEqual(metric_query_params["near_high_ratio"], 0.97)
         self.assertIn("expected_eps_growth", metric_query_params["factor_ids"])
+
+    def test_get_sector_leaders_filters_requested_market(self):
+        client = FakeClickHouseClient(metric_rows=[_sector_row("10", strong_stock_ratio=50)])
+
+        with _rules_file() as rules_path:
+            result = SectorLeaderService(
+                client_factory=lambda: client,
+                today_factory=lambda: date(2026, 5, 23),
+                gics_rules_path=rules_path,
+            ).get_sector_leaders(level="sector", market="us")
+
+        self.assertEqual(result.market, "US")
+        metric_query, metric_query_params = next(
+            (query, params)
+            for query, params in client.queries
+            if "FROM fact_daily_factor AS f" in query
+        )
+        self.assertEqual(metric_query_params["market_country"], "US")
+        self.assertIn("AND sm.country = {market_country:String}", metric_query)
 
     def test_per_and_pbr_default_to_ascending_with_missing_values_last(self):
         client = FakeClickHouseClient(
@@ -173,7 +194,8 @@ class SectorLeaderServiceTest(unittest.TestCase):
             "lowerUTF8(coalesce(iss.legal_name_en, '')) NOT LIKE '%special purpose acquisition%'",
             query,
         )
-        self.assertIn("max(trade_date) AS latest_trade_date", query)
+        self.assertIn("max(pd.trade_date) AS latest_trade_date", query)
+        self.assertIn("AND sm.country = {market_country:String}", query)
         self.assertIn("trade_date = (SELECT latest_trade_date FROM latest_market_date)", query)
         self.assertIn("trade_date < (SELECT latest_trade_date FROM latest_market_date)", query)
         self.assertIn("h.prior_high_52w IS NOT NULL", query)

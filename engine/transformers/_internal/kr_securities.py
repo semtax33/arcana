@@ -15,6 +15,8 @@ from engine.transformers._internal.sec_filings import load_sec_ticker_map
 
 
 DEFAULT_GICS_RULES_PATH = DATA_LAKE.rules("gics_rules.yaml")
+KR_GICS_RULES_PATH = DATA_LAKE.rules("gics_rules_kr.yaml")
+US_GICS_RULES_PATH = DATA_LAKE.rules("gics_rules_us.yaml")
 UNMAPPED = "UNMAPPED"
 
 
@@ -76,6 +78,14 @@ def pick_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
     return None
 
 
+def first_present_text(row: pd.Series, candidates: list[str]) -> str:
+    for column in candidates:
+        value = normalize_text(row.get(column, ""))
+        if value:
+            return value
+    return ""
+
+
 def match_patterns(
     patterns: list[str] | None,
     text: str,
@@ -88,14 +98,15 @@ def match_patterns(
 
 
 def get_row_fields(row: pd.Series) -> dict[str, str]:
-    company = normalize_text(row.get("회사명", ""))
-    industry = normalize_text(row.get("업종", ""))
-    product = normalize_text(row.get("주요제품", row.get("주요 제품", "")))
+    company = first_present_text(row, ["회사명", "company_name", "legal_name_en", "title", "security_name"])
+    industry = first_present_text(row, ["업종", "industry", "sector", "security_name"])
+    product = first_present_text(row, ["주요제품", "주요 제품", "product", "business", "security_name"])
+    ticker = first_present_text(row, ["종목코드", "ticker", "symbol"])
     return {
         "company": company,
         "industry": industry,
         "product": product,
-        "any_text": f"{company} {industry} {product}",
+        "any_text": f"{ticker} {company} {industry} {product}",
     }
 
 
@@ -421,8 +432,19 @@ def get_normalized_sector_and_issuer(market: str = "kr") -> pd.DataFrame:
     raise ValueError(f"unsupported market: {market}")
 
 
+def gics_rules_path_for_market(market: str = "kr") -> Path:
+    market = _normalize_market(market)
+    market_path = {
+        "kr": KR_GICS_RULES_PATH,
+        "us": US_GICS_RULES_PATH,
+    }.get(market)
+    if market_path is None:
+        raise ValueError(f"unsupported market: {market}")
+    return market_path if market_path.exists() else DEFAULT_GICS_RULES_PATH
+
+
 def _get_kr_normalized_sector_and_issuer() -> pd.DataFrame:
-    config = load_gics_config(DEFAULT_GICS_RULES_PATH)
+    config = load_gics_config(gics_rules_path_for_market("kr"))
     fetch_sector, kospi_kosdaq_corp_list = _load_company_functions()
     df = fetch_sector()
     market_df = kospi_kosdaq_corp_list()
@@ -546,26 +568,44 @@ def _get_us_ticker_map() -> pd.DataFrame:
             "title": title,
         }
     )
-    return fallback.loc[fallback["ticker"].astype(str).str.strip().ne("")].drop_duplicates("ticker").reset_index(drop=True)
+    return (
+        fallback.loc[fallback["ticker"].astype(str).str.strip().ne("")]
+        .drop_duplicates("ticker")
+        .reset_index(drop=True)
+    )
 
 
 def _get_us_normalized_sector_and_issuer() -> pd.DataFrame:
-    config = market_config("us")
+    market = market_config("us")
+    gics_config = load_gics_config(gics_rules_path_for_market("us"))
     ticker_map = _get_us_ticker_map()
-    tickers = ticker_map["ticker"].map(config.normalize_symbol)
+    tickers = ticker_map["ticker"].map(market.normalize_symbol)
     titles = ticker_map["title"].fillna("").astype(str)
+    mapped = attach_gics_sector(
+        pd.DataFrame(
+            {
+                "종목코드": tickers,
+                "회사명": titles.where(titles.str.strip().ne(""), tickers),
+                "업종": titles,
+                "주요제품": titles,
+                "ticker": tickers,
+                "title": titles,
+            }
+        ),
+        gics_config,
+    )
 
     return pd.DataFrame(
         {
-            "issuer_id": tickers.map(lambda ticker: issuer_id_of(ticker, config)),
+            "issuer_id": tickers.map(lambda ticker: issuer_id_of(ticker, market)),
             "legal_name_ko": "",
             "legal_name_en": titles.where(titles.str.strip().ne(""), tickers),
-            "domicile_country": config.country,
+            "domicile_country": market.country,
             "region": "",
             "industry_schema": "GICS",
-            "sector_code": UNMAPPED,
-            "industry_group_code": UNMAPPED,
-            "industry_group_name": UNMAPPED,
+            "sector_code": mapped["gics_sector_code"].map(lambda code: str(code)),
+            "industry_group_code": mapped["gics_industry_group_code"].map(lambda code: str(code)),
+            "industry_group_name": mapped["gics_industry_group_name"].map(lambda name: str(name)),
             "is_active": True,
         }
     )

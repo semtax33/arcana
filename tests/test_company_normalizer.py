@@ -3,6 +3,7 @@ import unittest
 
 import pandas as pd
 
+from engine.transformers import securities
 from engine.transformers.securities import attach_gics_sector, load_gics_config
 
 
@@ -18,6 +19,18 @@ class CompanyNormalizerGicsTest(unittest.TestCase):
         self.assertEqual(len(config["sectors"]), 11)
         self.assertEqual(len(config["industry_groups"]), 25)
         self.assertEqual(config["industry_groups"]["4530"], "Semiconductors & Semiconductor Equipment")
+
+    def test_market_gics_configs_are_split_for_kr_and_us(self):
+        kr_path = securities.gics_rules_path_for_market("kr")
+        us_path = securities.gics_rules_path_for_market("us")
+
+        self.assertEqual(kr_path.name, "gics_rules_kr.yaml")
+        self.assertEqual(us_path.name, "gics_rules_us.yaml")
+        self.assertEqual(
+            load_gics_config(kr_path)["industry_groups"]["4530"],
+            "Semiconductors & Semiconductor Equipment",
+        )
+        self.assertIn("AAPL", load_gics_config(us_path)["manual_overrides"])
 
     def test_attach_gics_sector_adds_sector_and_industry_group(self):
         mapped = attach_gics_sector(
@@ -89,6 +102,26 @@ class CompanyNormalizerGicsTest(unittest.TestCase):
         self.assertEqual(mapped.loc[0, "gics_sector_code"], "UNMAPPED")
         self.assertEqual(mapped.loc[0, "gics_industry_group_code"], "UNMAPPED")
         self.assertEqual(mapped.loc[0, "gics_industry_group_confidence"], 0.0)
+
+    def test_us_normalized_issuers_apply_gics_mapping(self):
+        ticker_map = pd.DataFrame(
+            [
+                {"cik": "320193", "ticker": "AAPL", "title": "Apple Inc."},
+                {"cik": "19617", "ticker": "JPM", "title": "JPMorgan Chase & Co."},
+                {"cik": "34088", "ticker": "XOM", "title": "Exxon Mobil Corporation"},
+                {"cik": "999999", "ticker": "DNA", "title": "Example Therapeutics Inc."},
+            ]
+        )
+
+        with unittest.mock.patch.object(securities, "_get_us_ticker_map", return_value=ticker_map):
+            result = securities.get_normalized_sector_and_issuer(market="us")
+
+        by_issuer = result.set_index("issuer_id")
+        self.assertEqual(by_issuer.loc["ISSUER_US_AAPL", "sector_code"], "45")
+        self.assertEqual(by_issuer.loc["ISSUER_US_AAPL", "industry_group_code"], "4520")
+        self.assertEqual(by_issuer.loc["ISSUER_US_JPM", "industry_group_code"], "4010")
+        self.assertEqual(by_issuer.loc["ISSUER_US_XOM", "industry_group_code"], "1010")
+        self.assertEqual(by_issuer.loc["ISSUER_US_DNA", "industry_group_code"], "3520")
 
 
 def _minimal_config():

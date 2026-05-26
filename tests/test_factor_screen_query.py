@@ -73,8 +73,8 @@ class FactorScreenQueryTest(unittest.TestCase):
         self.assertIn("latest_trade_date AS", query)
         self.assertIn("any(factor_name) AS factor_name", query)
         self.assertIn("GROUP BY factor_id", query)
-        self.assertIn("ORDER BY trade_date DESC", query)
-        self.assertIn("f.trade_date = (SELECT trade_date FROM latest_trade_date)", query)
+        self.assertIn("max(trade_date) AS latest_date", query)
+        self.assertIn("f.trade_date <= (SELECT latest_date FROM latest_trade_date)", query)
         self.assertIn("has({factor_ids:Array(String)}, f.factor_id)", query)
         self.assertNotIn("HAVING factor_value >= 0", query)
         self.assertIn("f.security_id AS security_id", query)
@@ -137,11 +137,25 @@ class FactorScreenQueryTest(unittest.TestCase):
         self.assertIn("latest_style_trade_date AS", query)
         self.assertIn("FROM arcana.fact_daily_style_score AS s", query)
         self.assertIn("'style_total_score' AS factor_id", query)
-        self.assertIn("toFloat64(s.total_score) AS factor_value", query)
+        self.assertIn("argMax(toFloat64(s.total_score), tuple(s.trade_date, s.updated_at)) AS factor_value", query)
         self.assertIn("UNION ALL", query)
         self.assertIn("has({regular_factor_ids:Array(String)}, f.factor_id)", query)
         self.assertIn("factor_value >= {condition_0_value:Float64}", query)
         self.assertIn("style_0_value", query)
+
+    def test_build_factor_screen_query_filters_market_and_uses_latest_values_before_as_of(self):
+        query, params = build_factor_screen_query(
+            [FactorCondition.top("roe", 30)],
+            as_of_date="2026-05-17",
+            market="us",
+            include_security_metadata=True,
+        )
+
+        self.assertEqual(params["market_country"], "US")
+        self.assertIn("AND sm.country = {market_country:String}", query)
+        self.assertIn("f.trade_date <= (SELECT latest_date FROM latest_trade_date)", query)
+        self.assertIn("argMax(f.factor_value, tuple(f.trade_date, f.updated_at)) AS factor_value", query)
+        self.assertNotIn("f.trade_date = (SELECT trade_date FROM latest_trade_date)", query)
 
     def test_style_score_aliases_are_canonicalized(self):
         query, params = build_factor_screen_query(
