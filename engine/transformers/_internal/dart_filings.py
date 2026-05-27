@@ -70,6 +70,101 @@ UNIT_SCALE_OUTLIER_FACTORS = (1_000, 1_000_000)
 UNIT_SCALE_OUTLIER_MIN_SUPPORT = 3
 UNIT_SCALE_OUTLIER_MULTIPLE = 100
 UNIT_SCALE_REPAIRED_MULTIPLE = 10
+COMMENT_SECTION_HEADER_TAGS = {"p", "div", "span", "h1", "h2", "h3", "h4", "h5", "h6"}
+COMMENT_RND_GENERIC_ASSET_LABELS = {"개발비", "개발비등"}
+COMMENT_RND_EXPENSE_CONTEXT_TOKENS = (
+    "판매비",
+    "관리비",
+    "판관비",
+    "비용",
+    "손익",
+    "경상",
+    "매출원가",
+    "영업비용",
+)
+COMMENT_RND_ASSET_CONTEXT_TOKENS = (
+    "무형자산",
+    "투자부동산",
+    "장부금액",
+    "취득",
+    "증가",
+    "상각",
+    "처분",
+    "자산",
+)
+COMMENT_BS_STOCK_CANONICAL_IDS = {
+    "TRADE_RECEIVABLES",
+    "TRADE_AND_OTHER_RECEIVABLES",
+    "TRADE_PAYABLES",
+    "TRADE_AND_OTHER_PAYABLES",
+    "INVENTORIES",
+}
+COMMENT_BS_STOCK_CONTEXT_TOKENS = {
+    "TRADE_RECEIVABLES": ("매출채권", "수취채권", "채권"),
+    "TRADE_AND_OTHER_RECEIVABLES": ("매출채권", "수취채권", "채권"),
+    "TRADE_PAYABLES": ("매입채무", "지급채무", "채무"),
+    "TRADE_AND_OTHER_PAYABLES": ("매입채무", "지급채무", "채무"),
+    "INVENTORIES": ("재고자산", "재고"),
+}
+COMMENT_BS_STOCK_BAD_LABEL_TOKENS = (
+    "대손",
+    "충당금",
+    "손상",
+    "평가",
+    "환입",
+    "증가",
+    "감소",
+    "증감",
+    "변동",
+    "취득",
+    "처분",
+    "상각",
+    "비용",
+    "수익",
+    "차손",
+    "원가",
+)
+COMMENT_BS_STOCK_BAD_CONTEXT_TOKENS = (
+    "현금흐름",
+    "영업활동",
+    "운전자본",
+    "자산부채",
+    "증가",
+    "감소",
+    "증감",
+    "변동",
+    "손상",
+    "평가",
+    "환입",
+    "처분",
+    "취득",
+    "비용",
+    "수익",
+    "차손",
+)
+COMMENT_BS_STOCK_TOTAL_LABELS = {"합계", "총계", "계"}
+COMMENT_AMORTIZATION_CANONICAL_IDS = {"AMORTIZATION", "DNA_IS"}
+COMMENT_AMORTIZATION_BAD_LABEL_TOKENS = (
+    "누계",
+    "기초",
+    "기말",
+    "장부금액",
+    "취득",
+    "처분",
+    "손상",
+    "환입",
+)
+COMMENT_SGNA_TOTAL_LABELS = {
+    "합계",
+    "총계",
+    "계",
+    "판매비와관리비",
+    "판매비및관리비",
+    "판매관리비",
+    "판매비와일반관리비",
+    "판매및일반관리비",
+}
+COMMENT_SGNA_CONTEXT_TOKENS = ("판매비와관리비", "판매비및관리비", "판매관리비", "판관비")
 
 
 def safe_str(value: Any) -> str:
@@ -590,7 +685,7 @@ def text_of(tag: Tag) -> str:
     return " ".join(tag.get_text(" ", strip=True).split())
 
 def looks_like_comment_section_header(tag: Tag) -> bool:
-    if tag.name != "p":
+    if tag.name not in COMMENT_SECTION_HEADER_TAGS:
         return False
 
     classes = tag.get("class", [])
@@ -604,14 +699,49 @@ def looks_like_comment_section_header(tag: Tag) -> bool:
     return bool(re.match(r"^\s*\d+\.\s+", text))
 
 
+def parse_unit_factor_from_text(text: str) -> int | None:
+    normalized = safe_str(text).replace("\xa0", " ").replace("　", " ")
+    if "단위" not in normalized:
+        return None
+
+    for unit_name in sorted(UNITS, key=len, reverse=True):
+        if re.search(rf"단위\s*[:：]\s*[^()]*{re.escape(unit_name)}", normalized):
+            return UNITS[unit_name]
+
+    return None
+
+
+def table_has_numeric_data(table: Tag) -> bool:
+    for tr in table.select("tr"):
+        cells = tr.find_all(["td", "th"], recursive=False)
+        if len(cells) < 2:
+            continue
+
+        cell_texts = [clean_text(cell) for cell in cells]
+        if any(parse_number(text) is not None for text in cell_texts[1:]):
+            return True
+
+    return False
+
+
+def looks_like_comment_data_table(table: Tag) -> bool:
+    if table.name != "table":
+        return False
+
+    if table.get("border") == "1":
+        return True
+
+    return table_has_numeric_data(table)
+
+
 def iter_comment_section_headers(soup: BeautifulSoup):
     seen: set[int] = set()
 
-    for header in soup.select("p.table-group-xbrl"):
+    for header in soup.select(".table-group-xbrl"):
         seen.add(id(header))
         yield header
 
-    for header in soup.find_all("p"):
+    for header in soup.find_all(list(COMMENT_SECTION_HEADER_TAGS)):
         if id(header) in seen:
             continue
         if looks_like_comment_section_header(header):
@@ -619,12 +749,15 @@ def iter_comment_section_headers(soup: BeautifulSoup):
 
 
 def iter_section_tables(soup: BeautifulSoup, section_name: str):
-    unit_re = re.compile(r"\(\s*단위\s*:\s*[^)]+?원\s*\)")
     scan_all_sections = safe_str(section_name).strip() in {"*", "__all__", "ALL"}
+    yielded_tables: set[int] = set()
 
     for header in iter_comment_section_headers(soup):
         section_title = text_of(header)
         unit_value = 1
+        parsed_unit = parse_unit_factor_from_text(section_title)
+        if parsed_unit is not None:
+            unit_value = parsed_unit
 
         if (
             not scan_all_sections
@@ -639,12 +772,13 @@ def iter_section_tables(soup: BeautifulSoup, section_name: str):
             if isinstance(node, Tag) and looks_like_comment_section_header(node):
                 break
             
-            if isinstance(node, Tag) and node.name == "table":
-                unit_matches = unit_re.findall(node.get_text())
-                if len(unit_matches) > 0:
-                    unit_value = parse_unit_factor(unit_matches[0])
-                # 실제 숫자 테이블 후보
-                elif node.get("border") == "1":
+            if isinstance(node, Tag):
+                parsed_unit = parse_unit_factor_from_text(node.get_text(" ", strip=True))
+                if parsed_unit is not None:
+                    unit_value = parsed_unit
+
+                if node.name == "table" and looks_like_comment_data_table(node):
+                    yielded_tables.add(id(node))
                     yield {
                         "unit": safe_str(unit_value),
                         "section_title": section_title,
@@ -652,6 +786,37 @@ def iter_section_tables(soup: BeautifulSoup, section_name: str):
                     }
 
             node = node.find_next_sibling()
+
+    if not scan_all_sections:
+        return
+
+    for table in soup.find_all("table"):
+        if id(table) in yielded_tables or not looks_like_comment_data_table(table):
+            continue
+
+        unit_value = 1
+        section_title = ""
+        for previous in table.find_all_previous(list(COMMENT_SECTION_HEADER_TAGS), limit=3):
+            text = text_of(previous)
+            if not text:
+                continue
+            parsed_unit = parse_unit_factor_from_text(text)
+            if parsed_unit is not None:
+                unit_value = parsed_unit
+            if not section_title and len(text) <= 300:
+                section_title = text
+            if looks_like_comment_section_header(previous):
+                break
+
+        parsed_unit = parse_unit_factor_from_text(table.get_text(" ", strip=True))
+        if parsed_unit is not None:
+            unit_value = parsed_unit
+
+        yield {
+            "unit": safe_str(unit_value),
+            "section_title": section_title or "주석",
+            "table": table,
+        }
 
 def clean_text(tag: Tag | None) -> str:
     if tag is None:
@@ -782,6 +947,8 @@ def extract_rows_from_dart_comment_soup(
                 "label": hit["matched_label"],
                 "raw_value": hit["raw_value"],
                 "value": hit["value"],
+                "row_text": hit.get("row_text", ""),
+                "unit": item["unit"],
             })
 
     unique_rows = {}
@@ -886,13 +1053,97 @@ def infer_comment_html_path(
     )
 
 
+def comment_rule_priority(rule: dict[str, Any]) -> int:
+    raw_priority = rule.get("priority", rule.get("comment_priority", 500))
+    try:
+        return int(raw_priority)
+    except Exception:
+        return 500
+
+
+def comment_rule_confidence(rule: dict[str, Any]) -> str:
+    confidence = safe_str(rule.get("confidence")).strip().lower()
+    if confidence:
+        return confidence
+
+    rule_id = safe_str(rule.get("id"))
+    if "sgna" in rule_id:
+        return "high"
+    if "expense_nature" in rule_id:
+        return "high"
+    if "intangible" in rule_id:
+        return "medium"
+    if safe_str(rule.get("section_name")).strip() in {"*", "__all__", "ALL"}:
+        return "low"
+    return "medium"
+
+
+def sorted_comment_rules(comment_rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        comment_rules,
+        key=lambda rule: (comment_rule_priority(rule), safe_str(rule.get("id"))),
+    )
+
+
+def is_comment_hit_allowed(rule: dict[str, Any], hit: dict[str, Any]) -> bool:
+    canonical_id = safe_str(hit.get("key")).strip()
+    label = normalize_account_name(hit.get("matched_label") or hit.get("label"))
+    context_text = normalize_account_name(
+        " ".join(
+            [
+                safe_str(rule.get("section_name")),
+                safe_str(hit.get("section_title")),
+                safe_str(hit.get("row_text")),
+            ]
+        )
+    )
+
+    if canonical_id in COMMENT_BS_STOCK_CANONICAL_IDS:
+        allowed_tokens = COMMENT_BS_STOCK_CONTEXT_TOKENS.get(canonical_id, ())
+        has_allowed_context = any(token in context_text for token in allowed_tokens)
+
+        if any(token in label for token in COMMENT_BS_STOCK_BAD_LABEL_TOKENS):
+            return False
+
+        if label in COMMENT_BS_STOCK_TOTAL_LABELS and not has_allowed_context:
+            return False
+
+        if any(token in context_text for token in COMMENT_BS_STOCK_BAD_CONTEXT_TOKENS):
+            return False
+
+        return has_allowed_context
+
+    if canonical_id in COMMENT_AMORTIZATION_CANONICAL_IDS:
+        if any(token in label for token in COMMENT_AMORTIZATION_BAD_LABEL_TOKENS):
+            return False
+
+        return "상각" in label or "상각" in context_text
+
+    if canonical_id == "SGNA":
+        if not any(token in context_text for token in COMMENT_SGNA_CONTEXT_TOKENS):
+            return False
+
+        return label in COMMENT_SGNA_TOTAL_LABELS
+
+    if canonical_id != "RND":
+        return True
+
+    if label not in COMMENT_RND_GENERIC_ASSET_LABELS:
+        return True
+
+    has_expense_context = any(token in context_text for token in COMMENT_RND_EXPENSE_CONTEXT_TOKENS)
+    has_asset_context = any(token in context_text for token in COMMENT_RND_ASSET_CONTEXT_TOKENS)
+
+    return has_expense_context or not has_asset_context
+
+
 def extract_comment_hits_by_rule(
     soup: BeautifulSoup,
     comment_rules: list[dict[str, Any]],
 ) -> dict[int, list[dict[str, Any]]]:
     section_groups: dict[str, dict[str, Any]] = {}
 
-    for rule in comment_rules:
+    for rule in sorted_comment_rules(comment_rules):
         section_name = safe_str(rule.get("section_name"))
         group = section_groups.setdefault(
             section_name,
@@ -923,6 +1174,12 @@ def extract_comment_hits_by_rule(
             )
 
             for hit in hits:
+                if not is_comment_hit_allowed(group["rule_by_key"].get(hit["key"], {}), {
+                    **hit,
+                    "section_title": item["section_title"],
+                }):
+                    continue
+
                 key = hit["key"]
                 if key in unique_rows:
                     continue
@@ -933,6 +1190,8 @@ def extract_comment_hits_by_rule(
                     "label": hit["matched_label"],
                     "raw_value": hit["raw_value"],
                     "value": hit["value"],
+                    "row_text": hit.get("row_text", ""),
+                    "unit": item["unit"],
                 }
 
         for row in unique_rows.values():
@@ -996,7 +1255,7 @@ def _map_comment_rule_hits_to_df(
                 "amount": safe_str(raw_amount),
                 "raw_amount": safe_str(raw_amount),
                 "amount_raw": safe_str(hit.get("raw_value")),
-                "unit_factor": "",
+                "unit_factor": safe_str(hit.get("unit")),
                 "table_title": safe_str(hit.get("section_title")),
                 "section_context": "주석",
                 "parent_context": safe_str(rule.get("section_name")),
@@ -1025,6 +1284,10 @@ def _map_comment_rule_hits_to_df(
             amount_policy = sign_decision.amount_policy
             cash_direction = sign_decision.cash_direction
             canonical_name = mapping_engine.canonical_name(canonical_id)
+
+        confidence = comment_rule_confidence(rule)
+        if confidence:
+            reason = f"{reason} / comment_confidence={confidence}"
 
         normalized_amount = apply_amount_policy(raw_amount, amount_policy)
         cash_effect_amount = apply_cash_direction(normalized_amount, cash_direction)
@@ -1056,9 +1319,13 @@ def _map_comment_rule_hits_to_df(
                     "parent_context": safe_str(rule.get("section_name")),
                     "context_path": safe_str(hit.get("section_title")),
                     "context_rule_id": safe_str(rule.get("id")),
-                    "context_reason": safe_str(rule.get("_source")),
+                    "context_reason": (
+                        f"{safe_str(rule.get('_source'))};"
+                        f"comment_confidence={confidence};"
+                        f"comment_priority={comment_rule_priority(rule)}"
+                    ),
                     "amount_raw": safe_str(hit.get("raw_value")),
-                    "unit_factor": "",
+                    "unit_factor": safe_str(hit.get("unit")),
                 }
             )
 
@@ -1083,7 +1350,7 @@ def extract_mapped_comment_rows(
     soup = BeautifulSoup(html, "lxml")
     hits_by_rule = extract_comment_hits_by_rule(soup, comment_rules)
 
-    for rule in comment_rules:
+    for rule in sorted_comment_rules(comment_rules):
         hits = hits_by_rule.get(id(rule), [])
 
         if not hits:

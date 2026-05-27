@@ -323,6 +323,11 @@ companyfacts_rules:
     label_patterns:
       - (?i)\boperating\s+income\s*(\(loss\))?\b
       - (?i)\bincome\s+from\s+operations\b
+  - canonical_id: EBITDA
+    fs_type: IS
+    primary_tags:
+      - us-gaap:EarningsBeforeInterestTaxesDepreciationAmortization
+      - us-gaap:EarningsBeforeInterestTaxesDepreciationAndAmortization
   - canonical_id: PBT
     fs_type: IS
     primary_tags:
@@ -431,6 +436,18 @@ companyfacts_rules:
     primary_tags: [us-gaap:EarningsPerShareDiluted]
     alternate_tags:
       - ifrs-full:DilutedEarningsLossPerShare
+  - canonical_id: BASIC_SHARES
+    fs_type: IS
+    primary_tags:
+      - us-gaap:WeightedAverageNumberOfSharesOutstandingBasic
+  - canonical_id: DILUTED_SHARES
+    fs_type: IS
+    primary_tags:
+      - us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding
+  - canonical_id: COMMON_SHARES_OUTSTANDING
+    fs_type: BS
+    primary_tags:
+      - dei:EntityCommonStockSharesOutstanding
   - canonical_id: OTHER_COMPREHENSIVE_INCOME
     fs_type: IS
     primary_tags:
@@ -541,7 +558,10 @@ companyfacts_rules:
   - canonical_id: DEPRECIATION_EXPENSE
     fs_type: CF
     primary_tags: [us-gaap:DepreciationDepletionAndAmortization]
-    alternate_tags: [us-gaap:Depreciation]
+    alternate_tags:
+      - us-gaap:Depreciation
+      - us-gaap:DepreciationDepletionAndAmortizationExpense
+      - us-gaap:DepreciationAndAmortization
     amount_policy: abs
     label_patterns:
       - (?i)\bdepreciation\b
@@ -551,6 +571,7 @@ companyfacts_rules:
     alternate_tags:
       - us-gaap:FiniteLivedIntangibleAssetsAmortizationExpense
       - us-gaap:AmortizationOfAcquiredIntangibleAssets
+      - us-gaap:AmortizationOfFinancingCosts
     amount_policy: abs
     label_patterns:
       - (?i)\bamortization\b

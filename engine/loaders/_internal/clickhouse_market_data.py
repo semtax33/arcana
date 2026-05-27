@@ -13,7 +13,9 @@ from engine.transformers.market_data import (
     normalize_price,
     normalize_shares,
     normalize_us_price,
+    normalize_us_shares,
     read_normalized_us_price,
+    read_normalized_us_shares,
 )
 
 
@@ -98,10 +100,9 @@ def insert_shares(
     client: Any = None,
 ):
     market = _normalize_market(market)
-    if market != "kr":
-        raise ValueError("shares loading is currently supported only for market='kr'")
+    source = _normalize_source(source)
 
-    normalized_shares_df = create_shares_dataframe(source=source)
+    normalized_shares_df = create_shares_dataframe(market=market, source=source)
     normalized_shares_df.attrs["inserted_rows"] = 0
     if normalized_shares_df.empty or dry_run:
         normalized_shares_df.attrs["inserted_rows"] = len(normalized_shares_df)
@@ -139,11 +140,18 @@ def create_price_dataframe(
     raise ValueError(f"unsupported market: {market}")
 
 
-def create_shares_dataframe(*, source: str = "bronze") -> pd.DataFrame:
+def create_shares_dataframe(*, market: str = "kr", source: str = "bronze") -> pd.DataFrame:
+    market = _normalize_market(market)
     source = _normalize_source(source)
-    if source == "silver":
-        return _read_silver_market_csv(DATA_LAKE.silver("krx", "shares", market_csv_name("normalized_shares")))
-    return normalize_shares(str(DATA_LAKE.bronze("krx", "shares", "*")))
+    if market == "kr":
+        if source == "silver":
+            return _read_silver_market_csv(DATA_LAKE.silver("krx", "shares", market_csv_name("normalized_shares")))
+        return normalize_shares(str(DATA_LAKE.bronze("krx", "shares", "*")))
+    if market == "us":
+        if source == "silver":
+            return read_normalized_us_shares()
+        return normalize_us_shares(str(DATA_LAKE.bronze("yfinance", "price", "*.csv")))
+    raise ValueError(f"unsupported market: {market}")
 
 
 def main():
@@ -181,10 +189,6 @@ def main():
         print(f"prepared price rows={result.attrs.get('inserted_rows', len(result)):,}", flush=True)
 
     if args.target in {"all", "shares"}:
-        if args.market != "kr":
-            if args.target == "shares":
-                raise SystemExit("shares target is currently supported only for market=kr")
-            return
         result = insert_shares(market=args.market, source=args.source, dry_run=args.dry_run)
         print(f"prepared share rows={result.attrs.get('inserted_rows', len(result)):,}", flush=True)
 

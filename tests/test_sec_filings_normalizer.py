@@ -14,6 +14,7 @@ from engine.transformers.sec_filings import normalize_us_sec_filings
 from engine.transformers._internal.sec_filings import (
     US_MAPPING_RULE_PATH,
     SecFactCandidate,
+    _fact_units_for_rule,
     _notes_rule_matches_tag,
     add_formula_derived_candidates,
     dedupe_candidates,
@@ -122,6 +123,18 @@ def fact(label: str, value: float, tag: str) -> dict:
 
 
 class SecFilingsNormalizerTest(unittest.TestCase):
+    def test_share_rules_only_accept_share_units(self):
+        fact = {
+            "units": {
+                "USD": [{"val": 1_000}],
+                "shares": [{"val": 100}],
+            }
+        }
+
+        units = _fact_units_for_rule(fact, "COMMON_SHARES_OUTSTANDING")
+
+        self.assertEqual(units, [("shares", [{"val": 100}])])
+
     def test_formula_derived_candidates_fill_only_accounting_identities(self):
         base = {
             "symbol": "AAPL",

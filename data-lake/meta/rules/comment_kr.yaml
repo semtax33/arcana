@@ -1,5 +1,7 @@
 comment_rules:
   - id: cash_flow_note_common
+    priority: 100
+    confidence: high
     section_name: 현금흐름
     target_patterns:
       DEPRECIATION_EXPENSE: "^감가상각비$"
@@ -10,11 +12,18 @@ comment_rules:
         - "^무형자산\\s*상각$"
         - "^영업권\\s*이외의\\s*무형자산\\s*상각비$"
       BAD_DEBT_EXPENSE: "^대손상각비$"
-      TRADE_RECEIVABLES: "^매출채권$"
 
   - id: intangible_assets_note_common
+    priority: 300
+    confidence: medium
     section_name: 무형자산
     target_patterns:
+      AMORTIZATION:
+        - "^무형자산\\s*상각비$"
+        - "^무형자산\\s*상각$"
+        - "^당기\\s*상각비$"
+        - "^상각비$"
+        - "^영업권\\s*이외의\\s*무형자산\\s*상각비$"
       RND:
         - "^연구개발비$"
         - "^연구와 개발 비용$"
@@ -34,7 +43,49 @@ comment_rules:
         - "^위탁연구비$"
         - "^경상개발연구비$"
 
+  - id: trade_receivables_note_balance
+    priority: 180
+    confidence: high
+    section_name: 매출채권
+    target_patterns:
+      TRADE_RECEIVABLES:
+        - "^매출\\s*채권$"
+        - "^매출채권$"
+        - "^유동\\s*매출채권$"
+        - "^단기\\s*매출채권$"
+        - "^장기\\s*매출채권$"
+        - "^매출채권\\s*순액$"
+        - "^매출채권\\(순액\\)$"
+
+  - id: trade_payables_note_balance
+    priority: 180
+    confidence: high
+    section_name: 매입채무
+    target_patterns:
+      TRADE_PAYABLES:
+        - "^매입\\s*채무$"
+        - "^매입채무$"
+        - "^유동\\s*매입채무$"
+        - "^단기\\s*매입채무$"
+        - "^장기\\s*매입채무$"
+
+  - id: inventories_note_balance
+    priority: 180
+    confidence: high
+    section_name: 재고자산
+    target_patterns:
+      INVENTORIES:
+        - "^재고\\s*자산$"
+        - "^재고자산$"
+        - "^유동\\s*재고자산$"
+        - "^기말\\s*재고자산$"
+        - "^합계$"
+        - "^총계$"
+        - "^계$"
+
   - id: expense_nature_note_amortization
+    priority: 150
+    confidence: high
     section_name: 비용의 성격
     target_patterns:
       DNA_IS:
@@ -68,12 +119,31 @@ comment_rules:
         - "^연구와\\s*개발\\s*비용$"
         - "^연구\\s*및\\s*개발비(?:용)?$"
         - "^소프트웨어개발비$"
+        - "^제품개발비$"
+        - "^상품개발비$"
+        - "^신제품개발비$"
+        - "^임상시험비$"
+        - "^임상개발비$"
+        - "^연구용역비$"
+        - "^개발용역비$"
+        - "^외주개발비$"
+        - "^연구재료비$"
+        - "^(?:경상)?(?:연구|개발|연구개발|기술개발|제품개발|상품개발|소프트웨어개발|임상(?:시험|개발)|시험연구|위탁연구|외주개발|연구용역|개발용역|연구재료)(?:비|비용|원가|수수료)?$"
         - "^연구개발비등$"
         - "^개발비등$"
 
   - id: sgna_note_amortization
+    priority: 100
+    confidence: high
     section_name: 판매비와관리비
     target_patterns:
+      SGNA:
+        - "^합계$"
+        - "^총계$"
+        - "^계$"
+        - "^판매비\\s*와\\s*관리비$"
+        - "^판매비\\s*및\\s*관리비$"
+        - "^판매관리비$"
       DNA_IS:
         - "^무형자산\\s*상각비$"
         - "^영업권\\s*이외의\\s*무형자산\\s*상각비$"
@@ -105,12 +175,31 @@ comment_rules:
         - "^연구와\\s*개발\\s*비용$"
         - "^연구\\s*및\\s*개발비(?:용)?$"
         - "^소프트웨어개발비$"
+        - "^제품개발비$"
+        - "^상품개발비$"
+        - "^신제품개발비$"
+        - "^임상시험비$"
+        - "^임상개발비$"
+        - "^연구용역비$"
+        - "^개발용역비$"
+        - "^외주개발비$"
+        - "^연구재료비$"
+        - "^(?:경상)?(?:연구|개발|연구개발|기술개발|제품개발|상품개발|소프트웨어개발|임상(?:시험|개발)|시험연구|위탁연구|외주개발|연구용역|개발용역|연구재료)(?:비|비용|원가|수수료)?$"
         - "^연구개발비등$"
         - "^개발비등$"
 
   - id: sgna_note_amortization_alt
+    priority: 100
+    confidence: high
     section_name: 판매비및관리비
     target_patterns:
+      SGNA:
+        - "^합계$"
+        - "^총계$"
+        - "^계$"
+        - "^판매비\\s*와\\s*관리비$"
+        - "^판매비\\s*및\\s*관리비$"
+        - "^판매관리비$"
       DNA_IS:
         - "^무형자산\\s*상각비$"
         - "^영업권\\s*이외의\\s*무형자산\\s*상각비$"
@@ -144,10 +233,22 @@ comment_rules:
         - "^연구\\s*및\\s*개발비(?:용)?$"
         - "^경상시험연구비$"
         - "^소프트웨어개발비$"
+        - "^제품개발비$"
+        - "^상품개발비$"
+        - "^신제품개발비$"
+        - "^임상시험비$"
+        - "^임상개발비$"
+        - "^연구용역비$"
+        - "^개발용역비$"
+        - "^외주개발비$"
+        - "^연구재료비$"
+        - "^(?:경상)?(?:연구|개발|연구개발|기술개발|제품개발|상품개발|소프트웨어개발|임상(?:시험|개발)|시험연구|위탁연구|외주개발|연구용역|개발용역|연구재료)(?:비|비용|원가|수수료)?$"
         - "^연구개발비등$"
         - "^개발비등$"
 
   - id: canonical_note_all_sections_common
+    priority: 900
+    confidence: low
     section_name: "*"
     target_patterns:
       TOTAL_ASSETS:
@@ -168,6 +269,11 @@ comment_rules:
         - "^재고$"
       TRADE_RECEIVABLES:
         - '^매출\s*채권$'
+      TRADE_AND_OTHER_RECEIVABLES:
+        - '^매출채권\s*및\s*기타채권$'
+        - "^매출채권및기타채권$"
+        - '^장기매출채권\s*및\s*기타비유동채권$'
+        - '^장기매출채권및기타비유동채권$'
         - "^매출채권및계약자산$"
       CASH_AND_EQUIVALENTS:
         - '^현금\s*및\s*현금성\s*자산$'
@@ -189,6 +295,11 @@ comment_rules:
         - '^합병\s*영업권$'
       TRADE_PAYABLES:
         - '^매입\s*채무$'
+      TRADE_AND_OTHER_PAYABLES:
+        - '^매입채무\s*및\s*기타채무$'
+        - "^매입채무및기타채무$"
+        - '^매입채무\s*및\s*기타유동채무$'
+        - '^매입채무및기타유동채무$'
         - "^매입채무및미지급금$"
       SHORT_TERM_DEBT:
         - '^단기\s*차입금$'
@@ -220,6 +331,10 @@ comment_rules:
       RETAINED_EARNINGS:
         - '^이익\s*잉여금(?:\(결손금\))?$'
         - '^미처분이익잉여금(?:\(미처리결손금\))?$'
+        - '^이익\s*잉여금\s*결손금$'
+        - '^미처리\s*결손금$'
+        - '^누적\s*결손금$'
+        - '^결손금\s*누계$'
         - '^결손금$'
       CONTRACT_ASSETS: '^계약\s*자산$'
       CONTRACT_LIABILITIES: '^계약\s*부채$'
@@ -228,16 +343,6 @@ comment_rules:
         - "^선수수익$"
       OTHER_RECEIVABLES: '^기타\s*채권$'
       OTHER_PAYABLES: '^기타\s*채무$'
-      TRADE_AND_OTHER_RECEIVABLES:
-        - '^매출채권\s*및\s*기타채권$'
-        - "^매출채권및기타채권$"
-        - '^장기매출채권\s*및\s*기타비유동채권$'
-        - '^장기매출채권및기타비유동채권$'
-      TRADE_AND_OTHER_PAYABLES:
-        - '^매입채무\s*및\s*기타채무$'
-        - "^매입채무및기타채무$"
-        - '^매입채무\s*및\s*기타유동채무$'
-        - '^매입채무및기타유동채무$'
       ASSETS_HELD_FOR_SALE:
         - '^매각예정\s*비유동\s*자산$'
         - '^매각예정\s*자산$'

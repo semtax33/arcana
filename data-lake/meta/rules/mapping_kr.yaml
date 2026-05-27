@@ -1079,6 +1079,9 @@ rules:
     exact_any:
       - 재고자산
       - 유동재고자산
+      - 재고 자산
+      - 상품및제품
+      - 제품및상품
     canonical_id: INVENTORIES
 
   - id: bs_ppe
@@ -1150,9 +1153,13 @@ rules:
     exact_any:
       - 매출채권
       - 장기매출채권
+      - 단기매출채권
+      - 유동매출채권
+      - 매출채권순액
+      - 매출채권(순액)
     canonical_id: TRADE_RECEIVABLES
 
-  - id: bs_trade_and_other_receivables_fallback
+  - id: bs_trade_and_other_receivables
     fs_type: BS
     priority: 680
     exact_any:
@@ -1167,13 +1174,22 @@ rules:
       - 매출채권 및 기타유동채권
       - 장기매출채권및기타비유동채권
       - 장기매출채권및기타채권
+      - 매출채권및계약자산
+      - 매출채권 및 계약자산
+    canonical_id: TRADE_AND_OTHER_RECEIVABLES
+    reason: Beneish DSRI에는 매출채권과 기타채권 합산 canonical을 우선 사용
+
+  - id: bs_other_receivables
+    fs_type: BS
+    priority: 660
+    exact_any:
       - 기타채권
       - 미수금
       - 미수수익
       - 단기미수금
       - 단기미수수익
     canonical_id: OTHER_RECEIVABLES
-    reason: 현재 캐노니컬에 매출채권및기타채권 계정이 없어 fallback
+    reason: 매출채권이 명시되지 않은 기타채권/미수금
 
   - id: bs_trade_payables
     fs_type: BS
@@ -1181,9 +1197,11 @@ rules:
     exact_any:
       - 매입채무
       - 단기매입채무
+      - 유동매입채무
+      - 장기매입채무
     canonical_id: TRADE_PAYABLES
 
-  - id: bs_trade_and_other_payables_fallback
+  - id: bs_trade_and_other_payables
     fs_type: BS
     priority: 680
     exact_any:
@@ -1195,13 +1213,20 @@ rules:
       - 매입채무 및 미지급금
       - 매입채무및기타유동채무
       - 장기매입채무및기타비유동채무
+    canonical_id: TRADE_AND_OTHER_PAYABLES
+    reason: 지급채무 회전율에는 매입채무와 기타채무 합산 canonical을 우선 사용
+
+  - id: bs_other_payables
+    fs_type: BS
+    priority: 660
+    exact_any:
       - 미지급금
       - 미지급비용
       - 단기미지급금
       - 장기미지급금
       - 기타채무
     canonical_id: OTHER_PAYABLES
-    reason: 현재 캐노니컬에 매입채무및기타채무 계정이 없어 fallback
+    reason: 매입채무가 명시되지 않은 기타채무/미지급금
 
   - id: bs_short_term_debt
     fs_type: BS
@@ -1316,6 +1341,10 @@ rules:
       - 이익잉여금(결손금)
       - 미처분이익잉여금
       - 미처분이익잉여금(미처리결손금)
+      - 이익잉여금결손금
+      - 미처리결손금
+      - 누적결손금
+      - 결손금누계
       - 결손금
       - (5)이익잉여금(결손금)
     canonical_id: RETAINED_EARNINGS

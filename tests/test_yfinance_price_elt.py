@@ -17,7 +17,12 @@ from engine.extractors._internal import yfinance_market_prices
 from engine.loaders import market_data
 from engine.loaders import securities as securities_loader
 from engine.loaders.market_data import PRICE_TABLE, insert_price
-from engine.transformers.market_data import normalize_us_price, normalize_yfinance_price_frame
+from engine.transformers.market_data import (
+    normalize_us_price,
+    normalize_us_shares,
+    normalize_yfinance_price_frame,
+    normalize_yfinance_shares_frame,
+)
 from engine.workflows._internal import download_workflow
 
 
@@ -299,7 +304,7 @@ class YFinancePriceEltTest(unittest.TestCase):
         insert_securities_mock.assert_not_called()
         self.assertIn("invalid choice: 'securities'", stderr.getvalue())
 
-    def test_us_market_data_cli_all_skips_unsupported_shares(self):
+    def test_us_market_data_cli_all_prepares_shares(self):
         price_df = pd.DataFrame(
             {
                 "security_id": ["SEC_US_AAPL"],
@@ -322,12 +327,57 @@ class YFinancePriceEltTest(unittest.TestCase):
                 return_value={"issuers": 1, "security-master": 1, "identifiers": 2},
             ),
             patch.object(market_data, "insert_price", return_value=price_df) as insert_price_mock,
-            patch.object(market_data, "insert_shares") as insert_shares_mock,
+            patch.object(market_data, "insert_shares", return_value=pd.DataFrame()) as insert_shares_mock,
         ):
             market_data.main()
 
         insert_price_mock.assert_called_once()
-        insert_shares_mock.assert_not_called()
+        insert_shares_mock.assert_called_once()
+
+    def test_normalize_yfinance_shares_frame_uses_explicit_shares_and_market_cap(self):
+        frame = pd.DataFrame(
+            {
+                "Date": ["2026-01-02"],
+                "Close": [100],
+                "Shares": [10],
+                "Market Cap": [1_000],
+            }
+        )
+
+        result = normalize_yfinance_shares_frame(frame, ticker="AAPL")
+
+        self.assertEqual(result["security_id"].iat[0], "SEC_US_AAPL")
+        self.assertEqual(result["shares"].iat[0], 10)
+        self.assertEqual(result["market_cap"].iat[0], 1_000)
+
+    def test_normalize_us_shares_falls_back_to_sec_weighted_average_shares(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            financial_dir = root / "financials"
+            financial_dir.mkdir()
+            (financial_dir / "us_normalized_AAPL.csv").write_text(
+                "\n".join(
+                    [
+                        "canonical_account_id,normalized_amount,fiscal_year,fiscal_month",
+                        "BASIC_SHARES,90,2025,12",
+                        "DILUTED_SHARES,100,2025,12",
+                        "COMMON_SHARES_OUTSTANDING,110,2025,12",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = normalize_us_shares(
+                root / "missing-price-*.csv",
+                financial_dir=financial_dir,
+                output_path=None,
+                log_progress=False,
+            )
+
+        self.assertEqual(result["security_id"].iat[0], "SEC_US_AAPL")
+        self.assertEqual(result["trade_date"].dt.strftime("%Y-%m-%d").iat[0], "2025-12-31")
+        self.assertEqual(result["shares"].iat[0], 110)
+        self.assertTrue(pd.isna(result["market_cap"].iat[0]))
 
     def test_normalize_us_price_logs_file_progress(self):
         with tempfile.TemporaryDirectory() as tmp:

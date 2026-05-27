@@ -19,6 +19,11 @@ SILVER_US_PRICE_PATH = DATA_LAKE.silver(
     "price",
     market_csv_name("normalized_price", market="us"),
 )
+SILVER_US_SHARES_PATH = DATA_LAKE.silver(
+    "us",
+    "shares",
+    market_csv_name("normalized_shares", market="us"),
+)
 US_PRICE_COLUMNS = [
     "security_id",
     "trade_date",
@@ -29,6 +34,17 @@ US_PRICE_COLUMNS = [
     "volume",
     "adj_close",
     "currency",
+]
+US_SHARES_COLUMNS = [
+    "security_id",
+    "trade_date",
+    "shares",
+    "market_cap",
+]
+US_SHARE_CANONICAL_IDS = [
+    "COMMON_SHARES_OUTSTANDING",
+    "DILUTED_SHARES",
+    "BASIC_SHARES",
 ]
 CLICKHOUSE_DATE_MIN = pd.Timestamp("1970-01-01")
 CLICKHOUSE_DATE_MAX = pd.Timestamp("2149-06-06")
@@ -133,6 +149,90 @@ def read_normalized_us_price(path: str | Path = SILVER_US_PRICE_PATH) -> pd.Data
     return frame[US_PRICE_COLUMNS].reset_index(drop=True)
 
 
+def normalize_us_shares(
+    path: str | Path | None = None,
+    *,
+    financial_dir: str | Path | None = None,
+    output_path: str | Path | None = SILVER_US_SHARES_PATH,
+    log_progress: bool = True,
+) -> pd.DataFrame:
+    frames = []
+    price_like_path = str(path or (BRONZE_YFINANCE_PRICE_DIR / "*.csv"))
+    for file in sorted(_glob_files(price_like_path)):
+        frame = pd.read_csv(file)
+        shares = normalize_yfinance_shares_frame(frame, ticker=Path(file).stem)
+        if not shares.empty:
+            frames.append(shares)
+
+    if not frames:
+        frames.extend(_us_shares_from_sec_financials(financial_dir))
+
+    result = _concat_shares_frames(frames)
+    if output_path is not None:
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        result.to_csv(output, index=False, encoding="utf-8-sig")
+        if log_progress:
+            print(f"saved normalized US share rows={len(result):,}, path={output}", flush=True)
+    elif log_progress:
+        print(f"normalized US share rows={len(result):,}", flush=True)
+    return result
+
+
+def normalize_yfinance_shares_frame(frame: pd.DataFrame, *, ticker: str) -> pd.DataFrame:
+    ticker = normalize_yfinance_ticker(ticker)
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=US_SHARES_COLUMNS)
+
+    df = frame.copy()
+    if df.index.name is not None or not isinstance(df.index, pd.RangeIndex):
+        df = df.reset_index()
+
+    date_col = _pick_column(df, ["Date", "Datetime", "trade_date", "date", "index"], required=False)
+    shares_col = _pick_column(
+        df,
+        ["shares", "Shares", "share_count", "Share Count", "shares_outstanding"],
+        required=False,
+    )
+    market_cap_col = _pick_column(
+        df,
+        ["market_cap", "Market Cap", "marketCapitalization"],
+        required=False,
+    )
+    close_col = _pick_column(df, ["Close", "close"], required=False)
+    if date_col is None or shares_col is None:
+        return pd.DataFrame(columns=US_SHARES_COLUMNS)
+
+    shares = _numeric(df[shares_col])
+    market_cap = (
+        _numeric(df[market_cap_col])
+        if market_cap_col is not None
+        else shares * _numeric(df[close_col]) if close_col is not None else pd.NA
+    )
+    result = pd.DataFrame(
+        {
+            "security_id": security_id_of(ticker, US_MARKET_CONFIG),
+            "trade_date": pd.to_datetime(df[date_col], errors="coerce"),
+            "shares": shares,
+            "market_cap": market_cap,
+        }
+    )
+    result = result.dropna(subset=["trade_date", "shares"])
+    result = result.loc[result["shares"] > 0].copy()
+    result = _drop_clickhouse_date_out_of_range(result, ticker=ticker)
+    return result[US_SHARES_COLUMNS].sort_values(["security_id", "trade_date"]).reset_index(drop=True)
+
+
+def read_normalized_us_shares(path: str | Path = SILVER_US_SHARES_PATH) -> pd.DataFrame:
+    frame = pd.read_csv(path)
+    if frame.empty:
+        return pd.DataFrame(columns=US_SHARES_COLUMNS)
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce")
+    frame = frame.dropna(subset=["trade_date"])
+    frame = _drop_clickhouse_date_out_of_range(frame)
+    return frame[US_SHARES_COLUMNS].reset_index(drop=True)
+
+
 def _concat_price_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
     non_empty = [frame for frame in frames if frame is not None and not frame.empty]
     if not non_empty:
@@ -140,6 +240,90 @@ def _concat_price_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
     return pd.concat(non_empty, ignore_index=True).sort_values(
         ["security_id", "trade_date"]
     ).reset_index(drop=True)
+
+
+def _concat_shares_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    non_empty = [frame for frame in frames if frame is not None and not frame.empty]
+    if not non_empty:
+        return pd.DataFrame(columns=US_SHARES_COLUMNS)
+    result = pd.concat(non_empty, ignore_index=True)
+    result["trade_date"] = pd.to_datetime(result["trade_date"], errors="coerce")
+    result["shares"] = pd.to_numeric(result["shares"], errors="coerce")
+    result["market_cap"] = pd.to_numeric(result["market_cap"], errors="coerce")
+    result = result.dropna(subset=["security_id", "trade_date", "shares"])
+    result = result.loc[result["shares"] > 0].copy()
+    result = result.sort_values(["security_id", "trade_date"])
+    result = result.drop_duplicates(["security_id", "trade_date"], keep="last")
+    return result[US_SHARES_COLUMNS].reset_index(drop=True)
+
+
+def _us_shares_from_sec_financials(financial_dir: str | Path | None = None) -> list[pd.DataFrame]:
+    root = Path(financial_dir) if financial_dir is not None else DATA_LAKE.silver("sec", "normalized")
+    if not root.exists():
+        return []
+
+    frames = []
+    for file_path in sorted(root.glob("us_normalized_*.csv")):
+        if file_path.name.endswith(".debug.csv"):
+            continue
+        ticker = file_path.stem.removeprefix("us_normalized_")
+        frame = pd.read_csv(file_path)
+        shares = _shares_from_sec_financial_frame(frame, ticker=ticker)
+        if not shares.empty:
+            frames.append(shares)
+    return frames
+
+
+def _shares_from_sec_financial_frame(frame: pd.DataFrame, *, ticker: str) -> pd.DataFrame:
+    if frame is None or frame.empty or "canonical_account_id" not in frame.columns:
+        return pd.DataFrame(columns=US_SHARES_COLUMNS)
+
+    df = frame.copy()
+    df["canonical_account_id"] = df["canonical_account_id"].astype(str)
+    df = df.loc[df["canonical_account_id"].isin(US_SHARE_CANONICAL_IDS)].copy()
+    if df.empty:
+        return pd.DataFrame(columns=US_SHARES_COLUMNS)
+
+    df["normalized_amount"] = pd.to_numeric(df.get("normalized_amount"), errors="coerce")
+    df = df.loc[df["normalized_amount"] > 0].copy()
+    if df.empty:
+        return pd.DataFrame(columns=US_SHARES_COLUMNS)
+
+    df["_priority"] = df["canonical_account_id"].map(
+        {canonical_id: priority for priority, canonical_id in enumerate(US_SHARE_CANONICAL_IDS)}
+    )
+    df["_trade_date"] = _period_end_dates(df)
+    df = df.dropna(subset=["_trade_date"])
+    if df.empty:
+        return pd.DataFrame(columns=US_SHARES_COLUMNS)
+
+    rows = (
+        df.sort_values(["_trade_date", "_priority"])
+        .drop_duplicates(["_trade_date"], keep="first")
+        .loc[:, ["_trade_date", "normalized_amount"]]
+    )
+    return pd.DataFrame(
+        {
+            "security_id": security_id_of(ticker, US_MARKET_CONFIG),
+            "trade_date": rows["_trade_date"].to_numpy(),
+            "shares": rows["normalized_amount"].to_numpy(),
+            "market_cap": pd.NA,
+        }
+    )[US_SHARES_COLUMNS]
+
+
+def _period_end_dates(df: pd.DataFrame) -> pd.Series:
+    year = pd.to_numeric(df.get("fiscal_year"), errors="coerce")
+    month = pd.to_numeric(df.get("fiscal_month"), errors="coerce").fillna(12)
+    dates = pd.to_datetime(
+        {
+            "year": year,
+            "month": month,
+            "day": 1,
+        },
+        errors="coerce",
+    )
+    return dates + pd.offsets.MonthEnd(0)
 
 
 def _glob_files(path: str) -> list[str]:

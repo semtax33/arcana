@@ -93,6 +93,7 @@ const FACTORS = [
   "cps",
   "csho",
   "mcap_mil",
+  "enterprise_value",
   "gpm",
   "opm",
   "ebitda_margin",
@@ -261,7 +262,12 @@ function num(value) {
 }
 
 function isCovered(value) {
-  return value !== null && value !== undefined && !Number.isNaN(value);
+  return (
+    value !== null &&
+    value !== undefined &&
+    typeof value === "number" &&
+    Number.isFinite(value)
+  );
 }
 
 function add(a, b) {
@@ -455,11 +461,14 @@ function addAnnualFinancialFactors(rows) {
     r.pbt = source.PBT ?? null;
     r.gross_profit = first(source, "GROSS_PROFIT");
     if (!isCovered(r.gross_profit)) r.gross_profit = sub(r.sale, r.cogs);
+    const cfDa =
+      isCovered(source.DEPRECIATION_EXPENSE) || isCovered(source.AMORTIZATION)
+        ? fill0(source.DEPRECIATION_EXPENSE) + fill0(source.AMORTIZATION)
+        : null;
     r.dp = first(source, "DNA_IS");
-    if (!isCovered(r.dp))
-      r.dp = fill0(source.DEPRECIATION_EXPENSE) + fill0(source.AMORTIZATION);
+    if (!isCovered(r.dp)) r.dp = cfDa;
     r.oibdp = first(source, "EBITDA");
-    if (!isCovered(r.oibdp)) r.oibdp = add(r.oiadp, fill0(r.dp));
+    if (!isCovered(r.oibdp)) r.oibdp = add(r.oiadp, r.dp);
     r.oancf = source.CFO ?? null;
     r.capx = isCovered(source.CAPEX_PPE) ? Math.abs(source.CAPEX_PPE) : null;
     r.fcf = sub(r.oancf, r.capx);
@@ -800,9 +809,15 @@ function addDailyFactors(rows) {
     r.enterprise_value = isCovered(r.market_cap)
       ? r.market_cap + fill0(r.debt) - fill0(r.che)
       : null;
-    r.ebitda_to_ev = div(r.oibdp, r.enterprise_value);
-    r.ev_to_ebitda = div(r.enterprise_value, r.oibdp);
-    r.ev_to_nopat = div(r.enterprise_value, r.nopat);
+    const positiveEv =
+      isCovered(r.enterprise_value) && r.enterprise_value > 0
+        ? r.enterprise_value
+        : null;
+    const nonzeroEbitda =
+      isCovered(r.oibdp) && r.oibdp !== 0 ? r.oibdp : null;
+    r.ebitda_to_ev = div(r.oibdp, positiveEv);
+    r.ev_to_ebitda = div(positiveEv, nonzeroEbitda);
+    r.ev_to_nopat = div(positiveEv, r.nopat);
     r.net_debt_to_ocf = div(r.net_debt, r.oancf);
     r.per = div(r.close, r.eps);
     r.pbr = div(r.close, r.bps);

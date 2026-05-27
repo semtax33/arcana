@@ -50,6 +50,11 @@ SOURCE_PRIORITY = {
     "derived_formula": 5,
 }
 EPS_CANONICAL_IDS = {"BASIC_EPS", "DILUTED_EPS"}
+SHARE_CANONICAL_IDS = {
+    "BASIC_SHARES",
+    "DILUTED_SHARES",
+    "COMMON_SHARES_OUTSTANDING",
+}
 DEFAULT_LABEL_EXCLUDE_NAMESPACES = {"us-gaap", "srt", "dei", "country", "exch"}
 
 
@@ -220,6 +225,8 @@ def _fact_units_for_rule(fact: dict[str, Any], canonical_id: str) -> list[tuple[
     units = fact.get("units", {}) or {}
     if canonical_id in EPS_CANONICAL_IDS:
         preferred = ["USD/shares", "USD / shares", "USD/share", "USD"]
+    elif canonical_id in SHARE_CANONICAL_IDS:
+        preferred = ["shares"]
     else:
         preferred = ["USD"]
 

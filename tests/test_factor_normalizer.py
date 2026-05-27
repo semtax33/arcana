@@ -83,6 +83,7 @@ class FactorNormalizerTest(unittest.TestCase):
                     "REVENUE": 1_000,
                     "GROSS_PROFIT": 400,
                     "OPERATING_INCOME": 200,
+                    "DNA_IS": 0,
                     "NET_INCOME": 100,
                     "NET_INCOME_PARENT": 100,
                     "TAX_EXPENSE": 25,
@@ -98,6 +99,7 @@ class FactorNormalizerTest(unittest.TestCase):
                     "REVENUE": 1_000,
                     "GROSS_PROFIT": 400,
                     "OPERATING_INCOME": 200,
+                    "DNA_IS": 0,
                     "NET_INCOME": 100,
                     "NET_INCOME_PARENT": 100,
                     "TAX_EXPENSE": 25,
@@ -117,6 +119,63 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["roe"], 20.0)
         self.assertAlmostEqual(latest["roic_financial"], 30.0)
         self.assertAlmostEqual(latest["roic_operational"], 30.0)
+
+    def test_ebitda_uses_reported_value_before_calculated_fallback(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": 100,
+                    "DNA_IS": 50,
+                    "EBITDA": 180,
+                }
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+
+        self.assertEqual(result["oibdp"].iat[0], 180)
+        self.assertAlmostEqual(result["ebitda_margin"].iat[0], 18.0)
+
+    def test_ebitda_fallback_requires_real_depreciation_source(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": 100,
+                    "DEPRECIATION_EXPENSE": 30,
+                    "AMORTIZATION": 20,
+                }
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+
+        self.assertEqual(result["dp"].iat[0], 50)
+        self.assertEqual(result["oibdp"].iat[0], 150)
+        self.assertAlmostEqual(result["ebitda_margin"].iat[0], 15.0)
+
+    def test_ebitda_is_missing_without_reported_value_or_depreciation_source(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": 100,
+                }
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+
+        self.assertTrue(pd.isna(result["dp"].iat[0]))
+        self.assertTrue(pd.isna(result["oibdp"].iat[0]))
+        self.assertTrue(pd.isna(result["ebitda_margin"].iat[0]))
 
     def test_nopat_uses_historical_tax_rate_without_imputing_rnd(self):
         financial_df = pd.DataFrame(
@@ -293,6 +352,47 @@ class FactorNormalizerTest(unittest.TestCase):
 
         self.assertAlmostEqual(result["rpr"].iat[0], 0.05)
         self.assertAlmostEqual(result["rnd_to_market_cap"].iat[0], 5.0)
+
+    def test_ev_to_ebitda_requires_positive_ev_and_nonzero_ebitda(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2025-01-02", "2025-01-03", "2025-01-04"]),
+                "close": [10, 10, 10],
+                "volume": [100, 100, 100],
+                "shares": [100, 100, 100],
+                "market_cap": [1_000, 1_000, 1_000],
+                "dltt": [200, 200, 200],
+                "dlc": [0, 0, 0],
+                "che": [100, 1_500, 100],
+                "oibdp": [100, 100, 0],
+            }
+        )
+
+        result = add_daily_market_valuation_factors(daily_df)
+
+        self.assertEqual(result["enterprise_value"].iat[0], 1_100)
+        self.assertAlmostEqual(result["ev_to_ebitda"].iat[0], 11.0)
+        self.assertTrue(pd.isna(result["ev_to_ebitda"].iat[1]))
+        self.assertEqual(result["ev_ebitda_quality_flag"].iat[1], "non_positive_enterprise_value")
+        self.assertTrue(pd.isna(result["ev_to_ebitda"].iat[2]))
+        self.assertEqual(result["ev_ebitda_quality_flag"].iat[2], "zero_ebitda")
+
+    def test_negative_ebitda_ev_ratio_is_retained_but_flagged(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2025-01-02"]),
+                "close": [10],
+                "volume": [100],
+                "shares": [100],
+                "market_cap": [1_000],
+                "oibdp": [-100],
+            }
+        )
+
+        result = add_daily_market_valuation_factors(daily_df)
+
+        self.assertAlmostEqual(result["ev_to_ebitda"].iat[0], -10.0)
+        self.assertEqual(result["ev_ebitda_quality_flag"].iat[0], "negative_ebitda")
 
     def test_daily_fcf_shareholder_return_factors_use_cash_dividends(self):
         daily_df = pd.DataFrame(
@@ -504,6 +604,47 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertTrue(pd.isna(result.loc[result["trade_date"] == pd.Timestamp("2025-04-14"), "at"].iat[0]))
         self.assertEqual(result.loc[result["trade_date"] == pd.Timestamp("2025-04-15"), "at"].iat[0], 1_000)
         self.assertEqual(result.loc[result["trade_date"] == pd.Timestamp("2025-04-16"), "at"].iat[0], 1_000)
+
+    def test_market_cap_is_derived_from_close_and_shares_when_share_file_lacks_market_cap(self):
+        price_df = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_AAPL"],
+                "trade_date": pd.to_datetime(["2025-01-02"]),
+                "close": [20],
+                "volume": [1_000],
+                "currency": ["USD"],
+            }
+        )
+        shares_df = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_AAPL"],
+                "trade_date": pd.to_datetime(["2025-01-01"]),
+                "shares": [100],
+                "market_cap": [pd.NA],
+            }
+        )
+        financial_df = pd.DataFrame(
+            {
+                "stock_code": ["AAPL"],
+                "security_id": ["SEC_US_AAPL"],
+                "financial_period": pd.to_datetime(["2024-12-31"]),
+                "report_date": pd.to_datetime(["2025-01-01"]),
+                "oibdp": [200],
+            }
+        )
+
+        with (
+            patch("engine.transformers.factors.read_stock_prices", return_value=price_df),
+            patch("engine.transformers.factors.read_stock_shares", return_value=shares_df),
+            patch("engine.transformers.factors.read_annual_financials", return_value=financial_df),
+            patch("engine.transformers.factors.add_dividend_factors", side_effect=lambda df, stock_code, **kwargs: df),
+            patch("engine.transformers.factors.add_price_momentum_factors", side_effect=lambda df: df),
+        ):
+            result = create_stock_factor_dataframe("AAPL", financial_basis="annual", market="us")
+
+        self.assertEqual(result["market_cap"].iat[0], 2_000)
+        self.assertEqual(result["enterprise_value"].iat[0], 2_000)
+        self.assertAlmostEqual(result["ev_to_ebitda"].iat[0], 10.0)
 
     def test_create_stock_factor_dataframe_skips_financial_read_when_prices_are_missing(self):
         with (

@@ -230,6 +230,11 @@ def positive_denominator(series):
     return values.where(values > 0)
 
 
+def nonzero_denominator(series):
+    values = pd.to_numeric(series, errors="coerce")
+    return values.where(values != 0)
+
+
 def safe_series_div(numerator, denominator):
     return pd.to_numeric(numerator, errors="coerce") / positive_denominator(denominator)
 
@@ -703,9 +708,11 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     cf_depreciation = numeric_column(df, "DEPRECIATION_EXPENSE")
     cf_amortization = numeric_column(df, "AMORTIZATION")
     df["dp"] = first_value_frame(df, "DNA_IS")
-    df["dp"] = df["dp"].fillna(cf_depreciation.fillna(0) + cf_amortization.fillna(0))
+    cf_da = cf_depreciation.fillna(0) + cf_amortization.fillna(0)
+    cf_da = cf_da.where(cf_depreciation.notna() | cf_amortization.notna())
+    df["dp"] = df["dp"].fillna(cf_da)
     df["oibdp"] = first_value_frame(df, "EBITDA")
-    df["oibdp"] = df["oibdp"].fillna(df["oiadp"] + df["dp"].fillna(0))
+    df["oibdp"] = df["oibdp"].fillna(df["oiadp"] + df["dp"])
 
     df["oancf"] = numeric_column(df, "CFO")
     df["capx"] = numeric_column(df, "CAPEX_PPE").abs()
@@ -1373,10 +1380,16 @@ def add_daily_market_valuation_factors(daily_df):
     df["rpr"] = xrd / market_cap
     df["rnd_to_market_cap"] = xrd / market_cap * 100
     df["enterprise_value"] = market_cap + debt.fillna(0) - che.fillna(0)
-    df["ebitda_to_ev"] = oibdp / df["enterprise_value"]
+    valid_ev = df["enterprise_value"].where(df["enterprise_value"] > 0)
+    valid_oibdp = nonzero_denominator(oibdp)
+    df["ev_ebitda_quality_flag"] = pd.Series(pd.NA, index=df.index, dtype="object")
+    df.loc[df["enterprise_value"].notna() & (df["enterprise_value"] <= 0), "ev_ebitda_quality_flag"] = "non_positive_enterprise_value"
+    df.loc[oibdp == 0, "ev_ebitda_quality_flag"] = "zero_ebitda"
+    df.loc[oibdp < 0, "ev_ebitda_quality_flag"] = "negative_ebitda"
+    df["ebitda_to_ev"] = oibdp / valid_ev
     df["fcf_to_ev_yield"] = fcf / positive_denominator(df["enterprise_value"]) * 100
-    df["ev_to_ebitda"] = df["enterprise_value"] / oibdp
-    df["ev_to_nopat"] = df["enterprise_value"] / nopat
+    df["ev_to_ebitda"] = valid_ev / valid_oibdp
+    df["ev_to_nopat"] = valid_ev / nopat
     df["net_debt_to_ocf"] = net_debt / oancf
 
     df["per"] = close / eps_for_ratio
@@ -1499,6 +1512,15 @@ def create_stock_factor_dataframe(
         daily_df["shares"] = math.nan
         daily_df["market_cap"] = math.nan
 
+    if "market_cap" in daily_df.columns and "shares" in daily_df.columns:
+        derived_market_cap = pd.to_numeric(daily_df["close"], errors="coerce") * pd.to_numeric(
+            daily_df["shares"],
+            errors="coerce",
+        )
+        daily_df["market_cap"] = pd.to_numeric(daily_df["market_cap"], errors="coerce").fillna(
+            derived_market_cap,
+        )
+
     if not financial_df.empty:
         financial_df = financial_df.copy()
         financial_df["financial_period"] = pd.to_datetime(financial_df["financial_period"], errors="coerce")
@@ -1582,6 +1604,7 @@ def preferred_factor_columns():
         "cps",
         "csho",
         "mcap_mil",
+        "enterprise_value",
         "rnd_to_market_cap",
         "gpm",
         "opm",
@@ -1822,7 +1845,8 @@ def calculate_factor_coverage(df, columns=None):
     row_count = len(df)
 
     for column in target_columns:
-        covered_count = int(df[column].notna().sum())
+        valid = coverage_valid_series(df[column])
+        covered_count = int(valid.sum())
         missing_count = row_count - covered_count
         coverage_ratio = covered_count / row_count if row_count else 0.0
         coverage_rows.append(
@@ -1842,7 +1866,7 @@ def calculate_factor_coverage(df, columns=None):
     ).reset_index(drop=True)
 
     total_cells = row_count * len(target_columns)
-    covered_cells = int(df[target_columns].notna().sum().sum())
+    covered_cells = int(sum(coverage_valid_series(df[column]).sum() for column in target_columns))
     missing_cells = total_cells - covered_cells
     coverage_ratio = covered_cells / total_cells if total_cells else 0.0
 
@@ -1855,7 +1879,15 @@ def calculate_factor_coverage(df, columns=None):
         "coverage_ratio": coverage_ratio,
         "coverage_pct": coverage_ratio * 100,
         "factor_coverage": factor_coverage_df,
-    }
+}
+
+
+def coverage_valid_series(series):
+    numeric = pd.to_numeric(series, errors="coerce")
+    return numeric.notna() & pd.Series(
+        [math.isfinite(value) for value in numeric],
+        index=series.index,
+    )
 
 
 def create_stock_factor_coverage(stock_code, **kwargs):
