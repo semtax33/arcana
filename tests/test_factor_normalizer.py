@@ -361,8 +361,7 @@ class FactorNormalizerTest(unittest.TestCase):
                 "volume": [100, 100, 100],
                 "shares": [100, 100, 100],
                 "market_cap": [1_000, 1_000, 1_000],
-                "dltt": [200, 200, 200],
-                "dlc": [0, 0, 0],
+                "debt": [200, 200, 200],
                 "che": [100, 1_500, 100],
                 "oibdp": [100, 100, 0],
             }

@@ -3,11 +3,16 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from engine.core.paths import DATA_LAKE
 from engine.transformers.factors import (
@@ -23,7 +28,7 @@ FOCUS_FACTORS = [
     "ebitda_to_ev",
     "ebitda_margin",
 ]
-OUT_DIR = DATA_LAKE.gold("factor_coverage")
+OUT_DIR = DATA_LAKE.root / "gold" / "factor_coverage"
 
 
 def build_ebitda_ev_coverage(
