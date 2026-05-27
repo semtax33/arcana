@@ -37,6 +37,7 @@ KRX_PRICE_PATH = LEGACY_PRICE_PATHS[0]
 SHARES_PATH = DATA_LAKE.silver("krx", "shares", market_csv_name("normalized_shares"))
 LEGACY_SHARES_PATHS = (DATA_LAKE.silver("krx", "shares", "normalized_shares.csv"),)
 ANNUAL_MONTH = 12
+DEFAULT_NOPAT_TAX_RATE = 0.21
 
 
 BASE_COLUMNS = [
@@ -177,6 +178,17 @@ def first_bounded_value_frame(df, reference, *columns, max_abs_multiple=1.5):
         values = bound_by_reference(df[column], reference, max_abs_multiple)
         result = result.fillna(values)
     return result
+
+
+def tax_rate_for_nopat(actual_tax_rate, operating_income, default_rate=DEFAULT_NOPAT_TAX_RATE):
+    actual = pd.to_numeric(actual_tax_rate, errors="coerce")
+    operating_income = pd.to_numeric(operating_income, errors="coerce")
+    valid_actual = actual.where((actual >= 0) & (actual <= 1))
+    historical_median = valid_actual.expanding(min_periods=1).median().shift(1)
+    no_history_fallback = pd.Series(default_rate, index=valid_actual.index, dtype="float64")
+    no_history_fallback = no_history_fallback.where(operating_income >= 0, 0.0)
+    fallback = historical_median.fillna(no_history_fallback)
+    return valid_actual.fillna(fallback).where(operating_income.notna())
 
 
 def sanitize_temporal_amount_outliers(df, max_neighbor_multiple=100):
@@ -726,13 +738,14 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["rnd_to_sales"] = df["xrd"] / df["sale"]
     df["tax_rate"] = df["tax_expense"] / df["pbt"]
     df.loc[(df["tax_rate"] < 0) | (df["tax_rate"] > 1), "tax_rate"] = math.nan
-    df["nopat"] = df["oiadp"] * (1 - df["tax_rate"])
+    nopat_tax_rate = tax_rate_for_nopat(df["tax_rate"], df["oiadp"])
+    df["nopat"] = df["oiadp"] * (1 - nopat_tax_rate)
 
     df["avg_parent_equity"] = (df["ceq"] + df["ceq"].shift(lag)) / 2
     df["roe"] = df["ni_parent"] / df["avg_parent_equity"]
     df["roa"] = df["ni"] / df["avg_assets"]
     df["iroe"] = (
-        df["ni_parent"] + df["xrd"].fillna(0) * (1 - df["tax_rate"].fillna(0))
+        df["ni_parent"] + df["xrd"].fillna(0) * (1 - nopat_tax_rate.fillna(0))
     ) / df["avg_parent_equity"]
     df["debt"] = df["dltt"].fillna(0) + df["dlc"].fillna(0)
     df["net_debt"] = df["debt"] - df["che"].fillna(0)

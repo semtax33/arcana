@@ -11,7 +11,13 @@ import yaml
 
 from engine.core.paths import parse_statement_snapshot_filename, statement_snapshot_name
 from engine.transformers.sec_filings import normalize_us_sec_filings
-from engine.transformers._internal.sec_filings import US_MAPPING_RULE_PATH, _notes_rule_matches_tag
+from engine.transformers._internal.sec_filings import (
+    US_MAPPING_RULE_PATH,
+    SecFactCandidate,
+    _notes_rule_matches_tag,
+    add_formula_derived_candidates,
+    dedupe_candidates,
+)
 from engine.workflows._internal.normalize_workflow import MAPPING_RULE_PATH
 
 
@@ -116,6 +122,58 @@ def fact(label: str, value: float, tag: str) -> dict:
 
 
 class SecFilingsNormalizerTest(unittest.TestCase):
+    def test_formula_derived_candidates_fill_only_accounting_identities(self):
+        base = {
+            "symbol": "AAPL",
+            "cik": "320193",
+            "entity_name": "Apple Inc.",
+            "statement_type": "IS",
+            "fiscal_year": 2025,
+            "fiscal_month": 12,
+            "period_end": "2025-12-31",
+            "filed": "2026-01-30",
+            "accn": "0000320193-26-000001",
+            "form": "10-K",
+            "fp": "FY",
+            "source": "companyfacts_primary",
+            "amount_policy": "as_reported",
+            "cash_direction": "",
+        }
+        candidates = [
+            SecFactCandidate(
+                **base,
+                canonical_id="REVENUE",
+                canonical_name="Revenue",
+                value=100,
+                raw_value=100,
+                rule_id="test:REVENUE",
+                reason="test",
+                original_account_name="Revenue",
+            ),
+            SecFactCandidate(
+                **base,
+                canonical_id="COGS",
+                canonical_name="COGS",
+                value=40,
+                raw_value=40,
+                rule_id="test:COGS",
+                reason="test",
+                original_account_name="COGS",
+            ),
+        ]
+
+        result = dedupe_candidates(
+            add_formula_derived_candidates(
+                candidates,
+                canonical_names={"GROSS_PROFIT": "Gross profit"},
+            )
+        )
+        by_id = {candidate.canonical_id: candidate for candidate in result}
+
+        self.assertEqual(by_id["GROSS_PROFIT"].value, 60)
+        self.assertEqual(by_id["GROSS_PROFIT"].source, "derived_formula")
+        self.assertNotIn("RND", by_id)
+
     def test_market_mapping_rule_paths_prefer_prefixed_files(self):
         self.assertEqual(MAPPING_RULE_PATH.name, "kr_mapping.yaml")
         self.assertEqual(US_MAPPING_RULE_PATH.name, "us_mapping.yaml")

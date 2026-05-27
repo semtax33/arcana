@@ -47,6 +47,7 @@ SOURCE_PRIORITY = {
     "companyfacts_label": 2,
     "notes": 3,
     "edgartools": 4,
+    "derived_formula": 5,
 }
 EPS_CANONICAL_IDS = {"BASIC_EPS", "DILUTED_EPS"}
 DEFAULT_LABEL_EXCLUDE_NAMESPACES = {"us-gaap", "srt", "dei", "country", "exch"}
@@ -1143,6 +1144,88 @@ def dedupe_candidates(candidates: list[SecFactCandidate]) -> list[SecFactCandida
     )
 
 
+def _formula_candidate(
+    *,
+    prototype: SecFactCandidate,
+    canonical_id: str,
+    canonical_names: dict[str, str],
+    value: float,
+    formula: str,
+    statement_type: str,
+) -> SecFactCandidate:
+    return SecFactCandidate(
+        symbol=prototype.symbol,
+        cik=prototype.cik,
+        entity_name=prototype.entity_name,
+        canonical_id=canonical_id,
+        canonical_name=canonical_names.get(canonical_id, "Unknown"),
+        statement_type=statement_type,
+        fiscal_year=prototype.fiscal_year,
+        fiscal_month=prototype.fiscal_month,
+        value=value,
+        raw_value=value,
+        period_end=prototype.period_end,
+        filed=prototype.filed,
+        accn=prototype.accn,
+        form=prototype.form,
+        fp=prototype.fp,
+        source="derived_formula",
+        rule_id=f"derived_formula:{canonical_id}:{formula}",
+        reason=f"derived formula: {formula}",
+        original_account_name=formula,
+        amount_policy="as_reported",
+        cash_direction="",
+    )
+
+
+def add_formula_derived_candidates(
+    candidates: list[SecFactCandidate],
+    *,
+    canonical_names: dict[str, str],
+) -> list[SecFactCandidate]:
+    by_period: dict[tuple[str, int, int], dict[str, SecFactCandidate]] = {}
+    for candidate in candidates:
+        key = (candidate.symbol, candidate.fiscal_year, candidate.fiscal_month)
+        by_period.setdefault(key, {})[candidate.canonical_id] = candidate
+
+    formulas: tuple[tuple[str, str, str, str, str], ...] = (
+        ("GROSS_PROFIT", "REVENUE", "COGS", "REVENUE - COGS", "IS"),
+        ("COGS", "REVENUE", "GROSS_PROFIT", "REVENUE - GROSS_PROFIT", "IS"),
+        ("TOTAL_EQUITY", "TOTAL_ASSETS", "TOTAL_LIABILITIES", "TOTAL_ASSETS - TOTAL_LIABILITIES", "BS"),
+        ("TOTAL_LIABILITIES", "TOTAL_ASSETS", "TOTAL_EQUITY", "TOTAL_ASSETS - TOTAL_EQUITY", "BS"),
+        ("TOTAL_ASSETS", "TOTAL_LIABILITIES", "TOTAL_EQUITY", "TOTAL_LIABILITIES + TOTAL_EQUITY", "BS"),
+        ("PBT", "NET_INCOME", "TAX_EXPENSE", "NET_INCOME + TAX_EXPENSE", "IS"),
+        ("TAX_EXPENSE", "PBT", "NET_INCOME", "PBT - NET_INCOME", "IS"),
+        ("NET_INCOME", "PBT", "TAX_EXPENSE", "PBT - TAX_EXPENSE", "IS"),
+    )
+    derived: list[SecFactCandidate] = []
+    for period_candidates in by_period.values():
+        for target, left_id, right_id, formula, statement_type in formulas:
+            if target in period_candidates:
+                continue
+            left = period_candidates.get(left_id)
+            right = period_candidates.get(right_id)
+            if left is None or right is None:
+                continue
+            if formula.endswith(f"{left_id} + {right_id}") or " + " in formula:
+                value = left.value + right.value
+            else:
+                value = left.value - right.value
+            prototype = left if left.source_rank <= right.source_rank else right
+            candidate = _formula_candidate(
+                prototype=prototype,
+                canonical_id=target,
+                canonical_names=canonical_names,
+                value=value,
+                formula=formula,
+                statement_type=statement_type,
+            )
+            period_candidates[target] = candidate
+            derived.append(candidate)
+
+    return candidates + derived
+
+
 def candidate_to_rows(candidate: SecFactCandidate) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized_amount = candidate.value
     cash_effect_amount = apply_cash_direction(normalized_amount, candidate.cash_direction)
@@ -1500,8 +1583,16 @@ def normalize_us_sec_filings(
     if log_progress:
         print(f"[INFO] dedupe start candidates={len(candidates)}")
     deduped = dedupe_candidates(candidates)
+    derived_count = 0
+    deduped_with_derived = add_formula_derived_candidates(
+        deduped,
+        canonical_names=canonical_names,
+    )
+    if len(deduped_with_derived) != len(deduped):
+        derived_count = len(deduped_with_derived) - len(deduped)
+        deduped = dedupe_candidates(deduped_with_derived)
     if log_progress:
-        print(f"[INFO] dedupe done candidates={len(deduped)}")
+        print(f"[INFO] dedupe done candidates={len(deduped)}, derived_formula={derived_count}")
         print(f"[INFO] write outputs start output_dir={output_dir}")
     written = write_symbol_outputs(deduped, output_dir=output_dir, save_debug=save_debug)
     write_report_metadata(deduped, report_metadata_path)

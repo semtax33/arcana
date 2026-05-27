@@ -310,6 +310,11 @@ companyfacts_rules:
       - (?i)\breserve\b
       - (?i)\boil\s+and\s+gas\s+reserves\b
       - (?i)\bfuture\s+net\s+cash\s+flows\b
+      - (?i)\bdeferred\s+tax\b
+      - (?i)\bcapitalized\b
+      - (?i)\bsoftware\s+development\s+costs?\b
+      - (?i)\bamortization\b
+      - (?i)\bstock[- ]based\s+compensation\b
   - canonical_id: OPERATING_INCOME
     fs_type: IS
     primary_tags: [us-gaap:OperatingIncomeLoss]
@@ -677,14 +682,33 @@ notes_rules:
       - ResearchAndDevelopmentAndEngineeringExpense
       - ResearchDevelopmentAndPatentExpense
       - ResearchAndDevelopmentExpenseNetOfGrantReimbursement
+      - ResearchAndDevelopmentExcludingInProcessExpense
+      - ResearchAndDevelopmentExpenseExcludingInProgressResearchAndDevelopment
+      - ResearchAndDevelopmentExpenseNetOfAdjustments
+      - EngineeringAndProductDevelopmentExpense
+      - ResearchAndDevelopmentCosts
+      - ResearchDevelopmentAndEngineeringExpenses
+      - ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCostNet
+      - ResearchAndDevelopmentInOperatingExpense
+      - ResearchAndDevelopmentExpensesNet
     tag_patterns:
       - (?i)(researchanddevelopment|researchdevelopment).*(expense|cost)
       - (?i)(product|technology|software)development(expense|cost)
     tag_exclude_patterns:
       - (?i)deferredtax
       - (?i)capitalized
+      - (?i)softwaredevelopment
+      - (?i)siteandsoftware
+      - (?i)propertyplantandequipment
       - (?i)amortiz
       - (?i)stockbasedcompensation
+      - (?i)transitiontax
+      - (?i)taxcuts
+      - (?i)reversal
+      - (?i)increaseanddecrease
+      - (?i)incomeexpense
+      - (?i)benefit
+      - (?i)accrued
       - (?i)(selling|administrative|costofrevenue).*(researchanddevelopment|researchdevelopment)
       - (?i)(researchanddevelopment|researchdevelopment).*(selling|administrative|costofrevenue)
     label_patterns:
@@ -700,6 +724,11 @@ notes_rules:
       - (?i)\breserve\b
       - (?i)\boil\s+and\s+gas\s+reserves\b
       - (?i)\bfuture\s+net\s+cash\s+flows\b
+      - (?i)\bdeferred\s+tax\b
+      - (?i)\bcapitalized\b
+      - (?i)\bsoftware\s+development\s+costs?\b
+      - (?i)\bamortization\b
+      - (?i)\bstock[- ]based\s+compensation\b
     report_name_patterns:
       - (?i)statement
       - (?i)operations
@@ -785,8 +814,23 @@ notes_rules:
       - PaymentsToAcquirePropertyPlantandEquipmentandSoftware
       - PaymentsToAcquirePropertyPlantAndEquipmentIncludingSoftware
       - PaymentsToAcquirePropertyPlantAndEquipmentAndInternalUseSoftware
+      - PaymentsToAcquirePropertyPlantAndEquipmentExcludingConstructionInProcess
+      - PaymentsToAcquirePropertyPlantAndEquipmentExcludingConstructionInProgress
+      - PaymentstoAcquirePropertyPlantandEquipmentNet
+      - PaymentsToAcquirePropertyPlantAndEquipmentIncludingDiscontinuedOperations
+      - PaymentsToAcquirePropertyPlantAndEquipmentExcludingCapitalizedCost
+      - PaymentsToAcquirePropertyPlantAndEquipmentAndOther
+      - PaymentsToAcquirePropertyPlantAndEquipmentExcludingOilAndGas
+      - PaymentsToAcquirePropertyPlantAndEquipmentExcludingRealEstate
     tag_patterns:
       - (?i)paymentstoacquire.*(propertyplantandequipment|productiveassets)
+    tag_exclude_patterns:
+      - (?i)businesses
+      - (?i)deferredlegalfees
+      - (?i)mineralrights
+      - (?i)fixedassetsotherthanpropertyplantandequipment
+      - (?i)relatedparties
+      - (?i)jvcompany
     label_patterns:
       - (?i)\b(payments?|cash\s+paid|purchase)\s+(to\s+acquire|for|of)\s+property,\s*plant,?\s+and\s+equipment\b
       - (?i)\bcapital\s+expenditures?\b
@@ -861,12 +905,21 @@ notes_rules:
       - PaymentsOfOrdinaryDividendsCommonStockAndPreferredStock
       - PaymentsOfOrdinaryDividendsAndSpecialDividends
       - PaymentsOfDividendsCommonAndPreferredStock
+      - PaymentsOfOrdinaryDividendsCommonAndPreferredShareholders
+      - PaymentsOfOrdinaryDividendsCommonAndPreferred
+      - PaymentsOfDividendsIncludingExpenses
+      - PaymentsOfDividendsRedeemablePreferredStock
+      - PaymentsOfDividendsToShareholders
     tag_patterns:
       - (?i)paymentsof.*dividends
     tag_exclude_patterns:
       - (?i)(minority|noncontrolling)
       - (?i)dividendequivalent
       - (?i)equitableadjust
+      - (?i)proceeds
+      - (?i)jointventures
+      - (?i)partnership
+      - (?i)operating
     label_patterns:
       - (?i)\bdividends?\s+paid\b
       - (?i)\bpayments?\s+of\s+dividends?\b
@@ -893,15 +946,37 @@ notes_rules:
       - PaymentsForRepurchaseOfConvertiblePreferredStock
       - PaymentsForRepurchaseOfOtherEquity
       - PaymentsForRepurchaseOfTreasuryStock
+      - PaymentsForRepurchaseOfCommonStockAndOtherRelatedCosts
+      - NetPaymentsForRepurchaseOfCommonStock
+      - PaymentsForRepurchaseOfCommonStockShareRepurchaseProgram
+      - PaymentsForRepurchaseOfCommonStockAndWarrants
+      - PaymentsForRepurchaseOfCommonStockIncludingRelatedExpenses
+      - PaymentsForRepurchaseOfStockAndCancellationOfShares
+      - PaymentsForRepurchaseOfCommonStockOpenMarket
+      - PaymentsForRepurchaseOfCommonStockInTheOpenMarket
+      - PaymentsForRepurchaseOfRedeemableCommonStock
+      - PaymentsForRepurchaseOfCommonStockUnderShareRepurchaseProgram
+      - PaymentsForRepurchaseOfCommonStockTreasuryShares
+      - PaymentsForRepurchaseOfCommonStockAsTreasuryStock
+      - PaymentsforRepurchaseofCommonStockintheOpenMarket
+      - PaymentsForRepurchaseOfStockHeldInTreasury
+      - PaymentsForRepurchaseOfTresuryStock
     tag_patterns:
       - (?i)paymentsforrepurchaseof.*(stock|equity)
     tag_exclude_patterns:
       - (?i)taxwithholding
+      - (?i)taxes
+      - (?i)withheld
+      - (?i)surrendered
       - (?i)equityaward
       - (?i)restrictedstock
       - (?i)stockoptions?
       - (?i)deferredcompensation
       - (?i)payrolltax
+      - (?i)noncontrolling
+      - (?i)subsidiar
+      - (?i)federaldepositinsurance
+      - (?i)insurancecorporation
     label_patterns:
       - (?i)\bpayments?\s+for\s+repurchase\s+of\s+(common\s+)?stock\b
       - (?i)\bpayments?\s+for\s+repurchase\s+of\s+.*stock\b

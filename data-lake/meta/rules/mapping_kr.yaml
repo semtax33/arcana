@@ -588,6 +588,9 @@ rules:
     exact_any:
       - 무형자산의취득
       - 무형자산취득
+      - 개발비의증가
+      - 개발비의취득
+      - 개발중인무형자산의취득
     canonical_id: CAPEX_INTANG
     amount_policy: abs
     cash_direction: outflow
@@ -656,6 +659,9 @@ rules:
     exact_any:
       - 이자의지급
       - 이자지급
+      - 이자지급(영업)
+      - 이자비용의지급
+      - 이자비용지급
     canonical_id: INT_PAID
     amount_policy: abs
     cash_direction: outflow
@@ -679,8 +685,11 @@ rules:
     exact_any:
       - 배당금의 지급
       - 배당금의지급
+      - 배당금지급
+      - 배당금지급(영업)
       - 배당의지급
       - 배당
+      - 현금배당
     canonical_id: DIV_PAID
     amount_policy: abs
     cash_direction: outflow
@@ -748,6 +757,9 @@ rules:
     exact_any:
       - 자기주식의취득
       - 자기주식취득
+      - 자기주식의취득으로인한현금의유출
+      - 자기주식의소각
+      - 자기주식소각
     canonical_id: BUYBACK
     amount_policy: abs
     cash_direction: outflow
@@ -759,6 +771,12 @@ rules:
     include_any:
       - 유상증자
       - 주식발행
+      - 주식의발행
+      - 보통주의발행
+      - 전환우선주의발행
+      - 상환우선주발행
+      - 전환상환우선주의발행
+      - 상환전환우선주의발행
       - 비지배지분의유상증자참여
       - 연결자본거래로인한현금유입
     canonical_id: EQ_ISSUE
@@ -1060,6 +1078,7 @@ rules:
     priority: 700
     exact_any:
       - 재고자산
+      - 유동재고자산
     canonical_id: INVENTORIES
 
   - id: bs_ppe
@@ -1074,6 +1093,9 @@ rules:
     priority: 700
     exact_any:
       - 무형자산
+      - 개발비
+      - 2.개발비
+      - 개발중인무형자산
       - 영업권및무형자산
       - 영업권및기타무형자산
       - 영업권과무형자산
@@ -1127,6 +1149,7 @@ rules:
     priority: 700
     exact_any:
       - 매출채권
+      - 장기매출채권
     canonical_id: TRADE_RECEIVABLES
 
   - id: bs_trade_and_other_receivables_fallback
@@ -1142,6 +1165,13 @@ rules:
       - 매출채권및기타금융채권
       - 매출채권 및 기타채권 합계
       - 매출채권 및 기타유동채권
+      - 장기매출채권및기타비유동채권
+      - 장기매출채권및기타채권
+      - 기타채권
+      - 미수금
+      - 미수수익
+      - 단기미수금
+      - 단기미수수익
     canonical_id: OTHER_RECEIVABLES
     reason: 현재 캐노니컬에 매출채권및기타채권 계정이 없어 fallback
 
@@ -1150,6 +1180,7 @@ rules:
     priority: 700
     exact_any:
       - 매입채무
+      - 단기매입채무
     canonical_id: TRADE_PAYABLES
 
   - id: bs_trade_and_other_payables_fallback
@@ -1162,6 +1193,13 @@ rules:
       - 장기매입채무 및 기타채무
       - 매입채무및미지급금
       - 매입채무 및 미지급금
+      - 매입채무및기타유동채무
+      - 장기매입채무및기타비유동채무
+      - 미지급금
+      - 미지급비용
+      - 단기미지급금
+      - 장기미지급금
+      - 기타채무
     canonical_id: OTHER_PAYABLES
     reason: 현재 캐노니컬에 매입채무및기타채무 계정이 없어 fallback
 
@@ -1171,6 +1209,11 @@ rules:
     exact_any:
       - 단기차입금
       - 유동성장기부채
+      - 유동성장기차입금
+      - 유동성전환사채
+      - 유동성사채
+      - 유동차입금
+      - 유동차입금(사채포함)
       - 단기금융부채
     canonical_id: SHORT_TERM_DEBT
 
@@ -1180,6 +1223,7 @@ rules:
     exact_any:
       - 장기차입금
       - 사채
+      - 전환사채
       - 장기금융부채
     canonical_id: LONG_TERM_DEBT
 
@@ -1269,6 +1313,11 @@ rules:
     priority: 700
     exact_any:
       - 이익잉여금
+      - 이익잉여금(결손금)
+      - 미처분이익잉여금
+      - 미처분이익잉여금(미처리결손금)
+      - 결손금
+      - (5)이익잉여금(결손금)
     canonical_id: RETAINED_EARNINGS
 
   # =========================
@@ -1675,6 +1724,16 @@ rules:
       - 연구개발비
       - 기술개발비
       - 경상개발비판관비
+      - 소프트웨어개발비
+      - 연구개발비등
+      - 개발비등
+      - 연구및개발비
+      - 연구및개발비용
+      - 특정과제연구개발비
+      - 기타연구개발비
+      - 시험연구비
+      - 경상시험연구비
+      - 위탁연구비
     canonical_id: RND
 
   - id: is_amortization

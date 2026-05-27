@@ -118,6 +118,75 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["roic_financial"], 30.0)
         self.assertAlmostEqual(latest["roic_operational"], 30.0)
 
+    def test_nopat_uses_historical_tax_rate_without_imputing_rnd(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2024,
+                    "financial_period": "2024-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "PPE": 500,
+                    "EAOP": 500,
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": 100,
+                    "NET_INCOME": 75,
+                    "NET_INCOME_PARENT": 75,
+                    "TAX_EXPENSE": 25,
+                    "PBT": 100,
+                    "RND": 10,
+                },
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "PPE": 500,
+                    "EAOP": 500,
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": 200,
+                    "NET_INCOME": 100,
+                    "NET_INCOME_PARENT": 100,
+                    "TAX_EXPENSE": 25,
+                    "PBT": -100,
+                },
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+        latest = result.iloc[-1]
+
+        self.assertTrue(pd.isna(latest["tax_rate"]))
+        self.assertAlmostEqual(latest["nopat"], 150.0)
+        self.assertAlmostEqual(latest["roic_financial"], 30.0)
+        self.assertAlmostEqual(latest["roic_operational"], 30.0)
+        self.assertTrue(pd.isna(latest["xrd"]))
+        self.assertTrue(pd.isna(latest["rnd_margin"]))
+
+    def test_nopat_uses_statutory_tax_rate_when_no_reported_rate_exists(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "PPE": 500,
+                    "EAOP": 500,
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": 100,
+                    "NET_INCOME": 80,
+                    "NET_INCOME_PARENT": 80,
+                }
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+        latest = result.iloc[-1]
+
+        self.assertTrue(pd.isna(latest["tax_rate"]))
+        self.assertAlmostEqual(latest["nopat"], 79.0)
+
     def test_requested_growth_and_margin_factors_are_calculated(self):
         revenues = [100, 120, 144, 172.8, 207.36, 248.832]
         financial_df = pd.DataFrame(

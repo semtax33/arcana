@@ -38,6 +38,7 @@ const DIVIDEND_DIR = path.join(ROOT, "data-lake", "bronze", "dart", "dividend");
 const OUT_DIR = path.join(ROOT, "data-lake", "gold", "factor_coverage");
 const OUT_CSV = path.join(OUT_DIR, "kr_factor_coverage_all_stocks.csv");
 const OUT_SUMMARY = path.join(OUT_DIR, "factor_coverage_summary.json");
+const DEFAULT_NOPAT_TAX_RATE = 0.21;
 
 function todaySeoulText() {
   const parts = new Intl.DateTimeFormat("en", {
@@ -306,6 +307,15 @@ function pickLargestAbs(values) {
   return best;
 }
 
+function median(values) {
+  const covered = values.filter(isCovered).slice().sort((a, b) => a - b);
+  if (covered.length === 0) return null;
+  const mid = Math.floor(covered.length / 2);
+  return covered.length % 2 === 1
+    ? covered[mid]
+    : (covered[mid - 1] + covered[mid]) / 2;
+}
+
 function extractAmountByName(
   rows,
   patterns,
@@ -399,6 +409,7 @@ function readAnnualFinancials(stockCode, files) {
 }
 function addAnnualFinancialFactors(rows) {
   const result = [];
+  const validTaxRates = [];
   for (let i = 0; i < rows.length; i++) {
     const source = rows[i];
     const prev = i > 0 ? result[i - 1] : {};
@@ -480,13 +491,23 @@ function addAnnualFinancialFactors(rows) {
     r.tax_rate = div(r.tax_expense, r.pbt);
     if (isCovered(r.tax_rate) && (r.tax_rate < 0 || r.tax_rate > 1))
       r.tax_rate = null;
-    r.nopat = mul(r.oiadp, isCovered(r.tax_rate) ? 1 - r.tax_rate : null);
+    let nopatTaxRate = r.tax_rate;
+    if (!isCovered(nopatTaxRate)) {
+      const historicalTaxRate = median(validTaxRates);
+      nopatTaxRate = isCovered(historicalTaxRate)
+        ? historicalTaxRate
+        : isCovered(r.oiadp) && r.oiadp < 0
+          ? 0
+          : DEFAULT_NOPAT_TAX_RATE;
+    }
+    if (isCovered(r.tax_rate)) validTaxRates.push(r.tax_rate);
+    r.nopat = mul(r.oiadp, isCovered(nopatTaxRate) ? 1 - nopatTaxRate : null);
     r.avg_parent_equity =
       isCovered(r.ceq) && isCovered(prev.ceq) ? (r.ceq + prev.ceq) / 2 : null;
     r.roe = div(r.ni_parent, r.avg_parent_equity);
     r.roa = div(r.ni, r.avg_assets);
     r.iroe = div(
-      add(r.ni_parent, fill0(r.xrd) * (1 - fill0(r.tax_rate))),
+      add(r.ni_parent, fill0(r.xrd) * (1 - fill0(nopatTaxRate))),
       r.avg_parent_equity,
     );
     r.debt = fill0(r.dltt) + fill0(r.dlc);
