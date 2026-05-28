@@ -156,6 +156,41 @@ Normalize dividend silver CSV만 갱신:
 python -c "from engine.loaders.dividends import refresh_silver_dividend_files; refresh_silver_dividend_files()"
 ```
 
+US SEC dividend event CSV와 daily dividend CSV 갱신:
+
+```powershell
+python -c "from engine.loaders.dividends import refresh_silver_dividend_files; refresh_silver_dividend_files(market='us')"
+```
+
+US 배당 정규화는 `data-lake/bronze/sec/financial-statement-and-notes-data-set/`의
+SEC Notes Dataset을 1순위로 사용하고, 부족한 값은 선택 의존성인
+edgartools fallback으로 보완합니다. 매핑 규칙은
+`data-lake/meta/rules/us_dividend.yaml`에 있으며, `10-K`, `10-Q`, `8-K`
+및 amendment form의 XBRL fact에서 선언일, 기준일, 지급일, 1주당 배당금을
+추출합니다. `10-K` 원문 HTML/PDF를 직접 파싱하지 않고 SEC Notes/companyfacts
+및 edgartools가 노출하는 XBRL fact를 사용합니다.
+
+산출물:
+
+```text
+data-lake/silver/us/dividend/us_dividend_events.csv
+data-lake/silver/us/dividend/us_dividend_normalized.csv
+```
+
+`us_dividend_events.csv` 컬럼:
+
+```text
+ticker,cik,company_name,exchange,dividend_declared_date,dividend_record_date,
+dividend_payment_date,dividend_amount_per_share,sec_filing_date,source_form,
+annual_dps,annual_eps,payout_ratio_dps_over_eps,
+payout_ratio_total_dividends_over_net_income
+```
+
+`us_dividend_normalized.csv`는 기존 `stock_dividend` 적재 스키마를 유지하며
+`trade_date=dividend_payment_date`, `dividend=dividend_amount_per_share`로 생성됩니다.
+US 팩터 계산과 백테스트 입력 factor table은 이 SEC 기반 daily dividend CSV를
+읽어 배당수익률, DPS, payout ratio, 배당 성장/삭감 관련 팩터를 계산합니다.
+
 Normalize benchmark silver CSV만 갱신:
 
 ```powershell
@@ -186,12 +221,42 @@ python -m engine.loaders.filings
 python -m engine.loaders.securities
 python -m engine.loaders.securities --market us
 python -m engine.loaders.dividends
+python -m engine.loaders.dividends --market us --dry-run
+python -m engine.loaders.dividends --market us
 ```
 
 `securities` 적재는 시장별 GICS 규칙을 적용해 `issuers`의 `sector_code`,
 `industry_group_code`, `industry_group_name`을 함께 채웁니다. KR 규칙은
 `data-lake/meta/rules/gics_rules_kr.yaml`, US 규칙은
 `data-lake/meta/rules/gics_rules_us.yaml`을 사용합니다.
+
+`engine.loaders.dividends --market us`는 먼저
+`data-lake/silver/us/dividend/us_dividend_events.csv`와
+`data-lake/silver/us/dividend/us_dividend_normalized.csv`를 갱신한 뒤,
+아래 ClickHouse 테이블에 적재합니다. `--dry-run`은 silver CSV만 준비하고
+ClickHouse insert는 수행하지 않습니다.
+
+```sql
+CREATE TABLE IF NOT EXISTS arcana.stock_dividend
+(
+    security_id      String,
+    trade_date       Date,
+    dividend         Nullable(Decimal(20, 6)),
+    payout_ratio     Nullable(Float64),
+    dividend_percent Nullable(Float64),
+    currency         LowCardinality(String)      default '',
+    updated_at       DateTime64(3, 'Asia/Seoul') default now64(3)
+)
+    engine = ReplacingMergeTree(updated_at)
+        PARTITION BY toYYYYMM(trade_date)
+        ORDER BY (trade_date, security_id)
+        SETTINGS index_granularity = 8192;
+```
+
+로더는 insert 직전에 `stock_dividend` 스키마에 맞춰 컬럼 순서와 타입을
+정규화합니다. `trade_date`는 Date, `dividend`는 Decimal(20, 6),
+`payout_ratio`와 `dividend_percent`는 nullable Float64, `updated_at`은
+Asia/Seoul 기준 loader 실행 시각으로 들어갑니다.
 
 ### 5. Load Factors
 

@@ -6,6 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import pandas as pd
+import yaml
 
 from engine.core.paths import (
     DATA_LAKE,
@@ -28,6 +29,13 @@ silver_dividend_company_summary_path = silver_dividend_dir / market_csv_name("di
 price_file_path = DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price"))
 krx_price_file_path = DATA_LAKE.silver("krx", "price", "kr_normalized_price.csv")
 us_price_base_dir = DATA_LAKE.bronze("yfinance", "price")
+us_sec_notes_dir = DATA_LAKE.bronze("sec", "financial-statement-and-notes-data-set")
+us_sec_financial_dir = DATA_LAKE.silver("sec", "normalized")
+us_sec_ticker_map_path = DATA_LAKE.meta("sec_company_tickers.csv")
+us_dividend_rule_path = DATA_LAKE.rules("us_dividend.yaml")
+us_silver_dividend_dir = DATA_LAKE.silver("us", "dividend")
+us_dividend_events_path = us_silver_dividend_dir / "us_dividend_events.csv"
+us_dividend_normalized_path = us_silver_dividend_dir / market_csv_name("dividend_normalized", market="us")
 
 COMMON_STOCK_KIND_LABELS = {"보통주", "보통주식", "common", "ordinary"}
 REPORT_ORDER = {
@@ -75,6 +83,23 @@ DIVIDEND_SUMMARY_FAILED_COLUMNS = [
     "source_file",
     "reason",
 ]
+US_DIVIDEND_EVENT_COLUMNS = [
+    "ticker",
+    "cik",
+    "company_name",
+    "exchange",
+    "dividend_declared_date",
+    "dividend_record_date",
+    "dividend_payment_date",
+    "dividend_amount_per_share",
+    "sec_filing_date",
+    "source_form",
+    "annual_dps",
+    "annual_eps",
+    "payout_ratio_dps_over_eps",
+    "payout_ratio_total_dividends_over_net_income",
+]
+DEFAULT_US_DIVIDEND_FORMS = {"10-K", "10-K/A", "10-Q", "10-Q/A", "8-K", "8-K/A"}
 
 
 def coerce_dividend_result_dtypes(df):
@@ -980,6 +1005,695 @@ def _pick_column(df, candidates, required=True):
     return None
 
 
+def _safe_text(value):
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    return str(value).strip()
+
+
+def _normalize_cik(value):
+    text = re.sub(r"\D", "", _safe_text(value))
+    return str(int(text)) if text else ""
+
+
+def _normalize_us_dividend_tag(value):
+    text = _safe_text(value)
+    if ":" in text:
+        text = text.split(":", 1)[1]
+    return text
+
+
+def _normalize_us_dividend_date(value):
+    text = _safe_text(value)
+    if not text:
+        return ""
+    if re.fullmatch(r"\d{8}", text):
+        return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return text
+    if re.fullmatch(r"\d{4}-\d{2}", text):
+        return text
+    parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return text
+    return parsed.strftime("%Y-%m-%d")
+
+
+def _is_full_iso_date(value):
+    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", _safe_text(value)))
+
+
+def _read_tsv_if_exists(path, *, usecols=None, chunksize=None):
+    path = Path(path)
+    if not path.exists():
+        if chunksize:
+            return []
+        return pd.DataFrame()
+    return pd.read_csv(
+        path,
+        sep="\t",
+        dtype=str,
+        keep_default_na=False,
+        usecols=usecols,
+        chunksize=chunksize,
+    )
+
+
+def _load_us_dividend_rules(path=None):
+    path = Path(path) if path is not None else us_dividend_rule_path
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    fields = data.get("fields", {})
+    if not isinstance(fields, dict):
+        raise ValueError(f"fields must be a mapping: {path}")
+
+    for field in [
+        "dividend_declared_date",
+        "dividend_record_date",
+        "dividend_payment_date",
+        "dividend_amount_per_share",
+    ]:
+        if not isinstance(fields.get(field, []), list):
+            raise ValueError(f"{field} must be a list: {path}")
+
+    return {
+        "allowed_forms": {
+            _safe_text(form).upper()
+            for form in data.get("allowed_forms", DEFAULT_US_DIVIDEND_FORMS)
+            if _safe_text(form)
+        },
+        "fields": fields,
+        "dimension_exclude_patterns": [
+            re.compile(pattern)
+            for pattern in data.get("dimension_exclude_patterns", [])
+        ],
+    }
+
+
+def _us_dividend_field_by_tag(rules):
+    result = {}
+    for field, items in rules["fields"].items():
+        for priority, item in enumerate(items):
+            tags = item.get("tags", []) if isinstance(item, dict) else []
+            for tag in tags:
+                result[_normalize_us_dividend_tag(tag)] = (field, priority)
+    return result
+
+
+def _load_sec_ticker_map(path=None):
+    path = Path(path) if path is not None else us_sec_ticker_map_path
+    columns = ["cik", "ticker", "title"]
+    if not path.exists():
+        return pd.DataFrame(columns=columns)
+
+    df = pd.read_csv(path, dtype=str).fillna("")
+    lower = {str(column).lower(): column for column in df.columns}
+    rename_map = {}
+    for canonical, aliases in {
+        "cik": ["cik", "cik_str"],
+        "ticker": ["ticker", "symbol"],
+        "title": ["title", "name", "company_name"],
+    }.items():
+        for alias in aliases:
+            if alias in lower:
+                rename_map[lower[alias]] = canonical
+                break
+    df = df.rename(columns=rename_map)
+    for column in columns:
+        if column not in df.columns:
+            df[column] = ""
+    df["cik"] = df["cik"].map(_normalize_cik)
+    df["ticker"] = df["ticker"].map(lambda value: US_MARKET_CONFIG.normalize_symbol(value))
+    return df[columns].drop_duplicates()
+
+
+def _iter_sec_notes_dirs(notes_root):
+    notes_root = Path(notes_root)
+    if (notes_root / "sub.tsv").exists():
+        yield notes_root
+        return
+    if not notes_root.exists():
+        return
+    for child in sorted(notes_root.iterdir()):
+        if child.is_dir() and (child / "sub.tsv").exists():
+            yield child
+
+
+def _field_value(field, values):
+    if not values:
+        return "", False
+    best_priority = min(priority for priority, _, _ in values)
+    best_values = [
+        value
+        for priority, value, _ in values
+        if priority == best_priority and _safe_text(value)
+    ]
+    distinct = sorted({_safe_text(value) for value in best_values})
+    if not distinct:
+        return "", False
+    if len(distinct) > 1:
+        return "", True
+    return distinct[0], False
+
+
+def _add_group_value(groups, key, field, priority, value, tag):
+    if not _safe_text(value):
+        return
+    groups.setdefault(key, {}).setdefault(field, []).append((priority, value, tag))
+
+
+def _reports_for_fact(pre_reports, adsh, tag, version):
+    reports = pre_reports.get((adsh, tag, version))
+    if reports:
+        return reports
+    reports = pre_reports.get((adsh, tag, ""))
+    if reports:
+        return reports
+    return {""}
+
+
+def _dimension_allowed(dimh, dim_segments, rules):
+    if not dimh or dimh == "0x00000000":
+        return True
+    segments = dim_segments.get(dimh, "")
+    if not segments:
+        return True
+    return not any(pattern.search(segments) for pattern in rules["dimension_exclude_patterns"])
+
+
+def _load_dim_segments(notes_dir, dimh_values):
+    if not dimh_values or not (Path(notes_dir) / "dim.tsv").exists():
+        return {}
+    wanted = set(dimh_values)
+    segments = {}
+    for chunk in _read_tsv_if_exists(
+        Path(notes_dir) / "dim.tsv",
+        usecols=lambda column: column in {"dimhash", "segments"},
+        chunksize=200_000,
+    ):
+        part = chunk.loc[chunk["dimhash"].isin(wanted)].copy()
+        for row in part.to_dict("records"):
+            segments[_safe_text(row.get("dimhash"))] = _safe_text(row.get("segments"))
+    return segments
+
+
+def _extract_sec_notes_dividend_events(
+    *,
+    notes_root=None,
+    ticker_map_path=None,
+    rules_path=None,
+    symbols=None,
+):
+    notes_root = Path(notes_root) if notes_root is not None else us_sec_notes_dir
+    rules = _load_us_dividend_rules(rules_path)
+    field_by_tag = _us_dividend_field_by_tag(rules)
+    wanted_tags = set(field_by_tag)
+    ticker_map = _load_sec_ticker_map(ticker_map_path)
+    if ticker_map.empty or not wanted_tags:
+        return pd.DataFrame(columns=US_DIVIDEND_EVENT_COLUMNS)
+
+    wanted_symbols = None
+    if symbols is not None:
+        wanted_symbols = {US_MARKET_CONFIG.normalize_symbol(symbol) for symbol in symbols}
+        ticker_map = ticker_map.loc[ticker_map["ticker"].isin(wanted_symbols)].copy()
+    if ticker_map.empty:
+        return pd.DataFrame(columns=US_DIVIDEND_EVENT_COLUMNS)
+
+    ticker_by_cik = dict(zip(ticker_map["cik"], ticker_map["ticker"]))
+    title_by_cik = dict(zip(ticker_map["cik"], ticker_map["title"]))
+    rows = []
+
+    for notes_dir in _iter_sec_notes_dirs(notes_root):
+        sub = _read_tsv_if_exists(
+            notes_dir / "sub.tsv",
+            usecols=lambda column: column in {"adsh", "cik", "name", "form", "filed"},
+        )
+        if sub.empty:
+            continue
+        sub["cik"] = sub["cik"].map(_normalize_cik)
+        sub["form"] = sub["form"].astype(str).str.upper()
+        sub = sub.loc[
+            sub["cik"].isin(ticker_by_cik)
+            & sub["form"].isin(rules["allowed_forms"])
+        ].copy()
+        if sub.empty:
+            continue
+
+        submissions = {
+            row["adsh"]: {
+                "cik": row["cik"],
+                "ticker": ticker_by_cik.get(row["cik"], ""),
+                "company_name": _safe_text(row.get("name")) or title_by_cik.get(row["cik"], ""),
+                "form": row["form"],
+                "filed": _normalize_us_dividend_date(row.get("filed")),
+                "exchange": "",
+            }
+            for row in sub.to_dict("records")
+        }
+        needed_adsh = set(submissions)
+
+        pre_reports = {}
+        pre_path = notes_dir / "pre.tsv"
+        if pre_path.exists():
+            for chunk in _read_tsv_if_exists(
+                pre_path,
+                usecols=lambda column: column in {"adsh", "report", "tag", "version"},
+                chunksize=300_000,
+            ):
+                tag_series = chunk["tag"].map(_normalize_us_dividend_tag)
+                part = chunk.loc[chunk["adsh"].isin(needed_adsh) & tag_series.isin(wanted_tags)].copy()
+                if part.empty:
+                    continue
+                part["_tag"] = part["tag"].map(_normalize_us_dividend_tag)
+                for row in part.to_dict("records"):
+                    key = (_safe_text(row.get("adsh")), _safe_text(row.get("_tag")), _safe_text(row.get("version")))
+                    pre_reports.setdefault(key, set()).add(_safe_text(row.get("report")))
+
+        groups = {}
+        dimh_values = set()
+        num_path = notes_dir / "num.tsv"
+        if num_path.exists():
+            for chunk in _read_tsv_if_exists(
+                num_path,
+                usecols=lambda column: column in {"adsh", "tag", "version", "ddate", "uom", "dimh", "value"},
+                chunksize=300_000,
+            ):
+                tag_series = chunk["tag"].map(_normalize_us_dividend_tag)
+                part = chunk.loc[chunk["adsh"].isin(needed_adsh) & tag_series.isin(wanted_tags)].copy()
+                if part.empty:
+                    continue
+                part["_tag"] = part["tag"].map(_normalize_us_dividend_tag)
+                for row in part.to_dict("records"):
+                    tag = _safe_text(row.get("_tag"))
+                    field, priority = field_by_tag[tag]
+                    if field != "dividend_amount_per_share":
+                        continue
+                    amount = normalize_decimal_amount(row.get("value"))
+                    if amount is None or amount <= 0:
+                        continue
+                    adsh = _safe_text(row.get("adsh"))
+                    version = _safe_text(row.get("version"))
+                    dimh = _safe_text(row.get("dimh"))
+                    dimh_values.add(dimh)
+                    for report in _reports_for_fact(pre_reports, adsh, tag, version):
+                        _add_group_value(groups, (adsh, report, dimh), field, priority, amount, tag)
+
+        txt_path = notes_dir / "txt.tsv"
+        if txt_path.exists():
+            meta_tags = {"SecurityExchangeName", "TradingSymbol"}
+            for chunk in _read_tsv_if_exists(
+                txt_path,
+                usecols=lambda column: column in {"adsh", "tag", "version", "ddate", "dimh", "value"},
+                chunksize=300_000,
+            ):
+                tag_series = chunk["tag"].map(_normalize_us_dividend_tag)
+                part = chunk.loc[
+                    chunk["adsh"].isin(needed_adsh)
+                    & (tag_series.isin(wanted_tags) | tag_series.isin(meta_tags))
+                ].copy()
+                if part.empty:
+                    continue
+                part["_tag"] = part["tag"].map(_normalize_us_dividend_tag)
+                for row in part.to_dict("records"):
+                    tag = _safe_text(row.get("_tag"))
+                    adsh = _safe_text(row.get("adsh"))
+                    value = _safe_text(row.get("value"))
+                    if tag == "SecurityExchangeName":
+                        submissions[adsh]["exchange"] = value
+                        continue
+                    if tag == "TradingSymbol" and value and not submissions[adsh]["ticker"]:
+                        submissions[adsh]["ticker"] = US_MARKET_CONFIG.normalize_symbol(value)
+                        continue
+                    field, priority = field_by_tag[tag]
+                    if field == "dividend_amount_per_share":
+                        continue
+                    version = _safe_text(row.get("version"))
+                    dimh = _safe_text(row.get("dimh"))
+                    dimh_values.add(dimh)
+                    date_value = _normalize_us_dividend_date(value)
+                    for report in _reports_for_fact(pre_reports, adsh, tag, version):
+                        _add_group_value(groups, (adsh, report, dimh), field, priority, date_value, tag)
+
+        dim_segments = _load_dim_segments(notes_dir, dimh_values)
+        for (adsh, _, dimh), values_by_field in groups.items():
+            if not _dimension_allowed(dimh, dim_segments, rules):
+                continue
+            amount, amount_ambiguous = _field_value("dividend_amount_per_share", values_by_field.get("dividend_amount_per_share", []))
+            payment_date, payment_ambiguous = _field_value("dividend_payment_date", values_by_field.get("dividend_payment_date", []))
+            if amount_ambiguous or payment_ambiguous or not amount or not payment_date:
+                continue
+            declared_date, declared_ambiguous = _field_value("dividend_declared_date", values_by_field.get("dividend_declared_date", []))
+            record_date, record_ambiguous = _field_value("dividend_record_date", values_by_field.get("dividend_record_date", []))
+            if declared_ambiguous or record_ambiguous:
+                continue
+            sub_row = submissions.get(adsh, {})
+            rows.append(
+                {
+                    "ticker": sub_row.get("ticker", ""),
+                    "cik": sub_row.get("cik", ""),
+                    "company_name": sub_row.get("company_name", ""),
+                    "exchange": sub_row.get("exchange", ""),
+                    "dividend_declared_date": declared_date,
+                    "dividend_record_date": record_date,
+                    "dividend_payment_date": payment_date,
+                    "dividend_amount_per_share": amount,
+                    "sec_filing_date": sub_row.get("filed", ""),
+                    "source_form": sub_row.get("form", ""),
+                    "_source": "sec_notes",
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+def _default_us_dividend_edgartools_provider(symbol, cik, company_name, rules):
+    try:
+        from edgar import Company, set_identity  # type: ignore
+    except Exception as exc:
+        print(f"[WARN] edgartools dividend fallback skipped for {symbol}: import failed ({type(exc).__name__})")
+        return []
+
+    import os
+
+    identity = os.environ.get("EDGAR_IDENTITY") or os.environ.get("SEC_IDENTITY")
+    if identity:
+        try:
+            set_identity(identity)
+        except Exception:
+            pass
+
+    try:
+        company = Company(symbol or int(cik))
+        facts_obj = getattr(company, "facts", None)
+        facts_obj = facts_obj() if callable(facts_obj) else facts_obj
+        to_pandas = getattr(facts_obj, "to_pandas", None)
+        if callable(to_pandas):
+            return to_pandas().to_dict("records")
+        if isinstance(facts_obj, pd.DataFrame):
+            return facts_obj.to_dict("records")
+    except Exception as exc:
+        print(f"[WARN] edgartools dividend fallback skipped for {symbol}: {type(exc).__name__}: {exc}")
+    return []
+
+
+def _extract_edgartools_dividend_events(
+    *,
+    ticker_map_path=None,
+    rules_path=None,
+    symbols=None,
+    provider=None,
+):
+    provider = provider or _default_us_dividend_edgartools_provider
+    rules = _load_us_dividend_rules(rules_path)
+    field_by_tag = _us_dividend_field_by_tag(rules)
+    ticker_map = _load_sec_ticker_map(ticker_map_path)
+    if symbols is not None:
+        wanted_symbols = {US_MARKET_CONFIG.normalize_symbol(symbol) for symbol in symbols}
+        ticker_map = ticker_map.loc[ticker_map["ticker"].isin(wanted_symbols)].copy()
+    rows = []
+    for item in ticker_map.to_dict("records"):
+        ticker = item["ticker"]
+        cik = item["cik"]
+        company_name = item["title"]
+        raw_rows = provider(ticker, cik, company_name, rules)
+        event_rows = []
+        grouped = {}
+        for raw in raw_rows or []:
+            if "dividend_amount_per_share" in raw or "dividend_payment_date" in raw:
+                event_rows.append(raw)
+                continue
+            lower = {str(key).lower(): key for key in raw}
+            tag_key = next((lower[name] for name in ["tag", "concept", "name"] if name in lower), None)
+            value_key = next((lower[name] for name in ["value", "val"] if name in lower), None)
+            if tag_key is None or value_key is None:
+                continue
+            tag = _normalize_us_dividend_tag(raw.get(tag_key))
+            if tag not in field_by_tag:
+                continue
+            field, priority = field_by_tag[tag]
+            accn = _safe_text(raw.get(lower.get("accn", "")) or raw.get(lower.get("accession", "")) or raw.get(lower.get("adsh", "")))
+            dimh = _safe_text(raw.get(lower.get("dimh", "")))
+            key = (accn, dimh)
+            value = normalize_decimal_amount(raw.get(value_key)) if field == "dividend_amount_per_share" else _normalize_us_dividend_date(raw.get(value_key))
+            _add_group_value(grouped, key, field, priority, value, tag)
+
+        for raw in event_rows:
+            rows.append(
+                {
+                    "ticker": US_MARKET_CONFIG.normalize_symbol(raw.get("ticker") or raw.get("symbol") or ticker),
+                    "cik": _normalize_cik(raw.get("cik") or cik),
+                    "company_name": _safe_text(raw.get("company_name") or raw.get("entity_name") or company_name),
+                    "exchange": _safe_text(raw.get("exchange")),
+                    "dividend_declared_date": _normalize_us_dividend_date(raw.get("dividend_declared_date")),
+                    "dividend_record_date": _normalize_us_dividend_date(raw.get("dividend_record_date")),
+                    "dividend_payment_date": _normalize_us_dividend_date(raw.get("dividend_payment_date")),
+                    "dividend_amount_per_share": normalize_decimal_amount(raw.get("dividend_amount_per_share")),
+                    "sec_filing_date": _normalize_us_dividend_date(raw.get("sec_filing_date") or raw.get("filed")),
+                    "source_form": _safe_text(raw.get("source_form") or raw.get("form")),
+                    "_source": "edgartools",
+                }
+            )
+
+        for values_by_field in grouped.values():
+            amount, amount_ambiguous = _field_value("dividend_amount_per_share", values_by_field.get("dividend_amount_per_share", []))
+            payment_date, payment_ambiguous = _field_value("dividend_payment_date", values_by_field.get("dividend_payment_date", []))
+            if amount_ambiguous or payment_ambiguous or not amount or not payment_date:
+                continue
+            declared_date, declared_ambiguous = _field_value("dividend_declared_date", values_by_field.get("dividend_declared_date", []))
+            record_date, record_ambiguous = _field_value("dividend_record_date", values_by_field.get("dividend_record_date", []))
+            if declared_ambiguous or record_ambiguous:
+                continue
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "cik": cik,
+                    "company_name": company_name,
+                    "exchange": "",
+                    "dividend_declared_date": declared_date,
+                    "dividend_record_date": record_date,
+                    "dividend_payment_date": payment_date,
+                    "dividend_amount_per_share": amount,
+                    "sec_filing_date": "",
+                    "source_form": "",
+                    "_source": "edgartools",
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+def _read_us_annual_financial_metrics(tickers, financial_dir=None):
+    financial_dir = Path(financial_dir) if financial_dir is not None else us_sec_financial_dir
+    result = {}
+    for ticker in sorted({US_MARKET_CONFIG.normalize_symbol(ticker) for ticker in tickers if _safe_text(ticker)}):
+        path = financial_dir / f"us_normalized_{ticker}.csv"
+        if not path.exists():
+            continue
+        df = pd.read_csv(path)
+        required = {"canonical_account_id", "normalized_amount", "fiscal_year"}
+        if not required.issubset(df.columns):
+            continue
+        df["fiscal_year"] = pd.to_numeric(df["fiscal_year"], errors="coerce")
+        df["fiscal_month"] = pd.to_numeric(df.get("fiscal_month"), errors="coerce")
+        df["normalized_amount"] = pd.to_numeric(df["normalized_amount"], errors="coerce")
+        for year, year_df in df.dropna(subset=["fiscal_year"]).groupby("fiscal_year"):
+            year_key = int(year)
+            by_id = {}
+            for account_id, account_df in year_df.groupby("canonical_account_id", sort=False):
+                ordered = account_df.sort_values("fiscal_month", na_position="first")
+                values = ordered["normalized_amount"].dropna()
+                if not values.empty:
+                    by_id[str(account_id)] = float(values.iloc[-1])
+            eps = by_id.get("DILUTED_EPS")
+            if eps is None:
+                eps = by_id.get("BASIC_EPS")
+            net_income = by_id.get("NET_INCOME")
+            div_paid = by_id.get("DIV_PAID")
+            result[(ticker, year_key)] = {
+                "annual_eps": eps,
+                "payout_ratio_total_dividends_over_net_income": (
+                    abs(div_paid) / net_income
+                    if div_paid is not None and net_income is not None and net_income > 0
+                    else None
+                ),
+            }
+    return result
+
+
+def _dedupe_us_dividend_events(df):
+    if df.empty:
+        return pd.DataFrame(columns=[*US_DIVIDEND_EVENT_COLUMNS, "_source"])
+    df = df.copy()
+    df["ticker"] = df["ticker"].map(lambda value: US_MARKET_CONFIG.normalize_symbol(value))
+    df["cik"] = df["cik"].map(_normalize_cik)
+    df["dividend_amount_per_share"] = pd.to_numeric(df["dividend_amount_per_share"], errors="coerce")
+    df = df.dropna(subset=["dividend_amount_per_share"])
+    df = df.loc[(df["ticker"] != "") & (df["cik"] != "") & (df["dividend_payment_date"] != "")]
+    if df.empty:
+        return pd.DataFrame(columns=[*US_DIVIDEND_EVENT_COLUMNS, "_source"])
+    df["_amount_key"] = df["dividend_amount_per_share"].map(lambda value: format(float(value), ".12g"))
+    source_series = (
+        df["_source"]
+        if "_source" in df.columns
+        else pd.Series([""] * len(df), index=df.index)
+    )
+    df["_source_rank"] = source_series.map({"sec_notes": 0, "edgartools": 1}).fillna(9)
+    df = df.sort_values(
+        ["_source_rank", "sec_filing_date", "source_form"],
+        ascending=[True, False, False],
+    )
+    df = (
+        df.groupby(["ticker", "cik", "dividend_payment_date", "_amount_key"], as_index=False, sort=False)
+        .head(1)
+        .sort_values(["ticker", "dividend_payment_date", "sec_filing_date"])
+        .reset_index(drop=True)
+    )
+    return df.drop(columns=["_amount_key", "_source_rank"], errors="ignore")
+
+
+def _add_us_annual_dividend_metrics(df, financial_dir=None):
+    if df.empty:
+        return pd.DataFrame(columns=US_DIVIDEND_EVENT_COLUMNS)
+    df = df.copy()
+    df["_payment_year"] = df["dividend_payment_date"].astype(str).str.extract(r"^(\d{4})")[0]
+    df["_payment_year"] = pd.to_numeric(df["_payment_year"], errors="coerce")
+    dps_by_year = (
+        df.dropna(subset=["_payment_year"])
+        .groupby(["ticker", "_payment_year"], dropna=False)["dividend_amount_per_share"]
+        .sum()
+        .to_dict()
+    )
+    financials = _read_us_annual_financial_metrics(df["ticker"].dropna().unique(), financial_dir)
+
+    annual_dps = []
+    annual_eps = []
+    payout_eps = []
+    payout_total = []
+    for row in df.to_dict("records"):
+        year = row.get("_payment_year")
+        year_key = int(year) if not pd.isna(year) else None
+        ticker = row.get("ticker")
+        dps = dps_by_year.get((ticker, year)) if year_key is not None else None
+        metrics = financials.get((ticker, year_key), {}) if year_key is not None else {}
+        eps = metrics.get("annual_eps")
+        annual_dps.append(dps)
+        annual_eps.append(eps)
+        payout_eps.append(dps / eps if dps is not None and eps is not None and eps > 0 else None)
+        payout_total.append(metrics.get("payout_ratio_total_dividends_over_net_income"))
+
+    df["annual_dps"] = annual_dps
+    df["annual_eps"] = annual_eps
+    df["payout_ratio_dps_over_eps"] = payout_eps
+    df["payout_ratio_total_dividends_over_net_income"] = payout_total
+    return df[US_DIVIDEND_EVENT_COLUMNS]
+
+
+def build_us_sec_dividend_events_dataframe(
+    *,
+    notes_root=None,
+    ticker_map_path=None,
+    rules_path=None,
+    financial_dir=None,
+    symbols=None,
+    use_edgartools=True,
+    edgartools_provider=None,
+):
+    frames = [
+        _extract_sec_notes_dividend_events(
+            notes_root=notes_root,
+            ticker_map_path=ticker_map_path,
+            rules_path=rules_path,
+            symbols=symbols,
+        )
+    ]
+    if use_edgartools:
+        frames.append(
+            _extract_edgartools_dividend_events(
+                ticker_map_path=ticker_map_path,
+                rules_path=rules_path,
+                symbols=symbols,
+                provider=edgartools_provider,
+            )
+        )
+    non_empty = [frame for frame in frames if frame is not None and not frame.empty]
+    if not non_empty:
+        return pd.DataFrame(columns=US_DIVIDEND_EVENT_COLUMNS)
+    events = _dedupe_us_dividend_events(pd.concat(non_empty, ignore_index=True))
+    return _add_us_annual_dividend_metrics(events, financial_dir)
+
+
+def write_us_sec_dividend_events_file(
+    *,
+    output_path=None,
+    notes_root=None,
+    ticker_map_path=None,
+    rules_path=None,
+    financial_dir=None,
+    symbols=None,
+    use_edgartools=True,
+    edgartools_provider=None,
+):
+    output_path = Path(output_path) if output_path is not None else us_dividend_events_path
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    events = build_us_sec_dividend_events_dataframe(
+        notes_root=notes_root,
+        ticker_map_path=ticker_map_path,
+        rules_path=rules_path,
+        financial_dir=financial_dir,
+        symbols=symbols,
+        use_edgartools=use_edgartools,
+        edgartools_provider=edgartools_provider,
+    )
+    events.to_csv(output_path, index=False, encoding="utf-8-sig")
+    return events
+
+
+def _read_us_dividend_events(path=None):
+    path = Path(path) if path is not None else us_dividend_events_path
+    if not path.exists():
+        return pd.DataFrame(columns=US_DIVIDEND_EVENT_COLUMNS)
+    df = pd.read_csv(path, dtype={"ticker": str, "cik": str}).drop(
+        columns=[column for column in pd.read_csv(path, nrows=0).columns if str(column).startswith("Unnamed")],
+        errors="ignore",
+    )
+    for column in US_DIVIDEND_EVENT_COLUMNS:
+        if column not in df.columns:
+            df[column] = pd.NA
+    return df[US_DIVIDEND_EVENT_COLUMNS]
+
+
+def _us_dividend_events_to_daily_frame(events, stock_code=None):
+    schema_columns = _dividend_schema_columns()
+    if events.empty:
+        return pd.DataFrame(columns=schema_columns)
+    df = events.copy()
+    df["ticker"] = df["ticker"].map(lambda value: US_MARKET_CONFIG.normalize_symbol(value))
+    if stock_code is not None:
+        ticker = US_MARKET_CONFIG.normalize_symbol(stock_code)
+        df = df.loc[df["ticker"] == ticker].copy()
+    df["trade_date"] = df["dividend_payment_date"].map(_normalize_us_dividend_date)
+    df = df.loc[df["trade_date"].map(_is_full_iso_date)].copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+    df["dividend"] = pd.to_numeric(df["dividend_amount_per_share"], errors="coerce")
+    df = df.dropna(subset=["trade_date", "dividend"])
+    df = df.loc[df["dividend"] > 0].copy()
+    if df.empty:
+        return pd.DataFrame(columns=schema_columns)
+    df["security_id"] = df["ticker"].map(lambda value: security_id_of(value, US_MARKET_CONFIG))
+    df["payout_ratio"] = pd.to_numeric(df["payout_ratio_dps_over_eps"], errors="coerce")
+    df["dividend_percent"] = pd.NA
+    df["currency"] = US_MARKET_CONFIG.currency
+    df["updated_at"] = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    df = df[schema_columns]
+    return coerce_dividend_result_dtypes(df).sort_values(["security_id", "trade_date"]).reset_index(drop=True)
+
+
 def _read_yfinance_dividend_frame(file_path, price_column="Close"):
     file_path = Path(file_path)
     ticker = normalize_yfinance_ticker(file_path.stem)
@@ -1028,12 +1742,16 @@ def create_us_stock_dividend_dataframe(
     price_column="Close",
 ):
     schema_columns = _dividend_schema_columns()
-    if path is not None:
-        files = [Path(path)]
-    elif stock_code is not None:
-        files = [us_price_base_dir / f"{normalize_yfinance_ticker(stock_code)}.csv"]
-    else:
-        files = sorted(us_price_base_dir.glob("*.csv"))
+    if path is None:
+        return _us_dividend_events_to_daily_frame(_read_us_dividend_events(), stock_code)
+
+    source_path = Path(path)
+    if source_path.exists():
+        header = pd.read_csv(source_path, nrows=0)
+        if {"dividend_payment_date", "dividend_amount_per_share"}.issubset(header.columns):
+            return _us_dividend_events_to_daily_frame(_read_us_dividend_events(source_path), stock_code)
+
+    files = [source_path]
 
     frames = []
     for file_path in files:

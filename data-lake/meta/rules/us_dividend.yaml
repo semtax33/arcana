@@ -1,0 +1,48 @@
+allowed_forms:
+  - 10-K
+  - 10-K/A
+  - 10-Q
+  - 10-Q/A
+  - 8-K
+  - 8-K/A
+
+dimension_exclude_patterns:
+  - (?i)PreferredStock
+  - (?i)PreferenceStock
+  - (?i)Noncontrolling
+  - (?i)NonControlling
+  - (?i)DividendEquivalent
+  - (?i)RestrictedStock
+
+fields:
+  dividend_declared_date:
+    - tags:
+        - DividendsPayableDateDeclaredDayMonthAndYear
+        - DividendPayableDateDeclaredDayMonthAndYear
+    - tags:
+        - DividendsPayableDateDeclaredMonthAndYear
+        - DividendPayableDateDeclaredMonthAndYear
+  dividend_record_date:
+    - tags:
+        - DividendsPayableDateOfRecordDayMonthAndYear
+        - DividendPayableDateOfRecordDayMonthAndYear
+    - tags:
+        - DividendsPayableDateOfRecordMonthAndYear
+        - DividendPayableDateOfRecordMonthAndYear
+  dividend_payment_date:
+    - tags:
+        - DividendPayableDateToBePaidDayMonthAndYear
+        - DividendsPayableDateToBePaidDayMonthAndYear
+        - DividendsPayableDatePaidDayMonthAndYear
+        - DividendPayableDatePaidDayMonthAndYear
+    - tags:
+        - DividendsPayableDateToBePaidMonthAndYear
+        - DividendPayableDateToBePaidMonthAndYear
+        - DividendsPayableDatePaidMonthAndYear
+        - DividendPayableDatePaidMonthAndYear
+  dividend_amount_per_share:
+    - tags:
+        - DividendsPayableAmountPerShare
+        - DividendPayableAmountPerShare
+    - tags:
+        - CommonStockDividendsPerShareDeclared

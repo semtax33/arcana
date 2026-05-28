@@ -1467,16 +1467,32 @@ def add_us_dividend_factors(daily_df, stock_code, market_data_cache=None):
         .reindex(df["trade_date"])
         .fillna(0)
     )
+    payout_ratio = (
+        pd.to_numeric(events["payout_ratio"], errors="coerce")
+        if "payout_ratio" in events.columns
+        else pd.Series([math.nan] * len(events), index=events.index)
+    )
+    if payout_ratio.notna().any():
+        payout_series = (
+            events.assign(_payout_ratio=payout_ratio)
+            .dropna(subset=["_payout_ratio"])
+            .groupby("trade_date")["_payout_ratio"]
+            .last()
+            .reindex(df["trade_date"])
+            .ffill()
+        )
+    else:
+        payout_series = pd.Series([math.nan] * len(df), index=df.index)
     rolling_dps = event_series.rolling("365D", min_periods=1).sum()
     df["dvpsx"] = rolling_dps.to_numpy()
     df.loc[df["dvpsx"] <= 0, "dvpsx"] = math.nan
     df["dvpsp"] = math.nan
     df["sharehold_div_yield"] = df["dvpsx"] / df["close"] * 100
-    df["tdpr"] = math.nan
+    df["tdpr"] = payout_series.to_numpy() * 100
     df["total_dividend_amount"] = df["dvpsx"] * numeric_column(df, "shares")
     df["dividend_fiscal_year"] = df["trade_date"].dt.year
     df["forward_dividend_yield"] = math.nan
-    df["earnings_payout_ratio"] = math.nan
+    df["earnings_payout_ratio"] = df["tdpr"]
     df["eps_dividend_coverage"] = numeric_column(df, "eps") / positive_denominator(df["dvpsx"])
     df["dps_yoy_pct"] = yoy_pct(pd.to_numeric(df["dvpsx"], errors="coerce"), periods=252)
     df["dps_cagr_3y"] = cagr_pct(pd.to_numeric(df["dvpsx"], errors="coerce"), years=3, periods_per_year=252)

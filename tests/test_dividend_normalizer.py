@@ -1,8 +1,14 @@
 import unittest
 import json
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
+import pandas as pd
+
+from engine.loaders import dividends as dividend_loader
 from engine.transformers import dividends as dividend_normalizer
 
 
@@ -254,6 +260,326 @@ class DividendNormalizerTest(unittest.TestCase):
 
         self.assertEqual(len(result), 2)
         self.assertEqual(sum(row["dividend_per_share"] for row in result), 170)
+
+    def test_build_us_sec_dividend_events_from_notes(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            notes_dir = root / "notes" / "2025q1_notes"
+            notes_dir.mkdir(parents=True)
+            ticker_map = root / "sec_company_tickers.csv"
+            financial_dir = root / "financials"
+            financial_dir.mkdir()
+
+            ticker_map.write_text(
+                "\n".join(
+                    [
+                        "cik,ticker,title",
+                        "4127,SWKS,Skyworks Solutions Inc.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (financial_dir / "us_normalized_SWKS.csv").write_text(
+                "\n".join(
+                    [
+                        "canonical_account_id,normalized_amount,fiscal_year,fiscal_month",
+                        "BASIC_EPS,1.5,2025,12",
+                        "DILUTED_EPS,2.0,2025,12",
+                        "DIV_PAID,70,2025,12",
+                        "NET_INCOME,1000,2025,12",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (notes_dir / "sub.tsv").write_text(
+                "\n".join(
+                    [
+                        "adsh\tcik\tname\tform\tfiled",
+                        "0000004127-25-000010\t4127\tSKYWORKS SOLUTIONS INC\t10-Q\t20250205",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (notes_dir / "pre.tsv").write_text(
+                "\n".join(
+                    [
+                        "adsh\treport\tline\tstmt\tinpth\ttag\tversion\tprole\tplabel\tnegating",
+                        "0000004127-25-000010\t46\t8\t\t0\tDividendsPayableAmountPerShare\tus-gaap/2024\tterseLabel\tDividend amount\t0",
+                        "0000004127-25-000010\t46\t9\t\t0\tDividendsPayableDateDeclaredDayMonthAndYear\tus-gaap/2024\tterseLabel\tDeclared\t0",
+                        "0000004127-25-000010\t46\t10\t\t0\tDividendsPayableDateOfRecordDayMonthAndYear\tus-gaap/2024\tterseLabel\tRecord\t0",
+                        "0000004127-25-000010\t46\t11\t\t0\tDividendPayableDateToBePaidDayMonthAndYear\tus-gaap/2024\tterseLabel\tPayment\t0",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (notes_dir / "num.tsv").write_text(
+                "\n".join(
+                    [
+                        "adsh\ttag\tversion\tddate\tqtrs\tuom\tdimh\tiprx\tvalue",
+                        "0000004127-25-000010\tDividendsPayableAmountPerShare\tus-gaap/2024\t20250131\t0\tUSD\t0xabc\t0\t0.7000",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (notes_dir / "txt.tsv").write_text(
+                "\n".join(
+                    [
+                        "adsh\ttag\tversion\tddate\tqtrs\tiprx\tlang\tdcml\tdurp\tdatp\tdimh\tdimn\tcoreg\tescaped\tsrclen\ttxtlen\tfootnote\tfootlen\tcontext\tvalue",
+                        "0000004127-25-000010\tSecurityExchangeName\tdei/2024\t20250131\t0\t0\ten-US\t32767\t0\t0\t0x00000000\t0\t\t0\t6\t6\t\t0\tc-1\tNASDAQ",
+                        "0000004127-25-000010\tDividendsPayableDateDeclaredDayMonthAndYear\tus-gaap/2024\t20250131\t0\t0\ten-US\t32767\t0\t0\t0xabc\t2\t\t0\t10\t10\t\t0\tc-1\t2025-02-05",
+                        "0000004127-25-000010\tDividendsPayableDateOfRecordDayMonthAndYear\tus-gaap/2024\t20250228\t0\t0\ten-US\t32767\t0\t0\t0xabc\t2\t\t0\t10\t10\t\t0\tc-2\t2025-02-24",
+                        "0000004127-25-000010\tDividendPayableDateToBePaidDayMonthAndYear\tus-gaap/2024\t20250331\t0\t0\ten-US\t32767\t0\t0\t0xabc\t2\t\t0\t10\t10\t\t0\tc-3\t2025-03-17",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (notes_dir / "dim.tsv").write_text(
+                "dimhash\tsegments\tsegt\n0xabc\tDividends=O2025Q2Dividends;\t0\n",
+                encoding="utf-8",
+            )
+
+            result = dividend_normalizer.build_us_sec_dividend_events_dataframe(
+                notes_root=root / "notes",
+                ticker_map_path=ticker_map,
+                financial_dir=financial_dir,
+                use_edgartools=False,
+            )
+
+        self.assertEqual(len(result), 1)
+        row = result.iloc[0]
+        self.assertEqual(row["ticker"], "SWKS")
+        self.assertEqual(str(row["cik"]), "4127")
+        self.assertEqual(row["exchange"], "NASDAQ")
+        self.assertEqual(row["dividend_declared_date"], "2025-02-05")
+        self.assertEqual(row["dividend_record_date"], "2025-02-24")
+        self.assertEqual(row["dividend_payment_date"], "2025-03-17")
+        self.assertAlmostEqual(row["dividend_amount_per_share"], 0.7)
+        self.assertAlmostEqual(row["annual_dps"], 0.7)
+        self.assertAlmostEqual(row["annual_eps"], 2.0)
+        self.assertAlmostEqual(row["payout_ratio_dps_over_eps"], 0.35)
+        self.assertAlmostEqual(row["payout_ratio_total_dividends_over_net_income"], 0.07)
+
+    def test_us_sec_dividend_events_skip_ambiguous_group_values(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            notes_dir = root / "notes"
+            notes_dir.mkdir()
+            ticker_map = root / "sec_company_tickers.csv"
+            ticker_map.write_text("cik,ticker,title\n4127,SWKS,Skyworks\n", encoding="utf-8")
+            (notes_dir / "sub.tsv").write_text(
+                "adsh\tcik\tname\tform\tfiled\n0000004127-25-000010\t4127\tSKYWORKS\t10-Q\t20250205\n",
+                encoding="utf-8",
+            )
+            (notes_dir / "pre.tsv").write_text(
+                "\n".join(
+                    [
+                        "adsh\treport\tline\tstmt\tinpth\ttag\tversion\tprole\tplabel\tnegating",
+                        "0000004127-25-000010\t46\t1\t\t0\tDividendsPayableAmountPerShare\tus-gaap/2024\tterseLabel\tAmount\t0",
+                        "0000004127-25-000010\t46\t2\t\t0\tDividendPayableDateToBePaidDayMonthAndYear\tus-gaap/2024\tterseLabel\tPayment\t0",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (notes_dir / "num.tsv").write_text(
+                "adsh\ttag\tversion\tddate\tqtrs\tuom\tdimh\tiprx\tvalue\n0000004127-25-000010\tDividendsPayableAmountPerShare\tus-gaap/2024\t20250131\t0\tUSD\t0xabc\t0\t0.70\n",
+                encoding="utf-8",
+            )
+            (notes_dir / "txt.tsv").write_text(
+                "\n".join(
+                    [
+                        "adsh\ttag\tversion\tddate\tqtrs\tiprx\tlang\tdcml\tdurp\tdatp\tdimh\tdimn\tcoreg\tescaped\tsrclen\ttxtlen\tfootnote\tfootlen\tcontext\tvalue",
+                        "0000004127-25-000010\tDividendPayableDateToBePaidDayMonthAndYear\tus-gaap/2024\t20250331\t0\t0\ten-US\t32767\t0\t0\t0xabc\t2\t\t0\t10\t10\t\t0\tc-1\t2025-03-17",
+                        "0000004127-25-000010\tDividendPayableDateToBePaidDayMonthAndYear\tus-gaap/2024\t20250331\t0\t0\ten-US\t32767\t0\t0\t0xabc\t2\t\t0\t10\t10\t\t0\tc-2\t2025-03-18",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = dividend_normalizer.build_us_sec_dividend_events_dataframe(
+                notes_root=notes_dir,
+                ticker_map_path=ticker_map,
+                use_edgartools=False,
+            )
+
+        self.assertTrue(result.empty)
+
+    def test_edgartools_fallback_does_not_override_sec_notes_event(self):
+        sec_rows = pd.DataFrame(
+            [
+                {
+                    "ticker": "SWKS",
+                    "cik": "4127",
+                    "company_name": "Skyworks",
+                    "exchange": "NASDAQ",
+                    "dividend_declared_date": "2025-02-05",
+                    "dividend_record_date": "2025-02-24",
+                    "dividend_payment_date": "2025-03-17",
+                    "dividend_amount_per_share": 0.7,
+                    "sec_filing_date": "2025-02-05",
+                    "source_form": "10-Q",
+                    "_source": "sec_notes",
+                }
+            ]
+        )
+        edgar_rows = pd.DataFrame(
+            [
+                {
+                    "ticker": "SWKS",
+                    "cik": "4127",
+                    "company_name": "Skyworks",
+                    "exchange": "",
+                    "dividend_declared_date": "1900-01-01",
+                    "dividend_record_date": "2025-02-24",
+                    "dividend_payment_date": "2025-03-17",
+                    "dividend_amount_per_share": 0.7,
+                    "sec_filing_date": "2025-02-06",
+                    "source_form": "8-K",
+                    "_source": "edgartools",
+                }
+            ]
+        )
+
+        result = dividend_normalizer._add_us_annual_dividend_metrics(
+            dividend_normalizer._dedupe_us_dividend_events(pd.concat([sec_rows, edgar_rows]))
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result["dividend_declared_date"].iat[0], "2025-02-05")
+        self.assertEqual(result["source_form"].iat[0], "10-Q")
+
+    def test_us_daily_dividend_dataframe_reads_sec_event_csv_by_default(self):
+        original_path = dividend_normalizer.us_dividend_events_path
+        with TemporaryDirectory() as temp_dir:
+            event_path = Path(temp_dir) / "us_dividend_events.csv"
+            pd.DataFrame(
+                [
+                    {
+                        "ticker": "AAPL",
+                        "cik": "320193",
+                        "company_name": "Apple Inc.",
+                        "exchange": "NASDAQ",
+                        "dividend_declared_date": "2025-01-01",
+                        "dividend_record_date": "2025-01-10",
+                        "dividend_payment_date": "2025-01-20",
+                        "dividend_amount_per_share": 0.25,
+                        "sec_filing_date": "2025-01-02",
+                        "source_form": "8-K",
+                        "annual_dps": 1.0,
+                        "annual_eps": 5.0,
+                        "payout_ratio_dps_over_eps": 0.2,
+                        "payout_ratio_total_dividends_over_net_income": 0.18,
+                    }
+                ]
+            ).to_csv(event_path, index=False)
+            try:
+                dividend_normalizer.us_dividend_events_path = event_path
+                result = dividend_normalizer.create_us_stock_dividend_dataframe("AAPL")
+            finally:
+                dividend_normalizer.us_dividend_events_path = original_path
+
+        self.assertEqual(result["security_id"].iat[0], "SEC_US_AAPL")
+        self.assertEqual(result["trade_date"].dt.strftime("%Y-%m-%d").iat[0], "2025-01-20")
+        self.assertEqual(result["dividend"].iat[0], 0.25)
+        self.assertEqual(result["payout_ratio"].iat[0], 0.2)
+
+    def test_us_refresh_writes_sec_events_before_daily_dividends(self):
+        daily = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_AAPL"],
+                "trade_date": pd.to_datetime(["2025-01-20"]),
+                "dividend": [0.25],
+                "payout_ratio": [0.2],
+                "dividend_percent": [pd.NA],
+                "currency": ["USD"],
+                "updated_at": [pd.Timestamp("2026-01-01")],
+            }
+        )
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "us_dividend_normalized.csv"
+            with (
+                patch.object(dividend_loader, "write_us_sec_dividend_events_file", return_value=pd.DataFrame({"ticker": ["AAPL"]})) as events_mock,
+                patch.object(dividend_loader, "create_all_stock_dividend_dataframe", return_value=daily) as daily_mock,
+                patch.object(dividend_loader, "dividend_output_path", return_value=output_path),
+            ):
+                result = dividend_loader.refresh_silver_dividend_files(market="us")
+            output_exists = output_path.exists()
+
+        events_mock.assert_called_once()
+        daily_mock.assert_called_once_with(market="us", path=None)
+        self.assertEqual(len(result), 1)
+        self.assertTrue(output_exists)
+
+    def test_kr_refresh_does_not_call_us_sec_dividend_events(self):
+        daily = pd.DataFrame(
+            {
+                "security_id": ["SEC_KR_005930"],
+                "trade_date": pd.to_datetime(["2025-01-20"]),
+                "dividend": [1000],
+                "payout_ratio": [0.25],
+                "dividend_percent": [1.2],
+                "currency": ["KRW"],
+                "updated_at": [pd.Timestamp("2026-01-01")],
+            }
+        )
+        with TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "dividend_normalized.csv"
+            with (
+                patch.object(
+                    dividend_loader,
+                    "write_silver_dividend_summary_files",
+                    return_value=(pd.DataFrame(), pd.DataFrame(), pd.DataFrame()),
+                ) as kr_summary_mock,
+                patch.object(dividend_loader, "write_us_sec_dividend_events_file") as us_events_mock,
+                patch.object(dividend_loader, "create_all_stock_dividend_dataframe", return_value=daily) as daily_mock,
+                patch.object(dividend_loader, "dividend_output_path", return_value=output_path),
+            ):
+                result = dividend_loader.refresh_silver_dividend_files(market="kr")
+
+        kr_summary_mock.assert_called_once()
+        us_events_mock.assert_not_called()
+        daily_mock.assert_called_once_with(market="kr", path=None)
+        self.assertEqual(len(result), 1)
+
+    def test_insert_dividends_prepares_clickhouse_stock_dividend_schema(self):
+        daily = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_AAPL", "SEC_US_MSFT"],
+                "trade_date": pd.to_datetime(["2025-01-20", None]),
+                "dividend": [0.25, 0.4],
+                "payout_ratio": [0.2, pd.NA],
+                "dividend_percent": [pd.NA, 1.0],
+                "currency": ["USD", "USD"],
+                "updated_at": [pd.Timestamp("1999-01-01"), pd.Timestamp("1999-01-01")],
+            }
+        )
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+                self.closed = False
+
+            def insert_df(self, table, frame, column_names):
+                self.calls.append((table, frame.copy(), list(column_names)))
+
+            def close(self):
+                self.closed = True
+
+        client = FakeClient()
+        with patch.object(dividend_loader, "refresh_silver_dividend_files", return_value=daily):
+            inserted = dividend_loader.insert_dividends(market="us", client=client)
+
+        self.assertEqual(inserted, 1)
+        self.assertEqual(len(client.calls), 1)
+        table, frame, columns = client.calls[0]
+        self.assertEqual(table, "stock_dividend")
+        self.assertEqual(columns, dividend_loader.STOCK_DIVIDEND_COLUMNS)
+        self.assertEqual(frame.columns.tolist(), dividend_loader.STOCK_DIVIDEND_COLUMNS)
+        self.assertEqual(frame["trade_date"].iat[0], date(2025, 1, 20))
+        self.assertEqual(frame["dividend"].iat[0], Decimal("0.250000"))
+        self.assertEqual(frame["payout_ratio"].iat[0], 0.2)
+        self.assertIsNone(frame["dividend_percent"].iat[0])
+        self.assertEqual(frame["currency"].iat[0], "USD")
+        self.assertFalse(client.closed)
 
 
 if __name__ == "__main__":

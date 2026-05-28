@@ -600,6 +600,30 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(result["sharehold_div_yield"].iat[1], 1.0)
         self.assertEqual(result["total_dividend_amount"].iat[1], 10.0)
 
+    def test_us_dividend_factors_use_sec_event_payout_ratio(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2025-01-02", "2025-01-03"]),
+                "close": [100, 100],
+                "shares": [10, 10],
+            }
+        )
+        events = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_AAPL"],
+                "trade_date": pd.to_datetime(["2025-01-02"]),
+                "dividend": [1.0],
+                "payout_ratio": [0.25],
+                "dividend_percent": [pd.NA],
+            }
+        )
+
+        with patch("engine.transformers.factors.read_stock_dividends", return_value=events):
+            result = add_dividend_factors(daily_df, "AAPL", market="us")
+
+        self.assertEqual(result["tdpr"].iat[0], 25.0)
+        self.assertEqual(result["earnings_payout_ratio"].iat[1], 25.0)
+
     def test_mdd_uses_returns_not_growth_multipliers(self):
         close = [100.0] * 21 + [100.0] * 80 + [50.0] * 80 + [75.0] * 180
         daily_df = pd.DataFrame(
