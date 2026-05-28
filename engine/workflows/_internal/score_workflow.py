@@ -30,6 +30,10 @@ FACTOR_VALUE_COLUMNS = ("factor_value", "value")
 MIN_INDUSTRY_GROUP_PEERS = 20
 MIN_SECTOR_PEERS = 10
 MIN_SCORE_PEERS = 5
+KR_MIN_UNIVERSE_MARKET_CAP = 50_000_000_000
+US_MIN_UNIVERSE_MARKET_CAP = 50_000_000
+KR_MIN_UNIVERSE_AVG_TRADING_VALUE_20D = 500_000_000
+US_MIN_UNIVERSE_AVG_TRADING_VALUE_20D = 500_000
 STYLE_SCORE_COLUMNS = {
     "VALUE": "value_score",
     "QUALITY": "quality_score",
@@ -633,16 +637,31 @@ def calculate_style_scores(
 
 
 def _build_universe_query() -> str:
-    return """
+    market_cap_expr = (
+        "ifNull(ls.stock_market_cap, "
+        "if(ls.latest_shares IS NULL OR lp.latest_close IS NULL, NULL, ls.latest_shares * lp.latest_close))"
+    )
+    return f"""
 WITH
-    toDate({trade_date:Date}) AS target_date,
+    toDate({{trade_date:Date}}) AS target_date,
     latest_shares AS
     (
         SELECT
             security_id,
-            argMax(toFloat64(market_cap), trade_date) AS market_cap
+            argMax(toFloat64(market_cap), trade_date) AS stock_market_cap,
+            argMax(toFloat64(shares), trade_date) AS latest_shares
         FROM arcana.stock_shares
         WHERE trade_date <= target_date
+        GROUP BY security_id
+    ),
+    latest_price AS
+    (
+        SELECT
+            security_id,
+            argMax(toFloat64(close), trade_date) AS latest_close
+        FROM arcana.price_daily
+        WHERE trade_date <= target_date
+            AND close IS NOT NULL
         GROUP BY security_id
     ),
     recent_liquidity AS
@@ -693,13 +712,15 @@ SELECT
         i.industry_group_code IN ('FINANCIALS', '40'), 1,
         0
     ) AS is_financial,
-    ls.market_cap AS market_cap,
+    {market_cap_expr} AS market_cap,
     rl.avg_trading_value_20d AS avg_trading_value_20d
 FROM arcana.security_master AS sm
 LEFT JOIN arcana.issuers AS i
     ON sm.issuer_id = i.issuer_id
 LEFT JOIN latest_shares AS ls
     ON sm.security_id = ls.security_id
+LEFT JOIN latest_price AS lp
+    ON sm.security_id = lp.security_id
 LEFT JOIN recent_liquidity AS rl
     ON sm.security_id = rl.security_id
 LEFT JOIN stock_codes AS sc
@@ -709,8 +730,16 @@ WHERE sm.is_active = 1
     AND sm.share_class IN ('COMMON', 'ORDINARY', 'ORD', '')
     AND sm.sec_type NOT IN ('ETF', 'ETN', 'FUND')
     AND sm.asset_subtype NOT IN ('SPAC', 'REIT')
-    AND ifNull(ls.market_cap, 0) >= 50000000000
-    AND ifNull(rl.avg_trading_value_20d, 0) >= 500000000
+    AND multiIf(
+        sm.country = 'US', ifNull({market_cap_expr}, 0) >= {US_MIN_UNIVERSE_MARKET_CAP},
+        sm.country = 'KR', ifNull({market_cap_expr}, 0) >= {KR_MIN_UNIVERSE_MARKET_CAP},
+        ifNull({market_cap_expr}, 0) >= {KR_MIN_UNIVERSE_MARKET_CAP}
+    )
+    AND multiIf(
+        sm.country = 'US', ifNull(rl.avg_trading_value_20d, 0) >= {US_MIN_UNIVERSE_AVG_TRADING_VALUE_20D},
+        sm.country = 'KR', ifNull(rl.avg_trading_value_20d, 0) >= {KR_MIN_UNIVERSE_AVG_TRADING_VALUE_20D},
+        ifNull(rl.avg_trading_value_20d, 0) >= {KR_MIN_UNIVERSE_AVG_TRADING_VALUE_20D}
+    )
 """.strip()
 
 

@@ -140,12 +140,12 @@ TOTAL_WEIGHTS = {
         STYLE_DIVIDEND: 0.10,
     },
     "MINERVINI_ZWEIG": {
-        STYLE_VALUE: 0.08,
-        STYLE_QUALITY: 0.23,
+        STYLE_VALUE: 0.20,
+        STYLE_QUALITY: 0.20,
         STYLE_GROWTH: 0.25,
-        STYLE_MOMENTUM: 0.29,
+        STYLE_MOMENTUM: 0.25,
         STYLE_RISK: 0.10,
-        STYLE_DIVIDEND: 0.05,
+        STYLE_DIVIDEND: 0.00,
     },
     "DIVIDEND_QUALITY": {
         STYLE_VALUE: 0.20,

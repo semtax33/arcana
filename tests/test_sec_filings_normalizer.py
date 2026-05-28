@@ -173,18 +173,33 @@ class SecFilingsNormalizerTest(unittest.TestCase):
                 reason="test",
                 original_account_name="COGS",
             ),
+            SecFactCandidate(
+                **base,
+                canonical_id="OPERATING_EXPENSES_TOTAL",
+                canonical_name="Operating expenses",
+                value=20,
+                raw_value=20,
+                rule_id="test:OPERATING_EXPENSES_TOTAL",
+                reason="test",
+                original_account_name="Operating expenses",
+            ),
         ]
 
         result = dedupe_candidates(
             add_formula_derived_candidates(
                 candidates,
-                canonical_names={"GROSS_PROFIT": "Gross profit"},
+                canonical_names={
+                    "GROSS_PROFIT": "Gross profit",
+                    "OPERATING_INCOME": "Operating income",
+                },
             )
         )
         by_id = {candidate.canonical_id: candidate for candidate in result}
 
         self.assertEqual(by_id["GROSS_PROFIT"].value, 60)
         self.assertEqual(by_id["GROSS_PROFIT"].source, "derived_formula")
+        self.assertEqual(by_id["OPERATING_INCOME"].value, 40)
+        self.assertEqual(by_id["OPERATING_INCOME"].source, "derived_formula")
         self.assertNotIn("RND", by_id)
 
     def test_market_mapping_rule_paths_prefer_prefixed_files(self):

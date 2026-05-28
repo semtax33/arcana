@@ -126,10 +126,16 @@ companyfacts_rules:
     alternate_tags:
       - us-gaap:ShortTermBorrowings
       - us-gaap:ShortTermDebt
+      - us-gaap:ShortTermNotesPayable
+      - us-gaap:NotesPayableCurrent
+      - us-gaap:LoansPayableCurrent
+      - us-gaap:BorrowingsCurrent
       - us-gaap:CurrentPortionOfLongTermDebt
       - us-gaap:LongTermDebtCurrent
       - us-gaap:LongTermDebtAndFinanceLeaseObligationsCurrent
       - us-gaap:DebtAndFinanceLeaseObligationsCurrent
+      - us-gaap:LongTermDebtAndCapitalLeaseObligationsCurrent
+      - us-gaap:DebtAndCapitalLeaseObligationsCurrent
       - us-gaap:CommercialPaper
       - us-gaap:OtherShortTermBorrowings
       - us-gaap:ShortTermBankLoansAndNotesPayable
@@ -143,14 +149,21 @@ companyfacts_rules:
     primary_tags: [us-gaap:LongTermDebtNoncurrent]
     alternate_tags:
       - us-gaap:LongTermDebt
+      - us-gaap:NotesPayableNoncurrent
+      - us-gaap:LongTermNotesPayable
+      - us-gaap:LoansPayableNoncurrent
+      - us-gaap:BorrowingsNoncurrent
       - us-gaap:LongTermDebtAndFinanceLeaseObligationsNoncurrent
       - us-gaap:DebtAndFinanceLeaseObligationsNoncurrent
       - us-gaap:OtherLongTermDebtNoncurrent
       - us-gaap:LongTermDebtAndCapitalLeaseObligations
+      - us-gaap:LongTermDebtAndCapitalLeaseObligationsNoncurrent
+      - us-gaap:DebtAndCapitalLeaseObligationsNoncurrent
       - ifrs-full:LongtermBorrowings
     label_patterns:
       - (?i)\blong[- ]term\s+(debt|borrowings?)\b
       - (?i)\bnon[- ]current\s+(debt|borrowings?)\b
+      - (?i)\b(long[- ]term|non[- ]current)\s+notes?\s+payable\b
   - canonical_id: LEASE_LIABILITY
     fs_type: BS
     primary_tags:
@@ -158,8 +171,18 @@ companyfacts_rules:
       - us-gaap:FinanceLeaseLiability
     alternate_tags:
       - us-gaap:OperatingLeaseLiabilities
+      - us-gaap:OperatingLeaseLiabilityCurrent
+      - us-gaap:OperatingLeaseLiabilityNoncurrent
+      - us-gaap:OperatingLeaseLiabilitiesCurrent
+      - us-gaap:OperatingLeaseLiabilitiesNoncurrent
       - us-gaap:FinanceLeaseLiabilities
+      - us-gaap:FinanceLeaseLiabilityCurrent
+      - us-gaap:FinanceLeaseLiabilityNoncurrent
+      - us-gaap:FinanceLeaseLiabilitiesCurrent
+      - us-gaap:FinanceLeaseLiabilitiesNoncurrent
       - us-gaap:LeaseLiability
+      - us-gaap:LeaseLiabilityCurrent
+      - us-gaap:LeaseLiabilityNoncurrent
       - ifrs-full:LeaseLiabilities
     label_patterns:
       - (?i)\blease\s+liabilit(y|ies)\b
@@ -319,10 +342,12 @@ companyfacts_rules:
     fs_type: IS
     primary_tags: [us-gaap:OperatingIncomeLoss]
     alternate_tags:
+      - us-gaap:IncomeLossFromOperations
       - ifrs-full:ProfitLossFromOperatingActivities
     label_patterns:
       - (?i)\boperating\s+income\s*(\(loss\))?\b
       - (?i)\bincome\s+from\s+operations\b
+      - (?i)\boperating\s+profit\s*(\(loss\))?\b
   - canonical_id: EBITDA
     fs_type: IS
     primary_tags:
@@ -1028,6 +1053,65 @@ notes_rules:
     cash_direction: outflow
 
 edgartools_fallback_rules:
+  - canonical_id: CASH_AND_EQUIVALENTS
+    fs_type: BS
+    tags:
+      - CashAndCashEquivalentsAtCarryingValue
+      - CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+      - CashCashEquivalentsAndShortTermInvestments
+  - canonical_id: SHORT_TERM_DEBT
+    fs_type: BS
+    tags:
+      - DebtCurrent
+      - ShortTermBorrowings
+      - ShortTermDebt
+      - ShortTermNotesPayable
+      - NotesPayableCurrent
+      - LoansPayableCurrent
+      - BorrowingsCurrent
+      - CurrentPortionOfLongTermDebt
+      - LongTermDebtCurrent
+      - LongTermDebtAndFinanceLeaseObligationsCurrent
+      - DebtAndFinanceLeaseObligationsCurrent
+      - LongTermDebtAndCapitalLeaseObligationsCurrent
+      - DebtAndCapitalLeaseObligationsCurrent
+      - CommercialPaper
+      - OtherShortTermBorrowings
+      - ShortTermBankLoansAndNotesPayable
+      - OtherLongTermDebtCurrent
+  - canonical_id: LONG_TERM_DEBT
+    fs_type: BS
+    tags:
+      - LongTermDebtNoncurrent
+      - LongTermDebt
+      - NotesPayableNoncurrent
+      - LongTermNotesPayable
+      - LoansPayableNoncurrent
+      - BorrowingsNoncurrent
+      - LongTermDebtAndFinanceLeaseObligationsNoncurrent
+      - DebtAndFinanceLeaseObligationsNoncurrent
+      - OtherLongTermDebtNoncurrent
+      - LongTermDebtAndCapitalLeaseObligations
+      - LongTermDebtAndCapitalLeaseObligationsNoncurrent
+      - DebtAndCapitalLeaseObligationsNoncurrent
+  - canonical_id: LEASE_LIABILITY
+    fs_type: BS
+    tags:
+      - OperatingLeaseLiability
+      - OperatingLeaseLiabilities
+      - OperatingLeaseLiabilityCurrent
+      - OperatingLeaseLiabilityNoncurrent
+      - OperatingLeaseLiabilitiesCurrent
+      - OperatingLeaseLiabilitiesNoncurrent
+      - FinanceLeaseLiability
+      - FinanceLeaseLiabilities
+      - FinanceLeaseLiabilityCurrent
+      - FinanceLeaseLiabilityNoncurrent
+      - FinanceLeaseLiabilitiesCurrent
+      - FinanceLeaseLiabilitiesNoncurrent
+      - LeaseLiability
+      - LeaseLiabilityCurrent
+      - LeaseLiabilityNoncurrent
   - canonical_id: REVENUE
     fs_type: IS
     tags:
@@ -1058,6 +1142,7 @@ edgartools_fallback_rules:
     fs_type: IS
     tags:
       - OperatingIncomeLoss
+      - IncomeLossFromOperations
   - canonical_id: TAX_EXPENSE
     fs_type: IS
     tags:

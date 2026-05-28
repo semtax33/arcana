@@ -7,6 +7,8 @@ import pandas as pd
 from engine.transformers.style_score_definitions import canonical_factor_id, factor_direction
 from engine.workflows.score import (
     FactorTableSchema,
+    KR_MIN_UNIVERSE_MARKET_CAP,
+    US_MIN_UNIVERSE_MARKET_CAP,
     _build_universe_query,
     build_style_scores,
     build_style_score_range,
@@ -44,6 +46,16 @@ class StyleScorePipelineTest(unittest.TestCase):
         query = _build_universe_query()
 
         self.assertIn("'ORD'", query)
+
+    def test_universe_query_uses_market_specific_market_cap_rules(self):
+        query = _build_universe_query()
+
+        self.assertIn("latest_price AS", query)
+        self.assertIn("ls.latest_shares * lp.latest_close", query)
+        self.assertIn("sm.country = 'US'", query)
+        self.assertIn(f">= {US_MIN_UNIVERSE_MARKET_CAP}", query)
+        self.assertIn("sm.country = 'KR'", query)
+        self.assertIn(f">= {KR_MIN_UNIVERSE_MARKET_CAP}", query)
 
     def test_asof_factor_query_uses_latest_available_snapshot(self):
         client = _CaptureQueryClient()

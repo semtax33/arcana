@@ -17,8 +17,10 @@ from engine.markets.registry import market_config
 from engine.transformers.dividends import silver_dividend_asof_events
 from engine.transformers.filing_periods import (
     REPORT_METADATA_PATH,
+    add_quarter_and_ttm_amounts,
     attach_report_metadata,
     quarterly_financial_frame,
+    read_period_snapshots,
     ttm_financial_frame,
 )
 from engine.transformers._internal.statement_files import (
@@ -577,12 +579,194 @@ def extract_fallback_values(df):
     }
 
 
+def _fallback_year_range(financial_df):
+    if financial_df is not None and not financial_df.empty and "fiscal_year" in financial_df.columns:
+        years = pd.to_numeric(financial_df["fiscal_year"], errors="coerce").dropna()
+        if not years.empty:
+            current_year = datetime.now(ZoneInfo("Asia/Seoul")).year
+            return int(years.min()), max(int(years.max()), current_year)
+
+    current_year = datetime.now(ZoneInfo("Asia/Seoul")).year
+    return current_year - 12, current_year
+
+
+def _is_missing_cell(value):
+    try:
+        return bool(pd.isna(value))
+    except Exception:
+        return value is None
+
+
+def _candidate_report_date(candidate):
+    filed = pd.to_datetime(getattr(candidate, "filed", None), errors="coerce")
+    if pd.notna(filed):
+        return filed
+    period_end = pd.to_datetime(getattr(candidate, "period_end", None), errors="coerce")
+    if pd.notna(period_end):
+        return period_end
+    return period_end_date(candidate.fiscal_year, candidate.fiscal_month)
+
+
+def _candidate_financial_period(candidate):
+    period_end = pd.to_datetime(getattr(candidate, "period_end", None), errors="coerce")
+    if pd.notna(period_end):
+        return period_end
+    return period_end_date(candidate.fiscal_year, candidate.fiscal_month)
+
+
+def _edgartools_candidates_for_factor_fallback(
+    stock_code,
+    *,
+    financial_df=None,
+    edgartools_provider=None,
+):
+    start_year, end_year = _fallback_year_range(financial_df)
+    try:
+        from engine.transformers._internal.sec_filings import (
+            canonical_name_map,
+            extract_edgartools_candidates,
+            load_sec_ticker_map,
+            load_us_mapping_rules,
+            normalize_cik,
+        )
+    except Exception as exc:
+        print(f"[WARN] edgartools factor fallback skipped for {stock_code}: import failed ({type(exc).__name__})")
+        return []
+
+    try:
+        rules = load_us_mapping_rules().get("edgartools_fallback_rules", [])
+    except Exception as exc:
+        print(f"[WARN] edgartools factor fallback skipped for {stock_code}: rule load failed ({type(exc).__name__})")
+        return []
+    if not rules:
+        return []
+
+    symbol = normalize_symbol_for_market(stock_code, "us")
+    cik_by_symbol = {symbol: ""}
+    name_by_symbol = {symbol: ""}
+    ticker_map = load_sec_ticker_map()
+    if not ticker_map.empty:
+        matched = ticker_map.loc[ticker_map["ticker"].astype(str).str.upper().eq(symbol)]
+        if not matched.empty:
+            cik_by_symbol[symbol] = normalize_cik(matched["cik"].iat[0])
+            name_by_symbol[symbol] = str(matched["title"].iat[0])
+
+    try:
+        canonical_names = canonical_name_map()
+    except Exception:
+        canonical_names = {}
+
+    try:
+        return extract_edgartools_candidates(
+            symbols=[symbol],
+            cik_by_symbol=cik_by_symbol,
+            name_by_symbol=name_by_symbol,
+            rules=rules,
+            canonical_names=canonical_names,
+            start_year=start_year,
+            end_year=end_year,
+            provider=edgartools_provider,
+            log_progress=False,
+        )
+    except Exception as exc:
+        print(f"[WARN] edgartools factor fallback skipped for {symbol}: {type(exc).__name__}: {exc}")
+        return []
+
+
+def fill_missing_financial_values_with_edgartools(
+    financial_df,
+    stock_code,
+    *,
+    market="kr",
+    months=None,
+    use_edgartools=True,
+    edgartools_provider=None,
+):
+    market = str(market or "kr").strip().lower()
+    if market != "us" or not use_edgartools:
+        return financial_df
+
+    candidates = _edgartools_candidates_for_factor_fallback(
+        stock_code,
+        financial_df=financial_df,
+        edgartools_provider=edgartools_provider,
+    )
+    if not candidates:
+        return financial_df
+
+    allowed_months = {int(month) for month in months} if months is not None else None
+    result = financial_df.copy() if financial_df is not None else pd.DataFrame()
+    base_columns = ["stock_code", "security_id", "fiscal_year", "fiscal_month", "financial_period"]
+    for column in base_columns:
+        if column not in result.columns:
+            result[column] = pd.NA
+    if "_fs_type_by_id" in result.columns:
+        result["_fs_type_by_id"] = result["_fs_type_by_id"].astype("object")
+
+    row_by_period = {}
+    for index, row in result.iterrows():
+        year = pd.to_numeric(pd.Series([row.get("fiscal_year")]), errors="coerce").iat[0]
+        month = pd.to_numeric(pd.Series([row.get("fiscal_month")]), errors="coerce").iat[0]
+        if pd.notna(year) and pd.notna(month):
+            row_by_period[(int(year), int(month))] = index
+
+    stock_code = normalize_symbol_for_market(stock_code, "us")
+    security_id = security_id_for_market(stock_code, "us")
+    for candidate in candidates:
+        if allowed_months is not None and int(candidate.fiscal_month) not in allowed_months:
+            continue
+        key = (int(candidate.fiscal_year), int(candidate.fiscal_month))
+        row_index = row_by_period.get(key)
+        if row_index is None:
+            row_index = len(result)
+            row_by_period[key] = row_index
+            result.loc[row_index, "stock_code"] = stock_code
+            result.loc[row_index, "security_id"] = security_id
+            result.loc[row_index, "fiscal_year"] = key[0]
+            result.loc[row_index, "fiscal_month"] = key[1]
+            result.loc[row_index, "financial_period"] = _candidate_financial_period(candidate)
+
+        canonical_id = str(candidate.canonical_id)
+        if canonical_id not in result.columns:
+            result[canonical_id] = math.nan
+        if _is_missing_cell(result.at[row_index, canonical_id]):
+            result.at[row_index, canonical_id] = candidate.value
+
+        if "report_date" not in result.columns:
+            result["report_date"] = pd.NaT
+        if _is_missing_cell(result.at[row_index, "report_date"]):
+            result.at[row_index, "report_date"] = _candidate_report_date(candidate)
+        if "rcept_no" not in result.columns:
+            result["rcept_no"] = pd.NA
+        if _is_missing_cell(result.at[row_index, "rcept_no"]):
+            result.at[row_index, "rcept_no"] = candidate.accn
+        if "source_url" not in result.columns:
+            result["source_url"] = pd.NA
+        if _is_missing_cell(result.at[row_index, "source_url"]) and candidate.cik and candidate.accn:
+            result.at[row_index, "source_url"] = (
+                f"https://www.sec.gov/Archives/edgar/data/"
+                f"{candidate.cik}/{candidate.accn.replace('-', '')}/"
+            )
+
+        if "_fs_type_by_id" in result.columns:
+            fs_type_by_id = result.at[row_index, "_fs_type_by_id"]
+            if not isinstance(fs_type_by_id, dict):
+                fs_type_by_id = {}
+            fs_type_by_id.setdefault(canonical_id, candidate.statement_type)
+            result.at[row_index, "_fs_type_by_id"] = fs_type_by_id
+
+    result["financial_period"] = pd.to_datetime(result["financial_period"], errors="coerce")
+    return result.sort_values("financial_period").reset_index(drop=True)
+
+
 def read_annual_financials(
     stock_code,
     report_metadata_path=REPORT_METADATA_PATH,
     *,
     financial_dir=None,
     market="kr",
+    use_edgartools=True,
+    edgartools_provider=None,
 ):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
@@ -617,12 +801,76 @@ def read_annual_financials(
         )
         rows.append(values)
 
-    if not rows:
-        return pd.DataFrame()
-
-    financial_df = pd.DataFrame(rows).sort_values("financial_period").reset_index(drop=True)
-    financial_df = attach_report_metadata(financial_df, report_metadata_path)
+    if rows:
+        financial_df = pd.DataFrame(rows).sort_values("financial_period").reset_index(drop=True)
+        financial_df = attach_report_metadata(financial_df, report_metadata_path)
+    else:
+        financial_df = pd.DataFrame()
+    financial_df = fill_missing_financial_values_with_edgartools(
+        financial_df,
+        stock_code,
+        market=market,
+        months={ANNUAL_MONTH},
+        use_edgartools=use_edgartools,
+        edgartools_provider=edgartools_provider,
+    )
+    if financial_df.empty:
+        return financial_df
     return add_annual_financial_factors(financial_df, periods_per_year=1)
+
+
+def _periodized_financial_frame_with_edgartools(
+    stock_code,
+    *,
+    financial_dir,
+    cumulative_statement_types=None,
+    report_metadata_path=REPORT_METADATA_PATH,
+    market="us",
+    use_edgartools=True,
+    edgartools_provider=None,
+):
+    snapshot_df = read_period_snapshots(
+        normalize_symbol_for_market(stock_code, market),
+        financial_dir,
+        report_metadata_path,
+        market=market,
+    )
+    if snapshot_df.empty:
+        snapshot_df = pd.DataFrame(columns=["_fs_type_by_id"])
+    elif "_fs_type_by_id" not in snapshot_df.columns:
+        snapshot_df["_fs_type_by_id"] = pd.NA
+
+    snapshot_df = fill_missing_financial_values_with_edgartools(
+        snapshot_df,
+        stock_code,
+        market=market,
+        use_edgartools=use_edgartools,
+        edgartools_provider=edgartools_provider,
+    )
+    if snapshot_df.empty:
+        return snapshot_df
+    return add_quarter_and_ttm_amounts(
+        snapshot_df,
+        cumulative_statement_types=cumulative_statement_types,
+    )
+
+
+def _financial_frame_from_periodized(periodized, *, suffix):
+    if periodized.empty:
+        return periodized
+
+    base_columns = ["stock_code", "security_id", "fiscal_year", "fiscal_month", "financial_period"]
+    if "report_date" in periodized.columns:
+        base_columns.append("report_date")
+    value_columns = {
+        column[: -len(suffix)]: periodized[column]
+        for column in periodized.columns
+        if column.endswith(suffix)
+    }
+    output = periodized[base_columns].copy()
+    if value_columns:
+        output = pd.concat([output, pd.DataFrame(value_columns, index=periodized.index)], axis=1)
+    return output
 
 
 def read_ttm_financials(
@@ -632,15 +880,29 @@ def read_ttm_financials(
     *,
     financial_dir=None,
     market="kr",
+    use_edgartools=True,
+    edgartools_provider=None,
 ):
     financial_dir = financial_dir if financial_dir is not None else financial_dir_for_market(market)
-    financial_df = ttm_financial_frame(
-        normalize_symbol_for_market(stock_code, market),
-        financial_dir,
-        cumulative_statement_types=cumulative_statement_types,
-        report_metadata_path=report_metadata_path,
-        market=market,
-    )
+    if str(market or "kr").strip().lower() == "us" and use_edgartools:
+        periodized = _periodized_financial_frame_with_edgartools(
+            stock_code,
+            financial_dir=financial_dir,
+            cumulative_statement_types=cumulative_statement_types,
+            report_metadata_path=report_metadata_path,
+            market=market,
+            use_edgartools=use_edgartools,
+            edgartools_provider=edgartools_provider,
+        )
+        financial_df = _financial_frame_from_periodized(periodized, suffix="_ttm")
+    else:
+        financial_df = ttm_financial_frame(
+            normalize_symbol_for_market(stock_code, market),
+            financial_dir,
+            cumulative_statement_types=cumulative_statement_types,
+            report_metadata_path=report_metadata_path,
+            market=market,
+        )
     if financial_df.empty:
         return financial_df
     return add_annual_financial_factors(financial_df, periods_per_year=4)
@@ -653,15 +915,29 @@ def read_quarterly_financials(
     *,
     financial_dir=None,
     market="kr",
+    use_edgartools=True,
+    edgartools_provider=None,
 ):
     financial_dir = financial_dir if financial_dir is not None else financial_dir_for_market(market)
-    financial_df = quarterly_financial_frame(
-        normalize_symbol_for_market(stock_code, market),
-        financial_dir,
-        cumulative_statement_types=cumulative_statement_types,
-        report_metadata_path=report_metadata_path,
-        market=market,
-    )
+    if str(market or "kr").strip().lower() == "us" and use_edgartools:
+        periodized = _periodized_financial_frame_with_edgartools(
+            stock_code,
+            financial_dir=financial_dir,
+            cumulative_statement_types=cumulative_statement_types,
+            report_metadata_path=report_metadata_path,
+            market=market,
+            use_edgartools=use_edgartools,
+            edgartools_provider=edgartools_provider,
+        )
+        financial_df = _financial_frame_from_periodized(periodized, suffix="_quarter")
+    else:
+        financial_df = quarterly_financial_frame(
+            normalize_symbol_for_market(stock_code, market),
+            financial_dir,
+            cumulative_statement_types=cumulative_statement_types,
+            report_metadata_path=report_metadata_path,
+            market=market,
+        )
     if financial_df.empty:
         return financial_df
     return add_annual_financial_factors(financial_df, periods_per_year=4)
@@ -787,6 +1063,9 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
 
     df["avg_parent_equity"] = (df["ceq"] + df["ceq"].shift(lag)) / 2
     df["roe"] = df["ni_parent"] / df["avg_parent_equity"]
+    df["roe_growth_1y"] = growth_pct(df["roe"], periods=lag)
+    df["roe_growth_3y"] = growth_pct(df["roe"], periods=lag * 3)
+    df["roe_growth_5y"] = growth_pct(df["roe"], periods=lag * 5)
     df["roa"] = df["ni"] / df["avg_assets"]
     df["iroe"] = (
         df["ni_parent"] + df["xrd"].fillna(0) * (1 - nopat_tax_rate.fillna(0))
@@ -1487,6 +1766,8 @@ def create_stock_factor_dataframe(
     market="kr",
     financial_dir=None,
     market_data_cache=None,
+    use_edgartools=True,
+    edgartools_provider=None,
 ):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
@@ -1524,6 +1805,8 @@ def create_stock_factor_dataframe(
             report_metadata_path=report_metadata_path,
             financial_dir=financial_dir,
             market=market,
+            use_edgartools=use_edgartools,
+            edgartools_provider=edgartools_provider,
         )
     elif financial_basis == "ttm":
         financial_df = read_ttm_financials(
@@ -1532,6 +1815,8 @@ def create_stock_factor_dataframe(
             report_metadata_path=report_metadata_path,
             financial_dir=financial_dir,
             market=market,
+            use_edgartools=use_edgartools,
+            edgartools_provider=edgartools_provider,
         )
     elif financial_basis == "annual":
         financial_df = read_annual_financials(
@@ -1539,6 +1824,8 @@ def create_stock_factor_dataframe(
             report_metadata_path=report_metadata_path,
             financial_dir=financial_dir,
             market=market,
+            use_edgartools=use_edgartools,
+            edgartools_provider=edgartools_provider,
         )
     else:
         raise ValueError("financial_basis must be 'annual', 'ttm', or 'quarterly'")
@@ -1683,6 +1970,9 @@ def preferred_factor_columns():
         "nopat",
         "roe",
         "avg_parent_equity",
+        "roe_growth_1y",
+        "roe_growth_3y",
+        "roe_growth_5y",
         "roa",
         "iroe",
         "roic_financial",

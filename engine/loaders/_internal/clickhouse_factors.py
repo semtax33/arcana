@@ -158,6 +158,9 @@ GROWTH_FACTORS = {
     "sales_growth_3y",
     "sales_growth_5y",
     "sales_cagr_3y",
+    "roe_growth_1y",
+    "roe_growth_3y",
+    "roe_growth_5y",
     "net_income_growth_1y",
     "net_income_growth_3y",
     "net_income_growth_5y",
@@ -282,6 +285,9 @@ FACTOR_NAME_OVERRIDES = {
     "eps_dividend_coverage": "EPS Dividend Coverage",
     "shareholder_yield": "Shareholder Yield",
     "sales_cagr_3y": "Sales CAGR 3Y",
+    "roe_growth_1y": "ROE Growth 1Y",
+    "roe_growth_3y": "ROE Growth 3Y",
+    "roe_growth_5y": "ROE Growth 5Y",
     "rnd_to_sales": "R&D / Sales",
     "operating_profit_margin": "Operating Profit Margin",
     "net_income_growth_1y": "Net Income Growth 1Y",
@@ -667,6 +673,9 @@ def infer_factor_unit(factor_id: str) -> str:
         "roe",
         "roic_financial",
         "roic_operational",
+        "roe_growth_1y",
+        "roe_growth_3y",
+        "roe_growth_5y",
         "sales_growth_1y",
         "sales_growth_3y",
         "sales_growth_5y",
@@ -956,6 +965,7 @@ def main() -> None:
     parser.add_argument("--price-path")
     parser.add_argument("--shares-path")
     parser.add_argument("--dividend-path")
+    parser.add_argument("--no-edgartools", action="store_true")
     args = parser.parse_args()
 
     factor_df = insert_daily_factors(
@@ -973,6 +983,7 @@ def main() -> None:
         price_path=args.price_path,
         shares_path=args.shares_path,
         dividend_path=args.dividend_path,
+        use_edgartools=not args.no_edgartools,
     )
     print(
         "prepared rows="

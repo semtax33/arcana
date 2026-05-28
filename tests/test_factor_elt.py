@@ -217,6 +217,9 @@ class FactorEltTest(unittest.TestCase):
             "sales_growth_1y",
             "sales_growth_3y",
             "sales_growth_5y",
+            "roe_growth_1y",
+            "roe_growth_3y",
+            "roe_growth_5y",
             "net_margin",
             "total_asset_turnover",
             "rnd_to_market_cap",
@@ -250,6 +253,8 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(row_by_id.loc["net_income_growth_5y", "factor_type"], "growth")
         self.assertEqual(row_by_id.loc["operating_income_growth_3y", "factor_type"], "growth")
         self.assertEqual(row_by_id.loc["sales_growth_5y", "factor_type"], "growth")
+        self.assertEqual(row_by_id.loc["roe_growth_5y", "factor_type"], "growth")
+        self.assertEqual(row_by_id.loc["roe_growth_5y", "unit"], "percent")
         self.assertEqual(row_by_id.loc["total_asset_turnover", "unit"], "times")
         self.assertEqual(row_by_id.loc["rnd_to_market_cap", "factor_type"], "valuation")
         self.assertEqual(row_by_id.loc["rnd_to_market_cap", "unit"], "percent")

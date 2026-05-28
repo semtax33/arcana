@@ -1198,6 +1198,13 @@ def add_formula_derived_candidates(
     formulas: tuple[tuple[str, str, str, str, str], ...] = (
         ("GROSS_PROFIT", "REVENUE", "COGS", "REVENUE - COGS", "IS"),
         ("COGS", "REVENUE", "GROSS_PROFIT", "REVENUE - GROSS_PROFIT", "IS"),
+        (
+            "OPERATING_INCOME",
+            "GROSS_PROFIT",
+            "OPERATING_EXPENSES_TOTAL",
+            "GROSS_PROFIT - OPERATING_EXPENSES_TOTAL",
+            "IS",
+        ),
         ("TOTAL_EQUITY", "TOTAL_ASSETS", "TOTAL_LIABILITIES", "TOTAL_ASSETS - TOTAL_LIABILITIES", "BS"),
         ("TOTAL_LIABILITIES", "TOTAL_ASSETS", "TOTAL_EQUITY", "TOTAL_ASSETS - TOTAL_EQUITY", "BS"),
         ("TOTAL_ASSETS", "TOTAL_LIABILITIES", "TOTAL_EQUITY", "TOTAL_LIABILITIES + TOTAL_EQUITY", "BS"),

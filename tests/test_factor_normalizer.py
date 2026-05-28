@@ -13,6 +13,7 @@ from engine.transformers.factors import (
     add_price_momentum_factors,
     create_stock_factor_dataframe,
     read_annual_financials,
+    read_quarterly_financials,
     read_stock_dividends,
     read_stock_prices,
     read_stock_shares,
@@ -327,6 +328,33 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["operating_income_growth_1y"], 20.0)
         self.assertAlmostEqual(latest["operating_income_growth_3y"], 100.0)
         self.assertAlmostEqual(latest["operating_income_growth_5y"], 500.0)
+
+    def test_roe_growth_factors_are_calculated(self):
+        net_income_parent = [100, 100, 110, 120, 130, 140, 150]
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2020 + index,
+                    "financial_period": f"{2020 + index}-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "EAOP": 500,
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": 100,
+                    "NET_INCOME": value,
+                    "NET_INCOME_PARENT": value,
+                }
+                for index, value in enumerate(net_income_parent)
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+        latest = result.iloc[-1]
+
+        self.assertAlmostEqual(latest["roe"], 30.0)
+        self.assertAlmostEqual(latest["roe_growth_1y"], (30.0 - 28.0) / 28.0 * 100)
+        self.assertAlmostEqual(latest["roe_growth_3y"], 25.0)
+        self.assertAlmostEqual(latest["roe_growth_5y"], 50.0)
 
     def test_fcf_dividend_sustainability_factors_are_calculated(self):
         financial_df = pd.DataFrame(
@@ -766,6 +794,108 @@ class FactorNormalizerTest(unittest.TestCase):
 
         self.assertEqual(result["fiscal_year"].tolist(), [2024, 2025])
         self.assertEqual(result["at"].tolist(), [900, 1000])
+
+    def test_us_annual_financials_fill_missing_factor_inputs_from_edgartools(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            financial_dir = root / "financials"
+            financial_dir.mkdir()
+
+            (financial_dir / "us_normalized_AAPL.csv").write_text(
+                "\n".join(
+                    [
+                        "canonical_account_id,canonical_account_name,original_account_name,statement_type,period,normalized_amount,fiscal_year,fiscal_month,fiscal_quarter",
+                        "REVENUE,Revenue,Revenue,IS,2025.12,1000,2025,12,4",
+                        "OPERATING_INCOME,Operating Income,Operating Income,IS,2025.12,100,2025,12,4",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            def provider(symbol, cik, entity_name, rules, start_year, end_year):
+                return [
+                    {
+                        "symbol": symbol,
+                        "cik": cik,
+                        "entity_name": entity_name,
+                        "canonical_id": "RND",
+                        "statement_type": "IS",
+                        "fiscal_year": 2025,
+                        "fiscal_month": 12,
+                        "value": 50,
+                        "period_end": "2025-12-31",
+                        "filed": "2026-02-01",
+                        "accn": "0000320193-26-000001",
+                        "form": "10-K",
+                        "fp": "FY",
+                        "tag": "ResearchAndDevelopmentExpense",
+                        "amount_policy": "abs",
+                    }
+                ]
+
+            result = read_annual_financials(
+                "AAPL",
+                financial_dir=financial_dir,
+                report_metadata_path=root / "missing_metadata.csv",
+                market="us",
+                edgartools_provider=provider,
+            )
+
+        self.assertEqual(result["xrd"].iat[0], 50)
+        self.assertAlmostEqual(result["rnd_margin"].iat[0], 5.0)
+
+    def test_us_quarterly_financials_periodize_edgartools_fallback_values(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            financial_dir = root / "financials"
+            financial_dir.mkdir()
+
+            def provider(symbol, cik, entity_name, rules, start_year, end_year):
+                return [
+                    {
+                        "symbol": symbol,
+                        "cik": cik,
+                        "entity_name": entity_name,
+                        "canonical_id": "REVENUE",
+                        "statement_type": "IS",
+                        "fiscal_year": 2025,
+                        "fiscal_month": 3,
+                        "value": 100,
+                        "period_end": "2025-03-31",
+                        "filed": "2025-04-25",
+                        "accn": "0000320193-25-000001",
+                        "form": "10-Q",
+                        "fp": "Q1",
+                        "tag": "RevenueFromContractWithCustomerExcludingAssessedTax",
+                    },
+                    {
+                        "symbol": symbol,
+                        "cik": cik,
+                        "entity_name": entity_name,
+                        "canonical_id": "REVENUE",
+                        "statement_type": "IS",
+                        "fiscal_year": 2025,
+                        "fiscal_month": 6,
+                        "value": 250,
+                        "period_end": "2025-06-30",
+                        "filed": "2025-07-25",
+                        "accn": "0000320193-25-000002",
+                        "form": "10-Q",
+                        "fp": "Q2",
+                        "tag": "RevenueFromContractWithCustomerExcludingAssessedTax",
+                    },
+                ]
+
+            result = read_quarterly_financials(
+                "AAPL",
+                financial_dir=financial_dir,
+                report_metadata_path=root / "missing_metadata.csv",
+                market="us",
+                edgartools_provider=provider,
+            )
+
+        self.assertEqual(result["financial_period"].dt.strftime("%Y-%m-%d").tolist(), ["2025-03-31", "2025-06-30"])
+        self.assertEqual(result["sale"].tolist(), [100, 150])
 
     def test_market_data_cache_matches_stock_readers(self):
         with TemporaryDirectory() as temp_dir:
