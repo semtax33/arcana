@@ -697,6 +697,8 @@ notes_rules:
       - ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost
       - InProcessResearchAndDevelopmentExpense
       - ResearchAndDevelopmentExpenseSoftwareExcludingAcquiredInProcessCost
+      - ResearchDevelopmentAndEngineeringExpenseNet
+      - ResearchAndDevelopmentExpenseNet
       - OtherResearchAndDevelopmentExpense
       - ProductDevelopmentExpense
       - ResearchAndDevelopmentExpenses
@@ -709,6 +711,8 @@ notes_rules:
       - EngineeringAndProductDevelopmentExpense
       - ResearchAndDevelopmentCosts
       - ResearchDevelopmentAndEngineeringExpenses
+      - ResearchDevelopmentAndEngineeringExpenseNet
+      - ResearchAndDevelopmentExpenseNet
       - ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCostNet
       - ResearchAndDevelopmentInOperatingExpense
       - ResearchAndDevelopmentExpensesNet
@@ -829,6 +833,8 @@ notes_rules:
       - PaymentsToAcquirePropertyPlantAndEquipment
       - PaymentsToAcquireProductiveAssets
       - PaymentsToAcquirePropertyPlantAndEquipmentAndIntangibleAssets
+      - PaymentsToAcquirePropertyPlantAndEquipmentAndOtherAssets
+      - PaymentsToAcquireProductiveAssetsExcludingDevelopSoftwareAndAcquireIntangibleAssets
       - PaymentsToAcquireOtherPropertyPlantAndEquipment
       - PaymentsToAcquireOtherProductiveAssets
       - PaymentsToAcquirePropertyPlantAndEquipmentNet
@@ -841,6 +847,8 @@ notes_rules:
       - PaymentsToAcquirePropertyPlantAndEquipmentIncludingDiscontinuedOperations
       - PaymentsToAcquirePropertyPlantAndEquipmentExcludingCapitalizedCost
       - PaymentsToAcquirePropertyPlantAndEquipmentAndOther
+      - PaymentsToAcquirePropertyPlantAndEquipmentAndOtherAssets
+      - PaymentsToAcquireProductiveAssetsExcludingDevelopSoftwareAndAcquireIntangibleAssets
       - PaymentsToAcquirePropertyPlantAndEquipmentExcludingOilAndGas
       - PaymentsToAcquirePropertyPlantAndEquipmentExcludingRealEstate
     tag_patterns:
@@ -931,6 +939,8 @@ notes_rules:
       - PaymentsOfDividendsIncludingExpenses
       - PaymentsOfDividendsRedeemablePreferredStock
       - PaymentsOfDividendsToShareholders
+      - PaymentsOfDividendsAndDistributions
+      - PaymentsOfOrdinaryDividendsCommonAndPreferredStock
     tag_patterns:
       - (?i)paymentsof.*dividends
     tag_exclude_patterns:
@@ -976,8 +986,10 @@ notes_rules:
       - PaymentsForRepurchaseOfCommonStockOpenMarket
       - PaymentsForRepurchaseOfCommonStockInTheOpenMarket
       - PaymentsForRepurchaseOfRedeemableCommonStock
+      - PaymentsforRepurchaseofRedeemableCommonStock
       - PaymentsForRepurchaseOfCommonStockUnderShareRepurchaseProgram
       - PaymentsForRepurchaseOfCommonStockTreasuryShares
+      - PaymentsForRepurchaseOfCommonStockForTreasury
       - PaymentsForRepurchaseOfCommonStockAsTreasuryStock
       - PaymentsforRepurchaseofCommonStockintheOpenMarket
       - PaymentsForRepurchaseOfStockHeldInTreasury

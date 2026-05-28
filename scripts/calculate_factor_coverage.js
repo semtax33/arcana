@@ -534,13 +534,13 @@ function addAnnualFinancialFactors(rows) {
       isCovered(r.invested_capital_financial) &&
       isCovered(prev.invested_capital_financial)
         ? (r.invested_capital_financial + prev.invested_capital_financial) / 2
-        : null;
+        : r.invested_capital_financial;
     r.avg_ic_operational =
       isCovered(r.invested_capital_operational) &&
       isCovered(prev.invested_capital_operational)
         ? (r.invested_capital_operational + prev.invested_capital_operational) /
           2
-        : null;
+        : r.invested_capital_operational;
     r.roic_financial = div(r.nopat, r.avg_ic_financial);
     r.roic_operational = div(r.nopat, r.avg_ic_operational);
     r.asset_turnover = div(r.sale, r.avg_assets);

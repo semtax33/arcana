@@ -85,6 +85,7 @@ class ValidationReport:
     warnings: list[dict[str, Any]]
     errors: list[dict[str, Any]]
     canonical_coverage: list[dict[str, Any]]
+    factor_readiness: list[dict[str, Any]]
     source_contribution: list[dict[str, Any]]
     rule_coverage: list[dict[str, Any]]
     missing_sample: list[dict[str, Any]]
@@ -310,6 +311,217 @@ def _parse_observed_rule_id(rule_id: str, row: dict[str, str]) -> dict[str, str]
     }
 
 
+def _annual_key_year(key: str) -> int | None:
+    if "|" not in key:
+        return None
+    try:
+        return int(key.rsplit("|", 1)[1])
+    except ValueError:
+        return None
+
+
+def _annual_key_symbol(key: str) -> str:
+    return key.split("|", 1)[0]
+
+
+def _build_factor_readiness(
+    annual_keys: set[str],
+    covered_by_id: dict[str, set[str]],
+) -> list[dict[str, Any]]:
+    def has(key: str, canonical_id: str) -> bool:
+        return key in covered_by_id.get(canonical_id, set())
+
+    def has_any(key: str, canonical_ids: list[str]) -> bool:
+        return any(has(key, canonical_id) for canonical_id in canonical_ids)
+
+    def has_all(key: str, canonical_ids: list[str]) -> bool:
+        return all(has(key, canonical_id) for canonical_id in canonical_ids)
+
+    specs: list[dict[str, Any]] = [
+        {
+            "factor_id": "RND",
+            "description": "R&D amount is present.",
+            "required": ["RND"],
+            "predicate": lambda key: has(key, "RND"),
+        },
+        {
+            "factor_id": "RND_MARGIN",
+            "description": "R&D margin / R&D to sales readiness.",
+            "required": ["RND", "REVENUE"],
+            "predicate": lambda key: has_all(key, ["RND", "REVENUE"]),
+        },
+        {
+            "factor_id": "NOPAT_FALLBACK_READY",
+            "description": "NOPAT can use statutory or historical tax-rate fallback.",
+            "required": ["OPERATING_INCOME"],
+            "predicate": lambda key: has(key, "OPERATING_INCOME"),
+        },
+        {
+            "factor_id": "NOPAT_STRICT",
+            "description": "NOPAT can use current reported tax rate.",
+            "required": ["OPERATING_INCOME", "PBT", "TAX_EXPENSE"],
+            "predicate": lambda key: has_all(key, ["OPERATING_INCOME", "PBT", "TAX_EXPENSE"]),
+        },
+        {
+            "factor_id": "D_AND_A_AVAILABLE",
+            "description": "Depreciation and amortization is available from IS or CF components.",
+            "required": [],
+            "any_of": ["DNA_IS", "DEPRECIATION_EXPENSE", "AMORTIZATION"],
+            "predicate": lambda key: has_any(key, ["DNA_IS", "DEPRECIATION_EXPENSE", "AMORTIZATION"]),
+        },
+        {
+            "factor_id": "EBITDA_DIRECT",
+            "description": "Reported EBITDA tag is present.",
+            "required": ["EBITDA"],
+            "predicate": lambda key: has(key, "EBITDA"),
+        },
+        {
+            "factor_id": "EBITDA_CALCULATED",
+            "description": "EBITDA can be derived as operating income plus D&A.",
+            "required": ["OPERATING_INCOME"],
+            "any_of": ["DNA_IS", "DEPRECIATION_EXPENSE", "AMORTIZATION"],
+            "predicate": lambda key: has(key, "OPERATING_INCOME")
+            and has_any(key, ["DNA_IS", "DEPRECIATION_EXPENSE", "AMORTIZATION"]),
+        },
+        {
+            "factor_id": "EV_INPUTS_STRICT",
+            "description": "SEC-side EV inputs have cash and at least one debt component.",
+            "required": ["CASH_AND_EQUIVALENTS"],
+            "any_of": ["SHORT_TERM_DEBT", "LONG_TERM_DEBT", "LEASE_LIABILITY"],
+            "predicate": lambda key: has(key, "CASH_AND_EQUIVALENTS")
+            and has_any(key, ["SHORT_TERM_DEBT", "LONG_TERM_DEBT", "LEASE_LIABILITY"]),
+        },
+        {
+            "factor_id": "EV_EBITDA_STRICT",
+            "description": "EV/EBITDA SEC-side readiness using calculated EBITDA and strict EV inputs.",
+            "required": ["OPERATING_INCOME", "CASH_AND_EQUIVALENTS"],
+            "any_of": [
+                "DNA_IS",
+                "DEPRECIATION_EXPENSE",
+                "AMORTIZATION",
+                "SHORT_TERM_DEBT",
+                "LONG_TERM_DEBT",
+                "LEASE_LIABILITY",
+            ],
+            "predicate": lambda key: has(key, "OPERATING_INCOME")
+            and has_any(key, ["DNA_IS", "DEPRECIATION_EXPENSE", "AMORTIZATION"])
+            and has(key, "CASH_AND_EQUIVALENTS")
+            and has_any(key, ["SHORT_TERM_DEBT", "LONG_TERM_DEBT", "LEASE_LIABILITY"]),
+        },
+        {
+            "factor_id": "ROIC_PROXY",
+            "description": "ROIC proxy readiness with NOPAT, equity, and cash.",
+            "required": ["OPERATING_INCOME", "PBT", "TAX_EXPENSE", "TOTAL_EQUITY", "CASH_AND_EQUIVALENTS"],
+            "predicate": lambda key: has_all(
+                key,
+                ["OPERATING_INCOME", "PBT", "TAX_EXPENSE", "TOTAL_EQUITY", "CASH_AND_EQUIVALENTS"],
+            ),
+        },
+        {
+            "factor_id": "ROIC_FINANCIAL_STRICT",
+            "description": "Financial invested-capital ROIC readiness with at least one debt component.",
+            "required": ["OPERATING_INCOME", "PBT", "TAX_EXPENSE", "TOTAL_EQUITY", "CASH_AND_EQUIVALENTS"],
+            "any_of": ["SHORT_TERM_DEBT", "LONG_TERM_DEBT", "LEASE_LIABILITY"],
+            "predicate": lambda key: has_all(
+                key,
+                ["OPERATING_INCOME", "PBT", "TAX_EXPENSE", "TOTAL_EQUITY", "CASH_AND_EQUIVALENTS"],
+            )
+            and has_any(key, ["SHORT_TERM_DEBT", "LONG_TERM_DEBT", "LEASE_LIABILITY"]),
+        },
+        {
+            "factor_id": "ROIC_OPERATIONAL_STRICT",
+            "description": "Operational invested-capital ROIC readiness with all working-capital components.",
+            "required": [
+                "OPERATING_INCOME",
+                "PBT",
+                "TAX_EXPENSE",
+                "TRADE_RECEIVABLES",
+                "INVENTORIES",
+                "TRADE_PAYABLES",
+                "PPE",
+                "INTANGIBLE_ASSETS",
+            ],
+            "predicate": lambda key: has_all(
+                key,
+                [
+                    "OPERATING_INCOME",
+                    "PBT",
+                    "TAX_EXPENSE",
+                    "TRADE_RECEIVABLES",
+                    "INVENTORIES",
+                    "TRADE_PAYABLES",
+                    "PPE",
+                    "INTANGIBLE_ASSETS",
+                ],
+            ),
+        },
+        {
+            "factor_id": "ROIC_OPERATIONAL_PRACTICAL",
+            "description": "Operational ROIC readiness with PPE plus at least one operating-capital component.",
+            "required": ["OPERATING_INCOME", "PBT", "TAX_EXPENSE", "PPE"],
+            "any_of": ["TRADE_RECEIVABLES", "INVENTORIES", "TRADE_PAYABLES", "INTANGIBLE_ASSETS"],
+            "predicate": lambda key: has_all(key, ["OPERATING_INCOME", "PBT", "TAX_EXPENSE", "PPE"])
+            and has_any(key, ["TRADE_RECEIVABLES", "INVENTORIES", "TRADE_PAYABLES", "INTANGIBLE_ASSETS"]),
+        },
+    ]
+
+    denominator = len(annual_keys)
+    rows: list[dict[str, Any]] = []
+    for spec in specs:
+        covered_count = sum(1 for key in annual_keys if spec["predicate"](key))
+        rows.append(
+            {
+                "factor_id": spec["factor_id"],
+                "basis": "current",
+                "description": spec["description"],
+                "covered_symbol_years": covered_count,
+                "missing_symbol_years": max(denominator - covered_count, 0),
+                "total_symbol_years": denominator,
+                "coverage_pct": round((covered_count / denominator * 100.0) if denominator else 0.0, 4),
+                "required_canonical_ids": ",".join(spec.get("required", [])),
+                "any_of_canonical_ids": ",".join(spec.get("any_of", [])),
+            }
+        )
+
+    lag_keys = {
+        key
+        for key in annual_keys
+        if (year := _annual_key_year(key)) is not None
+        and f"{_annual_key_symbol(key)}|{year - 1}" in annual_keys
+    }
+    spec_by_id = {spec["factor_id"]: spec for spec in specs}
+    for factor_id in [
+        "ROIC_FINANCIAL_STRICT",
+        "ROIC_OPERATIONAL_STRICT",
+        "ROIC_OPERATIONAL_PRACTICAL",
+    ]:
+        spec = spec_by_id[factor_id]
+        covered_count = 0
+        for key in lag_keys:
+            year = _annual_key_year(key)
+            if year is None:
+                continue
+            prior_key = f"{_annual_key_symbol(key)}|{year - 1}"
+            if spec["predicate"](key) and spec["predicate"](prior_key):
+                covered_count += 1
+        denominator = len(lag_keys)
+        rows.append(
+            {
+                "factor_id": f"{factor_id}_CURRENT_AND_PRIOR",
+                "basis": "current_and_prior",
+                "description": f"{spec['description']} Current and prior-year inputs are both present.",
+                "covered_symbol_years": covered_count,
+                "missing_symbol_years": max(denominator - covered_count, 0),
+                "total_symbol_years": denominator,
+                "coverage_pct": round((covered_count / denominator * 100.0) if denominator else 0.0, 4),
+                "required_canonical_ids": ",".join(spec.get("required", [])),
+                "any_of_canonical_ids": ",".join(spec.get("any_of", [])),
+            }
+        )
+
+    return rows
+
+
 def build_mapping_coverage_report(
     input_dir: str | Path = DEFAULT_INPUT_DIR,
     *,
@@ -470,6 +682,7 @@ def build_mapping_coverage_report(
         }
         for canonical_id, source in sorted(source_rows)
     ]
+    factor_readiness = _build_factor_readiness(annual_keys, covered_by_id)
 
     rule_rows: list[dict[str, Any]] = []
     all_rule_keys = set(expected_by_key) | set(observed_rule_rows)
@@ -594,6 +807,7 @@ def build_mapping_coverage_report(
         warnings=warnings,
         errors=errors,
         canonical_coverage=canonical_coverage,
+        factor_readiness=factor_readiness,
         source_contribution=source_contribution,
         rule_coverage=rule_rows,
         missing_sample=missing_sample,
@@ -619,6 +833,7 @@ def write_report_files(report: ValidationReport, output_dir: str | Path | None =
     written = [
         root / "mapping_coverage_validation.json",
         root / "canonical_coverage.csv",
+        root / "factor_readiness.csv",
         root / "source_contribution.csv",
         root / "rule_coverage.csv",
     ]
@@ -640,11 +855,26 @@ def write_report_files(report: ValidationReport, output_dir: str | Path | None =
     )
     _write_csv(
         written[2],
+        report.factor_readiness,
+        [
+            "factor_id",
+            "basis",
+            "description",
+            "covered_symbol_years",
+            "missing_symbol_years",
+            "total_symbol_years",
+            "coverage_pct",
+            "required_canonical_ids",
+            "any_of_canonical_ids",
+        ],
+    )
+    _write_csv(
+        written[3],
         report.source_contribution,
         ["canonical_id", "source", "covered_symbol_years", "row_count"],
     )
     _write_csv(
-        written[3],
+        written[4],
         report.rule_coverage,
         [
             "rule_key",

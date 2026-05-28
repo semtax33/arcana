@@ -38,6 +38,25 @@ SHARES_PATH = DATA_LAKE.silver("krx", "shares", market_csv_name("normalized_shar
 LEGACY_SHARES_PATHS = (DATA_LAKE.silver("krx", "shares", "normalized_shares.csv"),)
 ANNUAL_MONTH = 12
 DEFAULT_NOPAT_TAX_RATE = 0.21
+RND_INTENSIVE_SECTOR_CODES = {"35", "45", "50", "HEALTH_CARE", "INFORMATION_TECHNOLOGY", "COMMUNICATION_SERVICES"}
+RND_ZERO_IMPUTE_ALLOWED_SECTOR_CODES = {
+    "10",
+    "15",
+    "20",
+    "25",
+    "30",
+    "40",
+    "55",
+    "60",
+    "ENERGY",
+    "MATERIALS",
+    "INDUSTRIALS",
+    "CONSUMER_DISCRETIONARY",
+    "CONSUMER_STAPLES",
+    "FINANCIALS",
+    "UTILITIES",
+    "REAL_ESTATE",
+}
 
 
 BASE_COLUMNS = [
@@ -178,6 +197,21 @@ def first_bounded_value_frame(df, reference, *columns, max_abs_multiple=1.5):
         values = bound_by_reference(df[column], reference, max_abs_multiple)
         result = result.fillna(values)
     return result
+
+
+def sector_code_frame(df):
+    for column in ["sector_code", "gics_sector_code"]:
+        if column in df.columns:
+            return df[column].fillna("").astype(str).str.strip().str.upper()
+    return pd.Series("", index=df.index, dtype="object")
+
+
+def impute_missing_rnd_zero(xrd, df):
+    sector_code = sector_code_frame(df)
+    has_operating_context = numeric_column(df, "REVENUE").notna() | numeric_column(df, "OPERATING_INCOME").notna()
+    eligible_sector = sector_code.isin(RND_ZERO_IMPUTE_ALLOWED_SECTOR_CODES) & ~sector_code.isin(RND_INTENSIVE_SECTOR_CODES)
+    imputed = pd.to_numeric(xrd, errors="coerce").isna() & has_operating_context & eligible_sector
+    return pd.to_numeric(xrd, errors="coerce").mask(imputed, 0.0), imputed
 
 
 def tax_rate_for_nopat(actual_tax_rate, operating_income, default_rate=DEFAULT_NOPAT_TAX_RATE):
@@ -692,7 +726,10 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["ni_parent"] = first_value_frame(df, "NET_INCOME_PARENT", "NET_INCOME")
     df["oiadp"] = numeric_column(df, "OPERATING_INCOME")
     df["cogs"] = numeric_column(df, "COGS")
-    df["xrd"] = numeric_column(df, "RND")
+    df["xrd"], df["xrd_imputed_zero"] = impute_missing_rnd_zero(
+        numeric_column(df, "RND"),
+        df,
+    )
     df["xint"] = first_value_frame(
         df,
         "INTEREST_EXPENSE_FALLBACK",
@@ -764,8 +801,12 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
         + df["ppent"].fillna(0)
         + numeric_column(df, "INTANGIBLE_ASSETS", 0).fillna(0)
     )
-    df["avg_ic_financial"] = (df["invested_capital_financial"] + df["invested_capital_financial"].shift(lag)) / 2
-    df["avg_ic_operational"] = (df["invested_capital_operational"] + df["invested_capital_operational"].shift(lag)) / 2
+    df["avg_ic_financial"] = (
+        (df["invested_capital_financial"] + df["invested_capital_financial"].shift(lag)) / 2
+    ).fillna(df["invested_capital_financial"])
+    df["avg_ic_operational"] = (
+        (df["invested_capital_operational"] + df["invested_capital_operational"].shift(lag)) / 2
+    ).fillna(df["invested_capital_operational"])
     df["roic_financial"] = df["nopat"] / df["avg_ic_financial"]
     df["roic_operational"] = df["nopat"] / df["avg_ic_operational"]
 
@@ -1379,10 +1420,13 @@ def add_daily_market_valuation_factors(daily_df):
     df["npr"] = (che - debt) / market_cap
     df["rpr"] = xrd / market_cap
     df["rnd_to_market_cap"] = xrd / market_cap * 100
+    ev_input_missing = market_cap.isna() | (debt.isna() & che.isna())
     df["enterprise_value"] = market_cap + debt.fillna(0) - che.fillna(0)
     valid_ev = df["enterprise_value"].where(df["enterprise_value"] > 0)
     valid_oibdp = nonzero_denominator(oibdp)
     df["ev_ebitda_quality_flag"] = pd.Series(pd.NA, index=df.index, dtype="object")
+    df.loc[ev_input_missing, "ev_ebitda_quality_flag"] = "missing_enterprise_value_inputs"
+    df.loc[oibdp.isna(), "ev_ebitda_quality_flag"] = "missing_ebitda"
     df.loc[df["enterprise_value"].notna() & (df["enterprise_value"] <= 0), "ev_ebitda_quality_flag"] = "non_positive_enterprise_value"
     df.loc[oibdp == 0, "ev_ebitda_quality_flag"] = "zero_ebitda"
     df.loc[oibdp < 0, "ev_ebitda_quality_flag"] = "negative_ebitda"

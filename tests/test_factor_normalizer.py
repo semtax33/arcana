@@ -246,6 +246,44 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertTrue(pd.isna(latest["tax_rate"]))
         self.assertAlmostEqual(latest["nopat"], 79.0)
 
+    def test_missing_rnd_is_imputed_zero_for_non_rnd_intensive_sector(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "sector_code": "40",
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": 100,
+                }
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+
+        self.assertEqual(result["xrd"].iat[0], 0)
+        self.assertTrue(bool(result["xrd_imputed_zero"].iat[0]))
+        self.assertEqual(result["rnd_margin"].iat[0], 0)
+
+    def test_missing_rnd_stays_missing_for_rnd_intensive_sector(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "sector_code": "45",
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": 100,
+                }
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+
+        self.assertTrue(pd.isna(result["xrd"].iat[0]))
+        self.assertFalse(bool(result["xrd_imputed_zero"].iat[0]))
+        self.assertTrue(pd.isna(result["rnd_margin"].iat[0]))
+
     def test_requested_growth_and_margin_factors_are_calculated(self):
         revenues = [100, 120, 144, 172.8, 207.36, 248.832]
         financial_df = pd.DataFrame(
@@ -392,6 +430,23 @@ class FactorNormalizerTest(unittest.TestCase):
 
         self.assertAlmostEqual(result["ev_to_ebitda"].iat[0], -10.0)
         self.assertEqual(result["ev_ebitda_quality_flag"].iat[0], "negative_ebitda")
+
+    def test_ev_ebitda_flags_missing_inputs(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2025-01-02", "2025-01-03"]),
+                "close": [10, 10],
+                "volume": [100, 100],
+                "shares": [100, 100],
+                "market_cap": [1_000, 1_000],
+                "oibdp": [100, None],
+            }
+        )
+
+        result = add_daily_market_valuation_factors(daily_df)
+
+        self.assertEqual(result["ev_ebitda_quality_flag"].iat[0], "missing_enterprise_value_inputs")
+        self.assertEqual(result["ev_ebitda_quality_flag"].iat[1], "missing_ebitda")
 
     def test_daily_fcf_shareholder_return_factors_use_cash_dividends(self):
         daily_df = pd.DataFrame(

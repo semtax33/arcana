@@ -75,6 +75,7 @@ class UsMappingCoverageValidatorTest(unittest.TestCase):
             self.assertEqual(report.symbol_year_count, 0)
             self.assertTrue(all(path.exists() for path in written))
             self.assertIn("canonical_id", (root / "out" / "canonical_coverage.csv").read_text(encoding="utf-8-sig"))
+            self.assertIn("factor_id", (root / "out" / "factor_readiness.csv").read_text(encoding="utf-8-sig"))
 
     def test_reports_canonical_source_and_expected_rule_coverage(self):
         with TemporaryDirectory() as tmp:
@@ -97,6 +98,13 @@ class UsMappingCoverageValidatorTest(unittest.TestCase):
                         "symbol": "AAPL",
                         "canonical_account_id": "CAPEX_PPE",
                         "statement_type": "CF",
+                        "fiscal_year": "2025",
+                        "fiscal_month": "12",
+                    },
+                    {
+                        "symbol": "AAPL",
+                        "canonical_account_id": "REVENUE",
+                        "statement_type": "IS",
                         "fiscal_year": "2025",
                         "fiscal_month": "12",
                     },
@@ -147,6 +155,7 @@ class UsMappingCoverageValidatorTest(unittest.TestCase):
             )
 
             coverage_by_id = {row["canonical_id"]: row for row in report.canonical_coverage}
+            readiness_by_id = {row["factor_id"]: row for row in report.factor_readiness}
             rule_by_key = {row["rule_key"]: row for row in report.rule_coverage}
 
             self.assertEqual(report.verdict, "WARN")
@@ -154,6 +163,8 @@ class UsMappingCoverageValidatorTest(unittest.TestCase):
             self.assertEqual(report.symbol_year_count, 2)
             self.assertEqual(coverage_by_id["RND"]["coverage_pct"], 100.0)
             self.assertEqual(coverage_by_id["CAPEX_PPE"]["coverage_pct"], 50.0)
+            self.assertEqual(readiness_by_id["RND"]["coverage_pct"], 100.0)
+            self.assertEqual(readiness_by_id["RND_MARGIN"]["coverage_pct"], 50.0)
             self.assertEqual(
                 rule_by_key["companyfacts_primary:RND:us-gaap:ResearchAndDevelopmentExpense"]["row_count"],
                 1,
