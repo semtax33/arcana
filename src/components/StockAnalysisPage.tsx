@@ -5,6 +5,7 @@ import {
   Bot,
   BriefcaseBusiness,
   Building2,
+  Calculator,
   FileText,
   LineChart,
   Search,
@@ -24,7 +25,12 @@ import {
   type Time,
 } from "lightweight-charts";
 import { fetchStockAnalysis } from "../api/stockAnalysisApi";
+import {
+  fetchMultipleValuationBands,
+  type MultipleValuationApiResponse,
+} from "../api/multipleValuationApi";
 import { FinancialStatementsPage } from "./FinancialStatementsPage";
+import { MultipleValuationPage } from "./MultipleValuationPage";
 import type {
   StockAnalysisPoint,
   StockAnalysisResponse,
@@ -53,6 +59,7 @@ const topTabs = [
   "차트",
   "개요",
   "재무",
+  "적정가치",
   "애널리스트 전망",
   "스타일 스코어",
   "뉴스",
@@ -467,6 +474,10 @@ export function StockAnalysisPage({
   const [range, setRange] = useState<StockChartRange>("1Y");
   const [chartMode, setChartMode] = useState<StockChartMode>("candle");
   const [data, setData] = useState<StockAnalysisResponse | null>(null);
+  const [multipleValuationData, setMultipleValuationData] =
+    useState<MultipleValuationApiResponse | null>(null);
+  const [isMultipleValuationLoading, setIsMultipleValuationLoading] = useState(false);
+  const [multipleValuationError, setMultipleValuationError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -496,6 +507,34 @@ export function StockAnalysisPage({
       ignore = true;
     };
   }, [stockCode, range]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    setIsMultipleValuationLoading(true);
+    setMultipleValuationError("");
+    setMultipleValuationData(null);
+    void fetchMultipleValuationBands(stockCode, { bandBasis: "historical" })
+      .then((response) => {
+        if (!ignore) {
+          setMultipleValuationData(response);
+        }
+      })
+      .catch((error: Error) => {
+        if (!ignore) {
+          setMultipleValuationError(error.message);
+        }
+      })
+      .finally(() => {
+        if (!ignore) {
+          setIsMultipleValuationLoading(false);
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [stockCode]);
 
   const latest = data?.summary;
   const recentRows = data?.recentData ?? [];
@@ -589,6 +628,7 @@ export function StockAnalysisPage({
                 {tab === "차트" && <TrendingUp size={15} />}
                 {tab === "개요" && <FileText size={15} />}
                 {tab === "재무" && <BarChart3 size={15} />}
+                {tab === "적정가치" && <Calculator size={15} />}
                 {tab === "스타일 스코어" && <Star size={15} />}
                 <span>{tab}</span>
               </button>
@@ -609,6 +649,15 @@ export function StockAnalysisPage({
 
           {activeTab === "재무" ? (
             <FinancialStatementsPage stockCode={stockCode} />
+          ) : activeTab === "적정가치" ? (
+            <MultipleValuationPage
+              data={data}
+              initialApiData={multipleValuationData}
+              initialApiError={multipleValuationError}
+              isInitialApiLoading={isMultipleValuationLoading}
+              isLoading={isLoading}
+              stockCode={stockCode}
+            />
           ) : activeTab === "개요" ? (
             <StockOverviewPanel
               data={data}

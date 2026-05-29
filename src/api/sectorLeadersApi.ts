@@ -1,4 +1,8 @@
-import type { IndustryAnalysisRow, SectorLeadersResponse } from "../types/industryAnalysis";
+import type {
+  IndustryAnalysisRow,
+  IndustryMarket,
+  SectorLeadersResponse,
+} from "../types/industryAnalysis";
 
 const apiBaseUrl = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "").replace(/\/+$/, "");
 const apiPath = (path: string) => `${apiBaseUrl}${path}`;
@@ -173,7 +177,14 @@ function normalizeSectorLeaderRow(raw: unknown): IndustryAnalysisRow | null {
   };
 }
 
-function normalizeSectorLeadersPayload(payload: unknown): SectorLeadersResponse {
+function normalizeMarket(value: unknown, fallback: IndustryMarket): IndustryMarket {
+  return typeof value === "string" && value.toUpperCase() === "US" ? "US" : fallback;
+}
+
+function normalizeSectorLeadersPayload(
+  payload: unknown,
+  fallbackMarket: IndustryMarket,
+): SectorLeadersResponse {
   const rowsPayload = Array.isArray(payload)
     ? payload
     : isRecord(payload)
@@ -186,6 +197,7 @@ function normalizeSectorLeadersPayload(payload: unknown): SectorLeadersResponse 
 
   return {
     asOfDate,
+    market: isRecord(payload) ? normalizeMarket(payload.market, fallbackMarket) : fallbackMarket,
     rows: rowsPayload
       .map(normalizeSectorLeaderRow)
       .filter((row): row is IndustryAnalysisRow => row !== null),
@@ -202,12 +214,15 @@ async function readJson(response: Response) {
   return response.json() as Promise<unknown>;
 }
 
-export async function fetchSectorLeaders(): Promise<SectorLeadersResponse> {
-  const response = await fetch(apiPath("/api/sector-leaders"));
+export async function fetchSectorLeaders(
+  market: IndustryMarket = "KR",
+): Promise<SectorLeadersResponse> {
+  const searchParams = new URLSearchParams({ market });
+  const response = await fetch(apiPath(`/api/sector-leaders?${searchParams.toString()}`));
 
   if (!response.ok) {
     throw new Error("산업 분석 데이터를 불러오지 못했습니다.");
   }
 
-  return normalizeSectorLeadersPayload(await readJson(response));
+  return normalizeSectorLeadersPayload(await readJson(response), market);
 }

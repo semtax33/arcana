@@ -75,6 +75,7 @@ type FactorConditionDto = {
 };
 
 type FactorScreenRequestDto = {
+  market: string;
   conditions: FactorConditionDto[];
   industry_group_codes?: string[] | null;
   match_mode: "all" | "any";
@@ -704,12 +705,15 @@ export async function fetchMarketCatalog(): Promise<MarketOption[]> {
   return defaultMarketOptions;
 }
 
-export async function fetchIndustryCatalog(_market: string): Promise<IndustryOption[]> {
+export async function fetchIndustryCatalog(market: string): Promise<IndustryOption[]> {
   if (useMockApi) {
     return mockIndustries;
   }
 
-  const industryGroups = await getJson<IndustryGroupDto[]>("/api/sectors/industry-groups");
+  const searchParams = new URLSearchParams({ market });
+  const industryGroups = await getJson<IndustryGroupDto[]>(
+    `/api/sectors/industry-groups?${searchParams.toString()}`,
+  );
   return industryGroups.map(mapIndustryGroup);
 }
 
@@ -731,6 +735,7 @@ export async function runQuantScreening(
   }
 
   const payload: FactorScreenRequestDto = {
+    market: request.market,
     conditions: request.conditions.map(mapConditionToDto),
     industry_group_codes: request.industries.length > 0 ? request.industries : null,
     match_mode: "all",

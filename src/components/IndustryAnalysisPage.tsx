@@ -6,13 +6,18 @@ import {
   BarChart3,
   Building2,
   CalendarDays,
+  Globe2,
   LineChart,
   Percent,
   TrendingUp,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchSectorLeaders } from "../api/sectorLeadersApi";
-import type { IndustryAnalysisRow, IndustryMetricKey } from "../types/industryAnalysis";
+import type {
+  IndustryAnalysisRow,
+  IndustryMarket,
+  IndustryMetricKey,
+} from "../types/industryAnalysis";
 
 type SortDirection = "asc" | "desc";
 
@@ -66,6 +71,11 @@ const metrics: MetricDefinition[] = [
     unit: "x",
     icon: ArrowUpDown,
   },
+];
+
+const marketOptions: { value: IndustryMarket; label: string }[] = [
+  { value: "KR", label: "한국" },
+  { value: "US", label: "미국" },
 ];
 
 const numberFormatter = new Intl.NumberFormat("ko-KR", {
@@ -123,6 +133,7 @@ function SortStateIcon({
 }
 
 export function IndustryAnalysisPage() {
+  const [market, setMarket] = useState<IndustryMarket>("KR");
   const [sortKey, setSortKey] = useState<IndustryMetricKey>("strongStockRatio");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [rows, setRows] = useState<IndustryAnalysisRow[]>([]);
@@ -131,6 +142,8 @@ export function IndustryAnalysisPage() {
   const [errorMessage, setErrorMessage] = useState("");
 
   const selectedMetric = metrics.find((metric) => metric.key === sortKey) ?? metrics[0];
+  const selectedMarketLabel =
+    marketOptions.find((option) => option.value === market)?.label ?? market;
   const today = asOfDate ?? dateFormatter.format(new Date());
 
   useEffect(() => {
@@ -138,7 +151,9 @@ export function IndustryAnalysisPage() {
 
     setIsLoading(true);
     setErrorMessage("");
-    void fetchSectorLeaders()
+    setRows([]);
+    setAsOfDate(null);
+    void fetchSectorLeaders(market)
       .then((response) => {
         if (!ignore) {
           setRows(response.rows);
@@ -161,7 +176,7 @@ export function IndustryAnalysisPage() {
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [market]);
 
   const sortedRows = useMemo(() => {
     return [...rows].sort((left, right) => {
@@ -215,14 +230,31 @@ export function IndustryAnalysisPage() {
         <div>
           <p className="industry-eyebrow">주도 산업군 랭킹</p>
           <h1>산업 분석</h1>
-          <p>현재 날짜 기준 산업군별 강세, 성장성, 수익성, 밸류에이션을 비교합니다.</p>
+          <p>
+            선택한 시장의 산업군별 강세, 성장성, 수익률, 밸류에이션을 비교합니다.
+          </p>
         </div>
-        <div className="industry-header-status">
-          <span>
-            <CalendarDays size={14} />
-            {today}
-          </span>
-          <em>{isLoading ? "API 로딩 중" : "API 연동"}</em>
+        <div className="industry-header-actions">
+          <div className="industry-market-toggle" aria-label="분석 국가 선택">
+            {marketOptions.map((option) => (
+              <button
+                className={option.value === market ? "active" : ""}
+                key={option.value}
+                type="button"
+                onClick={() => setMarket(option.value)}
+              >
+                <Globe2 size={14} />
+                <span>{option.label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="industry-header-status">
+            <span>
+              <CalendarDays size={14} />
+              {today}
+            </span>
+            <em>{selectedMarketLabel} · {isLoading ? "API 로딩 중" : "API 연동"}</em>
+          </div>
         </div>
       </header>
 
@@ -241,7 +273,7 @@ export function IndustryAnalysisPage() {
             <em>{topIndustry ? formatMetricValue(topIndustry[sortKey], selectedMetric.unit) : "N/A"}</em>
           </article>
           <article>
-            <span>시장 전체 강세 비율</span>
+            <span>{selectedMarketLabel} 전체 강세 비율</span>
             <strong>{formatMetricValue(marketWeightedStrongRatio, "%")}</strong>
             <em>
               {isLoading
@@ -254,14 +286,14 @@ export function IndustryAnalysisPage() {
           <article>
             <span>섹터 단순평균</span>
             <strong>{formatMetricValue(averageStrongRatio, "%")}</strong>
-            <em>{rows.length > 0 ? `${rows.length}개 섹터 평균` : "산업군 평균"}</em>
+            <em>{rows.length > 0 ? `${rows.length}개 산업군 평균` : "산업군 평균"}</em>
           </article>
         </section>
 
         <section className="industry-sort-panel" aria-label="산업 분석 정렬 기준">
           <div className="industry-section-title">
-            <h2>판별 기준별 정렬</h2>
-            <p>각 기준을 클릭하면 주도 섹터 순위를 바로 비교할 수 있습니다.</p>
+            <h2>지표별 정렬</h2>
+            <p>각 지표를 클릭하면 주도 산업군 순위를 바로 비교할 수 있습니다.</p>
           </div>
 
           <div className="industry-metric-tabs">

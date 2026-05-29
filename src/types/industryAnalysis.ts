@@ -7,6 +7,8 @@ export type IndustryMetricKey =
   | "per"
   | "pbr";
 
+export type IndustryMarket = "KR" | "US";
+
 export type IndustryAnalysisRow = {
   industryName: string;
   stockCount: number;
@@ -22,5 +24,6 @@ export type IndustryAnalysisRow = {
 
 export type SectorLeadersResponse = {
   asOfDate: string | null;
+  market: IndustryMarket;
   rows: IndustryAnalysisRow[];
 };
