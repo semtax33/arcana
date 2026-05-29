@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import contextlib
+import io
 import json
 import math
 import os
@@ -28,6 +30,7 @@ from engine.transformers._internal.dart_filings import (
     apply_cash_direction,
     safe_str,
 )
+from engine.transformers._internal.edgar_identity import configure_edgar_identity
 
 
 US_MAPPING_RULE_PATH = first_existing_path(
@@ -974,31 +977,37 @@ def default_edgartools_provider(
         print(f"[WARN] edgartools fallback skipped for {symbol}: import failed ({type(exc).__name__})")
         return []
 
-    identity = os.environ.get("EDGAR_IDENTITY") or os.environ.get("SEC_IDENTITY")
-    if identity:
-        try:
-            set_identity(identity)
-        except Exception:
-            pass
+    try:
+        configure_edgar_identity(set_identity)
+    except Exception:
+        pass
 
     try:
         company_arg = symbol
         if not company_arg or str(company_arg).upper().startswith("CIK"):
             company_arg = int(cik)
-        company = Company(company_arg)
-        facts_obj = getattr(company, "facts", None)
-        facts_obj = facts_obj() if callable(facts_obj) else facts_obj
-        if facts_obj is None:
-            return []
-        to_pandas = getattr(facts_obj, "to_pandas", None)
-        if callable(to_pandas):
-            df = to_pandas()
-        elif isinstance(facts_obj, pd.DataFrame):
-            df = facts_obj
-        else:
-            return []
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            company = Company(company_arg)
+            facts_obj = getattr(company, "facts", None)
+            facts_obj = facts_obj() if callable(facts_obj) else facts_obj
+            if facts_obj is None:
+                return []
+            to_pandas = getattr(facts_obj, "to_pandas", None)
+            if callable(to_pandas):
+                df = to_pandas()
+            elif isinstance(facts_obj, pd.DataFrame):
+                df = facts_obj
+            else:
+                return []
     except Exception as exc:
-        print(f"[WARN] edgartools fallback skipped for {symbol}: {type(exc).__name__}: {exc}")
+        message = str(exc)
+        expected_empty_fact_error = (
+            "No company facts found" in message
+            or "No facts found" in message
+            or type(exc).__name__ in {"NoCompanyFactsFound", "NoFactsFound"}
+        )
+        if not expected_empty_fact_error:
+            print(f"[WARN] edgartools fallback skipped for {symbol}: {type(exc).__name__}: {exc}")
         return []
 
     if df is None or df.empty:

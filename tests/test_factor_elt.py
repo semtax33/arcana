@@ -133,6 +133,54 @@ class FactorEltTest(unittest.TestCase):
                     insert_catalog=False,
                 )
 
+    def test_insert_daily_factors_can_prepare_stocks_in_parallel(self):
+        class FakeClient:
+            def __init__(self):
+                self.inserted = []
+
+            def insert_df(self, table_name, dataframe, column_names):
+                self.inserted.append((table_name, dataframe.copy(), list(column_names)))
+
+        def make_wide_df(stock_code, **_):
+            return pd.DataFrame(
+                [
+                    {
+                        "security_id": f"SEC_KR_{stock_code}",
+                        "trade_date": "2026-01-02",
+                        "stock_code": stock_code,
+                        "fiscal_year": 2025,
+                        "financial_period": "2025-12-31",
+                        "currency": "KRW",
+                        "updated_at": "2026-01-03 09:00:00",
+                        "roe": 10.0,
+                    }
+                ]
+            )
+
+        client = FakeClient()
+        with (
+            patch("engine.loaders.factors._resolve_stock_codes", return_value=["005930", "000660"]),
+            patch("engine.loaders.factors.create_stock_factor_dataframe", side_effect=make_wide_df) as create_wide,
+        ):
+            result = insert_daily_factors(
+                stock_codes=["005930", "000660"],
+                client=client,
+                insert_catalog=False,
+                reader_mode="csv",
+                insert_batch_size=2,
+                progress_interval=0,
+                parallel_workers=2,
+            )
+
+        self.assertEqual(create_wide.call_count, 2)
+        self.assertEqual(result.attrs["inserted_rows"], 2)
+        self.assertEqual(result.attrs["factor_count"], 1)
+        self.assertEqual(len(client.inserted), 1)
+        table_name, inserted_df, column_names = client.inserted[0]
+        self.assertEqual(table_name, "fact_daily_factors")
+        self.assertEqual(column_names, FACT_DAILY_FACTOR_COLUMNS)
+        self.assertEqual(set(inserted_df["security_id"]), {"SEC_KR_005930", "SEC_KR_000660"})
+
     def test_create_factor_catalog_dataframe_marks_technical_factors(self):
         catalog_df = create_factor_catalog_dataframe(
             [

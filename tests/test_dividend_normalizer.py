@@ -1,5 +1,10 @@
 import unittest
+import contextlib
+import io
 import json
+import os
+import sys
+import types
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -13,6 +18,70 @@ from engine.transformers import dividends as dividend_normalizer
 
 
 class DividendNormalizerTest(unittest.TestCase):
+    def test_default_dividend_edgartools_provider_sets_identity(self):
+        identities = []
+
+        class FakeCompany:
+            def __init__(self, company_arg):
+                if not identities:
+                    raise AssertionError("edgartools identity must be set before Company")
+                self.company_arg = company_arg
+
+            def facts(self):
+                return pd.DataFrame(
+                    [
+                        {
+                            "tag": "DividendsPayableAmountPerShare",
+                            "value": 0.7,
+                        }
+                    ]
+                )
+
+        fake_edgar = types.SimpleNamespace(
+            Company=FakeCompany,
+            set_identity=lambda identity: identities.append(identity),
+        )
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.dict(sys.modules, {"edgar": fake_edgar}),
+        ):
+            rows = dividend_normalizer._default_us_dividend_edgartools_provider(
+                "ZYME",
+                "1937653",
+                "Zymeworks Inc.",
+                [],
+            )
+
+        self.assertEqual(identities, ["StatementParsing contact@example.com"])
+        self.assertEqual(rows[0]["tag"], "DividendsPayableAmountPerShare")
+
+    def test_default_dividend_edgartools_provider_suppresses_empty_companyfacts_noise(self):
+        class FakeCompany:
+            def __init__(self, company_arg):
+                print("No company facts found on url https://data.sec.gov/api/xbrl/companyfacts/CIK0002065741.json")
+                raise RuntimeError("No company facts found on url https://data.sec.gov/api/xbrl/companyfacts/CIK0002065741.json")
+
+        fake_edgar = types.SimpleNamespace(
+            Company=FakeCompany,
+            set_identity=lambda identity: None,
+        )
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.dict(sys.modules, {"edgar": fake_edgar}),
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+        ):
+            rows = dividend_normalizer._default_us_dividend_edgartools_provider(
+                "TEST",
+                "2065741",
+                "Test Inc.",
+                [],
+            )
+
+        self.assertEqual(rows, [])
+        self.assertEqual(stdout.getvalue(), "")
+
     def test_normalize_dividend_amount_preserves_decimal_places(self):
         self.assertEqual(dividend_normalizer.normalize_dividend_amount("1,000 원"), 1000)
         self.assertEqual(dividend_normalizer.normalize_dividend_amount("45.21 원"), 45.21)
@@ -326,6 +395,7 @@ class DividendNormalizerTest(unittest.TestCase):
                     [
                         "adsh\ttag\tversion\tddate\tqtrs\tiprx\tlang\tdcml\tdurp\tdatp\tdimh\tdimn\tcoreg\tescaped\tsrclen\ttxtlen\tfootnote\tfootlen\tcontext\tvalue",
                         "0000004127-25-000010\tSecurityExchangeName\tdei/2024\t20250131\t0\t0\ten-US\t32767\t0\t0\t0x00000000\t0\t\t0\t6\t6\t\t0\tc-1\tNASDAQ",
+                        "0000004127-25-000010\tTradingSymbol\tdei/2024\t20250131\t0\t0\ten-US\t32767\t0\t0\t0x00000000\t0\t\t0\t4\t4\t\t0\tc-1\tSWKS",
                         "0000004127-25-000010\tDividendsPayableDateDeclaredDayMonthAndYear\tus-gaap/2024\t20250131\t0\t0\ten-US\t32767\t0\t0\t0xabc\t2\t\t0\t10\t10\t\t0\tc-1\t2025-02-05",
                         "0000004127-25-000010\tDividendsPayableDateOfRecordDayMonthAndYear\tus-gaap/2024\t20250228\t0\t0\ten-US\t32767\t0\t0\t0xabc\t2\t\t0\t10\t10\t\t0\tc-2\t2025-02-24",
                         "0000004127-25-000010\tDividendPayableDateToBePaidDayMonthAndYear\tus-gaap/2024\t20250331\t0\t0\ten-US\t32767\t0\t0\t0xabc\t2\t\t0\t10\t10\t\t0\tc-3\t2025-03-17",
@@ -343,6 +413,7 @@ class DividendNormalizerTest(unittest.TestCase):
                 ticker_map_path=ticker_map,
                 financial_dir=financial_dir,
                 use_edgartools=False,
+                use_yfinance_fallback=False,
             )
 
         self.assertEqual(len(result), 1)
@@ -399,6 +470,7 @@ class DividendNormalizerTest(unittest.TestCase):
                 notes_root=notes_dir,
                 ticker_map_path=ticker_map,
                 use_edgartools=False,
+                use_yfinance_fallback=False,
             )
 
         self.assertTrue(result.empty)
@@ -446,6 +518,110 @@ class DividendNormalizerTest(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result["dividend_declared_date"].iat[0], "2025-02-05")
         self.assertEqual(result["source_form"].iat[0], "10-Q")
+
+    def test_yfinance_fallback_fills_tickers_missing_sec_dividend_events(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            notes_dir = root / "notes"
+            price_dir = root / "price"
+            notes_dir.mkdir()
+            price_dir.mkdir()
+            ticker_map = root / "sec_company_tickers.csv"
+            financial_dir = root / "financials"
+            financial_dir.mkdir()
+
+            ticker_map.write_text(
+                "\n".join(
+                    [
+                        "cik,ticker,title",
+                        "320193,AAPL,Apple Inc.",
+                        "789019,MSFT,Microsoft Corp.",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (price_dir / "AAPL.csv").write_text(
+                "\n".join(
+                    [
+                        "Date,Close,Dividends",
+                        "2025-01-20,100,0.25",
+                        "2025-02-20,110,0",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (price_dir / "MSFT.csv").write_text(
+                "\n".join(
+                    [
+                        "Date,Close,Dividends",
+                        "2025-01-20,100,0.40",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = dividend_normalizer.build_us_sec_dividend_events_dataframe(
+                notes_root=notes_dir,
+                ticker_map_path=ticker_map,
+                financial_dir=financial_dir,
+                symbols=["AAPL"],
+                use_edgartools=False,
+                yfinance_price_dir=price_dir,
+            )
+
+        self.assertEqual(len(result), 1)
+        row = result.iloc[0]
+        self.assertEqual(row["ticker"], "AAPL")
+        self.assertEqual(str(row["cik"]), "320193")
+        self.assertEqual(row["dividend_payment_date"], "2025-01-20")
+        self.assertAlmostEqual(row["dividend_amount_per_share"], 0.25)
+        self.assertEqual(row["source_form"], "YFINANCE")
+
+    def test_yfinance_fallback_does_not_override_sec_dividend_event_ticker(self):
+        sec_rows = pd.DataFrame(
+            [
+                {
+                    "ticker": "AAPL",
+                    "cik": "320193",
+                    "company_name": "Apple Inc.",
+                    "exchange": "NASDAQ",
+                    "dividend_declared_date": "2025-01-01",
+                    "dividend_record_date": "2025-01-10",
+                    "dividend_payment_date": "2025-01-20",
+                    "dividend_amount_per_share": 0.25,
+                    "sec_filing_date": "2025-01-02",
+                    "source_form": "8-K",
+                    "_source": "sec_notes",
+                }
+            ]
+        )
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            price_dir = root / "price"
+            price_dir.mkdir()
+            ticker_map = root / "sec_company_tickers.csv"
+            ticker_map.write_text("cik,ticker,title\n320193,AAPL,Apple Inc.\n", encoding="utf-8")
+            (price_dir / "AAPL.csv").write_text(
+                "Date,Close,Dividends\n2025-01-20,100,0.99\n",
+                encoding="utf-8",
+            )
+
+            yfinance_rows = dividend_normalizer._extract_yfinance_dividend_events(
+                ticker_map_path=ticker_map,
+                price_dir=price_dir,
+                exclude_tickers={"AAPL"},
+            )
+            result = dividend_normalizer._add_us_annual_dividend_metrics(
+                dividend_normalizer._dedupe_us_dividend_events(
+                    pd.concat([sec_rows, yfinance_rows], ignore_index=True)
+                ),
+                financial_dir=root / "financials",
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result["source_form"].iat[0], "8-K")
+        self.assertAlmostEqual(result["dividend_amount_per_share"].iat[0], 0.25)
 
     def test_us_daily_dividend_dataframe_reads_sec_event_csv_by_default(self):
         original_path = dividend_normalizer.us_dividend_events_path
@@ -504,7 +680,10 @@ class DividendNormalizerTest(unittest.TestCase):
                 result = dividend_loader.refresh_silver_dividend_files(market="us")
             output_exists = output_path.exists()
 
-        events_mock.assert_called_once()
+        events_mock.assert_called_once_with(
+            use_edgartools=True,
+            use_yfinance_fallback=True,
+        )
         daily_mock.assert_called_once_with(market="us", path=None)
         self.assertEqual(len(result), 1)
         self.assertTrue(output_exists)

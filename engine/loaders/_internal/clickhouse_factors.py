@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
 import math
 from pathlib import Path
+import time
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -454,6 +456,7 @@ def create_daily_factor_rows(
     end_date: str | None = None,
     market: str = "kr",
     reader_mode: str = "cached",
+    parallel_workers: int = 1,
     **kwargs,
 ) -> pd.DataFrame:
     reader_mode = str(reader_mode or "cached").strip().lower()
@@ -471,21 +474,18 @@ def create_daily_factor_rows(
             end_date=end_date,
         )
 
+    parallel_workers = _normalize_parallel_workers(parallel_workers)
     frames = []
-    for stock_code in _resolve_stock_codes(stock_codes, market=market):
-        wide_df = create_stock_factor_dataframe(
-            stock_code,
-            financial_basis=financial_basis,
-            start_date=start_date,
-            end_date=end_date,
-            market=market,
-            market_data_cache=market_data_cache,
-            **kwargs,
-        )
-        factor_df = prepare_daily_factor_rows(
-            wide_df,
-            financial_basis=financial_basis,
-        )
+    for _, factor_df in _iter_prepared_daily_factor_rows(
+        _resolve_stock_codes(stock_codes, market=market),
+        financial_basis=financial_basis,
+        start_date=start_date,
+        end_date=end_date,
+        market=market,
+        market_data_cache=market_data_cache,
+        parallel_workers=parallel_workers,
+        **kwargs,
+    ):
         if not factor_df.empty:
             frames.append(factor_df)
 
@@ -495,6 +495,111 @@ def create_daily_factor_rows(
     return pd.concat(frames, ignore_index=True).sort_values(
         ["trade_date", "factor_id", "financial_basis", "security_id"]
     ).reset_index(drop=True)
+
+
+def _normalize_parallel_workers(parallel_workers: int | None) -> int:
+    if parallel_workers is None:
+        return 1
+    parallel_workers = int(parallel_workers)
+    if parallel_workers < 1:
+        raise ValueError("parallel_workers must be greater than or equal to 1")
+    return parallel_workers
+
+
+def _prepare_daily_factor_rows_for_stock(
+    stock_code: str,
+    *,
+    financial_basis: str,
+    start_date: str | None,
+    end_date: str | None,
+    market: str,
+    market_data_cache,
+    kwargs: dict,
+) -> tuple[str, pd.DataFrame]:
+    wide_df = create_stock_factor_dataframe(
+        stock_code,
+        financial_basis=financial_basis,
+        start_date=start_date,
+        end_date=end_date,
+        market=market,
+        market_data_cache=market_data_cache,
+        **kwargs,
+    )
+    factor_df = prepare_daily_factor_rows(
+        wide_df,
+        financial_basis=financial_basis,
+        sort_rows=False,
+    )
+    return stock_code, factor_df
+
+
+def _warm_market_data_cache(market_data_cache) -> None:
+    groups = getattr(market_data_cache, "_groups", None)
+    if groups is None:
+        return
+    for dataset in ("price", "shares", "dividend"):
+        groups(dataset)
+
+
+def _iter_prepared_daily_factor_rows(
+    stock_codes: list[str],
+    *,
+    financial_basis: str,
+    start_date: str | None,
+    end_date: str | None,
+    market: str,
+    market_data_cache,
+    parallel_workers: int,
+    **kwargs,
+):
+    if parallel_workers == 1 or len(stock_codes) <= 1:
+        for stock_code in stock_codes:
+            yield _prepare_daily_factor_rows_for_stock(
+                stock_code,
+                financial_basis=financial_basis,
+                start_date=start_date,
+                end_date=end_date,
+                market=market,
+                market_data_cache=market_data_cache,
+                kwargs=kwargs,
+            )
+        return
+
+    if market_data_cache is not None:
+        _warm_market_data_cache(market_data_cache)
+
+    max_pending = max(parallel_workers * 2, parallel_workers)
+    stock_iter = iter(stock_codes)
+    pending = set()
+
+    def submit_next(executor) -> bool:
+        try:
+            stock_code = next(stock_iter)
+        except StopIteration:
+            return False
+        pending.add(
+            executor.submit(
+                _prepare_daily_factor_rows_for_stock,
+                stock_code,
+                financial_basis=financial_basis,
+                start_date=start_date,
+                end_date=end_date,
+                market=market,
+                market_data_cache=market_data_cache,
+                kwargs=kwargs,
+            )
+        )
+        return True
+
+    with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+        for _ in range(min(max_pending, len(stock_codes))):
+            submit_next(executor)
+
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                yield future.result()
+                submit_next(executor)
 
 
 def _resolve_stock_codes(stock_codes: list[str] | None, market: str = "kr") -> list[str]:
@@ -593,6 +698,40 @@ def _should_log_progress(stock_index: int, total_stocks: int, progress_interval:
     if stock_index in {1, total_stocks}:
         return True
     return progress_interval > 0 and stock_index % progress_interval == 0
+
+
+def _format_elapsed(started_at: float) -> str:
+    elapsed = max(0.0, time.monotonic() - started_at)
+    if elapsed < 60:
+        return f"{elapsed:.1f}s"
+    return f"{elapsed / 60:.1f}m"
+
+
+def _log_daily_factor_progress(
+    *,
+    market: str,
+    stock_index: int,
+    total_stocks: int,
+    stock_code: str,
+    stock_rows: int,
+    prepared_stocks: int,
+    skipped_stocks: int,
+    prepared_rows: int,
+    batch_rows: int,
+    inserted_rows: int,
+    factor_count: int,
+    started_at: float,
+) -> None:
+    print(
+        "[PROGRESS] daily factors "
+        f"market={market}, processed={stock_index:,}/{total_stocks:,}, "
+        f"prepared_stocks={prepared_stocks:,}, skipped_stocks={skipped_stocks:,}, "
+        f"prepared_rows={prepared_rows:,}, current_batch_rows={batch_rows:,}, "
+        f"inserted_rows={inserted_rows:,}, factors={factor_count:,}, "
+        f"last_stock={stock_code}, last_rows={stock_rows:,}, "
+        f"elapsed={_format_elapsed(started_at)}",
+        flush=True,
+    )
 
 
 def create_factor_catalog_dataframe(factor_ids: list[str] | None = None) -> pd.DataFrame:
@@ -812,6 +951,7 @@ def insert_daily_factors(
     insert_max_rows: int = 2_000_000,
     progress_interval: int = 25,
     reader_mode: str = "cached",
+    parallel_workers: int = 1,
     **kwargs,
 ) -> pd.DataFrame:
     reader_mode = str(reader_mode or "cached").strip().lower()
@@ -845,10 +985,12 @@ def insert_daily_factors(
             market=market,
             reader_mode=reader_mode,
             market_data_cache=market_data_cache,
+            parallel_workers=parallel_workers,
             **kwargs,
         )
         return factor_df
 
+    parallel_workers = _normalize_parallel_workers(parallel_workers)
     owns_client = client is None
     client = client or get_clickhouse_client()
 
@@ -857,6 +999,10 @@ def insert_daily_factors(
     batch_frames: list[pd.DataFrame] = []
     batch_rows = 0
     batch_index = 1
+    prepared_stock_count = 0
+    skipped_stock_count = 0
+    prepared_row_count = 0
+    started_at = time.monotonic()
     try:
         if insert_catalog:
             insert_factor_catalog(client, factor_ids=preferred_factor_columns())
@@ -867,47 +1013,59 @@ def insert_daily_factors(
             "loading daily factors "
             f"market={market}, stocks={total_stocks:,}, financial_basis={financial_basis}, "
             f"start_date={start_date or '-'}, end_date={end_date or '-'}, "
-            f"insert_batch_size={insert_batch_size:,}, insert_max_rows={insert_max_rows:,}",
+            f"insert_batch_size={insert_batch_size:,}, insert_max_rows={insert_max_rows:,}, "
+            f"parallel_workers={parallel_workers:,}, reader_mode={reader_mode}",
             flush=True,
         )
-        for stock_index, stock_code in enumerate(resolved_stock_codes, start=1):
-            if _should_log_progress(stock_index, total_stocks, progress_interval):
-                print(
-                    f"processing stock={stock_code} ({stock_index:,}/{total_stocks:,}), "
-                    f"current_batch_stocks={len(batch_frames):,}, current_batch_rows={batch_rows:,}, "
-                    f"inserted_rows={inserted_count:,}",
-                    flush=True,
-                )
-            wide_df = create_stock_factor_dataframe(
-                stock_code,
-                financial_basis=financial_basis,
-                start_date=start_date,
-                end_date=end_date,
-                market=market,
-                market_data_cache=market_data_cache,
-                **kwargs,
-            )
-            factor_df = prepare_daily_factor_rows(
-                wide_df,
-                financial_basis=financial_basis,
-                sort_rows=False,
-            )
+        prepared_rows = _iter_prepared_daily_factor_rows(
+            resolved_stock_codes,
+            financial_basis=financial_basis,
+            start_date=start_date,
+            end_date=end_date,
+            market=market,
+            market_data_cache=market_data_cache,
+            parallel_workers=parallel_workers,
+            **kwargs,
+        )
+        for stock_index, (stock_code, factor_df) in enumerate(prepared_rows, start=1):
             if factor_df.empty:
+                skipped_stock_count += 1
                 if _should_log_progress(stock_index, total_stocks, progress_interval):
-                    print(
-                        f"skipped stock={stock_code} ({stock_index:,}/{total_stocks:,}), no factor rows",
-                        flush=True,
+                    _log_daily_factor_progress(
+                        market=market,
+                        stock_index=stock_index,
+                        total_stocks=total_stocks,
+                        stock_code=stock_code,
+                        stock_rows=0,
+                        prepared_stocks=prepared_stock_count,
+                        skipped_stocks=skipped_stock_count,
+                        prepared_rows=prepared_row_count,
+                        batch_rows=batch_rows,
+                        inserted_rows=inserted_count,
+                        factor_count=len(seen_factor_ids),
+                        started_at=started_at,
                     )
                 continue
 
             seen_factor_ids.update(factor_df["factor_id"].unique())
             batch_frames.append(factor_df)
             batch_rows += len(factor_df)
+            prepared_stock_count += 1
+            prepared_row_count += len(factor_df)
             if _should_log_progress(stock_index, total_stocks, progress_interval):
-                print(
-                    f"prepared stock={stock_code} ({stock_index:,}/{total_stocks:,}), "
-                    f"rows={len(factor_df):,}, current_batch_rows={batch_rows:,}",
-                    flush=True,
+                _log_daily_factor_progress(
+                    market=market,
+                    stock_index=stock_index,
+                    total_stocks=total_stocks,
+                    stock_code=stock_code,
+                    stock_rows=len(factor_df),
+                    prepared_stocks=prepared_stock_count,
+                    skipped_stocks=skipped_stock_count,
+                    prepared_rows=prepared_row_count,
+                    batch_rows=batch_rows,
+                    inserted_rows=inserted_count,
+                    factor_count=len(seen_factor_ids),
+                    started_at=started_at,
                 )
 
             should_flush = (
@@ -931,6 +1089,14 @@ def insert_daily_factors(
                 batch_frames,
                 batch_index=batch_index,
             )
+        print(
+            "[DONE] daily factors "
+            f"market={market}, processed={total_stocks:,}/{total_stocks:,}, "
+            f"prepared_stocks={prepared_stock_count:,}, skipped_stocks={skipped_stock_count:,}, "
+            f"prepared_rows={prepared_row_count:,}, inserted_rows={inserted_count:,}, "
+            f"factors={len(seen_factor_ids):,}, elapsed={_format_elapsed(started_at)}",
+            flush=True,
+        )
     finally:
         if owns_client:
             client.close()
@@ -962,6 +1128,7 @@ def main() -> None:
     parser.add_argument("--insert-max-rows", type=int, default=2_000_000)
     parser.add_argument("--progress-interval", type=int, default=25)
     parser.add_argument("--reader-mode", default="cached", choices=["cached", "csv"])
+    parser.add_argument("--parallel-workers", type=int, default=1)
     parser.add_argument("--price-path")
     parser.add_argument("--shares-path")
     parser.add_argument("--dividend-path")
@@ -980,6 +1147,7 @@ def main() -> None:
         insert_max_rows=args.insert_max_rows,
         progress_interval=args.progress_interval,
         reader_mode=args.reader_mode,
+        parallel_workers=args.parallel_workers,
         price_path=args.price_path,
         shares_path=args.shares_path,
         dividend_path=args.dividend_path,

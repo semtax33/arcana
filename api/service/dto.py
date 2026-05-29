@@ -560,3 +560,91 @@ class FinancialRatiosResponseDto(BaseModel):
     sections: list[FinancialRatioSectionDto]
     source: str = "fact_daily_factor"
     auxiliary_sources: list[str] = Field(default_factory=list)
+
+
+MultipleValuationBandBasis = Literal["blend", "historical", "industry", "market"]
+
+
+class ValuationStockMetadataDto(BaseModel):
+    stock_code: str
+    security_id: str
+    stock_name: str | None = None
+    stock_name_en: str | None = None
+    country: str | None = "KR"
+    currency: str | None = "KRW"
+    industry_schema: str = ""
+    sector_code: str = ""
+    industry_group_code: str = ""
+    industry_group_name: str = ""
+
+
+class ValuationMetricDto(BaseModel):
+    value: float | None = None
+    display_value: str = "N/A"
+
+
+class ValuationBenchmarkComparisonDto(BaseModel):
+    benchmark_key: str
+    benchmark_name: str
+    value: ValuationMetricDto
+    difference_pct: float | None = None
+    signal: str = "neutral"
+    signal_label: str = "Neutral"
+
+
+class ValuationFactorComparisonDto(BaseModel):
+    factor_id: str
+    factor_name: str
+    unit: str
+    direction: str
+    current: ValuationMetricDto
+    comparisons: list[ValuationBenchmarkComparisonDto] = Field(default_factory=list)
+
+
+class ValuationHistoryPointDto(BaseModel):
+    factor_id: str
+    period: date
+    value: float | None = None
+    display_value: str = "N/A"
+
+
+class ValuationBandDto(BaseModel):
+    factor_id: str
+    factor_name: str
+    current_multiple: ValuationMetricDto
+    target_multiple: ValuationMetricDto
+    target_source: str
+    fair_price: ValuationMetricDto
+    buy_below_price: ValuationMetricDto
+    sell_above_price: ValuationMetricDto
+    upside_pct: float | None = None
+    signal: str = "neutral"
+    signal_label: str = "Neutral"
+    warning: str | None = None
+
+
+class ValuationBandSummaryDto(BaseModel):
+    fair_price: ValuationMetricDto
+    buy_below_price: ValuationMetricDto
+    sell_above_price: ValuationMetricDto
+    valid_factor_count: int = 0
+    excluded_factor_ids: list[str] = Field(default_factory=list)
+
+
+class MultipleValuationResponseDto(BaseModel):
+    stock: ValuationStockMetadataDto
+    as_of_date: date
+    price_date: date | None = None
+    current_price: ValuationMetricDto
+    financial_basis: str
+    lookback_years: int
+    buy_margin_pct: float
+    sell_margin_pct: float
+    band_basis: str
+    factor_source: str
+    factor_ids: list[str] = Field(default_factory=list)
+    comparisons: list[ValuationFactorComparisonDto] = Field(default_factory=list)
+    bands: list[ValuationBandDto] = Field(default_factory=list)
+    central_band: ValuationBandSummaryDto | None = None
+    history: list[ValuationHistoryPointDto] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)

@@ -41,7 +41,13 @@ def dividend_output_path(market: str = "kr") -> Path:
     raise ValueError(f"unsupported market: {market}")
 
 
-def refresh_silver_dividend_files(*, market: str = "kr", path: str | Path | None = None):
+def refresh_silver_dividend_files(
+    *,
+    market: str = "kr",
+    path: str | Path | None = None,
+    use_edgartools: bool = True,
+    use_yfinance_fallback: bool = True,
+):
     market = _normalize_market(market)
     if market == "kr":
         by_kind_df, company_df, failed_df = write_silver_dividend_summary_files()
@@ -52,7 +58,10 @@ def refresh_silver_dividend_files(*, market: str = "kr", path: str | Path | None
             f"failed={len(failed_df):,}"
         )
     elif market == "us" and path is None:
-        events_df = write_us_sec_dividend_events_file()
+        events_df = write_us_sec_dividend_events_file(
+            use_edgartools=use_edgartools,
+            use_yfinance_fallback=use_yfinance_fallback,
+        )
         print(f"refreshed US SEC dividend events: rows={len(events_df):,}")
 
     normalized_stock_dividends_df = create_all_stock_dividend_dataframe(market=market, path=path)
@@ -87,8 +96,21 @@ def prepare_stock_dividend_for_clickhouse(df):
     return result[STOCK_DIVIDEND_COLUMNS].reset_index(drop=True)
 
 
-def insert_dividends(*, market: str = "kr", path: str | Path | None = None, dry_run: bool = False, client=None) -> int:
-    normalized_stock_dividends_df = refresh_silver_dividend_files(market=market, path=path)
+def insert_dividends(
+    *,
+    market: str = "kr",
+    path: str | Path | None = None,
+    dry_run: bool = False,
+    client=None,
+    use_edgartools: bool = True,
+    use_yfinance_fallback: bool = True,
+) -> int:
+    normalized_stock_dividends_df = refresh_silver_dividend_files(
+        market=market,
+        path=path,
+        use_edgartools=use_edgartools,
+        use_yfinance_fallback=use_yfinance_fallback,
+    )
     insert_df = prepare_stock_dividend_for_clickhouse(normalized_stock_dividends_df)
     if insert_df.empty or dry_run:
         return len(insert_df)
@@ -115,10 +137,18 @@ def main():
         default=None,
         help="Optional source CSV path. For US, omit for SEC events or pass an event/yfinance legacy CSV.",
     )
+    parser.add_argument("--no-edgartools", action="store_true")
+    parser.add_argument("--no-yfinance-fallback", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    inserted = insert_dividends(market=args.market, path=args.path, dry_run=args.dry_run)
+    inserted = insert_dividends(
+        market=args.market,
+        path=args.path,
+        dry_run=args.dry_run,
+        use_edgartools=not args.no_edgartools,
+        use_yfinance_fallback=not args.no_yfinance_fallback,
+    )
     action = "prepared" if args.dry_run else "inserted"
     print(f"{action} stock_dividend market={args.market} rows={inserted:,}")
 

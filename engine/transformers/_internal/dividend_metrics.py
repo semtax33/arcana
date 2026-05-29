@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import math
 import re
@@ -17,6 +19,7 @@ from engine.core.paths import (
 from engine.core.identifiers import security_id_of
 from engine.extractors._internal.yfinance_market_prices import normalize_yfinance_ticker
 from engine.markets.us import US_MARKET_CONFIG
+from engine.transformers._internal.edgar_identity import configure_edgar_identity
 from engine.transformers._internal.statement_files import read_statement_period_frames
 
 base_dir = DATA_LAKE.silver("dart", "normalized")
@@ -1327,8 +1330,9 @@ def _extract_sec_notes_dividend_events(
                     if tag == "SecurityExchangeName":
                         submissions[adsh]["exchange"] = value
                         continue
-                    if tag == "TradingSymbol" and value and not submissions[adsh]["ticker"]:
-                        submissions[adsh]["ticker"] = US_MARKET_CONFIG.normalize_symbol(value)
+                    if tag == "TradingSymbol":
+                        if value and not submissions[adsh]["ticker"]:
+                            submissions[adsh]["ticker"] = US_MARKET_CONFIG.normalize_symbol(value)
                         continue
                     field, priority = field_by_tag[tag]
                     if field == "dividend_amount_per_share":
@@ -1379,26 +1383,30 @@ def _default_us_dividend_edgartools_provider(symbol, cik, company_name, rules):
         print(f"[WARN] edgartools dividend fallback skipped for {symbol}: import failed ({type(exc).__name__})")
         return []
 
-    import os
-
-    identity = os.environ.get("EDGAR_IDENTITY") or os.environ.get("SEC_IDENTITY")
-    if identity:
-        try:
-            set_identity(identity)
-        except Exception:
-            pass
+    try:
+        configure_edgar_identity(set_identity)
+    except Exception:
+        pass
 
     try:
-        company = Company(symbol or int(cik))
-        facts_obj = getattr(company, "facts", None)
-        facts_obj = facts_obj() if callable(facts_obj) else facts_obj
-        to_pandas = getattr(facts_obj, "to_pandas", None)
-        if callable(to_pandas):
-            return to_pandas().to_dict("records")
-        if isinstance(facts_obj, pd.DataFrame):
-            return facts_obj.to_dict("records")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            company = Company(symbol or int(cik))
+            facts_obj = getattr(company, "facts", None)
+            facts_obj = facts_obj() if callable(facts_obj) else facts_obj
+            to_pandas = getattr(facts_obj, "to_pandas", None)
+            if callable(to_pandas):
+                return to_pandas().to_dict("records")
+            if isinstance(facts_obj, pd.DataFrame):
+                return facts_obj.to_dict("records")
     except Exception as exc:
-        print(f"[WARN] edgartools dividend fallback skipped for {symbol}: {type(exc).__name__}: {exc}")
+        message = str(exc)
+        expected_empty_fact_error = (
+            "No company facts found" in message
+            or "No facts found" in message
+            or type(exc).__name__ in {"NoCompanyFactsFound", "NoFactsFound"}
+        )
+        if not expected_empty_fact_error:
+            print(f"[WARN] edgartools dividend fallback skipped for {symbol}: {type(exc).__name__}: {exc}")
     return []
 
 
@@ -1417,14 +1425,20 @@ def _extract_edgartools_dividend_events(
         wanted_symbols = {US_MARKET_CONFIG.normalize_symbol(symbol) for symbol in symbols}
         ticker_map = ticker_map.loc[ticker_map["ticker"].isin(wanted_symbols)].copy()
     rows = []
+    attempted_count = 0
+    empty_result_count = 0
     for item in ticker_map.to_dict("records"):
         ticker = item["ticker"]
         cik = item["cik"]
         company_name = item["title"]
+        attempted_count += 1
         raw_rows = provider(ticker, cik, company_name, rules)
+        if not raw_rows:
+            empty_result_count += 1
+            continue
         event_rows = []
         grouped = {}
-        for raw in raw_rows or []:
+        for raw in raw_rows:
             if "dividend_amount_per_share" in raw or "dividend_payment_date" in raw:
                 event_rows.append(raw)
                 continue
@@ -1485,6 +1499,88 @@ def _extract_edgartools_dividend_events(
                 }
             )
 
+    if attempted_count and empty_result_count:
+        print(
+            "[INFO] edgartools dividend fallback skipped symbols with no usable facts "
+            f"symbols={empty_result_count}/{attempted_count}"
+        )
+
+    return pd.DataFrame(rows)
+
+
+def _extract_yfinance_dividend_events(
+    *,
+    ticker_map_path=None,
+    symbols=None,
+    price_dir=None,
+    exclude_tickers=None,
+):
+    ticker_map = _load_sec_ticker_map(ticker_map_path)
+    if symbols is not None:
+        wanted_symbols = {US_MARKET_CONFIG.normalize_symbol(symbol) for symbol in symbols}
+        ticker_map = ticker_map.loc[ticker_map["ticker"].isin(wanted_symbols)].copy()
+    excluded = {US_MARKET_CONFIG.normalize_symbol(ticker) for ticker in (exclude_tickers or [])}
+    if excluded:
+        ticker_map = ticker_map.loc[~ticker_map["ticker"].isin(excluded)].copy()
+    if ticker_map.empty:
+        return pd.DataFrame(columns=[*US_DIVIDEND_EVENT_COLUMNS, "_source"])
+
+    price_dir = Path(price_dir) if price_dir is not None else us_price_base_dir
+    rows = []
+    symbols_with_dividends = set()
+    for item in ticker_map.to_dict("records"):
+        ticker = US_MARKET_CONFIG.normalize_symbol(item.get("ticker"))
+        if not ticker:
+            continue
+        file_path = price_dir / f"{normalize_yfinance_ticker(ticker)}.csv"
+        if not file_path.exists():
+            continue
+        try:
+            raw = pd.read_csv(file_path)
+            if raw.empty:
+                continue
+            date_col = _pick_column(raw, ["Date", "Datetime", "trade_date", "date", "index"], required=False)
+            dividend_col = _pick_column(raw, ["Dividends", "dividends", "dividend"], required=False)
+            if date_col is None or dividend_col is None:
+                continue
+            frame = pd.DataFrame(
+                {
+                    "date": pd.to_datetime(raw[date_col], errors="coerce"),
+                    "dividend": pd.to_numeric(raw[dividend_col], errors="coerce"),
+                }
+            )
+            frame = frame.dropna(subset=["date", "dividend"])
+            frame = frame.loc[frame["dividend"] > 0].copy()
+            if frame.empty:
+                continue
+        except Exception as exc:
+            print(f"[WARN] yfinance dividend fallback skipped for {ticker}: {type(exc).__name__}: {exc}")
+            continue
+
+        symbols_with_dividends.add(ticker)
+        for row in frame.to_dict("records"):
+            dividend_date = row["date"].strftime("%Y-%m-%d")
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "cik": _normalize_cik(item.get("cik")),
+                    "company_name": _safe_text(item.get("title")),
+                    "exchange": "",
+                    "dividend_declared_date": "",
+                    "dividend_record_date": "",
+                    "dividend_payment_date": dividend_date,
+                    "dividend_amount_per_share": float(row["dividend"]),
+                    "sec_filing_date": "",
+                    "source_form": "YFINANCE",
+                    "_source": "yfinance",
+                }
+            )
+
+    if rows:
+        print(
+            "[INFO] yfinance dividend fallback "
+            f"symbols={len(symbols_with_dividends)}, events={len(rows)}"
+        )
     return pd.DataFrame(rows)
 
 
@@ -1543,7 +1639,7 @@ def _dedupe_us_dividend_events(df):
         if "_source" in df.columns
         else pd.Series([""] * len(df), index=df.index)
     )
-    df["_source_rank"] = source_series.map({"sec_notes": 0, "edgartools": 1}).fillna(9)
+    df["_source_rank"] = source_series.map({"sec_notes": 0, "edgartools": 1, "yfinance": 2}).fillna(9)
     df = df.sort_values(
         ["_source_rank", "sec_filing_date", "source_form"],
         ascending=[True, False, False],
@@ -1603,6 +1699,8 @@ def build_us_sec_dividend_events_dataframe(
     symbols=None,
     use_edgartools=True,
     edgartools_provider=None,
+    use_yfinance_fallback=True,
+    yfinance_price_dir=None,
 ):
     frames = [
         _extract_sec_notes_dividend_events(
@@ -1622,9 +1720,30 @@ def build_us_sec_dividend_events_dataframe(
             )
         )
     non_empty = [frame for frame in frames if frame is not None and not frame.empty]
-    if not non_empty:
+    if non_empty:
+        events = _dedupe_us_dividend_events(pd.concat(non_empty, ignore_index=True))
+    else:
+        events = pd.DataFrame(columns=[*US_DIVIDEND_EVENT_COLUMNS, "_source"])
+
+    if use_yfinance_fallback:
+        covered_tickers = (
+            set(events["ticker"].dropna().astype(str))
+            if "ticker" in events.columns and not events.empty
+            else set()
+        )
+        yfinance_events = _extract_yfinance_dividend_events(
+            ticker_map_path=ticker_map_path,
+            symbols=symbols,
+            price_dir=yfinance_price_dir,
+            exclude_tickers=covered_tickers,
+        )
+        if yfinance_events is not None and not yfinance_events.empty:
+            events = _dedupe_us_dividend_events(
+                pd.concat([events, yfinance_events], ignore_index=True)
+            )
+
+    if events.empty:
         return pd.DataFrame(columns=US_DIVIDEND_EVENT_COLUMNS)
-    events = _dedupe_us_dividend_events(pd.concat(non_empty, ignore_index=True))
     return _add_us_annual_dividend_metrics(events, financial_dir)
 
 
@@ -1638,6 +1757,8 @@ def write_us_sec_dividend_events_file(
     symbols=None,
     use_edgartools=True,
     edgartools_provider=None,
+    use_yfinance_fallback=True,
+    yfinance_price_dir=None,
 ):
     output_path = Path(output_path) if output_path is not None else us_dividend_events_path
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1649,6 +1770,8 @@ def write_us_sec_dividend_events_file(
         symbols=symbols,
         use_edgartools=use_edgartools,
         edgartools_provider=edgartools_provider,
+        use_yfinance_fallback=use_yfinance_fallback,
+        yfinance_price_dir=yfinance_price_dir,
     )
     events.to_csv(output_path, index=False, encoding="utf-8-sig")
     return events
