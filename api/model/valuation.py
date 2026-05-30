@@ -12,6 +12,7 @@ class ValuationStockMetadata:
     stock_name_en: str | None = None
     country: str | None = "KR"
     currency: str | None = "KRW"
+    primary_market_mic: str = ""
     industry_schema: str = ""
     sector_code: str = ""
     industry_group_code: str = ""

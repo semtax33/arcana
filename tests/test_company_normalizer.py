@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest import mock
 import unittest
 
 import pandas as pd
@@ -31,6 +32,14 @@ class CompanyNormalizerGicsTest(unittest.TestCase):
             "Semiconductors & Semiconductor Equipment",
         )
         self.assertIn("AAPL", load_gics_config(us_path)["manual_overrides"])
+
+    def test_kr_semiconductor_manual_overrides_include_samsung_hynix_and_fadu(self):
+        overrides = load_gics_config(
+            PROJECT_ROOT / "data-lake" / "meta" / "rules" / "gics_rules_kr.yaml"
+        )["manual_overrides"]
+
+        for stock_code in ["005930", "000660", "440110"]:
+            self.assertEqual(overrides[stock_code]["industry_group_code"], "4530")
 
     def test_attach_gics_sector_adds_sector_and_industry_group(self):
         mapped = attach_gics_sector(
@@ -113,7 +122,7 @@ class CompanyNormalizerGicsTest(unittest.TestCase):
             ]
         )
 
-        with unittest.mock.patch.object(securities, "_get_us_ticker_map", return_value=ticker_map):
+        with mock.patch.object(securities, "_get_us_ticker_map", return_value=ticker_map):
             result = securities.get_normalized_sector_and_issuer(market="us")
 
         by_issuer = result.set_index("issuer_id")

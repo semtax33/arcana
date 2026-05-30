@@ -23,7 +23,8 @@ from api.model.valuation import (
 
 FACTOR_TABLES = ("fact_daily_factors",)
 FACTOR_VALUE_COLUMNS = ("factor_value",)
-DEFAULT_FINANCIAL_BASIS = "annual"
+DEFAULT_FINANCIAL_BASIS = "ttm"
+SUPPORTED_FINANCIAL_BASES = {"annual", "quarterly", "ttm", "forward"}
 DEFAULT_MARKET = "kr"
 DEFAULT_LOOKBACK_YEARS = 3
 DEFAULT_BUY_MARGIN_PCT = 20.0
@@ -31,8 +32,10 @@ DEFAULT_SELL_MARGIN_PCT = 10.0
 DEFAULT_BAND_BASIS = "blend"
 MARKET_STATS_MAX_EXECUTION_SECONDS = 6
 CROSS_SECTION_LOOKBACK_DAYS = 45
+MIN_HISTORICAL_STATS_POINTS = 6
+MIN_CENTRAL_BAND_FACTORS = 2
 MARKETS = {"kr", "us"}
-BAND_BASES = {"blend", "historical", "industry", "market"}
+BAND_BASES = {"blend", "historical", "industry", "market", "listing_market"}
 SUPPORTED_MULTIPLE_FACTORS = [
     "ev_to_nopat",
     "ev_to_ebitda",
@@ -104,6 +107,43 @@ FACTOR_LABELS = {
 }
 PERCENT_FACTORS = {"eps_yoy_pct", "rnd_to_market_cap", "fcf_to_ev_yield"}
 _SYMBOL_RE = re.compile(r"^[0-9A-Za-z.\-_]{1,32}$")
+DEFAULT_CENTRAL_BAND_FACTORS = (
+    "ev_to_nopat",
+    "ev_to_ebitda",
+    "per",
+    "pbr",
+    "fcfpr",
+    "fcf_to_ev_yield",
+    "psr",
+    "pcr",
+)
+SECTOR_CENTRAL_BAND_FACTORS = {
+    "10": ("ev_to_ebitda", "fcf_to_ev_yield", "per", "pbr", "pcr"),
+    "15": ("ev_to_ebitda", "pbr", "per", "fcf_to_ev_yield", "pcr"),
+    "20": ("ev_to_ebitda", "ev_to_nopat", "per", "fcf_to_ev_yield", "pbr", "pcr"),
+    "25": ("per", "ev_to_ebitda", "fcf_to_ev_yield", "psr", "pcr"),
+    "30": ("per", "ev_to_ebitda", "fcf_to_ev_yield", "pcr", "psr"),
+    "35": ("per", "ev_to_ebitda", "fcf_to_ev_yield", "psr"),
+    "40": ("pbr", "per", "pcr"),
+    "45": ("ev_to_nopat", "ev_to_ebitda", "fcf_to_ev_yield", "fcfpr", "pcr", "per", "pbr", "psr"),
+    "50": ("ev_to_ebitda", "fcf_to_ev_yield", "per", "psr", "rpr"),
+    "55": ("pbr", "per", "ev_to_ebitda", "fcf_to_ev_yield"),
+    "60": ("pbr", "per"),
+}
+INDUSTRY_GROUP_CENTRAL_BAND_FACTORS = {
+    "3510": ("per", "ev_to_ebitda", "fcf_to_ev_yield", "psr"),
+    "3520": ("per", "ev_to_ebitda", "fcf_to_ev_yield", "psr"),
+    "4010": ("pbr", "per", "pcr"),
+    "4020": ("pbr", "per", "pcr"),
+    "4030": ("pbr", "per", "pcr"),
+    "4510": ("psr", "fcf_to_ev_yield", "ev_to_nopat", "rpr"),
+    "4520": ("ev_to_nopat", "ev_to_ebitda", "fcf_to_ev_yield", "fcfpr", "pcr", "per"),
+    "4530": ("ev_to_nopat", "ev_to_ebitda", "fcfpr", "fcf_to_ev_yield", "pcr"),
+    "5010": ("ev_to_ebitda", "fcf_to_ev_yield", "per", "pbr"),
+    "5020": ("psr", "ev_to_ebitda", "fcf_to_ev_yield", "per", "rpr"),
+    "6010": ("pbr", "per"),
+    "6020": ("pbr", "per"),
+}
 
 
 class MultipleValuationNotFoundError(ValueError):
@@ -187,31 +227,35 @@ class MultipleValuationService:
                 security_id=security_id,
                 as_of_date=as_of,
                 factor_ids=normalized_factor_ids,
-                financial_basis=normalized_basis,
+                financial_basis="annual",
                 lookback_years=normalized_lookback,
                 factor_source=factor_source,
                 include_history=include_history,
             )
-            industry_stats = {}
-            if normalized_band_basis in {"blend", "industry"}:
-                industry_stats = _load_industry_factor_stats(
-                    client,
-                    as_of_date=as_of,
-                    factor_ids=normalized_factor_ids,
-                    financial_basis=normalized_basis,
-                    factor_source=factor_source,
-                    metadata=metadata,
-                )
-            market_stats = {}
-            if normalized_band_basis in {"blend", "market"}:
-                market_stats = _load_market_factor_stats(
-                    client,
-                    as_of_date=as_of,
-                    factor_ids=normalized_factor_ids,
-                    financial_basis=normalized_basis,
-                    market=normalized_market,
-                    factor_source=factor_source,
-                )
+            industry_stats = _load_industry_factor_stats(
+                client,
+                as_of_date=as_of,
+                factor_ids=normalized_factor_ids,
+                financial_basis=normalized_basis,
+                factor_source=factor_source,
+                metadata=metadata,
+            )
+            market_stats = _load_market_factor_stats(
+                client,
+                as_of_date=as_of,
+                factor_ids=normalized_factor_ids,
+                financial_basis=normalized_basis,
+                market=normalized_market,
+                factor_source=factor_source,
+            )
+            listing_market_stats = _load_listing_market_factor_stats(
+                client,
+                as_of_date=as_of,
+                factor_ids=normalized_factor_ids,
+                financial_basis=normalized_basis,
+                factor_source=factor_source,
+                metadata=metadata,
+            )
         finally:
             close = getattr(client, "close", None)
             if callable(close):
@@ -229,6 +273,8 @@ class MultipleValuationService:
             history_stats=history_stats,
             market_stats=market_stats,
             industry_stats=industry_stats,
+            listing_market_stats=listing_market_stats,
+            metadata=metadata,
         )
         bands, band_warnings = _build_bands(
             factor_ids=normalized_factor_ids,
@@ -237,12 +283,14 @@ class MultipleValuationService:
             history_stats=history_stats,
             market_stats=market_stats,
             industry_stats=industry_stats,
+            listing_market_stats=listing_market_stats,
             buy_margin_pct=normalized_buy_margin,
             sell_margin_pct=normalized_sell_margin,
             band_basis=normalized_band_basis,
         )
         central_band = _build_central_band_summary(
             bands,
+            metadata=metadata,
             buy_margin_pct=normalized_buy_margin,
             sell_margin_pct=normalized_sell_margin,
         )
@@ -288,6 +336,7 @@ SELECT
     any(iss.legal_name_en) AS stock_name_en,
     any(sm.country) AS country,
     any(sm.currency) AS currency,
+    any(sm.primary_market_mic) AS primary_market_mic,
     any(iss.industry_schema) AS industry_schema,
     any(iss.sector_code) AS sector_code,
     any(iss.industry_group_code) AS industry_group_code,
@@ -316,6 +365,7 @@ GROUP BY sm.security_id
         stock_name_en=_optional_str(row.get("stock_name_en")),
         country=_optional_str(row.get("country")) or ("US" if security_id.startswith("SEC_US_") else "KR"),
         currency=_optional_str(row.get("currency")) or ("USD" if security_id.startswith("SEC_US_") else "KRW"),
+        primary_market_mic=_optional_str(row.get("primary_market_mic")) or "",
         industry_schema=_optional_str(row.get("industry_schema")) or "",
         sector_code=_optional_str(row.get("sector_code")) or "",
         industry_group_code=_optional_str(row.get("industry_group_code")) or "",
@@ -354,6 +404,7 @@ SELECT
     any(iss.legal_name_en) AS stock_name_en,
     any(sm.country) AS country,
     any(sm.currency) AS security_currency,
+    any(sm.primary_market_mic) AS primary_market_mic,
     any(iss.industry_schema) AS industry_schema,
     any(iss.sector_code) AS sector_code,
     any(iss.industry_group_code) AS industry_group_code,
@@ -398,6 +449,7 @@ GROUP BY sm.security_id
         stock_name_en=_optional_str(row.get("stock_name_en")),
         country=_optional_str(row.get("country")) or ("US" if security_id.startswith("SEC_US_") else "KR"),
         currency=currency,
+        primary_market_mic=_optional_str(row.get("primary_market_mic")) or "",
         industry_schema=_optional_str(row.get("industry_schema")) or "",
         sector_code=_optional_str(row.get("sector_code")) or "",
         industry_group_code=_optional_str(row.get("industry_group_code")) or "",
@@ -482,25 +534,36 @@ WHERE isFinite(f.{value_column})
 GROUP BY f.factor_id
 """.strip()
 
-    for table_name, value_column in _factor_sources():
-        try:
-            rows = _records(
-                client.query_df(
-                    build_query(table_name, value_column),
-                    parameters={
-                        "security_id": security_id,
-                        "as_of_date": as_of_date.isoformat(),
-                        "factor_ids": factor_ids,
-                        "financial_basis": financial_basis,
-                    },
+    values_by_factor: dict[str, FactorValue] = {}
+    factor_source = FACTOR_TABLES[0]
+    for basis in _financial_basis_order(financial_basis):
+        missing_factor_ids = _missing_factor_ids(factor_ids, values_by_factor)
+        if not missing_factor_ids:
+            break
+        for table_name, value_column in _factor_sources():
+            try:
+                rows = _records(
+                    client.query_df(
+                        build_query(table_name, value_column),
+                        parameters={
+                            "security_id": security_id,
+                            "as_of_date": as_of_date.isoformat(),
+                            "factor_ids": missing_factor_ids,
+                            "financial_basis": basis,
+                        },
+                    )
                 )
-            )
-        except Exception:
-            continue
-        values = [_to_factor_value(row) for row in rows]
-        if values:
-            return values, table_name
-    return [], FACTOR_TABLES[0]
+            except Exception:
+                continue
+            values = [_to_factor_value(row) for row in rows]
+            if values:
+                factor_source = table_name
+            for value in values:
+                if value.factor_id in missing_factor_ids and value.factor_id not in values_by_factor:
+                    values_by_factor[value.factor_id] = value
+            if not _missing_factor_ids(factor_ids, values_by_factor):
+                break
+    return [values_by_factor[factor_id] for factor_id in factor_ids if factor_id in values_by_factor], factor_source
 
 
 def _load_historical_factor_stats(
@@ -515,27 +578,43 @@ def _load_historical_factor_stats(
 ) -> dict[str, FactorStats]:
     source_order = [factor_source, *[table for table in FACTOR_TABLES if table != factor_source]]
     start_date = _shift_years(as_of_date, -lookback_years)
-    for table_name in source_order:
-        for value_column in FACTOR_VALUE_COLUMNS:
-            try:
-                rows = _records(
-                    client.query_df(
-                        _build_historical_stats_query(table_name, value_column),
-                        parameters={
-                            "security_id": security_id,
-                            "start_date": start_date.isoformat(),
-                            "as_of_date": as_of_date.isoformat(),
-                            "factor_ids": factor_ids,
-                            "financial_basis": financial_basis,
-                        },
+    stats_by_factor: dict[str, FactorStats] = {}
+    for basis in _financial_basis_order(financial_basis):
+        missing_factor_ids = _missing_factor_ids(factor_ids, stats_by_factor)
+        if not missing_factor_ids:
+            break
+        for table_name in source_order:
+            for value_column in FACTOR_VALUE_COLUMNS:
+                try:
+                    rows = _records(
+                        client.query_df(
+                            _build_historical_stats_query(table_name, value_column),
+                            parameters={
+                                "security_id": security_id,
+                                "start_date": start_date.isoformat(),
+                                "as_of_date": as_of_date.isoformat(),
+                                "factor_ids": missing_factor_ids,
+                                "financial_basis": basis,
+                            },
+                        )
                     )
+                except Exception:
+                    continue
+                result = _stats_by_factor(rows)
+                stats_by_factor.update(
+                    {
+                        factor_id: stats
+                        for factor_id, stats in result.items()
+                        if factor_id in missing_factor_ids
+                        and factor_id not in stats_by_factor
+                        and not _should_fallback_historical_stats(factor_id, stats, basis)
+                    }
                 )
-            except Exception:
-                continue
-            result = _stats_by_factor(rows)
-            if result:
-                return result
-    return {}
+                if not _missing_factor_ids(factor_ids, stats_by_factor):
+                    break
+            if not _missing_factor_ids(factor_ids, stats_by_factor):
+                break
+    return stats_by_factor
 
 
 def _load_historical_factor_bundle(
@@ -551,34 +630,131 @@ def _load_historical_factor_bundle(
 ) -> tuple[dict[str, FactorStats], list[ValuationHistoryPoint]]:
     source_order = [factor_source, *[table for table in FACTOR_TABLES if table != factor_source]]
     start_date = _shift_years(as_of_date, -lookback_years)
-    for table_name in source_order:
-        for value_column in FACTOR_VALUE_COLUMNS:
-            try:
-                rows = _records(
-                    client.query_df(
-                        _build_historical_bundle_query(
-                            table_name,
-                            value_column,
-                            include_history=include_history,
-                        ),
-                        parameters={
-                            "security_id": security_id,
-                            "start_date": start_date.isoformat(),
-                            "as_of_date": as_of_date.isoformat(),
-                            "factor_ids": factor_ids,
-                            "financial_basis": financial_basis,
-                        },
+    stats_by_factor: dict[str, FactorStats] = {}
+    history_points: list[ValuationHistoryPoint] = []
+    for basis in _financial_basis_order(financial_basis):
+        missing_factor_ids = _missing_factor_ids(factor_ids, stats_by_factor)
+        if not missing_factor_ids:
+            break
+        for table_name in source_order:
+            for value_column in FACTOR_VALUE_COLUMNS:
+                parameters = {
+                    "security_id": security_id,
+                    "start_date": start_date.isoformat(),
+                    "as_of_date": as_of_date.isoformat(),
+                    "factor_ids": missing_factor_ids,
+                    "financial_basis": basis,
+                }
+                try:
+                    rows = _records(
+                        client.query_df(
+                            _build_historical_bundle_query(
+                                table_name,
+                                value_column,
+                                include_history=include_history,
+                            ),
+                            parameters=parameters,
+                        )
                     )
+                except Exception:
+                    rows = []
+                if not rows:
+                    try:
+                        rows = _records(
+                            client.query_df(
+                                _build_historical_bundle_plain_query(
+                                    table_name,
+                                    value_column,
+                                    include_history=include_history,
+                                ),
+                                parameters=parameters,
+                            )
+                        )
+                    except Exception:
+                        rows = []
+                if not rows:
+                    continue
+                stats = _stats_by_factor(rows)
+                added_factor_ids = {
+                    factor_id
+                    for factor_id, stat in stats.items()
+                    if factor_id in missing_factor_ids
+                    and factor_id not in stats_by_factor
+                    and not _should_fallback_historical_stats(factor_id, stat, basis)
+                }
+                stats_by_factor.update(
+                    {
+                        factor_id: stats[factor_id]
+                        for factor_id in added_factor_ids
+                    }
                 )
-            except Exception:
-                continue
-            stats = _stats_by_factor(rows)
-            if stats:
-                return stats, _history_points_from_bundle_rows(rows) if include_history else []
-    return {}, []
+                if include_history and added_factor_ids:
+                    history_points.extend(
+                        point
+                        for point in _history_points_from_bundle_rows(rows)
+                        if point.factor_id in added_factor_ids
+                    )
+                if not _missing_factor_ids(factor_ids, stats_by_factor):
+                    break
+            if not _missing_factor_ids(factor_ids, stats_by_factor):
+                break
+    return stats_by_factor, sorted(history_points, key=lambda item: (item.period, item.factor_id))
 
 
 def _build_historical_bundle_query(
+    table_name: str,
+    value_column: str,
+    *,
+    include_history: bool,
+) -> str:
+    _validate_factor_table(table_name)
+    _validate_value_column(value_column)
+    history_expr = (
+        ",\n    arraySort(groupArray(tuple(mv.period, mv.value))) AS history_points"
+        if include_history
+        else ""
+    )
+    return f"""
+WITH monthly_values AS (
+    SELECT
+        factor_id,
+        toDate(toStartOfMonth(trade_date)) AS period,
+        argMax({value_column}, tuple(trade_date, updated_at)) AS value
+    FROM {table_name}
+    PREWHERE
+        security_id = {{security_id:String}}
+        AND trade_date >= {{start_date:Date}}
+        AND trade_date <= {{as_of_date:Date}}
+        AND financial_basis = {{financial_basis:String}}
+        AND has({{factor_ids:Array(String)}}, factor_id)
+    WHERE isFinite({value_column})
+    GROUP BY
+        factor_id,
+        period
+),
+bounds AS (
+    SELECT
+        factor_id,
+        quantileExact(0.10)(value) AS p10_value,
+        quantileExact(0.90)(value) AS p90_value
+    FROM monthly_values
+    GROUP BY factor_id
+)
+SELECT
+    mv.factor_id AS factor_id,
+    avg(if(mv.value < b.p10_value, b.p10_value, if(mv.value > b.p90_value, b.p90_value, mv.value))) AS avg_value,
+    quantileExact(0.5)(mv.value) AS median_value,
+    quantileExact(0.25)(mv.value) AS p25_value,
+    quantileExact(0.75)(mv.value) AS p75_value,
+    count() AS n{history_expr}
+FROM monthly_values AS mv
+INNER JOIN bounds AS b
+    ON b.factor_id = mv.factor_id
+GROUP BY mv.factor_id
+""".strip()
+
+
+def _build_historical_bundle_plain_query(
     table_name: str,
     value_column: str,
     *,
@@ -625,21 +801,37 @@ def _build_historical_stats_query(table_name: str, value_column: str) -> str:
     _validate_factor_table(table_name)
     _validate_value_column(value_column)
     return f"""
+WITH raw_values AS (
+    SELECT
+        factor_id,
+        {value_column} AS value
+    FROM {table_name}
+    WHERE security_id = {{security_id:String}}
+        AND trade_date >= {{start_date:Date}}
+        AND trade_date <= {{as_of_date:Date}}
+        AND financial_basis = {{financial_basis:String}}
+        AND has({{factor_ids:Array(String)}}, factor_id)
+        AND isFinite({value_column})
+),
+bounds AS (
+    SELECT
+        factor_id,
+        quantileExact(0.10)(value) AS p10_value,
+        quantileExact(0.90)(value) AS p90_value
+    FROM raw_values
+    GROUP BY factor_id
+)
 SELECT
-    factor_id,
-    avg({value_column}) AS avg_value,
-    quantileExact(0.5)({value_column}) AS median_value,
-    quantileExact(0.25)({value_column}) AS p25_value,
-    quantileExact(0.75)({value_column}) AS p75_value,
+    rv.factor_id AS factor_id,
+    avg(if(rv.value < b.p10_value, b.p10_value, if(rv.value > b.p90_value, b.p90_value, rv.value))) AS avg_value,
+    quantileExact(0.5)(rv.value) AS median_value,
+    quantileExact(0.25)(rv.value) AS p25_value,
+    quantileExact(0.75)(rv.value) AS p75_value,
     count() AS n
-FROM {table_name}
-WHERE security_id = {{security_id:String}}
-    AND trade_date >= {{start_date:Date}}
-    AND trade_date <= {{as_of_date:Date}}
-    AND financial_basis = {{financial_basis:String}}
-    AND has({{factor_ids:Array(String)}}, factor_id)
-    AND isFinite({value_column})
-GROUP BY factor_id
+FROM raw_values AS rv
+INNER JOIN bounds AS b
+    ON b.factor_id = rv.factor_id
+GROUP BY rv.factor_id
 """.strip()
 
 
@@ -653,26 +845,89 @@ def _load_market_factor_stats(
     factor_source: str,
 ) -> dict[str, FactorStats]:
     source_order = [factor_source, *[table for table in FACTOR_TABLES if table != factor_source]]
-    for table_name in source_order:
-        for value_column in FACTOR_VALUE_COLUMNS:
-            try:
-                rows = _records(
-                    client.query_df(
-                        _build_market_stats_query(table_name, value_column),
-                        parameters={
-                            "as_of_date": as_of_date.isoformat(),
-                            "factor_ids": factor_ids,
-                            "financial_basis": financial_basis,
-                            "market_country": market.upper(),
-                        },
+    stats_by_factor: dict[str, FactorStats] = {}
+    for basis in _financial_basis_order(financial_basis):
+        missing_factor_ids = _missing_factor_ids(factor_ids, stats_by_factor)
+        if not missing_factor_ids:
+            break
+        for table_name in source_order:
+            for value_column in FACTOR_VALUE_COLUMNS:
+                try:
+                    rows = _records(
+                        client.query_df(
+                            _build_market_stats_query(table_name, value_column),
+                            parameters={
+                                "as_of_date": as_of_date.isoformat(),
+                                "factor_ids": missing_factor_ids,
+                                "financial_basis": basis,
+                                "market_country": market.upper(),
+                            },
+                        )
                     )
+                except Exception:
+                    continue
+                result = _stats_by_factor(rows)
+                stats_by_factor.update(
+                    {
+                        factor_id: stats
+                        for factor_id, stats in result.items()
+                        if factor_id in missing_factor_ids and factor_id not in stats_by_factor
+                    }
                 )
-            except Exception:
-                continue
-            result = _stats_by_factor(rows)
-            if result:
-                return result
-    return {}
+                if not _missing_factor_ids(factor_ids, stats_by_factor):
+                    break
+            if not _missing_factor_ids(factor_ids, stats_by_factor):
+                break
+    return stats_by_factor
+
+
+def _load_listing_market_factor_stats(
+    client: Any,
+    *,
+    as_of_date: date,
+    factor_ids: list[str],
+    financial_basis: str,
+    factor_source: str,
+    metadata: ValuationStockMetadata,
+) -> dict[str, FactorStats]:
+    if not metadata.primary_market_mic:
+        return {}
+    source_order = [factor_source, *[table for table in FACTOR_TABLES if table != factor_source]]
+    stats_by_factor: dict[str, FactorStats] = {}
+    for basis in _financial_basis_order(financial_basis):
+        missing_factor_ids = _missing_factor_ids(factor_ids, stats_by_factor)
+        if not missing_factor_ids:
+            break
+        for table_name in source_order:
+            for value_column in FACTOR_VALUE_COLUMNS:
+                try:
+                    rows = _records(
+                        client.query_df(
+                            _build_listing_market_stats_query(table_name, value_column),
+                            parameters={
+                                "as_of_date": as_of_date.isoformat(),
+                                "factor_ids": missing_factor_ids,
+                                "financial_basis": basis,
+                                "market_country": metadata.country or "",
+                                "primary_market_mic": metadata.primary_market_mic,
+                            },
+                        )
+                    )
+                except Exception:
+                    continue
+                result = _stats_by_factor(rows)
+                stats_by_factor.update(
+                    {
+                        factor_id: stats
+                        for factor_id, stats in result.items()
+                        if factor_id in missing_factor_ids and factor_id not in stats_by_factor
+                    }
+                )
+                if not _missing_factor_ids(factor_ids, stats_by_factor):
+                    break
+            if not _missing_factor_ids(factor_ids, stats_by_factor):
+                break
+    return stats_by_factor
 
 
 def _build_market_stats_query(table_name: str, value_column: str) -> str:
@@ -717,16 +972,94 @@ latest_factors AS (
     GROUP BY
         f.security_id,
         f.factor_id
+),
+bounds AS (
+    SELECT
+        factor_id,
+        quantileExact(0.10)(value) AS p10_value,
+        quantileExact(0.90)(value) AS p90_value
+    FROM latest_factors
+    GROUP BY factor_id
 )
 SELECT
-    factor_id,
-    avg(value) AS avg_value,
-    quantileExact(0.5)(value) AS median_value,
-    quantileExact(0.25)(value) AS p25_value,
-    quantileExact(0.75)(value) AS p75_value,
+    lf.factor_id AS factor_id,
+    avg(if(lf.value < b.p10_value, b.p10_value, if(lf.value > b.p90_value, b.p90_value, lf.value))) AS avg_value,
+    quantileExact(0.5)(lf.value) AS median_value,
+    quantileExact(0.25)(lf.value) AS p25_value,
+    quantileExact(0.75)(lf.value) AS p75_value,
     count() AS n
-FROM latest_factors
-GROUP BY factor_id
+FROM latest_factors AS lf
+INNER JOIN bounds AS b
+    ON b.factor_id = lf.factor_id
+GROUP BY lf.factor_id
+SETTINGS max_execution_time = {MARKET_STATS_MAX_EXECUTION_SECONDS}
+""".strip()
+
+
+def _build_listing_market_stats_query(table_name: str, value_column: str) -> str:
+    _validate_factor_table(table_name)
+    _validate_value_column(value_column)
+    return f"""
+WITH latest_factor_dates AS (
+    SELECT
+        f.factor_id AS factor_id,
+        max(f.trade_date) AS latest_trade_date
+    FROM {table_name} AS f
+    INNER JOIN security_master AS sm
+        ON sm.security_id = f.security_id
+    PREWHERE
+        f.trade_date <= {{as_of_date:Date}}
+        AND f.trade_date >= {{as_of_date:Date}} - INTERVAL {CROSS_SECTION_LOOKBACK_DAYS} DAY
+        AND f.financial_basis = {{financial_basis:String}}
+        AND has({{factor_ids:Array(String)}}, f.factor_id)
+    WHERE sm.country = {{market_country:String}}
+        AND sm.primary_market_mic = {{primary_market_mic:String}}
+        AND sm.is_active
+        AND isFinite(f.{value_column})
+    GROUP BY f.factor_id
+),
+latest_factors AS (
+    SELECT
+        f.security_id AS security_id,
+        f.factor_id AS factor_id,
+        argMax(f.{value_column}, f.updated_at) AS value
+    FROM {table_name} AS f
+    INNER JOIN latest_factor_dates AS d
+        ON d.factor_id = f.factor_id
+        AND d.latest_trade_date = f.trade_date
+    INNER JOIN security_master AS sm
+        ON sm.security_id = f.security_id
+    PREWHERE
+        f.trade_date >= {{as_of_date:Date}} - INTERVAL {CROSS_SECTION_LOOKBACK_DAYS} DAY
+        AND f.financial_basis = {{financial_basis:String}}
+        AND has({{factor_ids:Array(String)}}, f.factor_id)
+    WHERE sm.country = {{market_country:String}}
+        AND sm.primary_market_mic = {{primary_market_mic:String}}
+        AND sm.is_active
+        AND isFinite(f.{value_column})
+    GROUP BY
+        f.security_id,
+        f.factor_id
+),
+bounds AS (
+    SELECT
+        factor_id,
+        quantileExact(0.10)(value) AS p10_value,
+        quantileExact(0.90)(value) AS p90_value
+    FROM latest_factors
+    GROUP BY factor_id
+)
+SELECT
+    lf.factor_id AS factor_id,
+    avg(if(lf.value < b.p10_value, b.p10_value, if(lf.value > b.p90_value, b.p90_value, lf.value))) AS avg_value,
+    quantileExact(0.5)(lf.value) AS median_value,
+    quantileExact(0.25)(lf.value) AS p25_value,
+    quantileExact(0.75)(lf.value) AS p75_value,
+    count() AS n
+FROM latest_factors AS lf
+INNER JOIN bounds AS b
+    ON b.factor_id = lf.factor_id
+GROUP BY lf.factor_id
 SETTINGS max_execution_time = {MARKET_STATS_MAX_EXECUTION_SECONDS}
 """.strip()
 
@@ -742,6 +1075,17 @@ def _load_industry_factor_stats(
 ) -> dict[str, FactorStats]:
     if not metadata.industry_group_code:
         return {}
+    cross_section_stats = _load_industry_cross_section_factor_stats(
+        client,
+        as_of_date=as_of_date,
+        factor_ids=factor_ids,
+        financial_basis=financial_basis,
+        factor_source=factor_source,
+        metadata=metadata,
+    )
+    if cross_section_stats and not _missing_factor_ids(factor_ids, cross_section_stats):
+        return cross_section_stats
+
     rows = []
     for level in ("industry_group", "INDUSTRY_GROUP"):
         try:
@@ -750,7 +1094,7 @@ def _load_industry_factor_stats(
                     """
 SELECT
     factor_id,
-    argMax(avg_value, tuple(trade_date, updated_at)) AS avg_value,
+    argMax(coalesce(winsor_avg_value, avg_value), tuple(trade_date, updated_at)) AS avg_value,
     argMax(median_value, tuple(trade_date, updated_at)) AS median_value,
     argMax(p25_value, tuple(trade_date, updated_at)) AS p25_value,
     argMax(p75_value, tuple(trade_date, updated_at)) AS p75_value,
@@ -778,33 +1122,68 @@ GROUP BY factor_id
             break
     snapshot_stats = _stats_by_factor(rows)
     missing_factor_ids = [
-        factor_id for factor_id in factor_ids if factor_id not in snapshot_stats
+        factor_id for factor_id in factor_ids if factor_id not in snapshot_stats and factor_id not in cross_section_stats
     ]
     if snapshot_stats and not missing_factor_ids:
-        return snapshot_stats
+        return {**snapshot_stats, **cross_section_stats}
 
+    result = _load_industry_cross_section_factor_stats(
+        client,
+        as_of_date=as_of_date,
+        factor_ids=missing_factor_ids or factor_ids,
+        financial_basis=financial_basis,
+        factor_source=factor_source,
+        metadata=metadata,
+    )
+    return {**result, **snapshot_stats, **cross_section_stats}
+
+
+def _load_industry_cross_section_factor_stats(
+    client: Any,
+    *,
+    as_of_date: date,
+    factor_ids: list[str],
+    financial_basis: str,
+    factor_source: str,
+    metadata: ValuationStockMetadata,
+) -> dict[str, FactorStats]:
     source_order = [factor_source, *[table for table in FACTOR_TABLES if table != factor_source]]
-    for table_name in source_order:
-        for value_column in FACTOR_VALUE_COLUMNS:
-            try:
-                rows = _records(
-                    client.query_df(
-                        _build_industry_cross_section_stats_query(table_name, value_column),
-                        parameters={
-                            "as_of_date": as_of_date.isoformat(),
-                            "factor_ids": missing_factor_ids or factor_ids,
-                            "financial_basis": financial_basis,
-                            "industry_schema": metadata.industry_schema or "GICS",
-                            "industry_group_code": metadata.industry_group_code,
-                        },
+    stats_by_factor: dict[str, FactorStats] = {}
+    for basis in _financial_basis_order(financial_basis):
+        missing_factor_ids = _missing_factor_ids(factor_ids, stats_by_factor)
+        if not missing_factor_ids:
+            break
+        for table_name in source_order:
+            for value_column in FACTOR_VALUE_COLUMNS:
+                try:
+                    rows = _records(
+                        client.query_df(
+                            _build_industry_cross_section_stats_query(table_name, value_column),
+                            parameters={
+                                "as_of_date": as_of_date.isoformat(),
+                                "factor_ids": missing_factor_ids,
+                                "financial_basis": basis,
+                                "industry_schema": metadata.industry_schema or "GICS",
+                                "industry_group_code": metadata.industry_group_code,
+                                "market_country": metadata.country or "",
+                            },
+                        )
                     )
+                except Exception:
+                    continue
+                result = _stats_by_factor(rows)
+                stats_by_factor.update(
+                    {
+                        factor_id: stats
+                        for factor_id, stats in result.items()
+                        if factor_id in missing_factor_ids and factor_id not in stats_by_factor
+                    }
                 )
-            except Exception:
-                continue
-            result = _stats_by_factor(rows)
-            if result:
-                return {**result, **snapshot_stats}
-    return snapshot_stats
+                if not _missing_factor_ids(factor_ids, stats_by_factor):
+                    break
+            if not _missing_factor_ids(factor_ids, stats_by_factor):
+                break
+    return stats_by_factor
 
 
 def _build_industry_cross_section_stats_query(table_name: str, value_column: str) -> str:
@@ -817,6 +1196,7 @@ WITH industry_universe AS (
     INNER JOIN issuers AS iss
         ON iss.issuer_id = sm.issuer_id
     WHERE sm.is_active
+        AND sm.country = {{market_country:String}}
         AND iss.is_active
         AND iss.industry_schema = {{industry_schema:String}}
         AND iss.industry_group_code = {{industry_group_code:String}}
@@ -855,16 +1235,26 @@ latest_factors AS (
     GROUP BY
         f.security_id,
         f.factor_id
+),
+bounds AS (
+    SELECT
+        factor_id,
+        quantileExact(0.10)(value) AS p10_value,
+        quantileExact(0.90)(value) AS p90_value
+    FROM latest_factors
+    GROUP BY factor_id
 )
 SELECT
-    factor_id,
-    avg(value) AS avg_value,
-    quantileExact(0.5)(value) AS median_value,
-    quantileExact(0.25)(value) AS p25_value,
-    quantileExact(0.75)(value) AS p75_value,
+    lf.factor_id AS factor_id,
+    avg(if(lf.value < b.p10_value, b.p10_value, if(lf.value > b.p90_value, b.p90_value, lf.value))) AS avg_value,
+    quantileExact(0.5)(lf.value) AS median_value,
+    quantileExact(0.25)(lf.value) AS p25_value,
+    quantileExact(0.75)(lf.value) AS p75_value,
     count() AS n
-FROM latest_factors
-GROUP BY factor_id
+FROM latest_factors AS lf
+INNER JOIN bounds AS b
+    ON b.factor_id = lf.factor_id
+GROUP BY lf.factor_id
 SETTINGS max_execution_time = {MARKET_STATS_MAX_EXECUTION_SECONDS}
 """.strip()
 
@@ -947,6 +1337,8 @@ def _build_comparisons(
     history_stats: dict[str, FactorStats],
     market_stats: dict[str, FactorStats],
     industry_stats: dict[str, FactorStats],
+    listing_market_stats: dict[str, FactorStats],
+    metadata: ValuationStockMetadata,
 ) -> list[ValuationFactorComparison]:
     result = []
     for factor_id in factor_ids:
@@ -954,8 +1346,13 @@ def _build_comparisons(
         benchmarks = [
             ("historical_median", "Historical Median", history_stats.get(factor_id)),
             ("historical_avg", "Historical Avg", history_stats.get(factor_id)),
-            ("market_avg", "Market Median", market_stats.get(factor_id)),
-            ("industry_avg", "Industry Median", industry_stats.get(factor_id)),
+            ("market_avg", "Market Avg", market_stats.get(factor_id)),
+            (
+                "listing_market_avg",
+                f"{_listing_market_label(metadata)} Avg",
+                listing_market_stats.get(factor_id),
+            ),
+            ("industry_avg", "Industry Avg", industry_stats.get(factor_id)),
         ]
         comparisons = []
         for key, name, stats in benchmarks:
@@ -963,7 +1360,9 @@ def _build_comparisons(
             if stats is not None:
                 benchmark_value = _display_stat_value(
                     stats,
-                    "avg" if key == "historical_avg" else "median",
+                    "avg"
+                    if key in {"historical_avg", "market_avg", "listing_market_avg", "industry_avg"}
+                    else "median",
                 )
             comparisons.append(
                 _benchmark_comparison(
@@ -1015,6 +1414,7 @@ def _build_bands(
     history_stats: dict[str, FactorStats],
     market_stats: dict[str, FactorStats],
     industry_stats: dict[str, FactorStats],
+    listing_market_stats: dict[str, FactorStats],
     buy_margin_pct: float,
     sell_margin_pct: float,
     band_basis: str,
@@ -1029,6 +1429,7 @@ def _build_bands(
             history_stats=history_stats,
             market_stats=market_stats,
             industry_stats=industry_stats,
+            listing_market_stats=listing_market_stats,
         )
         fair_price = _fair_price_from_multiple(
             factor_id=factor_id,
@@ -1067,19 +1468,32 @@ def _build_bands(
 def _build_central_band_summary(
     bands: list[ValuationBand],
     *,
+    metadata: ValuationStockMetadata,
     buy_margin_pct: float,
     sell_margin_pct: float,
 ) -> ValuationBandSummary:
-    valid_prices = [
-        band.fair_price.value
+    profile_factor_ids = _central_band_factor_ids(metadata)
+    valid_profile_bands = [
+        band
         for band in bands
-        if _float_or_none(band.fair_price.value) is not None
+        if band.factor_id in profile_factor_ids and _float_or_none(band.fair_price.value) is not None
     ]
-    valid_prices = [float(price) for price in valid_prices]
+    if len(valid_profile_bands) < MIN_CENTRAL_BAND_FACTORS:
+        fallback_factor_ids = tuple(
+            factor_id for factor_id in DEFAULT_CENTRAL_BAND_FACTORS if factor_id not in {"peg", "eps_yoy_pct"}
+        )
+        valid_profile_bands = [
+            band
+            for band in bands
+            if band.factor_id in fallback_factor_ids and _float_or_none(band.fair_price.value) is not None
+        ]
+        profile_factor_ids = fallback_factor_ids
+
+    valid_prices = [float(band.fair_price.value) for band in valid_profile_bands]
     excluded_factor_ids = [
         band.factor_id
         for band in bands
-        if _float_or_none(band.fair_price.value) is None
+        if band.factor_id not in profile_factor_ids or _float_or_none(band.fair_price.value) is None
     ]
     central_price = median(valid_prices) if valid_prices else None
     buy_price = (
@@ -1101,6 +1515,16 @@ def _build_central_band_summary(
     )
 
 
+def _central_band_factor_ids(metadata: ValuationStockMetadata) -> tuple[str, ...]:
+    industry_group_code = str(metadata.industry_group_code or "")
+    if industry_group_code in INDUSTRY_GROUP_CENTRAL_BAND_FACTORS:
+        return INDUSTRY_GROUP_CENTRAL_BAND_FACTORS[industry_group_code]
+    sector_code = str(metadata.sector_code or "")
+    if sector_code in SECTOR_CENTRAL_BAND_FACTORS:
+        return SECTOR_CENTRAL_BAND_FACTORS[sector_code]
+    return DEFAULT_CENTRAL_BAND_FACTORS
+
+
 def _target_multiple(
     *,
     factor_id: str,
@@ -1108,17 +1532,21 @@ def _target_multiple(
     history_stats: dict[str, FactorStats],
     market_stats: dict[str, FactorStats],
     industry_stats: dict[str, FactorStats],
+    listing_market_stats: dict[str, FactorStats],
 ) -> tuple[float | None, str]:
     candidates: list[tuple[float | None, str]] = [
         (_target_stat_value(history_stats.get(factor_id)), "historical"),
-        (_target_stat_value(industry_stats.get(factor_id)), "industry"),
-        (_target_stat_value(market_stats.get(factor_id)), "market"),
+        (_target_stat_value(industry_stats.get(factor_id), prefer_avg=True), "industry"),
+        (_target_stat_value(listing_market_stats.get(factor_id), prefer_avg=True), "listing_market"),
+        (_target_stat_value(market_stats.get(factor_id), prefer_avg=True), "market"),
     ]
     if band_basis == "historical":
         return candidates[0]
     if band_basis == "industry":
         return candidates[1]
     if band_basis == "market":
+        return candidates[3]
+    if band_basis == "listing_market":
         return candidates[2]
 
     values = [value for value, _ in candidates if value is not None]
@@ -1135,10 +1563,29 @@ def _display_stat_value(stats: FactorStats | None, kind: str) -> float | None:
     return _first_finite(stats.avg_value, stats.median_value, stats.p75_value, stats.p25_value)
 
 
-def _target_stat_value(stats: FactorStats | None) -> float | None:
+def _target_stat_value(stats: FactorStats | None, *, prefer_avg: bool = False) -> float | None:
     if stats is None:
         return None
+    if prefer_avg:
+        return _first_positive(stats.avg_value, stats.median_value, stats.p75_value, stats.p25_value)
     return _first_positive(stats.median_value, stats.avg_value, stats.p75_value, stats.p25_value)
+
+
+def _should_fallback_historical_stats(
+    factor_id: str,
+    stats: FactorStats,
+    financial_basis: str,
+) -> bool:
+    if financial_basis not in {"ttm", "forward"}:
+        return False
+    if stats.n < MIN_HISTORICAL_STATS_POINTS:
+        return True
+    if factor_id not in PRICE_PROPORTIONAL_FACTORS and factor_id not in PRICE_INVERSE_FACTORS:
+        return False
+    median_value = _float_or_none(stats.median_value)
+    if median_value is None or median_value <= 0:
+        return True
+    return _target_stat_value(stats) is None
 
 
 def _first_finite(*values: float | None) -> float | None:
@@ -1271,6 +1718,18 @@ def _factor_sources() -> list[tuple[str, str]]:
     return [(table_name, value_column) for table_name in FACTOR_TABLES for value_column in FACTOR_VALUE_COLUMNS]
 
 
+def _financial_basis_order(financial_basis: str) -> list[str]:
+    if financial_basis == "forward":
+        return ["forward", "ttm", "annual"]
+    if financial_basis == "ttm":
+        return ["ttm", "annual"]
+    return [financial_basis]
+
+
+def _missing_factor_ids(factor_ids: list[str], values_by_factor: dict[str, Any]) -> list[str]:
+    return [factor_id for factor_id in factor_ids if factor_id not in values_by_factor]
+
+
 def _validate_factor_table(table_name: str) -> None:
     if table_name not in FACTOR_TABLES:
         raise ValueError(f"unsupported factor table: {table_name}")
@@ -1323,10 +1782,10 @@ def _normalize_factor_ids(factor_ids: list[str] | None) -> list[str]:
 
 def _normalize_financial_basis(value: str) -> str:
     normalized = str(value or DEFAULT_FINANCIAL_BASIS).strip().lower()
-    aliases = {"quarter": "quarterly"}
+    aliases = {"quarter": "quarterly", "ntm": "forward", "next_twelve_months": "forward"}
     normalized = aliases.get(normalized, normalized)
-    if normalized not in {"annual", "quarterly", "ttm"}:
-        raise ValueError("financial_basis must be one of: annual, quarterly, ttm")
+    if normalized not in SUPPORTED_FINANCIAL_BASES:
+        raise ValueError("financial_basis must be one of: annual, quarterly, ttm, forward")
     return normalized
 
 
@@ -1366,6 +1825,25 @@ def _factor_direction(factor_id: str) -> str:
     if factor_id in HIGHER_IS_BETTER_FACTORS:
         return "HIGHER_BETTER"
     return "NEUTRAL"
+
+
+def _listing_market_label(metadata: ValuationStockMetadata) -> str:
+    raw = str(metadata.primary_market_mic or "").strip()
+    if not raw:
+        return "Listing Market"
+    normalized = raw.upper()
+    aliases = {
+        "STK": "KOSPI",
+        "KS": "KOSPI",
+        "KOSPI": "KOSPI",
+        "KOSDAQ": "KOSDAQ",
+        "KQ": "KOSDAQ",
+        "KN": "KONEX",
+        "KONEX": "KONEX",
+        "XKRX": "KOSPI",
+        "XKOS": "KOSDAQ",
+    }
+    return aliases.get(normalized, raw)
 
 
 def _metric(value: float | None, unit: str) -> ValuationMetric:

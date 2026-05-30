@@ -101,10 +101,14 @@ python -m engine.workflows.download statements
 python -m engine.workflows.download comments
 python -m engine.workflows.download metadata
 python -m engine.workflows.download dividend
+python -m engine.workflows.download --start-date 2024-01-01 --end-date 2024-03-31 prices
+python -m engine.workflows.download --start-date 20240101 --end-date 20240331 statements
 python -m engine.workflows.download --market us sec-tickers
 python -m engine.workflows.download --market us prices --symbols AAPL,MSFT --limit 2
 python -m engine.workflows.download --market us prices --offset 100 --limit 500 --sleep-seconds 0.2
 ```
+
+`--start-date`, `--end-date` accepts `YYYYMMDD` or `YYYY-MM-DD` and limits the download range.
 
 `prices`와 `shares`는 KRX bronze CSV를 `data-lake/bronze/krx/...` 아래에
 저장합니다. DART 재무제표, 주석, 메타데이터, 배당 공시는

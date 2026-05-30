@@ -934,6 +934,18 @@ industry_group_score_overrides:
       "2510": 6.0
 
 manual_overrides:
+  "005930":
+    industry_group_code: "4530"
+    industry_group_name: Semiconductors & Semiconductor Equipment
+    reason: "Samsung Electronics; memory, foundry, and system semiconductor business"
+  "000660":
+    industry_group_code: "4530"
+    industry_group_name: Semiconductors & Semiconductor Equipment
+    reason: "SK hynix; memory semiconductor manufacturer"
+  "440110":
+    industry_group_code: "4530"
+    industry_group_name: Semiconductors & Semiconductor Equipment
+    reason: "FADU; fabless semiconductor controller business"
   "105760":
     industry_group_code: "4520"
     industry_group_name: Technology Hardware & Equipment

@@ -420,9 +420,11 @@ class YFinancePriceEltTest(unittest.TestCase):
         download_us.assert_called_once()
         self.assertEqual(download_us.call_args.kwargs["symbols"], ["AAPL", "MSFT"])
         self.assertEqual(download_us.call_args.kwargs["limit"], 2)
+        self.assertIsNone(download_us.call_args.kwargs["start_date"])
+        self.assertIsNone(download_us.call_args.kwargs["end_date"])
 
         with (
-            patch.object(sys, "argv", ["prog", "prices"]),
+            patch.object(sys, "argv", ["prog", "--start-date", "2024-01-01", "--end-date", "20240131", "prices"]),
             patch.object(download_workflow, "_stock_codes", return_value=["005930"]),
             patch.object(download_workflow, "fetch_all_prices") as fetch_kr,
         ):
@@ -430,6 +432,23 @@ class YFinancePriceEltTest(unittest.TestCase):
 
         fetch_kr.assert_called_once()
         self.assertEqual(fetch_kr.call_args.args[0], ["005930"])
+        self.assertEqual(fetch_kr.call_args.args[2], "20240101")
+        self.assertEqual(fetch_kr.call_args.args[3], "20240131")
+
+    def test_download_workflow_routes_date_range_to_dart_downloads(self):
+        with (
+            patch.object(sys, "argv", ["prog", "--start-date", "2024-01-01", "--end-date", "2024-03-31", "statements"]),
+            patch.object(download_workflow, "_stock_codes", return_value=["005930"]),
+            patch("engine.extractors.filings.download_statements") as download_statements,
+        ):
+            download_workflow.main()
+
+        download_statements.assert_called_once_with(
+            ["005930"],
+            0,
+            start_date="20240101",
+            end_date="20240331",
+        )
 
 
 if __name__ == "__main__":

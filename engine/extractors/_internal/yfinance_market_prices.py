@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from io import StringIO
 from pathlib import Path
 import re
@@ -71,6 +72,8 @@ def download_us_price_histories(
     force: bool = False,
     sleep_seconds: float = 0.0,
     output_dir: str | Path = BRONZE_YFINANCE_PRICE_DIR,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> list[Path]:
     resolved_symbols = _resolve_download_symbols(symbols)
     selected_symbols = resolved_symbols[max(offset, 0):]
@@ -88,7 +91,7 @@ def download_us_price_histories(
             continue
 
         print(f"downloading {ticker} (download_offset : {index})....")
-        frame = fetch_yfinance_price(ticker)
+        frame = fetch_yfinance_price(ticker, start_date=start_date, end_date=end_date)
         if frame.empty:
             print(f"empty yfinance result: {ticker}")
             continue
@@ -101,18 +104,30 @@ def download_us_price_histories(
     return written
 
 
-def fetch_yfinance_price(ticker: str) -> pd.DataFrame:
+def fetch_yfinance_price(
+    ticker: str,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> pd.DataFrame:
     yf = _import_yfinance()
     ticker = normalize_yfinance_ticker(ticker)
-    frame = yf.download(
-        ticker,
-        period="max",
-        interval="1d",
-        auto_adjust=False,
-        actions=True,
-        repair=True,
-        progress=False,
-    )
+    download_kwargs = {
+        "interval": "1d",
+        "auto_adjust": False,
+        "actions": True,
+        "repair": True,
+        "progress": False,
+    }
+    if start_date or end_date:
+        if start_date:
+            download_kwargs["start"] = _to_yfinance_date(start_date)
+        if end_date:
+            download_kwargs["end"] = _to_yfinance_date(end_date, add_day=True)
+    else:
+        download_kwargs["period"] = "max"
+
+    frame = yf.download(ticker, **download_kwargs)
     if frame is None or frame.empty:
         return pd.DataFrame()
 
@@ -384,6 +399,13 @@ def _import_yfinance():
             "yfinance is required for US price downloads. Install it with: pip install yfinance"
         ) from exc
     return yf
+
+
+def _to_yfinance_date(value: str, *, add_day: bool = False) -> str:
+    parsed = datetime.strptime(value, "%Y%m%d")
+    if add_day:
+        parsed += timedelta(days=1)
+    return parsed.strftime("%Y-%m-%d")
 
 
 def _flatten_yfinance_columns(frame: pd.DataFrame) -> pd.DataFrame:

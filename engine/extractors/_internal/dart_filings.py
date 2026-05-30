@@ -31,6 +31,14 @@ REPORT_METADATA_COLUMNS = [
 ]
 
 
+def _default_dart_start_date() -> str:
+    return (datetime.now() - timedelta(1) * 3650).strftime("%Y%m%d")
+
+
+def _default_dart_end_date() -> str:
+    return datetime.now().strftime("%Y%m%d")
+
+
 def request_with_retry(
     session: requests.Session,
     method: str,
@@ -401,7 +409,14 @@ def _safe_title_from_anchor(a) -> str:
     return txt if txt else "untitled"
 
 
-def fetch_dart_comment_search(ticker: str, save_dir: str, comment_prop_name: str | None = ""):
+def fetch_dart_comment_search(
+    ticker: str,
+    save_dir: str,
+    comment_prop_name: str | None = "",
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
     headers = {
@@ -421,8 +436,8 @@ def fetch_dart_comment_search(ticker: str, save_dir: str, comment_prop_name: str
         ("pageGubun", "corp"),
         ("attachDocNmPopYn", ""),
         ("textCrpNm", ticker),
-        ("startDate", (datetime.now() - timedelta(1)*3650).strftime("%Y%m%d")),
-        ("endDate", datetime.now().strftime("%Y%m%d")),
+        ("startDate", start_date or _default_dart_start_date()),
+        ("endDate", end_date or _default_dart_end_date()),
         ("decadeType", ""),
         ("publicType", "A001"),
         ("publicType", "A002"),
@@ -500,7 +515,14 @@ def fetch_dart_comment_search(ticker: str, save_dir: str, comment_prop_name: str
 
             _write_text(statement_content, save_dir, out_name)
 
-def fetch_dart_recent_comment_search(ticker: str, save_dir: str, comment_prop_name: str | None = ""):
+def fetch_dart_recent_comment_search(
+    ticker: str,
+    save_dir: str,
+    comment_prop_name: str | None = "",
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
     headers = {
@@ -520,8 +542,8 @@ def fetch_dart_recent_comment_search(ticker: str, save_dir: str, comment_prop_na
         ("pageGubun", "corp"),
         ("attachDocNmPopYn", ""),
         ("textCrpNm", ticker),
-        ("startDate", (datetime.now() - timedelta(1)*3650).strftime("%Y%m%d")),
-        ("endDate", datetime.now().strftime("%Y%m%d")),
+        ("startDate", start_date or _default_dart_start_date()),
+        ("endDate", end_date or _default_dart_end_date()),
         ("decadeType", ""),
         ("publicType", "A001"),
         ("publicType", "A002"),
@@ -604,7 +626,14 @@ def fetch_dart_recent_comment_search(ticker: str, save_dir: str, comment_prop_na
                 return
 
 
-def fetch_dart_search(ticker: str, save_dir: str, save_filename: str | None = None):
+def fetch_dart_search(
+    ticker: str,
+    save_dir: str,
+    save_filename: str | None = None,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
     headers = {
@@ -624,8 +653,8 @@ def fetch_dart_search(ticker: str, save_dir: str, save_filename: str | None = No
         ("pageGubun", "corp"),
         ("attachDocNmPopYn", ""),
         ("textCrpNm", ticker),
-        ("startDate", (datetime.now() - timedelta(1)*3650).strftime("%Y%m%d")),
-        ("endDate", datetime.now().strftime("%Y%m%d")),
+        ("startDate", start_date or _default_dart_start_date()),
+        ("endDate", end_date or _default_dart_end_date()),
         ("decadeType", ""),
         ("publicType", "A001"),
         ("publicType", "A002"),
@@ -731,8 +760,8 @@ def fetch_dart_report_metadata(
         ("pageGubun", "corp"),
         ("attachDocNmPopYn", ""),
         ("textCrpNm", ticker),
-        ("startDate", start_date or (datetime.now() - timedelta(1) * 3650).strftime("%Y%m%d")),
-        ("endDate", end_date or datetime.now().strftime("%Y%m%d")),
+        ("startDate", start_date or _default_dart_start_date()),
+        ("endDate", end_date or _default_dart_end_date()),
         ("decadeType", ""),
         ("publicType", "A001"),
         ("publicType", "A002"),
@@ -757,6 +786,8 @@ def collect_dart_report_metadata(
     *,
     source_types: tuple[str, ...] = ("statement", "comment"),
     output_csv_path: str | Path = DATA_LAKE.silver("dart", market_csv_name("report_metadata")),
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
 
@@ -764,7 +795,12 @@ def collect_dart_report_metadata(
         print(f"downloading report metadata {stock_code} (download_offset : {offset})....")
         for source_type in source_types:
             try:
-                metadata_df = fetch_dart_report_metadata(stock_code, source_type=source_type)
+                metadata_df = fetch_dart_report_metadata(
+                    stock_code,
+                    source_type=source_type,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
             except Exception as e:
                 print(f"[WARN] report metadata failed: stock_code={stock_code}, source_type={source_type}, error={repr(e)}")
                 continue
@@ -930,7 +966,14 @@ def parse_dividend_decision_html(html: Union[str, bytes], report_date: str) -> D
         "배당공시일": report_date 
     }
 
-def fetch_dart_dividend_search(ticker: str, save_dir: str, save_filename: str | None = None):
+def fetch_dart_dividend_search(
+    ticker: str,
+    save_dir: str,
+    save_filename: str | None = None,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     url = "https://dart.fss.or.kr/dsab007/detailSearch.ax"
 
     headers = {
@@ -950,8 +993,8 @@ def fetch_dart_dividend_search(ticker: str, save_dir: str, save_filename: str | 
         ("pageGubun", "corp"),
         ("attachDocNmPopYn", ""),
         ("textCrpNm", ticker),
-        ("startDate", (datetime.now() - timedelta(1)*3650).strftime("%Y%m%d")),
-        ("endDate", datetime.now().strftime("%Y%m%d")),
+        ("startDate", start_date or _default_dart_start_date()),
+        ("endDate", end_date or _default_dart_end_date()),
         ("autoSearch", "N"),
         ("autoSearchCorp", "Y"),
         ("option", "corp"),
@@ -1032,38 +1075,65 @@ def fetch_dart_dividend_search(ticker: str, save_dir: str, save_filename: str | 
                 print("[WARN] 배당 내역이 존재하지 않는 문서입니다.", e)
 
 
-def download_statements(stock_codes, download_offset):
+def download_statements(
+    stock_codes,
+    download_offset,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     download_stock_codes = stock_codes[download_offset:]
 
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
         dir = str(DATA_LAKE.bronze("dart", "finance-statement", ticker))
-        fetch_dart_search(ticker, dir)
+        fetch_dart_search(ticker, dir, start_date=start_date, end_date=end_date)
 
-def download_statement_comments(stock_codes, download_offset):
+
+def download_statement_comments(
+    stock_codes,
+    download_offset,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     download_stock_codes = sorted(stock_codes)[download_offset:]
 
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
         dir = str(DATA_LAKE.bronze("dart", "finance-comment", ticker))
-        fetch_dart_comment_search(ticker, dir)
+        fetch_dart_comment_search(ticker, dir, start_date=start_date, end_date=end_date)
 
-def download_recent_statement_comments(stock_codes, download_offset):
+
+def download_recent_statement_comments(
+    stock_codes,
+    download_offset,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     download_stock_codes = sorted(stock_codes)[download_offset:]
 
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
         dir = str(DATA_LAKE.bronze("dart", "finance-comment", ticker))
-        fetch_dart_recent_comment_search(ticker, dir)
+        fetch_dart_recent_comment_search(ticker, dir, start_date=start_date, end_date=end_date)
 
-def download_dividend_histories(stock_codes, download_offset):
+
+def download_dividend_histories(
+    stock_codes,
+    download_offset,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     download_stock_codes = sorted(stock_codes)[download_offset:]
 
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
         ticker = stock_code
         dir = str(DATA_LAKE.bronze("dart", "dividend", ticker))
-        fetch_dart_dividend_search(ticker, dir)
+        fetch_dart_dividend_search(ticker, dir, start_date=start_date, end_date=end_date)
