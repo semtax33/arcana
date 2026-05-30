@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import random
+import threading
 import time
 import requests
 from bs4 import BeautifulSoup
@@ -29,6 +31,66 @@ REPORT_METADATA_COLUMNS = [
     "source_url",
     "updated_at",
 ]
+
+DART_USER_AGENTS = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+)
+DART_ACCEPT_LANGUAGES = (
+    "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    "ko-KR,ko;q=0.9,en;q=0.8,en-US;q=0.7",
+    "ko,en-US;q=0.9,en;q=0.8",
+)
+
+
+def _dart_html_headers() -> dict[str, str]:
+    return {
+        "Accept": "text/html, */*; q=0.01",
+        "Accept-Language": random.choice(DART_ACCEPT_LANGUAGES),
+        "Connection": "keep-alive",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Referer": "https://dart.fss.or.kr/",
+        "User-Agent": random.choice(DART_USER_AGENTS),
+    }
+
+
+def _sleep_with_jitter(seconds: float) -> None:
+    if seconds <= 0:
+        return
+    time.sleep(random.uniform(seconds * 0.5, seconds * 1.5))
+
+
+class DartRequestThrottle:
+    def __init__(self, interval_seconds: float):
+        self.interval_seconds = max(0.0, float(interval_seconds or 0.0))
+        self._lock = threading.Lock()
+        self._next_allowed_at = 0.0
+
+    def wait(self) -> None:
+        if self.interval_seconds <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            if now < self._next_allowed_at:
+                time.sleep(self._next_allowed_at - now)
+                now = time.monotonic()
+            self._next_allowed_at = now + random.uniform(self.interval_seconds * 0.5, self.interval_seconds * 1.5)
+
+    def cooldown(self, seconds: float) -> None:
+        if seconds <= 0:
+            return
+        with self._lock:
+            self._next_allowed_at = max(self._next_allowed_at, time.monotonic() + seconds)
+
+
+def _wait_for_dart_request(throttle: DartRequestThrottle | None, seconds: float) -> None:
+    if throttle is not None:
+        throttle.wait()
+    else:
+        _sleep_with_jitter(seconds)
 
 
 def _default_dart_start_date() -> str:
@@ -238,11 +300,12 @@ class NodeMatch:
     eleId: Optional[str]
     offset: Optional[str]
     length: Optional[str]
+    dtd: Optional[str] = None
 
 
 # node['xxx'] = "value";  또는 node2["xxx"] = 123; 형태 둘 다 처리
 _FIELD_RE_TEMPLATE = r"""
-node(?:2|3)\[\s*['"]{field}['"]\s*\]\s*=\s*
+node\d*\[\s*['"]{field}['"]\s*\]\s*=\s*
 (?:
     (?P<q>['"])(?P<valq>(?:\\.|(?!\1).)*) (?P=q)
   | (?P<valn>-?\d+)
@@ -251,12 +314,37 @@ node(?:2|3)\[\s*['"]{field}['"]\s*\]\s*=\s*
 """
 
 
+_NODE_BLOCK_RE = re.compile(r"\bvar\s+node\d*\s*=\s*\{\}\s*;", flags=re.DOTALL)
+
+
 def _find_field(block: str, field: str) -> Optional[str]:
     pattern = _FIELD_RE_TEMPLATE.format(field=re.escape(field))
     m = re.search(pattern, block, flags=re.VERBOSE | re.DOTALL)
     if not m:
         return None
     return m.group("valq") if m.group("valq") is not None else m.group("valn")
+
+
+def _iter_node_blocks(html_or_js: str):
+    starts = [m.start() for m in _NODE_BLOCK_RE.finditer(html_or_js)]
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(html_or_js)
+        yield html_or_js[start:end]
+
+
+def _node_match_from_block(block: str) -> NodeMatch | None:
+    text = _find_field(block, "text")
+    if not text:
+        return None
+    return NodeMatch(
+        text=text,
+        rcpNo=_find_field(block, "rcpNo"),
+        dcmNo=_find_field(block, "dcmNo"),
+        eleId=_find_field(block, "eleId"),
+        offset=_find_field(block, "offset"),
+        length=_find_field(block, "length"),
+        dtd=_find_field(block, "dtd"),
+    )
 
 
 def parse_node2_financial_note(html_or_js: str) -> List[NodeMatch]:
@@ -403,6 +491,81 @@ def select_financial_statement_position(html_or_js: str) -> Optional[NodeMatch]:
     return None
 
 
+_BUSINESS_EXCLUDE_KEYWORDS = (
+    "재무제표",
+    "주석",
+    "감사의견",
+    "감사보고서",
+    "배당",
+    "임원",
+    "주주",
+    "계열회사",
+    "이사회",
+    "감사인",
+    "내부회계",
+)
+_BUSINESS_DIRECT_KEYWORDS = ("사업의내용", "사업내용", "사업의 내용", "II. 사업의 내용")
+_BUSINESS_FALLBACK_KEYWORDS = (
+    "사업개요",
+    "영업의개황",
+    "주요제품",
+    "주요서비스",
+    "매출및수주상황",
+    "매출및수주",
+    "주요매출",
+    "영업개황",
+    "회사의개요",
+)
+
+
+def _normalize_toc_text(text: str) -> str:
+    return re.sub(r"[\s\.\-_/()\[\]ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIVXLCDMivxlcdm0-9II]+", "", str(text or ""))
+
+
+def _business_info_score(text: str) -> int:
+    normalized = _normalize_toc_text(text)
+    if not normalized:
+        return 0
+    if any(keyword in normalized for keyword in _BUSINESS_EXCLUDE_KEYWORDS):
+        return 0
+    if any(keyword in normalized for keyword in _BUSINESS_DIRECT_KEYWORDS):
+        return 100
+    if any(keyword in normalized for keyword in _BUSINESS_FALLBACK_KEYWORDS):
+        return 50
+    return 0
+
+
+def parse_node_business_info(html_or_js: str) -> List[NodeMatch]:
+    matches: List[NodeMatch] = []
+    for block in _iter_node_blocks(html_or_js):
+        node = _node_match_from_block(block)
+        if not node or not _is_valid_node(node):
+            continue
+        if _business_info_score(node.text) > 0:
+            matches.append(node)
+    return matches
+
+
+def select_business_info_position(html_or_js: str) -> Optional[NodeMatch]:
+    candidates = parse_node_business_info(html_or_js)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda node: (_business_info_score(node.text), _node_length(node)))
+
+
+def _business_info_output_name(title: str, save_filename: str | None = None) -> str:
+    if save_filename:
+        return save_filename
+    safe_title = str(title or "").strip()
+    if len(safe_title.split("\n")) >= 2:
+        safe_title_line = safe_title.split("\n")[1].strip()
+    else:
+        if not safe_title:
+            print("WARNING! title line is omitted!\n")
+        safe_title_line = safe_title or "untitled"
+    return f"business_info_{safe_title_line}.html"
+
+
 def _safe_title_from_anchor(a) -> str:
     # "보고서명" 텍스트가 통째로 붙는 경우가 많아서 strip 기반으로 안전하게
     txt = a.get_text(" ", strip=True)
@@ -419,13 +582,7 @@ def fetch_dart_comment_search(
 ):
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
-    headers = {
-        "Accept": "text/html, */*; q=0.01",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7,ar-IQ;q=0.6,ar-JO;q=0.5,ar;q=0.4,ja-JP;q=0.3,ja;q=0.2",
-        "Connection": "keep-alive",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "User-Agent": "Mozilla/8.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/137.36",
-    }
+    headers = _dart_html_headers()
 
     data = [
         ("currentPage", "1"),
@@ -525,13 +682,7 @@ def fetch_dart_recent_comment_search(
 ):
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
-    headers = {
-        "Accept": "text/html, */*; q=0.01",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7,ar-IQ;q=0.6,ar-JO;q=0.5,ar;q=0.4,ja-JP;q=0.3,ja;q=0.2",
-        "Connection": "keep-alive",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "User-Agent": "Mozilla/10.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/137.36",
-    }
+    headers = _dart_html_headers()
 
     data = [
         ("currentPage", "1"),
@@ -636,13 +787,7 @@ def fetch_dart_search(
 ):
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
-    headers = {
-        "Accept": "text/html, */*; q=0.01",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7,ar-IQ;q=0.6,ar-JO;q=0.5,ar;q=0.4,ja-JP;q=0.3,ja;q=0.2",
-        "Connection": "keep-alive",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "User-Agent": "Mozilla/8.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/137.36",
-    }
+    headers = _dart_html_headers()
 
     data = [
         ("currentPage", "1"),
@@ -734,6 +879,111 @@ def fetch_dart_search(
             _write_text(statement_content, save_dir, out_name)
 
 
+def fetch_dart_business_info_search(
+    ticker: str,
+    save_dir: str,
+    save_filename: str | None = None,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    force: bool = False,
+    sleep_seconds: float = 5.0,
+    throttle: DartRequestThrottle | None = None,
+):
+    url = "https://dart.fss.or.kr/dsab001/search.ax"
+
+    headers = _dart_html_headers()
+
+    data = [
+        ("currentPage", "1"),
+        ("maxResults", "100"),
+        ("maxLinks", "10"),
+        ("sort", "date"),
+        ("series", "desc"),
+        ("pageGubun", "corp"),
+        ("attachDocNmPopYn", ""),
+        ("textCrpNm", ticker),
+        ("startDate", start_date or _default_dart_start_date()),
+        ("endDate", end_date or _default_dart_end_date()),
+        ("decadeType", ""),
+        ("publicType", "A001"),
+        ("publicType", "A002"),
+        ("publicType", "A003"),
+        ("publicType", "A005"),
+        ("publicType", "A004"),
+    ]
+
+    if save_filename:
+        out_path = Path(save_dir) / _safe_filename(save_filename)
+        if out_path.exists() and not force:
+            print(f"[SKIP] business info exists: {out_path}")
+            return
+
+    with requests.Session() as s:
+        _wait_for_dart_request(throttle, sleep_seconds)
+        resp = request_with_retry(s, "POST", url, headers=headers, data=data, timeout=30)
+        resp.encoding = resp.apparent_encoding
+        soup = BeautifulSoup(resp.text, "lxml")
+        anchors = soup.find_all("a", href=True)
+        seen_hrefs: set[str] = set()
+
+        for a in anchors:
+            href = a.get("href")
+            if not href:
+                continue
+            if href in seen_hrefs:
+                continue
+            if "dsaf001" not in href:
+                continue
+
+            seen_hrefs.add(href)
+            title = _safe_title_from_anchor(a)
+            out_name = _business_info_output_name(title, save_filename)
+            out_path = Path(save_dir) / _safe_filename(out_name)
+            if out_path.exists() and not force:
+                print(f"[SKIP] business info exists: {out_path}")
+                continue
+
+            page_url = urljoin("https://dart.fss.or.kr", href)
+
+            _wait_for_dart_request(throttle, sleep_seconds)
+            page_resp = request_with_retry(s, "GET", page_url, timeout=30)
+            page_resp.encoding = page_resp.apparent_encoding
+            page_soup = BeautifulSoup(page_resp.text, "lxml")
+
+            business_position = None
+            for sc in page_soup.find_all("script"):
+                script_text = sc.get_text()
+                if "makeToc" not in script_text and "node" not in script_text:
+                    continue
+                business_position = select_business_info_position(script_text)
+                if business_position:
+                    break
+
+            if not business_position:
+                business_position = select_business_info_position(page_resp.text)
+            if not business_position:
+                print(f"[WARN] business info section not found: ticker={ticker}, title={title}")
+                continue
+
+            params = {
+                "rcpNo": business_position.rcpNo,
+                "dcmNo": business_position.dcmNo,
+                "eleId": business_position.eleId,
+                "offset": business_position.offset,
+                "length": business_position.length,
+                "dtd": business_position.dtd or "dart4.xsd",
+            }
+            report_viewer_url = f"https://dart.fss.or.kr/report/viewer.do?{urlencode(params)}"
+
+            _wait_for_dart_request(throttle, sleep_seconds)
+            viewer_resp = request_with_retry(s, "GET", report_viewer_url, timeout=30)
+            viewer_resp.encoding = viewer_resp.apparent_encoding
+            business_content = viewer_resp.text
+
+            _write_text(business_content, save_dir, out_name)
+
+
 def fetch_dart_report_metadata(
     ticker: str,
     *,
@@ -743,13 +993,7 @@ def fetch_dart_report_metadata(
 ) -> pd.DataFrame:
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
-    headers = {
-        "Accept": "text/html, */*; q=0.01",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Connection": "keep-alive",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "User-Agent": "Mozilla/8.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/137.36",
-    }
+    headers = _dart_html_headers()
 
     data = [
         ("currentPage", "1"),
@@ -976,13 +1220,7 @@ def fetch_dart_dividend_search(
 ):
     url = "https://dart.fss.or.kr/dsab007/detailSearch.ax"
 
-    headers = {
-        "Accept": "text/html, */*; q=0.01",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7,ar-IQ;q=0.6,ar-JO;q=0.5,ar;q=0.4,ja-JP;q=0.3,ja;q=0.2",
-        "Connection": "keep-alive",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "User-Agent": "Mozilla/8.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/137.36",
-    }
+    headers = _dart_html_headers()
 
     data = [
         ("currentPage", "1"),
@@ -1105,6 +1343,78 @@ def download_statement_comments(
         ticker = stock_code
         dir = str(DATA_LAKE.bronze("dart", "finance-comment", ticker))
         fetch_dart_comment_search(ticker, dir, start_date=start_date, end_date=end_date)
+
+
+def download_business_infos(
+    stock_codes,
+    download_offset,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    max_workers: int = 1,
+    force: bool = False,
+    sleep_seconds: float = 5.0,
+    stock_retries: int = 3,
+    stock_retry_backoff: float = 30.0,
+):
+    download_stock_codes = sorted(stock_codes)[download_offset:]
+    max_workers = max(1, int(max_workers or 1))
+    stock_retries = max(0, int(stock_retries or 0))
+    stock_retry_backoff = max(0.0, float(stock_retry_backoff or 0.0))
+    throttle = DartRequestThrottle(sleep_seconds) if max_workers > 1 else None
+
+    def _download_one(task: tuple[int, str]) -> bool:
+        offset, stock_code = task
+        ticker = stock_code
+        dir = str(DATA_LAKE.bronze("dart", "business-info", ticker))
+        for attempt in range(stock_retries + 1):
+            print(f"downloading {stock_code} (download_offset : {offset}, attempt : {attempt + 1}/{stock_retries + 1})....")
+            try:
+                fetch_dart_business_info_search(
+                    ticker,
+                    dir,
+                    start_date=start_date,
+                    end_date=end_date,
+                    force=force,
+                    sleep_seconds=sleep_seconds,
+                    throttle=throttle,
+                )
+                return True
+            except (requests.ConnectionError, requests.Timeout) as e:
+                if attempt == stock_retries:
+                    print(
+                        f"[WARN] business info download failed: "
+                        f"stock_code={stock_code}, offset={offset}, error={repr(e)}"
+                    )
+                    return False
+                wait_s = stock_retry_backoff * (2 ** attempt) + random.uniform(0, stock_retry_backoff)
+                if throttle is not None:
+                    throttle.cooldown(wait_s)
+                print(
+                    f"[WARN] DART transient disconnect: stock_code={stock_code}, "
+                    f"attempt={attempt + 1}/{stock_retries + 1}, sleep={wait_s:.1f}s, error={repr(e)}"
+                )
+                time.sleep(wait_s)
+            except Exception as e:
+                print(f"[WARN] business info download failed: stock_code={stock_code}, offset={offset}, error={repr(e)}")
+                return False
+        return False
+
+    tasks = [(offset + download_offset, stock_code) for offset, stock_code in enumerate(download_stock_codes)]
+    if max_workers == 1:
+        for task in tasks:
+            _download_one(task)
+        return
+
+    print(f"downloading business info with max_workers={max_workers}")
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_task = {executor.submit(_download_one, task): task for task in tasks}
+        for future in as_completed(future_to_task):
+            offset, stock_code = future_to_task[future]
+            try:
+                future.result()
+            except Exception as e:
+                print(f"[WARN] business info download failed: stock_code={stock_code}, offset={offset}, error={repr(e)}")
 
 
 def download_recent_statement_comments(

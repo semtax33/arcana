@@ -450,6 +450,54 @@ class YFinancePriceEltTest(unittest.TestCase):
             end_date="20240331",
         )
 
+    def test_download_workflow_routes_date_range_to_dart_business_info(self):
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["prog", "--start-date", "2024-01-01", "--end-date", "2024-12-31", "business-info"],
+            ),
+            patch.object(download_workflow, "_stock_codes", return_value=["005930"]),
+            patch("engine.extractors.filings.download_business_infos") as download_business_infos,
+        ):
+            download_workflow.main()
+
+        download_business_infos.assert_called_once_with(
+            ["005930"],
+            0,
+            start_date="20240101",
+            end_date="20241231",
+            max_workers=1,
+            force=False,
+            sleep_seconds=5.0,
+            stock_retries=3,
+            stock_retry_backoff=30.0,
+        )
+
+    def test_download_workflow_routes_workers_and_force_to_dart_business_info(self):
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["prog", "--workers", "3", "--force", "--sleep-seconds", "1.25", "business-info"],
+            ),
+            patch.object(download_workflow, "_stock_codes", return_value=["005930"]),
+            patch("engine.extractors.filings.download_business_infos") as download_business_infos,
+        ):
+            download_workflow.main()
+
+        download_business_infos.assert_called_once_with(
+            ["005930"],
+            0,
+            start_date=None,
+            end_date=None,
+            max_workers=3,
+            force=True,
+            sleep_seconds=1.25,
+            stock_retries=3,
+            stock_retry_backoff=30.0,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

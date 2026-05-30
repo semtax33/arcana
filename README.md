@@ -99,10 +99,16 @@ python -m engine.workflows.download prices
 python -m engine.workflows.download shares
 python -m engine.workflows.download statements
 python -m engine.workflows.download comments
+python -m engine.workflows.download business-info
 python -m engine.workflows.download metadata
 python -m engine.workflows.download dividend
 python -m engine.workflows.download --start-date 2024-01-01 --end-date 2024-03-31 prices
 python -m engine.workflows.download --start-date 20240101 --end-date 20240331 statements
+python -m engine.workflows.download --start-date 2024-01-01 --end-date 2024-12-31 business-info
+python -m engine.workflows.download --workers 4 business-info
+python -m engine.workflows.download --workers 4 --sleep-seconds 3 business-info
+python -m engine.workflows.download --workers 2 --sleep-seconds 8 --stock-retries 5 --stock-retry-backoff 60 business-info
+python -m engine.workflows.download --force business-info
 python -m engine.workflows.download --market us sec-tickers
 python -m engine.workflows.download --market us prices --symbols AAPL,MSFT --limit 2
 python -m engine.workflows.download --market us prices --offset 100 --limit 500 --sleep-seconds 0.2
@@ -113,6 +119,17 @@ python -m engine.workflows.download --market us prices --offset 100 --limit 500 
 `prices`와 `shares`는 KRX bronze CSV를 `data-lake/bronze/krx/...` 아래에
 저장합니다. DART 재무제표, 주석, 메타데이터, 배당 공시는
 `data-lake/bronze/dart/...` 아래에 저장합니다.
+`business-info`는 DART main page의 `function makeToc()` JavaScript 목차에서
+`사업의 내용` 계열 섹션 위치를 찾아 `viewer.do`로 해당 HTML만 다운로드합니다.
+결과는 `data-lake/bronze/dart/business-info/{stock_code}/` 아래에 저장됩니다.
+기존 파일이 있으면 자동으로 건너뛰어 이어받기처럼 동작하며, 다시 받으려면
+`--force`를 사용합니다. 여러 종목을 병렬로 받으려면 `--workers 4`처럼 지정합니다.
+DART HTML 요청은 User-Agent와 Accept-Language를 랜덤 풀에서 선택합니다.
+병렬 다운로드 시 요청 간격을 늘리려면 `--sleep-seconds 8`처럼 지정합니다.
+`--workers`를 2 이상으로 지정해도 DART 요청은 전역 limiter를 공유하므로
+전체 요청 사이에 해당 간격이 적용됩니다.
+일시적인 연결 종료가 발생하면 종목 단위로 `--stock-retries`만큼 재시도하고,
+재시도 사이에는 `--stock-retry-backoff` 기준 exponential backoff를 적용합니다.
 
 `--market us sec-tickers`는 SEC의 CIK/ticker 매핑을
 `data-lake/meta/sec_company_tickers.csv`에 저장합니다. SEC companyfacts와

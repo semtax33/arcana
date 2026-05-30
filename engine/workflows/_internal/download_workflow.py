@@ -44,6 +44,22 @@ def download_all_statement_comments(args: argparse.Namespace) -> None:
     )
 
 
+def download_all_business_infos(args: argparse.Namespace) -> None:
+    from engine.extractors.filings import download_business_infos
+
+    download_business_infos(
+        _stock_codes(),
+        args.offset,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        max_workers=args.workers,
+        force=args.force,
+        sleep_seconds=args.sleep_seconds or 5.0,
+        stock_retries=args.stock_retries,
+        stock_retry_backoff=args.stock_retry_backoff,
+    )
+
+
 def download_all_report_metadata(args: argparse.Namespace) -> None:
     from engine.extractors.filings import collect_dart_report_metadata
 
@@ -105,6 +121,7 @@ def download_all_us_prices(args: argparse.Namespace) -> None:
 DOWNLOAD_ACTIONS = {
     "statements": download_all_statements,
     "comments": download_all_statement_comments,
+    "business-info": download_all_business_infos,
     "metadata": download_all_report_metadata,
     "prices": download_all_prices,
     "shares": download_all_shares,
@@ -124,7 +141,10 @@ def main() -> None:
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--workers", type=int, default=1, help="Parallel worker count for supported downloads.")
     parser.add_argument("--sleep-seconds", type=float, default=0.0)
+    parser.add_argument("--stock-retries", type=int, default=3, help="Per-symbol retry count for supported downloads.")
+    parser.add_argument("--stock-retry-backoff", type=float, default=30.0, help="Base seconds for per-symbol retry backoff.")
     parser.add_argument(
         "--start-date",
         type=_parse_date_arg,
