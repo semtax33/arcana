@@ -104,7 +104,10 @@ python -m engine.workflows.download metadata
 python -m engine.workflows.download dividend
 python -m engine.workflows.download --start-date 2024-01-01 --end-date 2024-03-31 prices
 python -m engine.workflows.download --start-date 20240101 --end-date 20240331 statements
+python -m engine.workflows.download --start-year 2000 --end-year 2025 statements
+python -m engine.workflows.download --start-year 2000 --end-year 2025 comments
 python -m engine.workflows.download --start-date 2024-01-01 --end-date 2024-12-31 business-info
+python -m engine.workflows.download --start-year 2000 --end-year 2025 business-info
 python -m engine.workflows.download --workers 4 business-info
 python -m engine.workflows.download --workers 4 --sleep-seconds 3 business-info
 python -m engine.workflows.download --workers 2 --sleep-seconds 8 --stock-retries 5 --stock-retry-backoff 60 business-info
@@ -115,6 +118,9 @@ python -m engine.workflows.download --market us prices --offset 100 --limit 500 
 ```
 
 `--start-date`, `--end-date` accepts `YYYYMMDD` or `YYYY-MM-DD` and limits the download range.
+`--start-year`, `--end-year` accepts `YYYY` and expands to full-year date ranges.
+DART statement/comment/business-info searches automatically split ranges longer than 10 years
+into multiple DART search requests, so older 20-30 year windows can be downloaded.
 
 `prices`와 `shares`는 KRX bronze CSV를 `data-lake/bronze/krx/...` 아래에
 저장합니다. DART 재무제표, 주석, 메타데이터, 배당 공시는

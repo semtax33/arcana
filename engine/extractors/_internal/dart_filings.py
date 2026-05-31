@@ -101,6 +101,37 @@ def _default_dart_end_date() -> str:
     return datetime.now().strftime("%Y%m%d")
 
 
+def _parse_dart_date(value: str) -> datetime:
+    return datetime.strptime(str(value), "%Y%m%d")
+
+
+def _add_years(value: datetime, years: int) -> datetime:
+    try:
+        return value.replace(year=value.year + years)
+    except ValueError:
+        return value.replace(year=value.year + years, month=2, day=28)
+
+
+def iter_dart_search_date_windows(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    *,
+    years_per_window: int = 10,
+) -> list[tuple[str, str]]:
+    start = _parse_dart_date(start_date or _default_dart_start_date())
+    end = _parse_dart_date(end_date or _default_dart_end_date())
+    if start > end:
+        raise ValueError("start_date must be earlier than or equal to end_date")
+
+    windows: list[tuple[str, str]] = []
+    window_start = start
+    while window_start <= end:
+        window_end = min(_add_years(window_start, years_per_window) - timedelta(days=1), end)
+        windows.append((window_start.strftime("%Y%m%d"), window_end.strftime("%Y%m%d")))
+        window_start = window_end + timedelta(days=1)
+    return windows
+
+
 def request_with_retry(
     session: requests.Session,
     method: str,
@@ -580,6 +611,25 @@ def fetch_dart_comment_search(
     start_date: str | None = None,
     end_date: str | None = None,
 ):
+    for window_start, window_end in iter_dart_search_date_windows(start_date, end_date):
+        print(f"searching DART comments {ticker}: {window_start}-{window_end}")
+        _fetch_dart_comment_search_window(
+            ticker,
+            save_dir,
+            comment_prop_name,
+            start_date=window_start,
+            end_date=window_end,
+        )
+
+
+def _fetch_dart_comment_search_window(
+    ticker: str,
+    save_dir: str,
+    comment_prop_name: str | None = "",
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
     headers = _dart_html_headers()
@@ -785,6 +835,25 @@ def fetch_dart_search(
     start_date: str | None = None,
     end_date: str | None = None,
 ):
+    for window_start, window_end in iter_dart_search_date_windows(start_date, end_date):
+        print(f"searching DART statements {ticker}: {window_start}-{window_end}")
+        _fetch_dart_search_window(
+            ticker,
+            save_dir,
+            save_filename,
+            start_date=window_start,
+            end_date=window_end,
+        )
+
+
+def _fetch_dart_search_window(
+    ticker: str,
+    save_dir: str,
+    save_filename: str | None = None,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+):
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
     headers = _dart_html_headers()
@@ -880,6 +949,31 @@ def fetch_dart_search(
 
 
 def fetch_dart_business_info_search(
+    ticker: str,
+    save_dir: str,
+    save_filename: str | None = None,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    force: bool = False,
+    sleep_seconds: float = 5.0,
+    throttle: DartRequestThrottle | None = None,
+):
+    for window_start, window_end in iter_dart_search_date_windows(start_date, end_date):
+        print(f"searching DART business info {ticker}: {window_start}-{window_end}")
+        _fetch_dart_business_info_search_window(
+            ticker,
+            save_dir,
+            save_filename,
+            start_date=window_start,
+            end_date=window_end,
+            force=force,
+            sleep_seconds=sleep_seconds,
+            throttle=throttle,
+        )
+
+
+def _fetch_dart_business_info_search_window(
     ticker: str,
     save_dir: str,
     save_filename: str | None = None,

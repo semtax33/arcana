@@ -155,8 +155,11 @@ def main() -> None:
         type=_parse_date_arg,
         help="Inclusive end date for downloads. Accepts YYYYMMDD or YYYY-MM-DD.",
     )
+    parser.add_argument("--start-year", type=_parse_year_arg, help="Inclusive start year. Expands to YYYY0101.")
+    parser.add_argument("--end-year", type=_parse_year_arg, help="Inclusive end year. Expands to YYYY1231.")
     parser.add_argument("target")
     args = parser.parse_args()
+    _apply_year_range(args)
     _validate_date_range(args.start_date, args.end_date)
     actions = US_DOWNLOAD_ACTIONS if args.market == "us" else DOWNLOAD_ACTIONS
     if args.target not in actions:
@@ -181,6 +184,27 @@ def _parse_date_arg(value: str) -> str:
     except ValueError as exc:
         raise argparse.ArgumentTypeError("date must be a valid calendar date") from exc
     return cleaned
+
+
+def _parse_year_arg(value: str) -> int:
+    cleaned = str(value).strip()
+    if len(cleaned) != 4 or not cleaned.isdigit():
+        raise argparse.ArgumentTypeError("year must be YYYY")
+    year = int(cleaned)
+    if year < 1900 or year > 2199:
+        raise argparse.ArgumentTypeError("year must be between 1900 and 2199")
+    return year
+
+
+def _apply_year_range(args: argparse.Namespace) -> None:
+    if args.start_year is not None:
+        if args.start_date is not None:
+            raise SystemExit("--start-year cannot be used with --start-date")
+        args.start_date = f"{args.start_year}0101"
+    if args.end_year is not None:
+        if args.end_date is not None:
+            raise SystemExit("--end-year cannot be used with --end-date")
+        args.end_date = f"{args.end_year}1231"
 
 
 def _validate_date_range(start_date: str | None, end_date: str | None) -> None:

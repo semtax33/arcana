@@ -450,6 +450,21 @@ class YFinancePriceEltTest(unittest.TestCase):
             end_date="20240331",
         )
 
+    def test_download_workflow_expands_year_range_to_dart_dates(self):
+        with (
+            patch.object(sys, "argv", ["prog", "--start-year", "2000", "--end-year", "2025", "statements"]),
+            patch.object(download_workflow, "_stock_codes", return_value=["005930"]),
+            patch("engine.extractors.filings.download_statements") as download_statements,
+        ):
+            download_workflow.main()
+
+        download_statements.assert_called_once_with(
+            ["005930"],
+            0,
+            start_date="20000101",
+            end_date="20251231",
+        )
+
     def test_download_workflow_routes_date_range_to_dart_business_info(self):
         with (
             patch.object(

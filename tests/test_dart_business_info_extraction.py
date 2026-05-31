@@ -32,6 +32,18 @@ class FakeResponse:
 
 
 class DartBusinessInfoExtractionTest(unittest.TestCase):
+    def test_dart_search_date_windows_split_long_ranges_by_decade(self):
+        windows = dart_filings.iter_dart_search_date_windows("20000101", "20251231")
+
+        self.assertEqual(
+            windows,
+            [
+                ("20000101", "20091231"),
+                ("20100101", "20191231"),
+                ("20200101", "20251231"),
+            ],
+        )
+
     def test_dart_html_headers_use_randomized_pool_values(self):
         headers = dart_filings._dart_html_headers()
 
