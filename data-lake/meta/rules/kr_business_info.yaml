@@ -1,0 +1,416 @@
+version: 1
+
+section_aliases:
+  overview:
+    - "사업의 개요"
+    - "사업의 내용"
+    - "일반사항"
+    - "회사 현황"
+    - "업계의 현황"
+    - "회사의 현황"
+    - "사업부문별 요약 재무현황"
+    - "산업의 특성"
+    - "산업의 성장성"
+    - "시장의 특성"
+    - "국내외 시장여건"
+    - "경쟁요소"
+    - "조직도"
+  products_services:
+    - "주요 제품 및 서비스"
+    - "주요 제품"
+    - "주요제품"
+    - "제품 및 서비스"
+    - "제품과 서비스"
+    - "주요 제품, 서비스 등"
+    - "주요 제품 서비스"
+    - "주요 제품 등의 현황"
+    - "주요제품등의 현황"
+    - "가격변동추이"
+    - "가격 변동 추이"
+    - "주요 가격변동원인"
+  raw_materials_facilities:
+    - "원재료 및 생산설비"
+    - "원재료"
+    - "주요 원재료"
+    - "주요 원재료에 관한 사항"
+    - "주요 원재료 등의 현황"
+    - "주요 원재료 등의 가격변동추이"
+    - "주요 원재료의 가격변동 추이"
+    - "원재료 등의 가격변동추이"
+    - "원재료의 가격변동 추이"
+    - "생산설비"
+    - "생산 및 설비"
+    - "생산 및 설비에 관한 사항"
+    - "생산능력"
+    - "생산실적"
+    - "가동률"
+    - "설비의 신설"
+    - "향후 투자 계획"
+  sales_orders:
+    - "매출 및 수주상황"
+    - "매출"
+    - "매출실적"
+    - "수주"
+    - "수주상황"
+    - "수주잔고"
+    - "판매경로"
+    - "판매조직"
+    - "판매방법 및 조건"
+    - "판매전략"
+    - "주요 매출처"
+  risk_derivatives:
+    - "위험관리 및 파생거래"
+    - "위험관리"
+    - "파생거래"
+    - "파생상품"
+    - "시장위험"
+    - "시장위험과 위험관리"
+    - "외환위험"
+    - "신용위험"
+    - "유동성위험"
+  contracts_rd:
+    - "주요계약 및 연구개발활동"
+    - "주요계약"
+    - "연구개발"
+    - "연구개발활동"
+    - "연구개발실적"
+    - "연구개발비용"
+    - "특허"
+    - "임상"
+    - "지적재산권"
+    - "지식재산권"
+  other:
+    - "기타 참고사항"
+    - "기타"
+    - "투자의사결정"
+    - "그 밖에 투자의사결정"
+    - "기타 투자의사결정"
+  business_status:
+    - "영업의 현황"
+    - "영업현황"
+    - "영업의 개황"
+    - "영업의 종류"
+    - "자금조달"
+    - "자금운용"
+    - "영업규모"
+    - "영업실적"
+  derivatives:
+    - "파생상품거래 현황"
+    - "파생상품거래"
+  business_facilities:
+    - "영업설비"
+  financial_soundness:
+    - "재무건전성"
+    - "자본적정성"
+    - "건전성"
+
+template_rules:
+  standard:
+    required_section_keys:
+      - overview
+      - products_services
+      - raw_materials_facilities
+      - sales_orders
+    title_patterns:
+      - '주요\s*제품'
+      - '원재료'
+      - '매출\s*및\s*수주'
+  financial:
+    required_section_keys:
+      - overview
+      - business_status
+    title_patterns:
+      - '영업의\s*현황'
+      - '파생상품거래\s*현황'
+      - '영업설비'
+      - '재무건전성'
+  mixed:
+    title_patterns:
+      - '\(\s*제조서비스업\s*\)'
+      - '\(\s*금융업\s*\)'
+  real_estate_light:
+    text_patterns:
+      - '부동산투자회사'
+      - '리츠'
+      - 'REIT'
+      - '부동산의\s*취득'
+    not_applicable_min_count: 2
+  legacy:
+    title_patterns:
+      - '^II\.\s*사업의\s*내용'
+
+heading_patterns:
+  - '^\s*\d+\.\s*[^\n]{1,80}$'
+  - '^\s*[가-힣]\.\s*[^\n]{1,100}$'
+  - '^\s*\(\s*\d+\s*\)\s*[^\n]{1,100}$'
+  - '^\s*\[[^\]]{1,80}\]\s*$'
+  - '^\s*<[^>]{1,80}>\s*$'
+  - '^◎\s*[^\n]{1,100}$'
+  - '^□\s*[^\n]{1,100}$'
+  - '^○\s*[^\n]{1,100}$'
+  - '사업의\s*개요'
+  - '영업의\s*현황'
+  - '주요\s*제품'
+  - '원재료'
+  - '생산\s*및\s*설비'
+  - '매출\s*및\s*수주'
+  - '수주상황'
+  - '판매전략'
+  - '위험관리'
+  - '시장위험'
+  - '연구개발'
+  - '투자의사결정'
+  - '기타\s*참고사항'
+
+not_applicable_patterns:
+  - '해당사항\s*없'
+  - '해당\s*사항\s*없'
+  - '해당사항이\s*없'
+  - '해당\s*없음'
+
+layout_table_rules:
+  layout_classes:
+    - "nb"
+  unit_patterns:
+    - '^\s*\(\s*단위\s*:'
+    - '^\s*\(\s*Unit\s*:'
+    - '^\s*\(\s*백만원'
+    - '^\s*\(\s*억원'
+  note_patterns:
+    - '^\s*※'
+    - '^\s*주\)'
+    - '^\s*\*'
+  max_layout_rows: 2
+  max_layout_cols: 2
+
+table_kind_rules:
+  unit_kind: "footnote"
+  max_title_rows: 1
+  max_title_cols: 3
+  max_title_text_length: 80
+  title_patterns:
+    - '^\s*\[.+\]'
+    - '^\s*\[.+\]\s*$'
+    - '^\s*\(.+\)\s*$'
+    - '^\s*-?\s*\d{4}'
+  max_paragraph_rows: 2
+  paragraph_min_text_length: 120
+  paragraph_patterns:
+    - '<BR\s*/?>'
+  data_min_rows: 2
+  data_min_cols: 2
+
+metadata_patterns:
+  rcept_no_patterns:
+    - 'rcept_no["''\s:=]+([0-9]{14})'
+    - 'rcpNo["''\s:=]+([0-9]{14})'
+  corp_code_patterns:
+    - 'corp_code["''\s:=]+([0-9]{8})'
+    - 'corpCode["''\s:=]+([0-9]{8})'
+  corp_name_patterns:
+    - 'corp_name["''\s:=]+([^"''<>]{1,80})'
+    - 'corpName["''\s:=]+([^"''<>]{1,80})'
+
+header_detection_rules:
+  max_header_rows: 3
+  th_ratio_threshold: 0.5
+  header_keyword_patterns:
+    - '구\s*분'
+    - '부\s*문'
+    - '품\s*목'
+    - '매\s*출'
+    - '금\s*액'
+    - '비\s*중'
+    - '제\s*\d+\s*기'
+
+data_type_patterns:
+  percent:
+    - '^-?\(?[0-9,]+(?:\.[0-9]+)?\)?\s*%$'
+  date:
+    - '^\d{4}[.\-/]\d{1,2}(?:[.\-/]\d{1,2})?$'
+  number:
+    - '^-?\(?[0-9,]+(?:\.[0-9]+)?\)?$'
+
+source_uri_rules:
+  relative_to: "project_root"
+
+business_domain_patterns:
+  manufacturing_service:
+    - '\(\s*제조서비스업\s*\)'
+  financial:
+    - '\(\s*금융업\s*\)'
+  insurance:
+    - '\(\s*보험업\s*\)'
+
+sector_keyword_rules:
+  "10":
+    name: "Energy"
+    keywords:
+      - "정유"
+      - "가스"
+      - "에너지"
+      - "유가"
+      - "원유"
+      - "LNG"
+      - "LPG"
+      - "석유"
+      - "윤활유"
+      - "발전"
+  "15":
+    name: "Materials"
+    keywords:
+      - "철강"
+      - "화학"
+      - "배터리"
+      - "소재"
+      - "비철금속"
+      - "원재료"
+      - "가격변동"
+      - "합성수지"
+      - "강판"
+      - "주석"
+  "20":
+    name: "Industrials"
+    keywords:
+      - "건설"
+      - "플랜트"
+      - "기계"
+      - "중공업"
+      - "수주"
+      - "공사"
+      - "조선"
+      - "방산"
+      - "물류"
+  "25":
+    name: "Consumer Discretionary"
+    keywords:
+      - "자동차"
+      - "차량"
+      - "부품"
+      - "패션"
+      - "제조서비스업"
+      - "금융업"
+      - "모바일기기"
+      - "양면테이프"
+      - "윈도우 필름"
+  "30":
+    name: "Consumer Staples"
+    keywords:
+      - "식품"
+      - "BIO"
+      - "바이오"
+      - "음료"
+      - "물류"
+      - "원재료"
+      - "생활건강"
+      - "위생"
+  "35":
+    name: "Health Care"
+    keywords:
+      - "의약품"
+      - "바이오"
+      - "CDMO"
+      - "연구개발"
+      - "특허"
+      - "임상"
+      - "수주"
+      - "의료기기"
+      - "신약"
+  "40":
+    name: "Financials"
+    keywords:
+      - "금융"
+      - "은행"
+      - "자금조달"
+      - "자금운용"
+      - "영업규모"
+      - "재무건전성"
+      - "대손충당금"
+      - "여신"
+  "45":
+    name: "Information Technology"
+    keywords:
+      - "반도체"
+      - "디스플레이"
+      - "전자"
+      - "DRAM"
+      - "NAND"
+      - "원재료"
+      - "웨이퍼"
+      - "파운드리"
+  "50":
+    name: "Communication Services"
+    keywords:
+      - "통신"
+      - "플랫폼"
+      - "광고"
+      - "콘텐츠"
+      - "서비스"
+      - "무선"
+      - "유선"
+      - "인터넷"
+  "55":
+    name: "Utilities"
+    keywords:
+      - "전력"
+      - "가스"
+      - "발전"
+      - "요금"
+      - "연료"
+      - "규제"
+      - "송전"
+      - "배전"
+  "60":
+    name: "Real Estate"
+    keywords:
+      - "부동산"
+      - "리츠"
+      - "REIT"
+      - "임대"
+      - "투자"
+      - "운용"
+      - "부동산담보"
+      - "위탁관리"
+
+extraction_keywords:
+  products_services:
+    - "주요 제품"
+    - "서비스"
+    - "매출 비중"
+    - "가격변동"
+  raw_materials_facilities:
+    - "원재료"
+    - "공급"
+    - "생산능력"
+    - "생산실적"
+    - "가동률"
+  sales_orders:
+    - "매출실적"
+    - "내수"
+    - "수출"
+    - "주요 매출처"
+    - "수주잔고"
+    - "공사현황"
+  risk_derivatives:
+    - "시장위험"
+    - "환율"
+    - "이자율"
+    - "상품가격"
+    - "파생상품"
+  contracts_rd:
+    - "주요계약"
+    - "연구개발"
+    - "특허"
+    - "임상"
+    - "기술개발"
+  business_status:
+    - "영업의 종류"
+    - "자금조달"
+    - "자금운용"
+    - "영업규모"
+    - "영업실적"
+  financial_soundness:
+    - "BIS"
+    - "자본적정성"
+    - "건전성"
+    - "연체율"

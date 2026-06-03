@@ -156,12 +156,38 @@ Install yfinance first if needed: `pip install yfinance`.
 python -m engine.workflows.normalize
 python -m engine.workflows.normalize --market kr
 python -m engine.workflows.normalize --market us --symbols AAPL,MSFT --start-year 2020 --end-year 2025
+python -m engine.workflows.normalize --target business-info
+python -m engine.workflows.normalize --target business-info --symbols 005930,105560 --start-year 2026 --end-year 2026 --workers 8
+python -m engine.workflows.normalize --target all --workers 8
 ```
 
 KR은 DART HTML 재무제표를 canonical account 기준 CSV로 정규화합니다.
 산출물은 `data-lake/silver/dart/normalized/` 아래에 저장됩니다. US는 SEC
 companyfacts, SEC Notes Data Sets, edgartools fallback 순서로 값을 채워
 `data-lake/silver/sec/normalized/` 아래에 저장합니다.
+
+`--target` 기본값은 `statements`이며 기존처럼 재무제표만 파싱합니다.
+`--target business-info`는 이미 다운로드된
+`data-lake/bronze/dart/business-info/{stock_code}/business_info_(YYYY.MM).html`
+파일을 읽어 사업의 내용 섹션과 표를 정규화합니다. `--symbols`로 종목을 제한할 수 있고,
+`--start-year`, `--end-year`는 business-info 파일명의 연도를 기준으로 포함 범위를 지정합니다.
+`--workers`는 business-info 파싱 스레드 수로 재사용됩니다. `--target all`은 KR 재무제표
+정규화 후 business-info 정규화를 이어서 실행합니다. business-info 정규화는 KR 전용입니다.
+
+business-info 파싱 규칙은 코드에 하드코딩하지 않고
+`data-lake/meta/rules/kr_business_info.yaml`에서 관리합니다. 산출물은 종목별로 나뉘며,
+한 종목 안에서는 선택된 모든 연도/분기 HTML이 합쳐집니다.
+
+```text
+data-lake/silver/dart/business-info/{stock_code}/kr_business_info_sections.csv
+data-lake/silver/dart/business-info/{stock_code}/kr_business_info_tables.csv
+data-lake/silver/dart/business-info/{stock_code}/kr_business_info_cells.csv
+data-lake/silver/dart/business-info/{stock_code}/kr_business_info_rows.csv
+```
+
+`tables`는 table-level manifest이며 `table_id`, `table_kind`, `source_uri`,
+`source_html_hash`, `header_paths_json`을 포함합니다. `cells`는 rowspan/colspan을
+확장한 cell-level 구조, `rows`는 LLM 재처리와 검수에 쓰기 쉬운 row-level 구조입니다.
 
 US fallback 값은 선택 의존성인 edgartools 패키지를 사용합니다. 패키지가
 설치되지 않았거나 SEC 조회가 실패하면 edgartools fallback만 건너뛰고

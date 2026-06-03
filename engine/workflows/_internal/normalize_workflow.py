@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from concurrent.futures import ProcessPoolExecutor
 from datetime import date
 from pathlib import Path
-
-import pandas as pd
+from typing import Any
 
 from engine.core.paths import (
     DATA_LAKE,
@@ -61,7 +61,7 @@ if MAX_WORKERS <= 0:
 StatementTask = tuple[Path, str, str, Path, Path | None]
 NormalizeResult = tuple[str, str, str, str]
 
-_WORKER_CANONICAL_DF: pd.DataFrame | None = None
+_WORKER_CANONICAL_DF: Any | None = None
 _WORKER_CONTEXT_ENGINE: ContextEngine | None = None
 _WORKER_MAPPING_ENGINE: RuleEngine | None = None
 
@@ -72,6 +72,10 @@ def normalized_statement_output_dir() -> Path:
 
 def normalized_statement_snapshot_dir() -> Path:
     return DATA_LAKE.silver("dart", "normalized-snapshots")
+
+
+def business_info_output_dir() -> Path:
+    return DATA_LAKE.silver("dart", "business-info")
 
 
 def normalization_dependency_paths() -> list[Path]:
@@ -189,6 +193,88 @@ def build_normalization_tasks(
                 )
 
     return tasks, skipped_count, missing_count
+
+
+def iter_business_info_paths(
+    symbols: list[str] | None = None,
+    *,
+    start_year: int | None = None,
+    end_year: int | None = None,
+    bronze_root: str | Path | None = None,
+) -> list[Path]:
+    root = Path(bronze_root) if bronze_root is not None else DATA_LAKE.bronze("dart", "business-info")
+    if not root.exists():
+        return []
+
+    if symbols:
+        stock_dirs = [root / _normalize_kr_symbol(symbol) for symbol in symbols]
+    else:
+        stock_dirs = sorted(path for path in root.iterdir() if path.is_dir())
+
+    paths: list[Path] = []
+    for stock_dir in stock_dirs:
+        if not stock_dir.is_dir():
+            continue
+        for path in sorted(stock_dir.glob("business_info_(*).html")):
+            period = _business_info_period(path)
+            if period is None:
+                continue
+            year, _ = period
+            if start_year is not None and year < start_year:
+                continue
+            if end_year is not None and year > end_year:
+                continue
+            paths.append(path)
+    return paths
+
+
+def normalize_business_infos(
+    symbols: list[str] | None = None,
+    *,
+    start_year: int | None = None,
+    end_year: int | None = None,
+    workers: int | None = 1,
+) -> list[tuple[Path, Path, Path, Path]] | tuple[Path, Path, Path, Path]:
+    from engine.transformers._internal.kr_business_extractor import (
+        document_to_cell_records,
+        document_to_row_records,
+        document_to_section_records,
+        document_to_table_records,
+        parse_business_info_files,
+        write_business_info_csvs,
+    )
+
+    paths = iter_business_info_paths(
+        symbols,
+        start_year=start_year,
+        end_year=end_year,
+    )
+    worker_count = workers if workers is not None else 1
+    print(f"[INFO] business-info files={len(paths)}, workers={worker_count}")
+    documents = parse_business_info_files(paths, max_workers=worker_count)
+    section_rows = sum(len(document_to_section_records(document)) for document in documents)
+    table_rows = sum(len(document_to_table_records(document)) for document in documents)
+    cell_rows = sum(len(document_to_cell_records(document)) for document in documents)
+    row_rows = sum(len(document_to_row_records(document)) for document in documents)
+    written_paths = write_business_info_csvs(documents)
+    print(
+        f"[DONE] business-info documents={len(documents)}, "
+        f"section_rows={section_rows}, table_rows={table_rows}, "
+        f"cell_rows={cell_rows}, row_rows={row_rows}"
+    )
+    if isinstance(written_paths, list):
+        print(f"[DONE] business-info stock_csv_groups={len(written_paths)}")
+        for group in written_paths[:5]:
+            print(f"[DONE] business-info stock_output={group[0].parent}")
+        if len(written_paths) > 5:
+            print(f"[DONE] business-info stock_output_more={len(written_paths) - 5}")
+    else:
+        section_path, table_path, cell_path, row_path = written_paths
+        print(f"[DONE] business-info sections={section_path}")
+        print(f"[DONE] business-info tables={table_path}")
+        print(f"[DONE] business-info cells={cell_path}")
+        print(f"[DONE] business-info rows={row_path}")
+    return written_paths
 
 
 def normalize_all_statements() -> None:
@@ -403,9 +489,39 @@ def _print_progress(
         )
 
 
+def _parse_symbols(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _normalize_kr_symbol(value: object) -> str:
+    text = str(value or "").strip().upper()
+    return text.zfill(6) if text.isdigit() else text
+
+
+_BUSINESS_INFO_FILE_RE = re.compile(
+    r"business_info_\((?P<year>\d{4})[._](?P<month>\d{1,2})\)\.html$",
+    re.IGNORECASE,
+)
+
+
+def _business_info_period(path: str | Path) -> tuple[int, int] | None:
+    match = _BUSINESS_INFO_FILE_RE.match(Path(path).name)
+    if not match:
+        return None
+    return int(match.group("year")), int(match.group("month"))
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Normalize financial statements.")
+    parser = argparse.ArgumentParser(description="Normalize financial statements and business-info HTML.")
     parser.add_argument("--market", default="kr", choices=["kr", "us"])
+    parser.add_argument(
+        "--target",
+        default="statements",
+        choices=["statements", "business-info", "all"],
+        help="Normalize financial statements, DART business-info HTML, or both. business-info is KR-only.",
+    )
     parser.add_argument("--symbols", help="Comma-separated symbols. US examples: AAPL,MSFT")
     parser.add_argument("--start-year", type=int)
     parser.add_argument("--end-year", type=int)
@@ -425,20 +541,28 @@ def main() -> None:
         help="US normalize progress log interval by processed symbols/files.",
     )
     args = parser.parse_args()
+    symbols = _parse_symbols(args.symbols)
 
     if args.market == "kr":
-        normalize_all_statements()
+        if args.target in {"statements", "all"}:
+            normalize_all_statements()
+        if args.target in {"business-info", "all"}:
+            normalize_business_infos(
+                symbols=symbols,
+                start_year=args.start_year,
+                end_year=args.end_year,
+                workers=args.workers,
+            )
         return
+
+    if args.target != "statements":
+        raise ValueError(f"--target {args.target!r} is only supported for --market kr")
 
     from engine.transformers.sec_filings import normalize_us_sec_filings
 
     today = date.today()
     end_year = args.end_year or today.year
     start_year = args.start_year or end_year - 10
-    symbols = None
-    if args.symbols:
-        symbols = [item.strip() for item in args.symbols.split(",") if item.strip()]
-
     written = normalize_us_sec_filings(
         symbols=symbols,
         start_year=start_year,
