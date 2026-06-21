@@ -8,12 +8,55 @@ from api.service.dto import (
     FactorScreenResponseDto,
     FactorScreenSummaryDto,
     FactorScreenValueDto,
+    ScreenerStrategyDeleteResponseDto,
+    ScreenerStrategyDetailDto,
+    ScreenerStrategyListResponseDto,
+    ScreenerStrategySaveRequestDto,
     ScreenedStockRowDto,
 )
 from api.service.factor_screen_service import FactorScreenService
-
+from api.service.screener_strategy_service import ScreenerStrategyService
 
 router = APIRouter(prefix="/api/factor-screen", tags=["factor-screen"])
+
+
+@router.get("/strategies", response_model=ScreenerStrategyListResponseDto)
+def list_screener_strategies() -> ScreenerStrategyListResponseDto:
+    strategies = ScreenerStrategyService().list_strategies()
+    return ScreenerStrategyListResponseDto(strategies=strategies)
+
+
+@router.post("/strategies", response_model=ScreenerStrategyDetailDto)
+def save_screener_strategy(
+    request: ScreenerStrategySaveRequestDto,
+) -> ScreenerStrategyDetailDto:
+    try:
+        return ScreenerStrategyService().save_strategy(request.name, request.strategy)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/strategies/{strategy_id}", response_model=ScreenerStrategyDetailDto)
+def get_screener_strategy(strategy_id: int) -> ScreenerStrategyDetailDto:
+    try:
+        return ScreenerStrategyService().get_strategy(strategy_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="screener strategy not found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.delete("/strategies/{strategy_id}", response_model=ScreenerStrategyDeleteResponseDto)
+def delete_screener_strategy(strategy_id: int) -> ScreenerStrategyDeleteResponseDto:
+    try:
+        deleted = ScreenerStrategyService().delete_strategy(strategy_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="screener strategy not found")
+    return ScreenerStrategyDeleteResponseDto(deleted=True)
 
 
 @router.post("/screen", response_model=FactorScreenResponseDto)

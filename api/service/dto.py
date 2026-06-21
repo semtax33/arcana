@@ -287,6 +287,30 @@ class FactorScreenResponseDto(BaseModel):
     rows: list[ScreenedStockRowDto]
 
 
+class ScreenerStrategySummaryDto(BaseModel):
+    id: int
+    name: str
+    created_at: str
+    updated_at: str
+
+
+class ScreenerStrategyDetailDto(ScreenerStrategySummaryDto):
+    strategy: FactorScreenRequestDto
+
+
+class ScreenerStrategyListResponseDto(BaseModel):
+    strategies: list[ScreenerStrategySummaryDto] = Field(default_factory=list)
+
+
+class ScreenerStrategySaveRequestDto(BaseModel):
+    name: str
+    strategy: FactorScreenRequestDto
+
+
+class ScreenerStrategyDeleteResponseDto(BaseModel):
+    deleted: bool
+
+
 class FactorBacktestRequestDto(BaseModel):
     conditions: list[FactorConditionDto] = Field(..., min_length=1)
     start_date: date
@@ -334,6 +358,8 @@ class BacktestRebalanceDto(BaseModel):
     rebalance_date: date
     signal_date: date
     positions: list[BacktestPositionDto] = Field(default_factory=list)
+    entered_positions: list[BacktestPositionDto] = Field(default_factory=list)
+    exited_positions: list[BacktestPositionDto] = Field(default_factory=list)
 
 
 class BacktestAnnualReturnDto(BaseModel):

@@ -1,6 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from fastapi import FastAPI
+from typing import Any
+
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 
 from api.controller.backtest_controller import router as backtest_router
 from api.controller.chart_controller import router as chart_router
@@ -28,6 +31,37 @@ app.include_router(style_score_router)
 app.include_router(valuation_router)
 
 
+@app.get("/", include_in_schema=False)
+def mcp_http_root() -> dict[str, Any]:
+    return {
+        "name": "arcana-api",
+        "transport": "http",
+        "protocol": "mcp",
+        "endpoint": "/",
+    }
+
+
+@app.post("/", include_in_schema=False)
+async def mcp_http_transport(request: Request) -> Response:
+    from api.mcp import handle_http_message
+
+    message = await request.json()
+    if isinstance(message, list):
+        responses = [
+            response
+            for item in message
+            if (response := handle_http_message(item)) is not None
+        ]
+        if not responses:
+            return Response(status_code=202)
+        return JSONResponse(responses)
+
+    response = handle_http_message(message)
+    if response is None:
+        return Response(status_code=202)
+    return JSONResponse(response)
+
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+

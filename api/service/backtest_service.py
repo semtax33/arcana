@@ -148,6 +148,7 @@ class BacktestService:
         rebalance_history: list[BacktestRebalance] = []
         planned_segments: list[dict[str, Any]] = []
         selected_security_ids: set[str] = set()
+        previous_positions_by_id: dict[str, BacktestPosition] = {}
 
         for index, rebalance_date in enumerate(rebalance_dates):
             signal_date = _previous_trading_day(trading_days, rebalance_date)
@@ -173,11 +174,25 @@ class BacktestService:
                 candidates = candidates[:max_positions]
 
             positions = _positions_from_candidates(candidates)
+            current_positions_by_id = {position.security_id: position for position in positions}
+            entered_positions = [
+                position
+                for position in positions
+                if position.security_id not in previous_positions_by_id
+            ]
+            exited_positions = [
+                position
+                for security_id, position in previous_positions_by_id.items()
+                if security_id not in current_positions_by_id
+            ]
+            previous_positions_by_id = current_positions_by_id
             rebalance_history.append(
                 BacktestRebalance(
                     rebalance_date=rebalance_date,
                     signal_date=signal_date,
                     positions=positions,
+                    entered_positions=entered_positions,
+                    exited_positions=exited_positions,
                 )
             )
 

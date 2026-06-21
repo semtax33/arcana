@@ -41,6 +41,8 @@ class BacktestRebalance:
     rebalance_date: date
     signal_date: date
     positions: list[BacktestPosition]
+    entered_positions: list[BacktestPosition] = field(default_factory=list)
+    exited_positions: list[BacktestPosition] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -40,6 +40,14 @@ def run_factor_backtest(request: FactorBacktestRequestDto) -> FactorBacktestResp
                     BacktestPositionDto(**position.__dict__)
                     for position in rebalance.positions
                 ],
+                entered_positions=[
+                    BacktestPositionDto(**position.__dict__)
+                    for position in rebalance.entered_positions
+                ],
+                exited_positions=[
+                    BacktestPositionDto(**position.__dict__)
+                    for position in rebalance.exited_positions
+                ],
             )
             for rebalance in result.rebalance_history
         ],
