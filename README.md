@@ -1,4 +1,4 @@
-# StatementParsing
+# Arcana
 
 Korean market statement parsing and ELT pipeline for DART 공시, KRX 시장 데이터,
 팩터, 배당, 벤치마크, 스타일 점수, ClickHouse 적재를 다룹니다.
@@ -9,7 +9,7 @@ PowerShell에서 저장소 루트로 이동한 뒤 가상환경을 활성화합�
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
-& D:\Programming\python_example\StatementParsing\.venv-llama\Scripts\Activate.ps1
+& D:\Programming\python_example\Arcana\.venv-llama\Scripts\Activate.ps1
 ```
 
 가상환경이 삭제된 Python 설치 경로를 가리키면 테스트나 파이프라인 명령을
@@ -404,5 +404,5 @@ Git safe-directory 문제로 상태 확인이 막히면 아래처럼 일회성 �
 있습니다.
 
 ```powershell
-git -c safe.directory=D:/Programming/python_example/StatementParsing status --short
+git -c safe.directory=D:/Programming/python_example/Arcana status --short
 ```

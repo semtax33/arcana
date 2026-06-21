@@ -4,7 +4,7 @@ import os
 from collections.abc import Callable
 
 
-DEFAULT_EDGAR_IDENTITY = "StatementParsing contact@example.com"
+DEFAULT_EDGAR_IDENTITY = "Arcana contact@example.com"
 EDGAR_IDENTITY_ENV_NAMES = (
     "EDGAR_IDENTITY",
     "SEC_IDENTITY",

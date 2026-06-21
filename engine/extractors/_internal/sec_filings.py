@@ -17,7 +17,7 @@ SEC_TICKER_MAP_PATH = DATA_LAKE.meta("sec_company_tickers.csv")
 def download_sec_company_tickers(
     output_path: str | Path = SEC_TICKER_MAP_PATH,
     *,
-    user_agent: str = "StatementParsing contact@example.com",
+    user_agent: str = "Arcana contact@example.com",
 ) -> pd.DataFrame:
     request = Request(
         SEC_COMPANY_TICKERS_URL,

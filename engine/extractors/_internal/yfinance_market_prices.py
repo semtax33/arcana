@@ -343,7 +343,7 @@ def _voting_rank_of_row(row: pd.Series) -> int:
 
 
 def _download_text(url: str) -> str:
-    request = Request(url, headers={"User-Agent": "StatementParsing yfinance universe loader"})
+    request = Request(url, headers={"User-Agent": "Arcana yfinance universe loader"})
     try:
         return _read_url_text(request)
     except URLError as exc:

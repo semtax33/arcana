@@ -53,7 +53,7 @@ class DividendNormalizerTest(unittest.TestCase):
                 [],
             )
 
-        self.assertEqual(identities, ["StatementParsing contact@example.com"])
+        self.assertEqual(identities, ["Arcana contact@example.com"])
         self.assertEqual(rows[0]["tag"], "DividendsPayableAmountPerShare")
 
     def test_default_dividend_edgartools_provider_suppresses_empty_companyfacts_noise(self):
