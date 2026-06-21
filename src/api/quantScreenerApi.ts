@@ -10,6 +10,9 @@ import type {
   QuantScreenerColumn,
   QuantScreenerRequest,
   QuantScreenerResponse,
+  SavedScreenerStrategyDetail,
+  SavedScreenerStrategySummary,
+  ScreenerStrategySettings,
   ScreenedFactorValue,
   ScreenedStock,
 } from "../types/quantScreener";
@@ -132,6 +135,20 @@ type FactorScreenResponseDto = {
   rows: ScreenedStockRowDto[];
 };
 
+type ScreenerStrategySummaryDto = {
+  id: number;
+  name: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type ScreenerStrategyDetailDto = ScreenerStrategySummaryDto & {
+  strategy: FactorScreenRequestDto;
+};
+
+type ScreenerStrategyListResponseDto = {
+  strategies: ScreenerStrategySummaryDto[];
+};
 type FactorBacktestSummaryDto = {
   start_date: string;
   end_date: string;
@@ -170,6 +187,8 @@ type FactorBacktestRebalanceDto = {
   rebalance_date: string;
   signal_date: string | null;
   positions: FactorBacktestPositionDto[];
+  entered_positions?: FactorBacktestPositionDto[] | null;
+  exited_positions?: FactorBacktestPositionDto[] | null;
 };
 
 type FactorBacktestResponseDto = {
@@ -281,6 +300,8 @@ const mockFilterCatalog: FilterGroup[] = [
     ],
   },
 ];
+
+const mockStrategyStorageKey = "arcana.screenerStrategies";
 
 const mockRows: ScreenedStock[] = [
   {
@@ -455,6 +476,25 @@ function mapFactorsToFilterCatalog(factors: FactorDto[]): FilterGroup[] {
   });
 }
 
+function isComparisonOperator(value: string | null | undefined): value is ComparisonOperator {
+  return value === ">" || value === ">=" || value === "<" || value === "<=" || value === "=";
+}
+
+function mapConditionDtoToCondition(condition: FactorConditionDto): QuantScreenerRequest["conditions"][number] {
+  const filterId = condition.factor_id;
+  const fallbackLabel = condition.alias ?? filterId;
+
+  return {
+    filterId,
+    field: filterId,
+    label: fallbackLabel,
+    inputMode: condition.mode === "top_percent" ? "percentile" : "value",
+    operator: isComparisonOperator(condition.operator) ? condition.operator : ">=",
+    value: condition.value ?? 0,
+    percentile: condition.top_percent ?? 30,
+  };
+}
+
 function mapConditionToDto(condition: QuantScreenerRequest["conditions"][number]): FactorConditionDto {
   if (condition.inputMode === "percentile") {
     return {
@@ -530,6 +570,15 @@ function mapBenchmarkValues(
   );
 }
 
+function mapBacktestPosition(position: FactorBacktestPositionDto) {
+  return {
+    securityId: position.security_id,
+    ticker: position.ticker ?? position.security_id,
+    name: position.stock_name ?? position.security_id,
+    weight: position.weight,
+    score: position.score,
+  };
+}
 function mapBacktestResponse(response: FactorBacktestResponseDto): FactorBacktestResponse {
   const benchmarkNames = getBenchmarkNames(response);
 
@@ -564,13 +613,9 @@ function mapBacktestResponse(response: FactorBacktestResponseDto): FactorBacktes
     rebalanceHistory: response.rebalance_history.map((rebalance) => ({
       rebalanceDate: rebalance.rebalance_date,
       signalDate: rebalance.signal_date,
-      positions: rebalance.positions.map((position) => ({
-        securityId: position.security_id,
-        ticker: position.ticker ?? position.security_id,
-        name: position.stock_name ?? position.security_id,
-        weight: position.weight,
-        score: position.score,
-      })),
+      positions: rebalance.positions.map(mapBacktestPosition),
+      enteredPositions: (rebalance.entered_positions ?? []).map(mapBacktestPosition),
+      exitedPositions: (rebalance.exited_positions ?? []).map(mapBacktestPosition),
     })),
     warnings: response.warnings ?? [],
   };
@@ -636,6 +681,62 @@ function mapScreeningResponse(
       ),
     })),
   };
+}
+
+function mapStrategyDto(dto: ScreenerStrategyDetailDto): SavedScreenerStrategyDetail {
+  return {
+    id: dto.id,
+    name: dto.name,
+    createdAt: dto.created_at,
+    updatedAt: dto.updated_at,
+    strategy: {
+      market: dto.strategy.market,
+      industries: dto.strategy.industry_group_codes ?? [],
+      conditions: dto.strategy.conditions.map(mapConditionDtoToCondition),
+      matchMode: dto.strategy.match_mode,
+      limit: dto.strategy.limit,
+    },
+  };
+}
+
+function mapStrategySummaryDto(dto: ScreenerStrategySummaryDto): SavedScreenerStrategySummary {
+  return {
+    id: dto.id,
+    name: dto.name,
+    createdAt: dto.created_at,
+    updatedAt: dto.updated_at,
+  };
+}
+
+function mapStrategySettingsToDto(strategy: ScreenerStrategySettings): FactorScreenRequestDto {
+  return {
+    market: strategy.market,
+    conditions: strategy.conditions.map(mapConditionToDto),
+    industry_group_codes: strategy.industries,
+    match_mode: strategy.matchMode,
+    limit: strategy.limit,
+  };
+}
+
+function readMockStrategies(): SavedScreenerStrategyDetail[] {
+  try {
+    const rawValue = window.localStorage.getItem(mockStrategyStorageKey);
+    if (!rawValue) {
+      return [];
+    }
+    const parsed = JSON.parse(rawValue) as SavedScreenerStrategyDetail[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeMockStrategies(strategies: SavedScreenerStrategyDetail[]) {
+  window.localStorage.setItem(mockStrategyStorageKey, JSON.stringify(strategies));
+}
+
+function createMockStrategyId(strategies: SavedScreenerStrategyDetail[]) {
+  return strategies.reduce((maxId, strategy) => Math.max(maxId, strategy.id), 0) + 1;
 }
 
 function createMockScreeningResponse(request: QuantScreenerRequest): QuantScreenerResponse {
@@ -753,6 +854,87 @@ export async function runQuantScreening(
   }
 
   return mapScreeningResponse((await response.json()) as FactorScreenResponseDto, request);
+}
+
+export async function fetchScreenerStrategies(): Promise<SavedScreenerStrategySummary[]> {
+  if (useMockApi) {
+    return readMockStrategies()
+      .map(({ strategy: _strategy, ...summary }) => summary)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  const response = await getJson<ScreenerStrategyListResponseDto>("/api/factor-screen/strategies");
+  return response.strategies.map(mapStrategySummaryDto);
+}
+
+export async function fetchScreenerStrategy(
+  strategyId: number,
+): Promise<SavedScreenerStrategyDetail> {
+  if (useMockApi) {
+    const strategy = readMockStrategies().find((item) => item.id === strategyId);
+    if (!strategy) {
+      throw new Error(`Strategy not found: ${strategyId}`);
+    }
+    return strategy;
+  }
+
+  const response = await getJson<ScreenerStrategyDetailDto>(
+    `/api/factor-screen/strategies/${strategyId}`,
+  );
+  return mapStrategyDto(response);
+}
+
+export async function saveScreenerStrategy({
+  name,
+  strategy,
+}: {
+  name: string;
+  strategy: ScreenerStrategySettings;
+}): Promise<SavedScreenerStrategyDetail> {
+  if (useMockApi) {
+    const strategies = readMockStrategies();
+    const normalizedName = name.trim();
+    const now = new Date().toISOString();
+    const existing = strategies.find((item) => item.name === normalizedName);
+    const saved: SavedScreenerStrategyDetail = existing
+      ? { ...existing, strategy, updatedAt: now }
+      : {
+          id: createMockStrategyId(strategies),
+          name: normalizedName,
+          strategy,
+          createdAt: now,
+          updatedAt: now,
+        };
+    writeMockStrategies(existing ? strategies.map((item) => (item.id === saved.id ? saved : item)) : [saved, ...strategies]);
+    return saved;
+  }
+
+  const response = await fetch(`${apiBaseUrl}/api/factor-screen/strategies`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, strategy: mapStrategySettingsToDto(strategy) }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Save strategy failed: ${response.status}`);
+  }
+
+  return mapStrategyDto((await response.json()) as ScreenerStrategyDetailDto);
+}
+
+export async function deleteScreenerStrategy(strategyId: number): Promise<void> {
+  if (useMockApi) {
+    writeMockStrategies(readMockStrategies().filter((strategy) => strategy.id !== strategyId));
+    return;
+  }
+
+  const response = await fetch(`${apiBaseUrl}/api/factor-screen/strategies/${strategyId}`, {
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Delete strategy failed: ${response.status}`);
+  }
 }
 
 export async function runFactorBacktest(

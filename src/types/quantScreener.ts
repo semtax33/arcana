@@ -112,6 +112,24 @@ export type QuantScreenerResponse = {
   factorColumns?: QuantScreenerColumn[];
 };
 
+export type ScreenerStrategySettings = {
+  market: MarketCode;
+  industries: string[];
+  conditions: ScreenerCondition[];
+  matchMode: "all" | "any";
+  limit: number;
+};
+
+export type SavedScreenerStrategySummary = {
+  id: number;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SavedScreenerStrategyDetail = SavedScreenerStrategySummary & {
+  strategy: ScreenerStrategySettings;
+};
 export type BacktestRebalanceFrequency = "quarterly" | "semiannual" | "annual" | "monthly" | string;
 
 export type FactorBacktestRequest = {
@@ -149,6 +167,8 @@ export type BacktestRebalance = {
   rebalanceDate: string;
   signalDate: string | null;
   positions: BacktestPosition[];
+  enteredPositions: BacktestPosition[];
+  exitedPositions: BacktestPosition[];
 };
 
 export type FactorBacktestSummary = {

@@ -9,7 +9,10 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  FolderOpen,
+  Save,
   Search,
+  Trash2,
   X,
 } from "lucide-react";
 import type { QuantScreenerStore } from "../stores/quantScreenerStore";
@@ -30,6 +33,21 @@ const numberFormatter = new Intl.NumberFormat("ko-KR", {
   maximumFractionDigits: 2,
 });
 
+const strategyDateFormatter = new Intl.DateTimeFormat("ko-KR", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+function formatStrategyDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return strategyDateFormatter.format(date);
+}
 function formatValue(value: number | null | undefined, unit?: string | null) {
   if (value === null || value === undefined) {
     return "-";
@@ -80,6 +98,141 @@ export const QuantScreenerPage = observer(({ store }: QuantScreenerPageProps) =>
     void store.loadCatalog();
   }, [store]);
 
+  const renderStrategyHeaderActions = () => (
+    <div className="header-actions">
+      <button className="ghost-button" type="button" onClick={() => store.openStrategyList()}>
+        <FolderOpen size={14} />
+        전략 불러오기
+      </button>
+      <button
+        className="ghost-button"
+        type="button"
+        onClick={() => store.openStrategySave()}
+        disabled={store.selectedConditionCount === 0 || store.isStrategyLoading}
+      >
+        <Save size={14} />
+        전략 저장
+      </button>
+      <button className="icon-chip" type="button" aria-label="닫기">
+        <X size={16} />
+      </button>
+    </div>
+  );
+
+  const renderStrategyModals = () => (
+    <>
+      {store.isStrategySaveOpen && (
+        <div className="strategy-modal-backdrop" role="presentation" onClick={() => store.closeStrategySave()}>
+          <section
+            className="strategy-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="strategy-save-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="strategy-modal-header">
+              <div>
+                <span>SCREENING STRATEGY</span>
+                <h2 id="strategy-save-title">전략 저장</h2>
+              </div>
+              <button type="button" aria-label="닫기" onClick={() => store.closeStrategySave()}>
+                <X size={18} />
+              </button>
+            </header>
+            <label className="strategy-name-field">
+              <span>전략 이름</span>
+              <input
+                value={store.strategyNameInput}
+                placeholder="예: 고품질 성장주"
+                onChange={(event) => store.setStrategyNameInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    void store.saveCurrentStrategy();
+                  }
+                }}
+              />
+            </label>
+            {store.strategyErrorMessage && (
+              <p className="strategy-modal-error">{store.strategyErrorMessage}</p>
+            )}
+            <div className="strategy-modal-actions">
+              <button className="ghost-button" type="button" onClick={() => store.closeStrategySave()}>
+                취소
+              </button>
+              <button
+                className="green-button"
+                type="button"
+                onClick={() => void store.saveCurrentStrategy()}
+                disabled={store.isStrategyLoading}
+              >
+                저장
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {store.isStrategyListOpen && (
+        <div className="strategy-modal-backdrop" role="presentation" onClick={() => store.closeStrategyList()}>
+          <section
+            className="strategy-modal strategy-list-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="strategy-list-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="strategy-modal-header">
+              <div>
+                <span>SAVED STRATEGIES</span>
+                <h2 id="strategy-list-title">전략 불러오기</h2>
+              </div>
+              <button type="button" aria-label="닫기" onClick={() => store.closeStrategyList()}>
+                <X size={18} />
+              </button>
+            </header>
+            {store.strategyErrorMessage && (
+              <p className="strategy-modal-error">{store.strategyErrorMessage}</p>
+            )}
+            <div className="strategy-list">
+              {store.isStrategyLoading && store.savedStrategies.length === 0 ? (
+                <p className="strategy-empty">전략 목록을 불러오는 중입니다.</p>
+              ) : store.savedStrategies.length === 0 ? (
+                <p className="strategy-empty">저장된 전략이 없습니다.</p>
+              ) : (
+                store.savedStrategies.map((strategy) => (
+                  <article className="strategy-list-item" key={strategy.id}>
+                    <div>
+                      <strong>{strategy.name}</strong>
+                      <span>수정 {formatStrategyDate(strategy.updatedAt)}</span>
+                    </div>
+                    <div className="strategy-row-actions">
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        onClick={() => void store.applySavedStrategy(strategy.id)}
+                        disabled={store.isStrategyLoading}
+                      >
+                        불러오기
+                      </button>
+                      <button
+                        className="danger-icon-button"
+                        type="button"
+                        aria-label={`${strategy.name} 삭제`}
+                        onClick={() => void store.deleteSavedStrategy(strategy.id)}
+                        disabled={store.isStrategyLoading}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+    </>
+  );
   const renderFilterGroup = (group: FilterGroup, depth = 0) => {
     const expanded = store.isGroupExpanded(group.id);
     const hasChildren = Boolean(group.children?.length);
@@ -162,14 +315,7 @@ export const QuantScreenerPage = observer(({ store }: QuantScreenerPageProps) =>
             <h1>퀀트 스크리너</h1>
             <p>스크리닝 확인</p>
           </div>
-          <div className="header-actions">
-            <button className="ghost-button" type="button">
-              전략 불러오기
-            </button>
-            <button className="icon-chip" type="button" aria-label="닫기">
-              <X size={16} />
-            </button>
-          </div>
+          {renderStrategyHeaderActions()}
         </header>
 
         <section className="result-panel result-only">
@@ -265,6 +411,7 @@ export const QuantScreenerPage = observer(({ store }: QuantScreenerPageProps) =>
             </table>
           </div>
         </section>
+              {renderStrategyModals()}
       </section>
     );
   }
@@ -281,14 +428,7 @@ export const QuantScreenerPage = observer(({ store }: QuantScreenerPageProps) =>
               : `${store.factorCount}개 팩터`}
           </p>
         </div>
-        <div className="header-actions">
-          <button className="ghost-button" type="button">
-            전략 불러오기
-          </button>
-          <button className="icon-chip" type="button" aria-label="닫기">
-            <X size={16} />
-          </button>
-        </div>
+        {renderStrategyHeaderActions()}
       </header>
 
       <div className="quant-layout">
@@ -484,6 +624,7 @@ export const QuantScreenerPage = observer(({ store }: QuantScreenerPageProps) =>
       </div>
 
       {store.errorMessage && <p className="error-message">{store.errorMessage}</p>}
+          {renderStrategyModals()}
     </section>
   );
 });

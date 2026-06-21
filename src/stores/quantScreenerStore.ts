@@ -1,11 +1,15 @@
 import { makeAutoObservable, runInAction } from "mobx";
 import {
   defaultMarketOptions,
+  deleteScreenerStrategy,
   fetchFilterCatalog,
   fetchIndustryCatalog,
   fetchMarketCatalog,
+  fetchScreenerStrategies,
+  fetchScreenerStrategy,
   runFactorBacktest,
   runQuantScreening,
+  saveScreenerStrategy,
 } from "../api/quantScreenerApi";
 import type {
   ComparisonOperator,
@@ -17,7 +21,10 @@ import type {
   IndustryOption,
   MarketCode,
   QuantScreenerResponse,
+  SavedScreenerStrategyDetail,
+  SavedScreenerStrategySummary,
   ScreenerCondition,
+  ScreenerStrategySettings,
   ScreenedStock,
   QuantScreenerColumn,
 } from "../types/quantScreener";
@@ -32,7 +39,63 @@ const defaultRebalanceFrequency: BacktestRebalanceFrequency = "annual";
 
 const defaultIndustryIds: string[] = [];
 const defaultExpandedGroups: string[] = [];
-const defaultFactorIds = ["roe", "per", "epr", "bpr"];
+const defaultConditions: Array<{
+  factorId: string;
+  inputMode: ConditionInputMode;
+  operator: ComparisonOperator;
+  value: number;
+  percentile: number;
+}> = [
+  {
+    factorId: "roic_operational",
+    inputMode: "value",
+    operator: ">=",
+    value: 8,
+    percentile: 30,
+  },
+  {
+    factorId: "ev_to_nopat",
+    inputMode: "percentile",
+    operator: "<=",
+    value: 0,
+    percentile: 40,
+  },
+  {
+    factorId: "payout_ratio",
+    inputMode: "value",
+    operator: "<=",
+    value: 70,
+    percentile: 30,
+  },
+  {
+    factorId: "roe_growth_5y",
+    inputMode: "value",
+    operator: ">",
+    value: 0,
+    percentile: 30,
+  },
+  {
+    factorId: "fcf_to_ev_yield",
+    inputMode: "percentile",
+    operator: ">=",
+    value: 0,
+    percentile: 30,
+  },
+  {
+    factorId: "dps_cagr_10y",
+    inputMode: "value",
+    operator: ">",
+    value: 0,
+    percentile: 30,
+  },
+  {
+    factorId: "dividend_yield",
+    inputMode: "value",
+    operator: ">=",
+    value: 2.5,
+    percentile: 30,
+  },
+];
 
 function findFilter(
   groups: FilterGroup[],
@@ -81,6 +144,13 @@ export class QuantScreenerStore {
   isScreening = false;
   errorMessage = "";
   backtestErrorMessage = "";
+  isStrategySaveOpen = false;
+  isStrategyListOpen = false;
+  savedStrategies: SavedScreenerStrategySummary[] = [];
+  strategyNameInput = "";
+  strategyErrorMessage = "";
+  isStrategyLoading = false;
+  activeStrategyName = "";
 
   constructor() {
     makeAutoObservable(this);
@@ -165,7 +235,7 @@ export class QuantScreenerStore {
       });
     } catch {
       runInAction(() => {
-        this.errorMessage = "스크리너 카탈로그를 불러오지 못했습니다.";
+        this.errorMessage = "?ㅽ겕由щ꼫 移댄깉濡쒓렇瑜?遺덈윭?ㅼ? 紐삵뻽?듬땲??";
       });
     } finally {
       runInAction(() => {
@@ -182,7 +252,7 @@ export class QuantScreenerStore {
       });
     } catch {
       runInAction(() => {
-        this.errorMessage = "산업 목록을 불러오지 못했습니다.";
+        this.errorMessage = "?곗뾽 紐⑸줉??遺덈윭?ㅼ? 紐삵뻽?듬땲??";
       });
     }
   }
@@ -192,11 +262,11 @@ export class QuantScreenerStore {
       return;
     }
 
-    for (const factorId of defaultFactorIds) {
-      const filter = findFilter(this.filterCatalog, factorId);
+    for (const defaultCondition of defaultConditions) {
+      const filter = findFilter(this.filterCatalog, defaultCondition.factorId);
 
       if (filter) {
-        this.addCondition(filter);
+        this.addDefaultCondition(filter, defaultCondition);
       }
     }
 
@@ -278,6 +348,33 @@ export class QuantScreenerStore {
     ];
   }
 
+  addDefaultCondition(
+    filter: FilterDefinition,
+    defaultCondition: (typeof defaultConditions)[number],
+  ) {
+    if (
+      this.selectedConditions.some(
+        (condition) => condition.filterId === filter.id,
+      )
+    ) {
+      return;
+    }
+
+    this.selectedConditions = [
+      ...this.selectedConditions,
+      {
+        filterId: filter.id,
+        field: filter.field,
+        label: filter.label,
+        inputMode: defaultCondition.inputMode,
+        operator: defaultCondition.operator,
+        value: defaultCondition.value,
+        percentile: defaultCondition.percentile,
+        unit: filter.unit,
+      },
+    ];
+  }
+
   removeCondition(filterId: string) {
     this.selectedConditions = this.selectedConditions.filter(
       (condition) => condition.filterId !== filterId,
@@ -313,6 +410,184 @@ export class QuantScreenerStore {
   resetConditions() {
     this.selectedConditions = [];
     this.addDefaultConditions();
+    this.activeStrategyName = "";
+  }
+
+  setStrategyNameInput(name: string) {
+    this.strategyNameInput = name;
+  }
+
+  openStrategySave() {
+    if (this.selectedConditionCount === 0) {
+      return;
+    }
+
+    this.strategyNameInput = this.activeStrategyName;
+    this.strategyErrorMessage = "";
+    this.isStrategySaveOpen = true;
+  }
+
+  closeStrategySave() {
+    this.isStrategySaveOpen = false;
+    this.strategyErrorMessage = "";
+  }
+
+  openStrategyList() {
+    this.isStrategyListOpen = true;
+    this.strategyErrorMessage = "";
+    void this.loadSavedStrategies();
+  }
+
+  closeStrategyList() {
+    this.isStrategyListOpen = false;
+    this.strategyErrorMessage = "";
+  }
+
+  async loadSavedStrategies() {
+    this.isStrategyLoading = true;
+    this.strategyErrorMessage = "";
+
+    try {
+      const strategies = await fetchScreenerStrategies();
+      runInAction(() => {
+        this.savedStrategies = strategies;
+      });
+    } catch {
+      runInAction(() => {
+        this.strategyErrorMessage = "전략 목록을 불러오지 못했습니다.";
+      });
+    } finally {
+      runInAction(() => {
+        this.isStrategyLoading = false;
+      });
+    }
+  }
+
+  async saveCurrentStrategy() {
+    const name = this.strategyNameInput.trim();
+
+    if (!name) {
+      this.strategyErrorMessage = "전략 이름을 입력해주세요.";
+      return;
+    }
+
+    if (this.selectedConditionCount === 0) {
+      this.strategyErrorMessage = "저장할 조건이 없습니다.";
+      return;
+    }
+
+    this.isStrategyLoading = true;
+    this.strategyErrorMessage = "";
+
+    try {
+      const saved = await saveScreenerStrategy({
+        name,
+        strategy: this.buildCurrentStrategy(),
+      });
+      const strategies = await fetchScreenerStrategies();
+
+      runInAction(() => {
+        this.activeStrategyName = saved.name;
+        this.savedStrategies = strategies;
+        this.isStrategySaveOpen = false;
+        this.strategyNameInput = "";
+      });
+    } catch {
+      runInAction(() => {
+        this.strategyErrorMessage = "전략을 저장하지 못했습니다.";
+      });
+    } finally {
+      runInAction(() => {
+        this.isStrategyLoading = false;
+      });
+    }
+  }
+
+  async applySavedStrategy(strategyId: number) {
+    this.isStrategyLoading = true;
+    this.strategyErrorMessage = "";
+
+    try {
+      const strategy = await fetchScreenerStrategy(strategyId);
+      runInAction(() => {
+        this.applyStrategy(strategy);
+      });
+      void this.reloadIndustries();
+    } catch {
+      runInAction(() => {
+        this.strategyErrorMessage = "전략을 불러오지 못했습니다.";
+      });
+    } finally {
+      runInAction(() => {
+        this.isStrategyLoading = false;
+      });
+    }
+  }
+
+  async deleteSavedStrategy(strategyId: number) {
+    const strategy = this.savedStrategies.find((item) => item.id === strategyId);
+    this.isStrategyLoading = true;
+    this.strategyErrorMessage = "";
+
+    try {
+      await deleteScreenerStrategy(strategyId);
+      runInAction(() => {
+        this.savedStrategies = this.savedStrategies.filter((item) => item.id !== strategyId);
+        if (strategy && this.activeStrategyName === strategy.name) {
+          this.activeStrategyName = "";
+        }
+      });
+    } catch {
+      runInAction(() => {
+        this.strategyErrorMessage = "전략을 삭제하지 못했습니다.";
+      });
+    } finally {
+      runInAction(() => {
+        this.isStrategyLoading = false;
+      });
+    }
+  }
+
+  private buildCurrentStrategy(): ScreenerStrategySettings {
+    return {
+      market: this.market,
+      industries: [...this.selectedIndustries],
+      conditions: this.selectedConditions.map((condition) => ({ ...condition })),
+      matchMode: "all",
+      limit: maxResultRows,
+    };
+  }
+
+  private applyStrategy(strategy: SavedScreenerStrategyDetail) {
+    this.market = strategy.strategy.market;
+    this.selectedIndustries = [...strategy.strategy.industries];
+    this.selectedConditions = strategy.strategy.conditions.map((condition) =>
+      this.hydrateCondition(condition),
+    );
+    this.activeStrategyName = strategy.name;
+    this.result = null;
+    this.backtestResult = null;
+    this.backtestErrorMessage = "";
+    this.errorMessage = "";
+    this.sortKey = "rank";
+    this.sortDirection = "asc";
+    this.viewMode = "builder";
+    this.isStrategyListOpen = false;
+  }
+
+  private hydrateCondition(condition: ScreenerCondition): ScreenerCondition {
+    const filter = findFilter(this.filterCatalog, condition.filterId);
+
+    if (!filter) {
+      return condition;
+    }
+
+    return {
+      ...condition,
+      field: filter.field,
+      label: filter.label,
+      unit: filter.unit,
+    };
   }
 
   backToBuilder() {
@@ -381,7 +656,7 @@ export class QuantScreenerStore {
           return;
         }
 
-        this.backtestErrorMessage = "백테스트 결과를 불러오지 못했습니다.";
+        this.backtestErrorMessage = "諛깊뀒?ㅽ듃 寃곌낵瑜?遺덈윭?ㅼ? 紐삵뻽?듬땲??";
       });
     } finally {
       runInAction(() => {
@@ -446,7 +721,7 @@ export class QuantScreenerStore {
       });
     } catch {
       runInAction(() => {
-        this.errorMessage = "스크리닝 실행 중 오류가 발생했습니다.";
+        this.errorMessage = "?ㅽ겕由щ떇 ?ㅽ뻾 以??ㅻ쪟媛 諛쒖깮?덉뒿?덈떎.";
         this.viewMode = "builder";
       });
     } finally {

@@ -64,6 +64,10 @@ const percentFormatter = new Intl.NumberFormat("ko-KR", {
   minimumFractionDigits: 0,
 });
 
+const adjustmentMin = 0;
+const adjustmentMax = 60;
+const adjustmentStep = 1;
+
 const benchmarkOptions: Array<{
   id: BenchmarkMode;
   label: string;
@@ -273,9 +277,20 @@ const factorIdAliases: Record<string, string[]> = {
   pbr: ["pbr", "pb", "p_b", "price_book", "price_to_book"],
   eps_yoy: ["eps_yoy", "eps_yoy_pct", "eps_growth_yoy", "eps_growth", "epsYoY"],
   fcfpr: ["fcfpr", "fcf_pr", "fcf_price_ratio"],
-  rd_market_cap: ["rd_market_cap", "rnd_to_market_cap", "r_d_market_cap", "r_and_d_market_cap", "rd_to_market_cap"],
+  rd_market_cap: [
+    "rd_market_cap",
+    "rnd_to_market_cap",
+    "r_d_market_cap",
+    "r_and_d_market_cap",
+    "rd_to_market_cap",
+  ],
   rpr: ["rpr"],
-  fcf_ev_yield: ["fcf_ev_yield", "fcfevyield", "fcf_to_ev_yield", "fcf/ev_yield"],
+  fcf_ev_yield: [
+    "fcf_ev_yield",
+    "fcfevyield",
+    "fcf_to_ev_yield",
+    "fcf/ev_yield",
+  ],
   peg: ["peg"],
   psr: ["psr", "ps", "p_s", "price_sales", "price_to_sales"],
   pcr: ["pcr", "pc", "p_c", "price_cash_flow", "price_to_cash_flow"],
@@ -305,6 +320,14 @@ function formatOptionalFactor(value: number | null | undefined, suffix = "x") {
   return formatFactor(value, suffix);
 }
 
+function clampAdjustment(value: number) {
+  if (!Number.isFinite(value)) {
+    return adjustmentMin;
+  }
+
+  return Math.min(adjustmentMax, Math.max(adjustmentMin, Math.round(value)));
+}
+
 function factorSuffix(factorId: string) {
   return factorId === "eps_yoy" ||
     factorId === "rd_market_cap" ||
@@ -330,16 +353,25 @@ function p75(values: number[]) {
   }
 
   const sorted = [...values].sort((left, right) => left - right);
-  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.75) - 1);
+  const index = Math.min(
+    sorted.length - 1,
+    Math.ceil(sorted.length * 0.75) - 1,
+  );
 
   return sorted[index];
 }
 
 function apiFactorLookupKey(factor: MultipleValuationApiFactor) {
-  const candidates = [factor.id, factor.label ?? ""].filter(Boolean).map(normalizeComparableId);
+  const candidates = [factor.id, factor.label ?? ""]
+    .filter(Boolean)
+    .map(normalizeComparableId);
 
   for (const [templateId, aliases] of Object.entries(factorIdAliases)) {
-    if (aliases.map(normalizeComparableId).some((alias) => candidates.includes(alias))) {
+    if (
+      aliases
+        .map(normalizeComparableId)
+        .some((alias) => candidates.includes(alias))
+    ) {
       return templateId;
     }
   }
@@ -355,7 +387,10 @@ function mergeApiFactor(
     return template;
   }
 
-  const apiHistory = apiFactor.history && apiFactor.history.length > 0 ? apiFactor.history : undefined;
+  const apiHistory =
+    apiFactor.history && apiFactor.history.length > 0
+      ? apiFactor.history
+      : undefined;
   const apiMedian = apiHistory ? median(apiHistory) : null;
   const apiP75 = apiHistory ? p75(apiHistory) : null;
 
@@ -363,8 +398,12 @@ function mergeApiFactor(
     ...template,
     label: apiFactor.label ?? template.label,
     description: apiFactor.description ?? template.description,
-    current: apiFactor.current === undefined ? template.current : apiFactor.current,
-    benchmark: apiFactor.benchmark === undefined ? template.benchmark : apiFactor.benchmark,
+    current:
+      apiFactor.current === undefined ? template.current : apiFactor.current,
+    benchmark:
+      apiFactor.benchmark === undefined
+        ? template.benchmark
+        : apiFactor.benchmark,
     historyMedian:
       apiFactor.historyMedian === undefined
         ? (apiMedian ?? template.historyMedian)
@@ -373,12 +412,28 @@ function mergeApiFactor(
       apiFactor.historyP75 === undefined
         ? (apiP75 ?? template.historyP75)
         : apiFactor.historyP75,
-    industryAvg: apiFactor.industryAvg === undefined ? template.industryAvg : apiFactor.industryAvg,
-    marketAvg: apiFactor.marketAvg === undefined ? template.marketAvg : apiFactor.marketAvg,
-    nasdaqAvg: apiFactor.nasdaqAvg === undefined ? template.nasdaqAvg : apiFactor.nasdaqAvg,
-    buyPrice: apiFactor.buyPrice === undefined ? template.buyPrice : apiFactor.buyPrice,
-    fairPrice: apiFactor.fairPrice === undefined ? template.fairPrice : apiFactor.fairPrice,
-    sellPrice: apiFactor.sellPrice === undefined ? template.sellPrice : apiFactor.sellPrice,
+    industryAvg:
+      apiFactor.industryAvg === undefined
+        ? template.industryAvg
+        : apiFactor.industryAvg,
+    marketAvg:
+      apiFactor.marketAvg === undefined
+        ? template.marketAvg
+        : apiFactor.marketAvg,
+    nasdaqAvg:
+      apiFactor.nasdaqAvg === undefined
+        ? template.nasdaqAvg
+        : apiFactor.nasdaqAvg,
+    buyPrice:
+      apiFactor.buyPrice === undefined ? template.buyPrice : apiFactor.buyPrice,
+    fairPrice:
+      apiFactor.fairPrice === undefined
+        ? template.fairPrice
+        : apiFactor.fairPrice,
+    sellPrice:
+      apiFactor.sellPrice === undefined
+        ? template.sellPrice
+        : apiFactor.sellPrice,
     targetSource: apiFactor.targetSource ?? template.targetSource,
     direction: apiFactor.direction ?? template.direction,
     priceModel: apiFactor.priceModel ?? template.priceModel,
@@ -386,10 +441,16 @@ function mergeApiFactor(
   };
 }
 
-function createApiOnlyFactor(apiFactor: MultipleValuationApiFactor): MultipleFactor {
+function createApiOnlyFactor(
+  apiFactor: MultipleValuationApiFactor,
+): MultipleFactor {
   const id = apiFactorLookupKey(apiFactor);
-  const history = apiFactor.history && apiFactor.history.length > 0 ? apiFactor.history : [];
-  const fallbackMedian = history.length > 0 ? median(history) : (apiFactor.benchmark ?? apiFactor.current ?? null);
+  const history =
+    apiFactor.history && apiFactor.history.length > 0 ? apiFactor.history : [];
+  const fallbackMedian =
+    history.length > 0
+      ? median(history)
+      : (apiFactor.benchmark ?? apiFactor.current ?? null);
   const label = apiFactor.label ?? apiFactor.id.toUpperCase();
   const isYield = /yield|yoy|r&d|rd/i.test(label);
 
@@ -403,7 +464,11 @@ function createApiOnlyFactor(apiFactor: MultipleValuationApiFactor): MultipleFac
     historyP75: apiFactor.historyP75 ?? p75(history) ?? fallbackMedian,
     industryAvg: apiFactor.industryAvg ?? apiFactor.benchmark ?? fallbackMedian,
     marketAvg: apiFactor.marketAvg ?? apiFactor.benchmark ?? fallbackMedian,
-    nasdaqAvg: apiFactor.nasdaqAvg ?? apiFactor.marketAvg ?? apiFactor.benchmark ?? fallbackMedian,
+    nasdaqAvg:
+      apiFactor.nasdaqAvg ??
+      apiFactor.marketAvg ??
+      apiFactor.benchmark ??
+      fallbackMedian,
     buyPrice: apiFactor.buyPrice,
     fairPrice: apiFactor.fairPrice,
     sellPrice: apiFactor.sellPrice,
@@ -420,13 +485,25 @@ function getBenchmarkValue(factor: MultipleFactor, mode: BenchmarkMode) {
   }
 
   if (mode === "market") {
-    return factor.nasdaqAvg ?? factor.marketAvg ?? factor.benchmark ?? factor.historyMedian;
+    return (
+      factor.nasdaqAvg ??
+      factor.marketAvg ??
+      factor.benchmark ??
+      factor.historyMedian
+    );
   }
 
-  return factor.historyMedian ?? factor.benchmark ?? factor.industryAvg ?? factor.marketAvg;
+  return (
+    factor.historyMedian ??
+    factor.benchmark ??
+    factor.industryAvg ??
+    factor.marketAvg
+  );
 }
 
-function apiBandBasis(mode: BenchmarkMode): "historical" | "industry" | "market" {
+function apiBandBasis(
+  mode: BenchmarkMode,
+): "historical" | "industry" | "market" {
   return mode === "history" ? "historical" : mode;
 }
 
@@ -442,7 +519,10 @@ function isApiFairPriceForMode(factor: MultipleFactor, mode: BenchmarkMode) {
   const source = normalizeComparableId(factor.targetSource);
   const expected = apiBandBasis(mode);
 
-  return source === expected || (mode === "history" && source === "historical_median");
+  return (
+    source === expected ||
+    (mode === "history" && source === "historical_median")
+  );
 }
 
 function calculateFairPrice(
@@ -478,8 +558,15 @@ function median(values: number[]) {
     : sorted[middle];
 }
 
-function getFactorTone(factor: MultipleFactor, benchmark: number | null | undefined) {
-  if (factor.current === null || benchmark === null || benchmark === undefined) {
+function getFactorTone(
+  factor: MultipleFactor,
+  benchmark: number | null | undefined,
+) {
+  if (
+    factor.current === null ||
+    benchmark === null ||
+    benchmark === undefined
+  ) {
     return "neutral";
   }
 
@@ -544,7 +631,9 @@ export function MultipleValuationPage({
   const [safetyMargin, setSafetyMargin] = useState(20);
   const [sellPremium, setSellPremium] = useState(15);
   const [selectedFactorId, setSelectedFactorId] = useState("per");
-  const [apiData, setApiData] = useState<MultipleValuationApiResponse | null>(initialApiData);
+  const [apiData, setApiData] = useState<MultipleValuationApiResponse | null>(
+    initialApiData,
+  );
   const [apiError, setApiError] = useState(initialApiError);
   const [isApiLoading, setIsApiLoading] = useState(isInitialApiLoading);
 
@@ -553,7 +642,9 @@ export function MultipleValuationPage({
 
     if (
       benchmarkMode === "history" &&
-      (isInitialApiLoading || initialApiError || initialApiData?.stockCode === stockCode)
+      (isInitialApiLoading ||
+        initialApiError ||
+        initialApiData?.stockCode === stockCode)
     ) {
       setApiData(initialApiData);
       setApiError(initialApiError);
@@ -588,53 +679,71 @@ export function MultipleValuationPage({
     return () => {
       ignore = true;
     };
-  }, [benchmarkMode, initialApiData, initialApiError, isInitialApiLoading, stockCode]);
+  }, [
+    benchmarkMode,
+    initialApiData,
+    initialApiError,
+    isInitialApiLoading,
+    stockCode,
+  ]);
 
   const apiFactorsById = useMemo(() => {
-    const entries = (apiData?.factors ?? []).map((factor) => [
-      apiFactorLookupKey(factor),
-      factor,
-    ] as const);
+    const entries = (apiData?.factors ?? []).map(
+      (factor) => [apiFactorLookupKey(factor), factor] as const,
+    );
 
     return new Map(entries);
   }, [apiData?.factors]);
-  const multipleFactors = useMemo(
-    () => {
-      const templateIds = new Set(factorTemplates.map((template) => template.id));
-      const mergedTemplates = factorTemplates.map((template) =>
-        mergeApiFactor(template, apiFactorsById.get(template.id)),
-      );
-      const apiOnlyFactors = [...apiFactorsById.entries()]
-        .filter(([id]) => !templateIds.has(id))
-        .map(([, factor]) => createApiOnlyFactor(factor));
+  const multipleFactors = useMemo(() => {
+    const templateIds = new Set(factorTemplates.map((template) => template.id));
+    const mergedTemplates = factorTemplates.map((template) =>
+      mergeApiFactor(template, apiFactorsById.get(template.id)),
+    );
+    const apiOnlyFactors = [...apiFactorsById.entries()]
+      .filter(([id]) => !templateIds.has(id))
+      .map(([, factor]) => createApiOnlyFactor(factor));
 
-      return [...mergedTemplates, ...apiOnlyFactors];
-    },
-    [apiFactorsById],
-  );
-  const latestPrice = apiData?.currentPrice ?? data?.summary.latestPrice ?? 32700;
-  const latestDate = apiData?.asOfDate ?? data?.summary.latestDate ?? "2026-01-09";
+    return [...mergedTemplates, ...apiOnlyFactors];
+  }, [apiFactorsById]);
+  const latestPrice =
+    apiData?.currentPrice ?? data?.summary.latestPrice ?? 32700;
+  const latestDate =
+    apiData?.asOfDate ?? data?.summary.latestDate ?? "2026-01-09";
   const stockName = apiData?.stockName ?? data?.summary.name ?? stockCode;
   const industryLabel =
-    apiData?.industryLabel ?? data?.summary.industryLabel ?? "Industry peer group";
+    apiData?.industryLabel ??
+    data?.summary.industryLabel ??
+    "Industry peer group";
   const selectedBenchmark = benchmarkOptions.find(
     (option) => option.id === benchmarkMode,
   );
+  const updateSafetyMargin = (value: number) =>
+    setSafetyMargin(clampAdjustment(value));
+  const updateSellPremium = (value: number) =>
+    setSellPremium(clampAdjustment(value));
 
   const factorRows = useMemo(() => {
     return multipleFactors.map((factor) => {
       const benchmark = getBenchmarkValue(factor, benchmarkMode);
-      const calculatedFairPrice = calculateFairPrice(latestPrice, factor, benchmark);
+      const calculatedFairPrice = calculateFairPrice(
+        latestPrice,
+        factor,
+        benchmark,
+      );
       const fairPrice = isApiFairPriceForMode(factor, benchmarkMode)
-        ? (factor.fairPrice === undefined ? calculatedFairPrice : factor.fairPrice)
+        ? factor.fairPrice === undefined
+          ? calculatedFairPrice
+          : factor.fairPrice
         : calculatedFairPrice;
 
       return {
         ...factor,
         benchmark,
         fairPrice,
-        buyPrice: fairPrice === null ? null : fairPrice * (1 - safetyMargin / 100),
-        sellPrice: fairPrice === null ? null : fairPrice * (1 + sellPremium / 100),
+        buyPrice:
+          fairPrice === null ? null : fairPrice * (1 - safetyMargin / 100),
+        sellPrice:
+          fairPrice === null ? null : fairPrice * (1 + sellPremium / 100),
         tone: getFactorTone(factor, benchmark),
       };
     });
@@ -644,11 +753,25 @@ export function MultipleValuationPage({
     (factor): factor is (typeof factorRows)[number] & { fairPrice: number } =>
       typeof factor.fairPrice === "number" && Number.isFinite(factor.fairPrice),
   );
-  const fairValue = pricedRows.length > 0 ? median(pricedRows.map((row) => row.fairPrice)) : null;
-  const buyValue = fairValue === null ? null : fairValue * (1 - safetyMargin / 100);
-  const sellValue = fairValue === null ? null : fairValue * (1 + sellPremium / 100);
-  const selectedFactor = factorRows.find((factor) => factor.id === selectedFactorId) ?? factorRows[0];
-  const upside = fairValue === null ? null : ((fairValue - latestPrice) / latestPrice) * 100;
+  const fallbackFairValue =
+    pricedRows.length > 0
+      ? median(pricedRows.map((row) => row.fairPrice))
+      : null;
+  const apiCentralBand = apiData?.centralBand;
+  const fairValue =
+    typeof apiCentralBand?.fairPrice === "number" &&
+    Number.isFinite(apiCentralBand.fairPrice)
+      ? apiCentralBand.fairPrice
+      : fallbackFairValue;
+  const buyValue =
+    fairValue === null ? null : fairValue * (1 - safetyMargin / 100);
+  const sellValue =
+    fairValue === null ? null : fairValue * (1 + sellPremium / 100);
+  const selectedFactor =
+    factorRows.find((factor) => factor.id === selectedFactorId) ??
+    factorRows[0];
+  const upside =
+    fairValue === null ? null : ((fairValue - latestPrice) / latestPrice) * 100;
   const benchmarkLabel = selectedBenchmark?.label ?? "Benchmark";
   const comparisonRows = useMemo<MultipleValuationApiComparisonRow[]>(() => {
     if ((apiData?.comparisonRows ?? []).length > 0) {
@@ -714,7 +837,8 @@ export function MultipleValuationPage({
             {stockName} <span>({stockCode})</span>
           </h1>
           <p>
-            {industryLabel} 기준으로 time series와 cross section 멀티플을 함께 비교합니다.
+            {industryLabel} 기준으로 time series와 cross section 멀티플을 함께
+            비교합니다.
           </p>
         </div>
         <div className="valuation-header-metrics">
@@ -736,9 +860,15 @@ export function MultipleValuationPage({
       </header>
 
       {(isApiLoading || isInitialApiLoading || (isLoading && !data)) && (
-        <p className="valuation-note">종목 데이터를 불러오는 동안 예시 팩터로 밴드를 계산합니다.</p>
+        <p className="valuation-note">
+          종목 데이터를 불러오는 동안 예시 팩터로 밴드를 계산합니다.
+        </p>
       )}
-      {apiError && <p className="valuation-note">{apiError} 현재 화면은 폴백 데이터로 표시합니다.</p>}
+      {apiError && (
+        <p className="valuation-note">
+          {apiError} 현재 화면은 폴백 데이터로 표시합니다.
+        </p>
+      )}
 
       <section className="valuation-control-bar">
         <div className="valuation-control-group">
@@ -758,33 +888,35 @@ export function MultipleValuationPage({
           <em>{selectedBenchmark?.description}</em>
         </div>
 
-        <label className="valuation-slider">
+        <div className="valuation-slider">
           <span>
             안전마진 <strong>{safetyMargin}%</strong>
           </span>
           <input
-            max={40}
-            min={0}
-            step={5}
+            aria-label="안전마진 슬라이더"
+            max={adjustmentMax}
+            min={adjustmentMin}
+            step={adjustmentStep}
             type="range"
             value={safetyMargin}
-            onChange={(event) => setSafetyMargin(Number(event.target.value))}
+            onChange={(event) => updateSafetyMargin(Number(event.target.value))}
           />
-        </label>
+        </div>
 
-        <label className="valuation-slider">
+        <div className="valuation-slider">
           <span>
             매도 프리미엄 <strong>{sellPremium}%</strong>
           </span>
           <input
-            max={40}
-            min={0}
-            step={5}
+            aria-label="매도 프리미엄 슬라이더"
+            max={adjustmentMax}
+            min={adjustmentMin}
+            step={adjustmentStep}
             type="range"
             value={sellPremium}
-            onChange={(event) => setSellPremium(Number(event.target.value))}
+            onChange={(event) => updateSellPremium(Number(event.target.value))}
           />
-        </label>
+        </div>
       </section>
 
       <section className="valuation-band-grid">
@@ -813,7 +945,9 @@ export function MultipleValuationPage({
           <BarChart3 size={17} />
           <div>
             <h2>핵심 멀티플 비교</h2>
-            <p>현재 멀티플을 선택한 벤치마크와 비교하고 가격 밴드를 계산합니다.</p>
+            <p>
+              현재 멀티플을 선택한 벤치마크와 비교하고 가격 밴드를 계산합니다.
+            </p>
           </div>
         </div>
         <div className="valuation-table-wrap">
@@ -840,8 +974,12 @@ export function MultipleValuationPage({
                     <strong>{factor.label}</strong>
                     <span>{factor.description}</span>
                   </td>
-                  <td>{formatFactor(factor.current, factorSuffix(factor.id))}</td>
-                  <td>{formatFactor(factor.benchmark, factorSuffix(factor.id))}</td>
+                  <td>
+                    {formatFactor(factor.current, factorSuffix(factor.id))}
+                  </td>
+                  <td>
+                    {formatFactor(factor.benchmark, factorSuffix(factor.id))}
+                  </td>
                   <td>
                     <span className={`valuation-pill ${factor.tone}`}>
                       {factor.tone === "discount" && <ArrowDown size={12} />}
@@ -864,7 +1002,10 @@ export function MultipleValuationPage({
           <Landmark size={17} />
           <div>
             <h2>시장/산업 평균과의 상대 비교</h2>
-            <p>시장 평균, 대표지수, 산업 평균, 현재 종목을 같은 열에서 비교합니다.</p>
+            <p>
+              시장 평균, 대표지수, 산업 평균, 현재 종목을 같은 열에서
+              비교합니다.
+            </p>
           </div>
         </div>
         <div className="valuation-table-wrap">
@@ -885,7 +1026,10 @@ export function MultipleValuationPage({
                   </td>
                   {comparisonColumns.map((column) => (
                     <td key={`${row.label}-${column.id}`}>
-                      {formatOptionalFactor(row.values[column.id], column.suffix)}
+                      {formatOptionalFactor(
+                        row.values[column.id],
+                        column.suffix,
+                      )}
                     </td>
                   ))}
                 </tr>
@@ -921,9 +1065,17 @@ export function MultipleValuationPage({
             </div>
           </div>
           <div className="valuation-summary-list">
-            <p>낮을수록 좋은 멀티플은 목표 멀티플 / 현재 멀티플로 가격을 환산합니다.</p>
-            <p>수익률형 지표는 현재 수익률 / 목표 수익률로 가격을 환산합니다.</p>
-            <p>EPS YoY, R&D / Market Cap처럼 가격 환산이 직접적이지 않은 지표는 비교 신호로만 사용합니다.</p>
+            <p>
+              낮을수록 좋은 멀티플은 목표 멀티플 / 현재 멀티플로 가격을
+              환산합니다.
+            </p>
+            <p>
+              수익률형 지표는 현재 수익률 / 목표 수익률로 가격을 환산합니다.
+            </p>
+            <p>
+              EPS YoY, R&D / Market Cap처럼 가격 환산이 직접적이지 않은 지표는
+              비교 신호로만 사용합니다.
+            </p>
           </div>
         </article>
       </section>

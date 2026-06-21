@@ -29,6 +29,14 @@ export type MultipleValuationApiComparisonRow = {
   values: Record<string, number | null>;
 };
 
+export type MultipleValuationApiCentralBand = {
+  fairPrice?: number | null;
+  buyPrice?: number | null;
+  sellPrice?: number | null;
+  validFactorCount?: number | null;
+  excludedFactorIds?: string[];
+};
+
 export type MultipleValuationApiResponse = {
   stockCode: string;
   stockName?: string;
@@ -37,6 +45,7 @@ export type MultipleValuationApiResponse = {
   currentPrice?: number | null;
   factors: MultipleValuationApiFactor[];
   comparisonRows: MultipleValuationApiComparisonRow[];
+  centralBand?: MultipleValuationApiCentralBand | null;
 };
 
 const factorListKeys = [
@@ -556,6 +565,24 @@ function normalizeBand(raw: unknown): MultipleValuationApiFactor | null {
   };
 }
 
+function normalizeCentralBand(raw: unknown): MultipleValuationApiCentralBand | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  const excluded = raw.excluded_factor_ids ?? raw.excludedFactorIds;
+
+  return {
+    fairPrice: pickMetricValue(raw, ["fair_price", "fairPrice", "target_price"]),
+    buyPrice: pickMetricValue(raw, ["buy_below_price", "buyBelowPrice", "buy_price"]),
+    sellPrice: pickMetricValue(raw, ["sell_above_price", "sellAbovePrice", "sell_price"]),
+    validFactorCount: pickNumber(raw, ["valid_factor_count", "validFactorCount"]),
+    excludedFactorIds: Array.isArray(excluded)
+      ? excluded.filter((value): value is string => typeof value === "string")
+      : undefined,
+  };
+}
+
 function normalizeHistoryFactors(rawItems: unknown[]): MultipleValuationApiFactor[] {
   const grouped = new Map<string, number[]>();
 
@@ -674,6 +701,7 @@ function normalizePayload(payload: unknown, stockCode: string): MultipleValuatio
     comparisonRows: comparisonPayload
       .map(normalizeComparisonRow)
       .filter((row): row is MultipleValuationApiComparisonRow => row !== null),
+    centralBand: normalizeCentralBand(record.central_band ?? record.centralBand),
   };
 }
 

@@ -21,6 +21,8 @@ import type { QuantScreenerStore } from "../stores/quantScreenerStore";
 import type {
   BacktestAnnualReturn,
   BacktestEquityPoint,
+  BacktestPosition,
+  BacktestRebalance,
   BacktestRebalanceFrequency,
   FactorBacktestResponse,
 } from "../types/quantScreener";
@@ -197,6 +199,67 @@ function getWinCount(annualReturns: BacktestAnnualReturn[]) {
 function formatDateLabel(value: string | null | undefined) {
   return value ? value.replaceAll("-", ".") : "-";
 }
+type YearlyPositionChange = {
+  year: number;
+  rebalances: BacktestRebalance[];
+  latestPositions: BacktestPosition[];
+  enteredCount: number;
+  exitedCount: number;
+};
+
+function formatPositionWeight(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "비중 -";
+  }
+
+  return `비중 ${percentFormatter.format(value * 100)}%`;
+}
+
+function buildYearlyPositionChanges(
+  rebalanceHistory: BacktestRebalance[],
+): YearlyPositionChange[] {
+  const byYear = new Map<number, YearlyPositionChange>();
+
+  for (const rebalance of rebalanceHistory) {
+    const year = Number(rebalance.rebalanceDate.slice(0, 4));
+
+    if (!Number.isFinite(year)) {
+      continue;
+    }
+
+    const group = byYear.get(year) ?? {
+      year,
+      rebalances: [],
+      latestPositions: [],
+      enteredCount: 0,
+      exitedCount: 0,
+    };
+
+    group.rebalances.push(rebalance);
+    group.latestPositions = rebalance.positions;
+    group.enteredCount += rebalance.enteredPositions.length;
+    group.exitedCount += rebalance.exitedPositions.length;
+    byYear.set(year, group);
+  }
+
+  return [...byYear.values()].sort((left, right) => right.year - left.year);
+}
+
+function PositionChip({
+  position,
+  tone,
+}: {
+  position: BacktestPosition;
+  tone?: "entered" | "exited" | "held";
+}) {
+  return (
+    <span className={`position-chip ${tone ?? ""}`}>
+      <strong>{position.ticker}</strong>
+      <em>{position.name}</em>
+      <small>{formatPositionWeight(position.weight)}</small>
+    </span>
+  );
+}
 
 function CumulativeReturnChart({ data }: { data: BacktestEquityPoint[] }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -371,6 +434,9 @@ export const BacktestResultPage = observer(
     const summary = result?.summary;
     const annualReturns = result?.annualReturns ?? [];
     const equityCurve = result?.equityCurve ?? [];
+    const rebalanceHistory = result?.rebalanceHistory ?? [];
+    const latestHoldingPositions = rebalanceHistory.at(-1)?.positions ?? [];
+    const yearlyPositionChanges = buildYearlyPositionChanges(rebalanceHistory);
     const benchmarkNames = summary?.benchmarkNames ?? [];
     const primaryBenchmarkName = benchmarkNames[0] ?? null;
     const selectedLabels = store.selectedConditions.map(
@@ -383,10 +449,9 @@ export const BacktestResultPage = observer(
       (annualReturns.length > 0
         ? (winCount / annualReturns.length) * 100
         : null);
-    const latestPositions =
-      result?.rebalanceHistory.at(-1)?.positions.length ??
-      store.result?.total ??
-      0;
+    const latestPositions = result
+      ? latestHoldingPositions.length
+      : store.result?.total ?? 0;
     const averageExcess =
       annualReturns.length > 0 && primaryBenchmarkName
         ? annualReturns.reduce(
@@ -422,7 +487,7 @@ export const BacktestResultPage = observer(
             <h1>전략 성과 분석</h1>
             <p>
               {formatDateLabel(summary?.startDate)} -{" "}
-              {formatDateLabel(summary?.endDate)} · {store.market} ·{" "}
+              {formatDateLabel(summary?.endDate)} - {store.market} ·{" "}
               {rebalanceLabels[
                 summary?.rebalanceFrequency ?? store.backtestRebalanceFrequency
               ] ??
@@ -613,6 +678,117 @@ export const BacktestResultPage = observer(
                 </aside>
               </section>
 
+              <section className="backtest-card position-change-card">
+                <div className="backtest-section-title">
+                  <div>
+                    <h2>편입/편출 종목</h2>
+                    <p>연도별 리밸런싱 변경 내역과 현재 보유 종목입니다.</p>
+                  </div>
+                </div>
+
+                <div className="position-change-layout">
+                  <section className="current-holdings-panel">
+                    <div className="position-panel-heading">
+                      <span>현재 보유</span>
+                      <strong>{latestHoldingPositions.length}개</strong>
+                    </div>
+                    {latestHoldingPositions.length > 0 ? (
+                      <div className="position-chip-list holdings">
+                        {latestHoldingPositions.map((position) => (
+                          <PositionChip
+                            key={position.securityId}
+                            position={position}
+                            tone="held"
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="position-empty-inline">보유 종목이 없습니다.</p>
+                    )}
+                  </section>
+
+                  {yearlyPositionChanges.length > 0 ? (
+                    <div className="position-timeline">
+                      {yearlyPositionChanges.map((yearGroup) => (
+                        <article className="position-year-block" key={yearGroup.year}>
+                          <div className="position-year-header">
+                            <strong>{yearGroup.year}</strong>
+                            <span>
+                              편입 {yearGroup.enteredCount} - 편출 {yearGroup.exitedCount} - 보유 {yearGroup.latestPositions.length}
+                            </span>
+                          </div>
+
+                          {yearGroup.rebalances.map((rebalance) => (
+                            <section
+                              className="position-rebalance-row"
+                              key={rebalance.rebalanceDate}
+                            >
+                              <div className="position-rebalance-heading">
+                                <strong>{formatDateLabel(rebalance.rebalanceDate)}</strong>
+                                <span>신호일 {formatDateLabel(rebalance.signalDate)}</span>
+                              </div>
+                              <div className="position-change-columns">
+                                <div className="position-change-column entered">
+                                  <h3>편입 {rebalance.enteredPositions.length}</h3>
+                                  {rebalance.enteredPositions.length > 0 ? (
+                                    <div className="position-chip-list compact">
+                                      {rebalance.enteredPositions.map((position) => (
+                                        <PositionChip
+                                          key={position.securityId}
+                                          position={position}
+                                          tone="entered"
+                                        />
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="position-empty-inline">없음</p>
+                                  )}
+                                </div>
+                                <div className="position-change-column exited">
+                                  <h3>편출 {rebalance.exitedPositions.length}</h3>
+                                  {rebalance.exitedPositions.length > 0 ? (
+                                    <div className="position-chip-list compact">
+                                      {rebalance.exitedPositions.map((position) => (
+                                        <PositionChip
+                                          key={position.securityId}
+                                          position={position}
+                                          tone="exited"
+                                        />
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="position-empty-inline">없음</p>
+                                  )}
+                                </div>
+                                <div className="position-change-column held">
+                                  <h3>보유 {rebalance.positions.length}</h3>
+                                  {rebalance.positions.length > 0 ? (
+                                    <div className="position-chip-list compact">
+                                      {rebalance.positions.map((position) => (
+                                        <PositionChip
+                                          key={position.securityId}
+                                          position={position}
+                                          tone="held"
+                                        />
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="position-empty-inline">없음</p>
+                                  )}
+                                </div>
+                              </div>
+                            </section>
+                          ))}
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="backtest-empty position-empty">
+                      리밸런싱 히스토리가 없습니다.
+                    </div>
+                  )}
+                </div>
+              </section>
               <section className="backtest-bottom-grid">
                 <article className="backtest-card">
                   <div className="backtest-section-title">
@@ -620,7 +796,7 @@ export const BacktestResultPage = observer(
                       <h2>연도별 수익률</h2>
                       <p>
                         연간 승률 {formatMetric(winRate)} ({winCount}/
-                        {annualReturns.length}) · 평균 초과 수익률{" "}
+                        {annualReturns.length}) - 평균 초과 수익률{" "}
                         {formatMetric(averageExcess)}
                       </p>
                     </div>
