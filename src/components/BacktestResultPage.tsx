@@ -553,14 +553,32 @@ export const BacktestResultPage = observer(
             </div>
             <div className="backtest-date-range">
               <span>기간</span>
-              <button type="button">
-                {summary?.startDate ?? "2016-01-01"}
+              <label className="backtest-date-field">
+                <input
+                  aria-label="백테스트 시작일"
+                  type="date"
+                  value={store.backtestStartDate}
+                  max={store.backtestEndDate}
+                  onChange={(event) =>
+                    store.setBacktestStartDate(event.target.value)
+                  }
+                  disabled={store.isBacktesting}
+                />
                 <Calendar size={14} />
-              </button>
-              <button type="button">
-                {summary?.endDate ?? "2026-04-26"}
+              </label>
+              <label className="backtest-date-field">
+                <input
+                  aria-label="백테스트 종료일"
+                  type="date"
+                  value={store.backtestEndDate}
+                  min={store.backtestStartDate}
+                  onChange={(event) =>
+                    store.setBacktestEndDate(event.target.value)
+                  }
+                  disabled={store.isBacktesting}
+                />
                 <Calendar size={14} />
-              </button>
+              </label>
             </div>
             <button
               className="blue-button"

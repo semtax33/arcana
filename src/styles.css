@@ -1101,22 +1101,46 @@ button {
 }
 
 .loading-screen {
+  grid-template-rows: 1fr;
+  min-height: 100vh;
+  padding: 24px;
   place-items: center;
-  align-content: center;
+  align-content: stretch;
+}
+
+.screening-loader-panel {
+  display: grid;
+  place-items: center;
   gap: 16px;
+  min-width: 0;
 }
 
 .screening-loader {
+  --screening-progress: 0%;
+  position: relative;
   display: grid;
   place-items: center;
   width: 88px;
   height: 88px;
-  border: 5px solid #1e2a3f;
-  border-top-color: #1fd1a5;
   border-radius: 999px;
   color: #eff6ff;
+  background: conic-gradient(#1fd1a5 var(--screening-progress), #1e2a3f 0);
   font-size: 18px;
   font-weight: 900;
+  box-shadow: 0 0 0 1px rgba(31, 209, 165, 0.08), 0 12px 34px rgba(0, 0, 0, 0.26);
+}
+
+.screening-loader::before {
+  position: absolute;
+  inset: 5px;
+  border-radius: inherit;
+  background: #080d19;
+  content: "";
+}
+
+.screening-loader span {
+  position: relative;
+  z-index: 1;
 }
 
 .loading-screen p {
@@ -1382,7 +1406,7 @@ button {
 }
 
 .backtest-control-group button,
-.backtest-date-range button {
+.backtest-date-field {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1396,6 +1420,31 @@ button {
   font-size: 12px;
   font-weight: 900;
   white-space: nowrap;
+}
+
+.backtest-date-field {
+  cursor: text;
+}
+
+.backtest-date-field input {
+  min-width: 112px;
+  border: 0;
+  outline: 0;
+  color: #dbe6f3;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 900;
+  color-scheme: dark;
+}
+
+.backtest-date-field:focus-within {
+  border-color: #1fd1a5;
+  box-shadow: 0 0 0 3px rgba(31, 209, 165, 0.12);
+}
+
+.backtest-date-field:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .backtest-control-group button.selected {

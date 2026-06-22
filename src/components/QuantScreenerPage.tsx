@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type CSSProperties } from "react";
 import { observer } from "mobx-react-lite";
 import {
   ArrowLeft,
@@ -279,17 +279,35 @@ export const QuantScreenerPage = observer(({ store }: QuantScreenerPageProps) =>
     );
   };
 
+  const screeningProgress = Math.max(
+    0,
+    Math.min(100, Math.round(store.screeningProgress)),
+  );
+
   if (store.viewMode === "loading") {
     return (
       <section className="quant-page loading-screen">
-        <div className="screening-loader" aria-label="스크리닝 진행률">
-          <span>5%</span>
+        <div className="screening-loader-panel">
+          <div
+            className="screening-loader"
+            role="progressbar"
+            aria-label="Screening progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={screeningProgress}
+            style={
+              {
+                "--screening-progress": `${screeningProgress}%`,
+              } as CSSProperties
+            }
+          >
+            <span>{screeningProgress}%</span>
+          </div>
+          <p>{store.screeningProgressLabel}</p>
         </div>
-        <p>스크리닝 중...</p>
       </section>
     );
   }
-
   if (store.viewMode === "backtest") {
     return <BacktestResultPage store={store} />;
   }

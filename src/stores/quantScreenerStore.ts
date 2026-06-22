@@ -36,6 +36,7 @@ const maxResultRows = 5000;
 const defaultBacktestStartDate = "2016-01-01";
 const defaultBacktestEndDate = "2026-04-26";
 const defaultRebalanceFrequency: BacktestRebalanceFrequency = "annual";
+const dateInputPattern = /^\d{4}-\d{2}-\d{2}$/;
 
 const defaultIndustryIds: string[] = [];
 const defaultExpandedGroups: string[] = [];
@@ -142,6 +143,9 @@ export class QuantScreenerStore {
   backtestRequestId = 0;
   isCatalogLoading = false;
   isScreening = false;
+  screeningProgress = 0;
+  screeningProgressLabel = "스크리닝 준비 중...";
+  private screeningProgressTimer: number | null = null;
   errorMessage = "";
   backtestErrorMessage = "";
   isStrategySaveOpen = false;
@@ -614,6 +618,34 @@ export class QuantScreenerStore {
     this.backtestRebalanceFrequency = frequency;
   }
 
+  setBacktestStartDate(value: string) {
+    if (!isValidDateInput(value)) {
+      return;
+    }
+
+    this.backtestStartDate = value;
+
+    if (this.backtestEndDate < value) {
+      this.backtestEndDate = value;
+    }
+
+    this.backtestErrorMessage = "";
+  }
+
+  setBacktestEndDate(value: string) {
+    if (!isValidDateInput(value)) {
+      return;
+    }
+
+    this.backtestEndDate = value;
+
+    if (this.backtestStartDate > value) {
+      this.backtestStartDate = value;
+    }
+
+    this.backtestErrorMessage = "";
+  }
+
   async runBacktest() {
     if (this.selectedConditions.length === 0 || this.isBacktesting) {
       return;
@@ -628,6 +660,11 @@ export class QuantScreenerStore {
     const startDate = this.backtestStartDate;
     const endDate = this.backtestEndDate;
     const rebalanceFrequency = this.backtestRebalanceFrequency;
+
+    if (startDate > endDate) {
+      this.backtestErrorMessage = "시작일은 종료일보다 늦을 수 없습니다.";
+      return;
+    }
 
     this.backtestRequestId = requestId;
     this.isBacktesting = true;
@@ -703,8 +740,10 @@ export class QuantScreenerStore {
     this.viewMode = "loading";
     this.result = null;
     this.errorMessage = "";
+    this.startScreeningProgress();
 
     try {
+      this.setScreeningProgress(15, "조건 전송 중...");
       const result = await runQuantScreening({
         market: this.market,
         industries: this.selectedIndustries,
@@ -714,6 +753,9 @@ export class QuantScreenerStore {
       });
 
       runInAction(() => {
+        this.stopScreeningProgress();
+        this.screeningProgress = 100;
+        this.screeningProgressLabel = "스크리닝 완료";
         this.result = result;
         this.sortKey = "rank";
         this.sortDirection = "asc";
@@ -721,14 +763,59 @@ export class QuantScreenerStore {
       });
     } catch {
       runInAction(() => {
-        this.errorMessage = "?ㅽ겕由щ떇 ?ㅽ뻾 以??ㅻ쪟媛 諛쒖깮?덉뒿?덈떎.";
+        this.stopScreeningProgress();
+        this.screeningProgress = 0;
+        this.screeningProgressLabel = "스크리닝 준비 중...";
+        this.errorMessage = "스크리닝 결과를 불러오지 못했습니다.";
         this.viewMode = "builder";
       });
     } finally {
       runInAction(() => {
         this.isScreening = false;
+        this.stopScreeningProgress();
       });
     }
+  }
+
+  private setScreeningProgress(progress: number, label?: string) {
+    const normalizedProgress = Math.max(0, Math.min(100, Math.round(progress)));
+    this.screeningProgress = Math.max(this.screeningProgress, normalizedProgress);
+
+    if (label) {
+      this.screeningProgressLabel = label;
+    }
+  }
+
+  private startScreeningProgress() {
+    this.stopScreeningProgress();
+    this.screeningProgress = 5;
+    this.screeningProgressLabel = "스크리닝 준비 중...";
+    this.screeningProgressTimer = window.setInterval(() => {
+      runInAction(() => {
+        if (!this.isScreening || this.screeningProgress >= 90) {
+          return;
+        }
+
+        const increment =
+          this.screeningProgress < 35 ? 5 : this.screeningProgress < 70 ? 3 : 1;
+        this.screeningProgress = Math.min(90, this.screeningProgress + increment);
+
+        if (this.screeningProgress >= 70) {
+          this.screeningProgressLabel = "결과 계산 중...";
+        } else if (this.screeningProgress >= 35) {
+          this.screeningProgressLabel = "데이터 조회 중...";
+        }
+      });
+    }, 450);
+  }
+
+  private stopScreeningProgress() {
+    if (this.screeningProgressTimer === null) {
+      return;
+    }
+
+    window.clearInterval(this.screeningProgressTimer);
+    this.screeningProgressTimer = null;
   }
 }
 
@@ -768,4 +855,14 @@ function compareSortValues(
 
 function isEmptySortValue(value: string | number | null | undefined) {
   return value === null || value === undefined || value === "";
+}
+
+function isValidDateInput(value: string) {
+  if (!dateInputPattern.test(value)) {
+    return false;
+  }
+
+  const date = new Date(`${value}T00:00:00`);
+
+  return !Number.isNaN(date.getTime());
 }
