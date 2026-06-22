@@ -316,6 +316,7 @@ class FactorBacktestRequestDto(BaseModel):
     start_date: date
     end_date: date
     rebalance_frequency: RebalanceFrequency
+    market: str | None = None
     financial_basis: str | None = "annual"
     style_profile: StyleProfile = "DEFAULT"
     sector_codes: list[str] | None = None

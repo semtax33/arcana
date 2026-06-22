@@ -25,6 +25,8 @@ from api.repository.backtest_query import (
 from api.repository.factor_screen_query import FactorCondition
 from api.service.dto import FactorBacktestRequestDto, FactorConditionDto
 from api.service.style_score_catalog import (
+    DEFAULT_FACTOR_SCREEN_STYLE_PROFILE,
+    DEFAULT_SCREEN_STYLE_PROFILE,
     canonical_style_score_factor_id,
     is_style_score_factor,
 )
@@ -44,6 +46,7 @@ class BacktestService:
     def run_factor_backtest(self, request: FactorBacktestRequestDto) -> FactorBacktestResult:
         _validate_request(request)
         conditions = [_to_repository_condition(condition) for condition in request.conditions]
+        style_profile = _resolve_style_profile(request.style_profile, conditions)
         benchmark_ids = _normalize_benchmark_ids(request.benchmarks)
         warnings = [SURVIVOR_BIAS_WARNING]
 
@@ -71,8 +74,9 @@ class BacktestService:
                 trading_days=trading_days,
                 rebalance_dates=rebalance_dates,
                 end_date=request.end_date,
+                market=request.market,
                 financial_basis=request.financial_basis or "annual",
-                style_profile=request.style_profile,
+                style_profile=style_profile,
                 sector_codes=request.sector_codes,
                 industry_group_codes=request.industry_group_codes,
                 match_mode=request.match_mode,
@@ -134,6 +138,7 @@ class BacktestService:
         trading_days: list[date],
         rebalance_dates: list[date],
         end_date: date,
+        market: str | None,
         financial_basis: str,
         style_profile: str,
         sector_codes: list[str] | None,
@@ -160,6 +165,7 @@ class BacktestService:
                 client,
                 conditions=conditions,
                 signal_date=signal_date,
+                market=market,
                 financial_basis=financial_basis,
                 style_profile=style_profile,
                 sector_codes=sector_codes,
@@ -270,6 +276,7 @@ class BacktestService:
         *,
         conditions: list[FactorCondition],
         signal_date: date,
+        market: str | None,
         financial_basis: str,
         style_profile: str,
         sector_codes: list[str] | None,
@@ -278,6 +285,7 @@ class BacktestService:
         query, params = build_factor_snapshot_query(
             conditions,
             signal_date=signal_date,
+            market=market,
             financial_basis=financial_basis,
             style_profile=style_profile,
             sector_codes=sector_codes,
@@ -373,6 +381,19 @@ def _to_repository_condition(condition: FactorConditionDto) -> FactorCondition:
     data = condition.model_dump() if hasattr(condition, "model_dump") else condition.dict()
     data["factor_id"] = canonical_style_score_factor_id(str(data["factor_id"]))
     return FactorCondition(**data)
+
+
+def _resolve_style_profile(
+    requested_profile: str | None,
+    conditions: list[FactorCondition],
+) -> str | None:
+    if not any(is_style_score_factor(condition.factor_id) for condition in conditions):
+        return requested_profile
+
+    profile = str(requested_profile or "").strip().upper()
+    if not profile or profile == DEFAULT_SCREEN_STYLE_PROFILE:
+        return DEFAULT_FACTOR_SCREEN_STYLE_PROFILE
+    return profile
 
 
 def _validate_request(request: FactorBacktestRequestDto) -> None:

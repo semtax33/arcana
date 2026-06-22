@@ -35,6 +35,7 @@ def build_factor_snapshot_query(
     conditions: list[FactorCondition | dict[str, Any]],
     *,
     signal_date: str | date,
+    market: str | None = None,
     financial_basis: str | None = "annual",
     style_profile: str | None = DEFAULT_SCREEN_STYLE_PROFILE,
     sector_codes: list[str] | None = None,
@@ -57,6 +58,7 @@ def build_factor_snapshot_query(
         if industry_group_codes
         else None
     )
+    normalized_market = _normalize_market(market)
 
     factor_ids = _validate_factor_ids(
         sorted({condition.factor_id for condition in normalized_conditions})
@@ -76,13 +78,17 @@ def build_factor_snapshot_query(
         params["sector_codes"] = normalized_sector_codes
     if normalized_industry_group_codes:
         params["industry_group_codes"] = normalized_industry_group_codes
+    if normalized_market:
+        params["market_country"] = normalized_market.upper()
     basis_filter = ""
     if financial_basis:
         params["financial_basis"] = financial_basis
         basis_filter = "\n        AND f.financial_basis = {financial_basis:String}"
 
     ctes = []
-    needs_security_universe = bool(normalized_sector_codes or normalized_industry_group_codes)
+    needs_security_universe = bool(
+        normalized_sector_codes or normalized_industry_group_codes or normalized_market
+    )
     regular_security_universe_join = ""
     style_security_universe_join = ""
     if needs_security_universe:
@@ -94,6 +100,9 @@ def build_factor_snapshot_query(
             industry_group_filter = (
                 "\n        AND has({industry_group_codes:Array(String)}, iss.industry_group_code)"
             )
+        market_filter = ""
+        if normalized_market:
+            market_filter = "\n        AND sm.country = {market_country:String}"
         ctes.append(
             f"""
 security_universe AS (
@@ -102,7 +111,7 @@ security_universe AS (
     FROM {_validate_table_name(security_table)} AS sm
     LEFT JOIN {_validate_table_name(issuer_table)} AS iss
         ON iss.issuer_id = sm.issuer_id
-    WHERE 1 = 1{sector_filter}{industry_group_filter}
+    WHERE 1 = 1{market_filter}{sector_filter}{industry_group_filter}
     GROUP BY sm.security_id
 )
 """.strip()
@@ -364,6 +373,15 @@ def _validate_style_score_column(column_name: str) -> str:
 
 def _normalize_style_profile(value: str | None) -> str:
     return str(value or DEFAULT_SCREEN_STYLE_PROFILE).strip().upper()
+
+
+def _normalize_market(value: str | None) -> str | None:
+    market = str(value or "").strip().lower()
+    if not market or market == "all":
+        return None
+    if market not in {"kr", "us"}:
+        raise ValueError("market must be one of: all, kr, us")
+    return market
 
 
 def _escape_sql_string(value: str) -> str:

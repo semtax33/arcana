@@ -318,6 +318,32 @@ class BacktestServiceTest(unittest.TestCase):
         self.assertEqual([position.security_id for position in second_rebalance.entered_positions], ["SEC_KR_B"])
         self.assertEqual([position.security_id for position in second_rebalance.exited_positions], ["SEC_KR_A"])
 
+    def test_factor_backtest_resolves_default_style_profile_for_style_score_conditions(self):
+        client = FakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(
+                    factor_id="style_total_score",
+                    mode="top_percent",
+                    top_percent=100,
+                ),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 1, 3),
+            rebalance_frequency="quarterly",
+            max_positions=1,
+        )
+
+        BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        snapshot_queries = [
+            (query, params)
+            for query, params in client.queries
+            if "latest_factor_values AS" in query
+        ]
+        self.assertEqual(len(snapshot_queries), 1)
+        self.assertEqual(snapshot_queries[0][1]["style_profile"], "MINERVINI_ZWEIG")
+
     def test_factor_backtest_passes_style_profile_to_snapshot_query(self):
         client = FakeClickHouseClient()
         request = FactorBacktestRequestDto(
@@ -331,6 +357,7 @@ class BacktestServiceTest(unittest.TestCase):
             start_date=date(2026, 1, 2),
             end_date=date(2026, 1, 3),
             rebalance_frequency="quarterly",
+            market="KR",
             style_profile="MINERVINI_ZWEIG",
             max_positions=1,
         )
@@ -346,6 +373,7 @@ class BacktestServiceTest(unittest.TestCase):
         query, params = snapshot_queries[0]
         self.assertIn("FROM arcana.fact_daily_style_score AS s", query)
         self.assertEqual(params["style_profile"], "MINERVINI_ZWEIG")
+        self.assertEqual(params["market_country"], "KR")
 
 
 if __name__ == "__main__":

@@ -65,6 +65,18 @@ class BacktestQueryTest(unittest.TestCase):
         self.assertIn("has({industry_group_codes:Array(String)}, iss.industry_group_code)", query)
         self.assertIn("INNER JOIN security_universe AS u", query)
 
+    def test_factor_snapshot_query_can_filter_market(self):
+        query, params = build_factor_snapshot_query(
+            [FactorCondition.top("roe", 30)],
+            signal_date="2026-01-01",
+            market="KR",
+        )
+
+        self.assertEqual(params["market_country"], "KR")
+        self.assertIn("security_universe AS", query)
+        self.assertIn("sm.country = {market_country:String}", query)
+        self.assertIn("INNER JOIN security_universe AS u", query)
+
 
 if __name__ == "__main__":
     unittest.main()
