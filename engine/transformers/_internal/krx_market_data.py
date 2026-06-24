@@ -1,5 +1,4 @@
-from datetime import datetime
-from glob import glob
+﻿from glob import glob
 from pathlib import Path
 
 import pandas as pd
@@ -7,6 +6,17 @@ import pandas as pd
 from engine.core.paths import DATA_LAKE, PROJECT_ROOT, market_csv_name
 
 ENGINE_DIR = Path(__file__).resolve().parent
+
+DATE_COLUMN = "\ub0a0\uc9dc"
+OPEN_COLUMN = "\uc2dc\uac00"
+HIGH_COLUMN = "\uace0\uac00"
+LOW_COLUMN = "\uc800\uac00"
+CLOSE_COLUMN = "\uc885\uac00"
+VOLUME_COLUMN = "\uac70\ub798\ub7c9"
+CHANGE_RATE_COLUMN = "\ub4f1\ub77d\ub960"
+MARKET_CAP_COLUMN = "\uc2dc\uac00\ucd1d\uc561"
+TRADING_VALUE_COLUMN = "\uac70\ub798\ub300\uae08"
+LISTED_SHARES_COLUMN = "\uc0c1\uc7a5\uc8fc\uc2dd\uc218"
 
 
 def _glob_files(path: str) -> list[str]:
@@ -47,57 +57,67 @@ def _dedupe_market_symbol_files(files: list[str]) -> list[str]:
     return list(by_stock_code.values())
 
 
-def normalize_price(path: str):
+def _read_market_symbol_files(path: str) -> pd.DataFrame:
     files = _dedupe_market_symbol_files(_glob_files(path))
-
     if not files:
-        raise FileNotFoundError("CSV 파일을 찾지 못했습니다.")
-
-    df = pd.concat(
-        [
-            pd.read_csv(file).assign(stock_code=_stock_code_from_path(file))
-            for file in files
-        ],
-        ignore_index=True
+        raise FileNotFoundError("CSV file not found")
+    return pd.concat(
+        [pd.read_csv(file).assign(stock_code=_stock_code_from_path(file)) for file in files],
+        ignore_index=True,
     )
-    
-    df["security_id"] = df["stock_code"].apply(lambda stock_code: f"SEC_KR_{str(stock_code).strip().zfill(6)}")
-    df["trade_date"] = df["날짜"].apply(lambda date: datetime.strptime(date, "%Y-%m-%d"))
-    df["open"] = df["시가"].apply(lambda price: price)
-    df["high"] = df["고가"].apply(lambda price: price)
-    df["low"] = df["저가"].apply(lambda price: price)
-    df["close"] = df["종가"].apply(lambda price: price)
-    df["volume"] = df["거래량"].apply(lambda volume: volume)
-    df["adj_close"] = df["종가"].apply(lambda price: price)
-    df["currency"] = df["stock_code"].apply(lambda _: "KRW")
 
-    df = df.drop(columns=["날짜", "시가", "고가", "저가", "종가", "거래량", "stock_code", "등락률"])
 
-    _write_csv(df, DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price")))
+def _parse_trade_dates(values):
+    dates = pd.to_datetime(values, errors="coerce", format="mixed")
+    invalid = dates.isna()
+    if invalid.any():
+        sample = values.loc[invalid].head(3).astype(str).tolist() if hasattr(values, "loc") else []
+        raise ValueError(f"invalid KRX trade_date values: {sample}")
+    return dates.dt.normalize()
 
-    return df
+
+def _require_columns(df: pd.DataFrame, columns: list[str]) -> None:
+    missing = [column for column in columns if column not in df.columns]
+    if missing:
+        raise KeyError(f"missing KRX columns: {missing}")
+
+
+def _security_id(stock_code) -> str:
+    return f"SEC_KR_{str(stock_code).strip().zfill(6)}"
+
+
+def normalize_price(path: str):
+    df = _read_market_symbol_files(path)
+    _require_columns(
+        df,
+        [DATE_COLUMN, OPEN_COLUMN, HIGH_COLUMN, LOW_COLUMN, CLOSE_COLUMN, VOLUME_COLUMN],
+    )
+
+    result = pd.DataFrame()
+    result["security_id"] = df["stock_code"].apply(_security_id)
+    result["trade_date"] = _parse_trade_dates(df[DATE_COLUMN])
+    result["open"] = df[OPEN_COLUMN]
+    result["high"] = df[HIGH_COLUMN]
+    result["low"] = df[LOW_COLUMN]
+    result["close"] = df[CLOSE_COLUMN]
+    result["volume"] = df[VOLUME_COLUMN]
+    result["adj_close"] = df[CLOSE_COLUMN]
+    result["currency"] = "KRW"
+
+    _write_csv(result, DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price")))
+    return result
+
 
 def normalize_shares(path: str):
-    files = _dedupe_market_symbol_files(_glob_files(path))
+    df = _read_market_symbol_files(path)
+    _require_columns(df, [DATE_COLUMN, LISTED_SHARES_COLUMN, MARKET_CAP_COLUMN])
 
-    if not files:
-        raise FileNotFoundError("CSV 파일을 찾지 못했습니다.")
+    result = pd.DataFrame()
+    result["security_id"] = df["stock_code"].apply(_security_id)
+    result["trade_date"] = _parse_trade_dates(df[DATE_COLUMN])
+    result["shares"] = df[LISTED_SHARES_COLUMN]
+    result["market_cap"] = df[MARKET_CAP_COLUMN]
 
-    df = pd.concat(
-        [
-            pd.read_csv(file).assign(stock_code=_stock_code_from_path(file))
-            for file in files
-        ],
-        ignore_index=True
-    )
-    
-    df["security_id"] = df["stock_code"].apply(lambda stock_code: f"SEC_KR_{str(stock_code).strip().zfill(6)}")
-    df["trade_date"] = df["날짜"].apply(lambda date: datetime.strptime(date, "%Y-%m-%d"))
-    df["shares"] = df["상장주식수"].apply(lambda shares: shares)
-    df["market_cap"] = df["시가총액"].apply(lambda market_cap: market_cap)
+    _write_csv(result, DATA_LAKE.silver("krx", "shares", market_csv_name("normalized_shares")))
+    return result
 
-    df = df.drop(columns=["날짜", "상장주식수", "시가총액", "거래량", "거래대금", "상장주식수", "stock_code"])
-
-    _write_csv(df, DATA_LAKE.silver("krx", "shares", market_csv_name("normalized_shares")))
-
-    return df

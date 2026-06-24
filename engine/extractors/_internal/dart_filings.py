@@ -834,6 +834,7 @@ def fetch_dart_search(
     *,
     start_date: str | None = None,
     end_date: str | None = None,
+    force: bool = False,
 ):
     for window_start, window_end in iter_dart_search_date_windows(start_date, end_date):
         print(f"searching DART statements {ticker}: {window_start}-{window_end}")
@@ -843,6 +844,7 @@ def fetch_dart_search(
             save_filename,
             start_date=window_start,
             end_date=window_end,
+            force=force,
         )
 
 
@@ -853,6 +855,7 @@ def _fetch_dart_search_window(
     *,
     start_date: str | None = None,
     end_date: str | None = None,
+    force: bool = False,
 ):
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
@@ -901,6 +904,18 @@ def _fetch_dart_search_window(
             seen_hrefs.add(href)
 
             title = _safe_title_from_anchor(a)
+            safe_title = title.strip()
+            if len(safe_title.split("\n")) >= 2:
+                safe_title_line = safe_title.split("\n")[1].strip()
+            else:
+                print("WARNING! title line is omitted!\n")
+                safe_title_line = safe_title
+            out_name = f"finance_statement_{safe_title_line}.html"
+            out_path = Path(save_dir) / _safe_filename(out_name)
+            if out_path.exists() and not force:
+                print(f"[SKIP] statement exists: {out_path}")
+                continue
+
             page_url = f"https://dart.fss.or.kr{href}"
 
             # 2) 공시 페이지 GET
@@ -1311,6 +1326,7 @@ def fetch_dart_dividend_search(
     *,
     start_date: str | None = None,
     end_date: str | None = None,
+    force: bool = False,
 ):
     url = "https://dart.fss.or.kr/dsab007/detailSearch.ax"
 
@@ -1388,6 +1404,13 @@ def fetch_dart_dividend_search(
             m = PAT_VIEWDOC.search(content)
             rcept_no = m.group("rcept_no")
             doc_no = m.group("doc_no")
+            report_date = f"{rcept_no[0:4]}-{rcept_no[4:6]}-{rcept_no[6:8]}"
+            safe_title = f"dividend_{report_date}".strip()
+            out_name = f"finance_statement_{safe_title}.json"
+            out_path = Path(save_dir) / _safe_filename(out_name)
+            if out_path.exists() and not force:
+                print(f"[SKIP] dividend exists: {out_path}")
+                continue
             time.sleep(0.3)
 
             dividend_frame_url = f"https://dart.fss.or.kr/report/viewer.do?rcpNo={rcept_no}&dcmNo={doc_no}&dtd=HTML"
@@ -1413,14 +1436,17 @@ def download_statements(
     *,
     start_date: str | None = None,
     end_date: str | None = None,
+    display_offset_base: int | None = None,
+    force: bool = False,
 ):
     download_stock_codes = stock_codes[download_offset:]
+    offset_base = download_offset if display_offset_base is None else display_offset_base
 
     for offset, stock_code in enumerate(download_stock_codes):
-        print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
+        print(f"downloading {stock_code} (download_offset : {offset+offset_base})....")
         ticker = stock_code
         dir = str(DATA_LAKE.bronze("dart", "finance-statement", ticker))
-        fetch_dart_search(ticker, dir, start_date=start_date, end_date=end_date)
+        fetch_dart_search(ticker, dir, start_date=start_date, end_date=end_date, force=force)
 
 
 def download_statement_comments(
@@ -1429,11 +1455,13 @@ def download_statement_comments(
     *,
     start_date: str | None = None,
     end_date: str | None = None,
+    display_offset_base: int | None = None,
 ):
     download_stock_codes = sorted(stock_codes)[download_offset:]
+    offset_base = download_offset if display_offset_base is None else display_offset_base
 
     for offset, stock_code in enumerate(download_stock_codes):
-        print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
+        print(f"downloading {stock_code} (download_offset : {offset+offset_base})....")
         ticker = stock_code
         dir = str(DATA_LAKE.bronze("dart", "finance-comment", ticker))
         fetch_dart_comment_search(ticker, dir, start_date=start_date, end_date=end_date)
@@ -1450,6 +1478,7 @@ def download_business_infos(
     sleep_seconds: float = 5.0,
     stock_retries: int = 3,
     stock_retry_backoff: float = 30.0,
+    display_offset_base: int | None = None,
 ):
     download_stock_codes = sorted(stock_codes)[download_offset:]
     max_workers = max(1, int(max_workers or 1))
@@ -1494,7 +1523,8 @@ def download_business_infos(
                 return False
         return False
 
-    tasks = [(offset + download_offset, stock_code) for offset, stock_code in enumerate(download_stock_codes)]
+    offset_base = download_offset if display_offset_base is None else display_offset_base
+    tasks = [(offset + offset_base, stock_code) for offset, stock_code in enumerate(download_stock_codes)]
     if max_workers == 1:
         for task in tasks:
             _download_one(task)
@@ -1533,11 +1563,14 @@ def download_dividend_histories(
     *,
     start_date: str | None = None,
     end_date: str | None = None,
+    display_offset_base: int | None = None,
+    force: bool = False,
 ):
     download_stock_codes = sorted(stock_codes)[download_offset:]
+    offset_base = download_offset if display_offset_base is None else display_offset_base
 
     for offset, stock_code in enumerate(download_stock_codes):
-        print(f"downloading {stock_code} (download_offset : {offset+download_offset})....")
+        print(f"downloading {stock_code} (download_offset : {offset+offset_base})....")
         ticker = stock_code
         dir = str(DATA_LAKE.bronze("dart", "dividend", ticker))
-        fetch_dart_dividend_search(ticker, dir, start_date=start_date, end_date=end_date)
+        fetch_dart_dividend_search(ticker, dir, start_date=start_date, end_date=end_date, force=force)

@@ -193,6 +193,73 @@ class DartBusinessInfoExtractionTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         sleep_mock.assert_not_called()
 
+    def test_fetch_statements_skips_existing_output_before_main_request(self):
+        search_html = """
+        <html><body>
+          <a href="/dsaf001/main.do?rcpNo=20260515001799">Samsung Electronics (2026.03)</a>
+        </body></html>
+        """
+        calls = []
+
+        def fake_request(session, method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            if method == "POST":
+                return FakeResponse(search_html)
+            raise AssertionError(f"main/viewer should not be requested for existing output: {url}")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_path = Path(tmp_dir) / "finance_statement_Samsung Electronics (2026.03).html"
+            output_path.write_text("already downloaded", encoding="utf-8")
+            with (
+                patch.object(dart_filings, "request_with_retry", side_effect=fake_request),
+                patch.object(dart_filings.time, "sleep") as sleep_mock,
+            ):
+                dart_filings.fetch_dart_search(
+                    "005930",
+                    tmp_dir,
+                    start_date="20260101",
+                    end_date="20260331",
+                )
+
+        self.assertEqual(len(calls), 1)
+        sleep_mock.assert_not_called()
+    def test_fetch_dividends_skips_existing_output_before_viewer_request(self):
+        search_html = """
+        <html><body>
+          <a href="/dsaf001/main.do?rcpNo=20260624000001">현금ㆍ현물배당결정</a>
+        </body></html>
+        """
+        main_html = """
+        <html><script>viewDoc('20260624000001', '12345');</script></html>
+        """
+        calls = []
+
+        def fake_request(session, method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            if method == "POST":
+                return FakeResponse(search_html)
+            if "dsaf001/main.do" in url:
+                return FakeResponse(main_html)
+            if "report/viewer.do" in url:
+                raise AssertionError("viewer should not be requested for existing dividend output")
+            raise AssertionError(f"unexpected URL: {url}")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_path = Path(tmp_dir) / "finance_statement_dividend_2026-06-24.json"
+            output_path.write_text("{}", encoding="utf-8")
+            with (
+                patch.object(dart_filings, "request_with_retry", side_effect=fake_request),
+                patch.object(dart_filings.time, "sleep") as sleep_mock,
+            ):
+                dart_filings.fetch_dart_dividend_search(
+                    "005930",
+                    tmp_dir,
+                    start_date="20260624",
+                    end_date="20260624",
+                )
+
+        self.assertFalse(any("report/viewer.do" in url for _, url, _ in calls))
+        sleep_mock.assert_not_called()
     def test_download_business_infos_uses_thread_pool_when_workers_requested(self):
         calls = []
 

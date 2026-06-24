@@ -8,4 +8,4 @@ data-lake/silver/**
 data-lake/gold/**
 data-lake/meta/screener_strategies.sqlite3
 data-lake/meta/screener_strategies.sqlite3-*
-
+data-lake/meta/refresh_state/**
