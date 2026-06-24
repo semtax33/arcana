@@ -150,6 +150,22 @@ US price downloads use NasdaqTrader symbol directories for the universe and yfin
 `period=max` history files under `data-lake/bronze/yfinance/price/{TICKER}.csv`.
 Install yfinance first if needed: `pip install yfinance`.
 
+
+WACC input downloads:
+
+```powershell
+python -m engine.workflows.download --market kr wacc-inputs
+python -m engine.workflows.download --market us wacc-inputs
+```
+
+`wacc-inputs` downloads the shared Damodaran NYU country ERP workbook to
+`data-lake/bronze/damodaran/country_risk_premiums/ctryprem.xlsx` and FRED
+rates to `data-lake/bronze/fred/rates/`. For US WACC, it also downloads the
+S&P 500 benchmark to `data-lake/bronze/yfinance/benchmark/us_sp500.csv`.
+KR beta uses the existing KRX price and benchmark data already stored under
+`data-lake/bronze/krx/`; US beta uses existing
+`data-lake/bronze/yfinance/price/{TICKER}.csv` prices. Koscom data is not used.
+
 ### 2. Transform / Normalize
 
 ```powershell
@@ -250,6 +266,32 @@ Normalize benchmark silver CSV만 갱신:
 python -c "from engine.loaders.benchmarks import normalize_downloaded_benchmark_prices; normalize_downloaded_benchmark_prices(r'data-lake\bronze\krx\benchmark\*.csv')"
 ```
 
+Normalize WACC silver input CSVs:
+
+```powershell
+python -c "from pathlib import Path; from engine.transformers.erp import normalize_country_erp, normalize_fred_risk_free_rates; normalize_country_erp(); paths=list(Path(r'data-lake\bronze\fred\rates').glob('*.csv')); normalize_fred_risk_free_rates(paths) if paths else None"
+python -c "from engine.transformers.wacc import create_default_wacc_assumptions; create_default_wacc_assumptions()"
+python -c "import pandas as pd; from engine.transformers.wacc import normalize_benchmark_weekly_returns, SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH; df=pd.read_csv(r'data-lake\bronze\yfinance\benchmark\us_sp500.csv'); normalize_benchmark_weekly_returns(df, market='us', benchmark_id='SP500').to_csv(SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH, index=False, encoding='utf-8-sig')"
+```
+
+WACC silver outputs are written under `data-lake/silver/wacc/`:
+
+```text
+risk_free_rates.csv
+country_equity_risk_premiums.csv
+weekly_returns.csv
+benchmark_weekly_returns.csv
+wacc_assumptions.csv
+```
+
+Damodaran ERP is used first. If the Damodaran workbook cannot be read, KR ERP
+falls back to the 2-year annualized KOSPI expected return minus the latest KR
+government bond rate. Weekly beta uses Friday week-end returns, `adj_close`
+when available and `close` otherwise. If at least 52 overlapping weekly returns
+are not available, WACC falls back to the market default beta in
+`wacc_assumptions.csv`.
+
+
 아래 loader 명령들은 정규화된 silver 파일을 갱신한 뒤 ClickHouse 적재까지
 이어 수행합니다.
 
@@ -327,6 +369,30 @@ python -m engine.loaders.factors --financial-basis annual --start-date 2026-01-0
 python -m engine.loaders.factors --market us --stock-codes AAPL --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24
 ```
 
+Load factors with WACC inputs:
+
+```powershell
+python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24 --dry-run
+python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24
+python -m engine.loaders.factors --market us --stock-codes AAPL,MSFT --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24 --dry-run
+python -m engine.loaders.factors --market us --stock-codes AAPL,MSFT --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24
+```
+
+Online WACC backfill can be enabled when the local bronze/silver WACC inputs are
+missing or stale:
+
+```powershell
+python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24 --wacc-online-backfill --dry-run
+python -m engine.loaders.factors --market us --stock-codes AAPL --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24 --wacc-online-backfill --dry-run
+```
+
+Without `--wacc-online-backfill`, the loader only reads local bronze/silver
+files. With it, the loader refreshes Damodaran ERP, FRED rates, default WACC
+assumptions, and the US S&P 500 benchmark before preparing rows. Prepared WACC
+factor rows are inserted into the existing ClickHouse `fact_daily_factors`
+table together with the other daily factors.
+
+
 주요 옵션:
 
 ```text
@@ -341,7 +407,25 @@ python -m engine.loaders.factors --market us --stock-codes AAPL --financial-basi
 --insert-max-rows 2000000
 --progress-interval 25
 --price-path data-lake\silver\us\price\us_normalized_price.csv
+--wacc-assumptions-path data-lake\silver\wacc\wacc_assumptions.csv
+--wacc-risk-free-path data-lake\silver\wacc\risk_free_rates.csv
+--wacc-erp-path data-lake\silver\wacc\country_equity_risk_premiums.csv
+--wacc-benchmark-path data-lake\silver\wacc\benchmark_weekly_returns.csv
+--wacc-online-backfill
 ```
+
+WACC factor ids loaded to ClickHouse:
+
+```text
+wacc
+cost_of_equity
+cost_of_debt_pre_tax
+cost_of_debt_after_tax
+wacc_equity_weight
+wacc_debt_weight
+beta
+```
+
 
 US 팩터 적재는 `data-lake/silver/sec/normalized/` 재무 CSV와
 `data-lake/silver/us/price/us_normalized_price.csv`가 있을 때 daily factor

@@ -8,6 +8,7 @@ from engine.extractors.market_prices import (
     fetch_all_prices,
     fetch_all_shares,
 )
+from engine.extractors.erp import download_default_erp_inputs
 
 
 def _stock_codes() -> list[str]:
@@ -118,6 +119,12 @@ def download_all_us_prices(args: argparse.Namespace) -> None:
     )
 
 
+def download_erp_inputs(args: argparse.Namespace) -> None:
+    paths = download_default_erp_inputs(market=args.market, start_date=args.start_date, end_date=args.end_date)
+    for path in paths:
+        print(f"downloaded ERP input: {path}")
+
+
 DOWNLOAD_ACTIONS = {
     "statements": download_all_statements,
     "comments": download_all_statement_comments,
@@ -126,11 +133,15 @@ DOWNLOAD_ACTIONS = {
     "prices": download_all_prices,
     "shares": download_all_shares,
     "dividend": download_all_dividend,
+    "erp": download_erp_inputs,
+    "wacc-inputs": download_erp_inputs,
 }
 
 US_DOWNLOAD_ACTIONS = {
     "prices": download_all_us_prices,
     "sec-tickers": download_sec_company_tickers,
+    "erp": download_erp_inputs,
+    "wacc-inputs": download_erp_inputs,
 }
 
 
@@ -214,3 +225,4 @@ def _validate_date_range(start_date: str | None, end_date: str | None) -> None:
 
 if __name__ == "__main__":
     main()
+

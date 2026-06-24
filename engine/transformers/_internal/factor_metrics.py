@@ -27,6 +27,18 @@ from engine.transformers._internal.statement_files import (
     legacy_statement_snapshot_files,
     read_statement_period_frames,
 )
+from engine.transformers._internal.wacc_inputs import (
+    SILVER_WACC_ASSUMPTIONS_PATH,
+    SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH,
+    SILVER_COUNTRY_ERP_PATH,
+    SILVER_RISK_FREE_RATE_PATH,
+    calculate_rolling_beta,
+    latest_country_erp,
+    market_assumption,
+    normalize_weekly_returns_from_prices,
+    read_wacc_assumptions,
+    risk_free_series_for_market,
+)
 
 
 FINANCIAL_DIR = DATA_LAKE.silver("dart", "normalized")
@@ -80,7 +92,6 @@ NON_FACTOR_COLUMNS = set(BASE_COLUMNS) | {
     "high",
     "low",
     "adj_close",
-    "등락률",
     "fiscal_month",
     "security_id_fin",
     "stock_code_fin",
@@ -315,17 +326,29 @@ class FactorMarketDataCache:
         start_date=None,
         end_date=None,
         start_warmup_days=366 * 11,
+        wacc_risk_free_path=None,
+        wacc_erp_path=None,
+        wacc_assumptions_path=None,
+        wacc_benchmark_path=None,
     ):
         self.market = str(market or "kr").strip().lower()
         self.price_path = resolve_price_path(price_path, market=self.market)
         self.shares_path = shares_path_for_market(self.market) if shares_path is None else Path(shares_path)
         self.dividend_path = dividend_path_for_market(self.market) if dividend_path is None else Path(dividend_path)
+        self.wacc_risk_free_path = Path(wacc_risk_free_path) if wacc_risk_free_path is not None else SILVER_RISK_FREE_RATE_PATH
+        self.wacc_erp_path = Path(wacc_erp_path) if wacc_erp_path is not None else SILVER_COUNTRY_ERP_PATH
+        self.wacc_assumptions_path = Path(wacc_assumptions_path) if wacc_assumptions_path is not None else SILVER_WACC_ASSUMPTIONS_PATH
+        self.wacc_benchmark_path = Path(wacc_benchmark_path) if wacc_benchmark_path is not None else SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH
         self.start_date = pd.Timestamp(start_date) if start_date is not None else None
         self.end_date = pd.Timestamp(end_date) if end_date is not None else None
         self.start_warmup_days = int(start_warmup_days)
         self._price_groups = None
         self._shares_groups = None
         self._dividend_groups = None
+        self._risk_free_rates = None
+        self._country_erps = None
+        self._wacc_assumptions = None
+        self._benchmark_weekly_returns = None
 
     def prices(self, security_id, stock_code=None):
         price_df = self._stock_frame("price", security_id)
@@ -370,6 +393,39 @@ class FactorMarketDataCache:
             .sort_values("trade_date")
             .reset_index(drop=True)
         )
+
+    def risk_free_rates(self):
+        if self._risk_free_rates is None:
+            self._risk_free_rates = self._read_wacc_csv(self.wacc_risk_free_path)
+            if "date" in self._risk_free_rates.columns:
+                self._risk_free_rates["date"] = pd.to_datetime(self._risk_free_rates["date"], errors="coerce")
+        return self._risk_free_rates.copy()
+
+    def country_erps(self):
+        if self._country_erps is None:
+            self._country_erps = self._read_wacc_csv(self.wacc_erp_path)
+        return self._country_erps.copy()
+
+    def wacc_assumptions(self):
+        if self._wacc_assumptions is None:
+            self._wacc_assumptions = read_wacc_assumptions(self.wacc_assumptions_path)
+        return self._wacc_assumptions.copy()
+
+    def benchmark_weekly_returns(self):
+        if self._benchmark_weekly_returns is None:
+            self._benchmark_weekly_returns = self._read_wacc_csv(self.wacc_benchmark_path)
+            if "week_end_date" in self._benchmark_weekly_returns.columns:
+                self._benchmark_weekly_returns["week_end_date"] = pd.to_datetime(
+                    self._benchmark_weekly_returns["week_end_date"],
+                    errors="coerce",
+                )
+        return self._benchmark_weekly_returns.copy()
+
+    def _read_wacc_csv(self, path):
+        path = Path(path)
+        if not path.exists():
+            return pd.DataFrame()
+        return _drop_unnamed_columns(pd.read_csv(path))
 
     def _stock_frame(self, dataset, security_id):
         frame, groups = self._groups(dataset)
@@ -549,35 +605,34 @@ def extract_fallback_values(df):
     return {
         "RETAINED_EARNINGS_FALLBACK": extract_amount_by_name(
             df,
-            [r"이익\s*잉여금", r"결손금"],
+            [r"retained\s+earnings", r"accumulated\s+earnings", r"earned\s+surplus"],
             statement_types=["BS"],
         ),
         "LONG_TERM_DEBT_FALLBACK": extract_amount_by_name(
             df,
-            [r"장기\s*차입", r"사채"],
+            [r"long[-\s]?term\s+debt", r"non[-\s]?current\s+borrowings", r"bonds\s+payable"],
             statement_types=["BS"],
             absolute=True,
         ),
         "INTEREST_EXPENSE_FALLBACK": extract_amount_by_name(
             df,
-            [r"이자\s*비용"],
+            [r"interest\s+expense"],
             statement_types=["CF", "IS", "CIS"],
             absolute=True,
         ),
         "INTEREST_PAID_FALLBACK": extract_amount_by_name(
             df,
-            [r"이자\s*지급"],
+            [r"interest\s+paid"],
             statement_types=["CF", "IS", "CIS"],
             absolute=True,
         ),
         "FINANCE_COST_FALLBACK": extract_amount_by_name(
             df,
-            [r"금융\s*비용"],
+            [r"finance\s+costs?", r"financial\s+costs?"],
             statement_types=["CF", "IS", "CIS"],
             absolute=True,
         ),
     }
-
 
 def _fallback_year_range(financial_df):
     if financial_df is not None and not financial_df.empty and "fiscal_year" in financial_df.columns:
@@ -1071,6 +1126,7 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
         df["ni_parent"] + df["xrd"].fillna(0) * (1 - nopat_tax_rate.fillna(0))
     ) / df["avg_parent_equity"]
     df["debt"] = df["dltt"].fillna(0) + df["dlc"].fillna(0)
+    df["avg_debt"] = ((df["debt"] + df["debt"].shift(lag)) / 2).fillna(df["debt"])
     df["net_debt"] = df["debt"] - df["che"].fillna(0)
     df["invested_capital_financial"] = df["seq"] + df["debt"] - df["che"].fillna(0)
     df["invested_capital_operational"] = (
@@ -1319,7 +1375,7 @@ def dividend_history_metrics(events):
     history["dividend_change_momentum"] = history["dps_yoy_pct"]
     report_name = history["report_name"].fillna("").astype(str)
     history["special_dividend"] = report_name.str.contains(
-        r"special|특별",
+        r"special|extra|one[- ]?time",
         case=False,
         regex=True,
     ).astype(float)
@@ -1769,6 +1825,132 @@ def add_daily_market_valuation_factors(daily_df):
     return df
 
 
+def add_wacc_factors(
+    daily_df,
+    *,
+    market="kr",
+    stock_code=None,
+    market_data_cache=None,
+    wacc_risk_free_path=None,
+    wacc_erp_path=None,
+    wacc_assumptions_path=None,
+    wacc_benchmark_path=None,
+):
+    df = daily_df.copy()
+    market = str(market or "kr").strip().lower()
+    assumptions = (
+        market_data_cache.wacc_assumptions()
+        if market_data_cache is not None
+        else read_wacc_assumptions(wacc_assumptions_path or SILVER_WACC_ASSUMPTIONS_PATH)
+    )
+    risk_free = (
+        market_data_cache.risk_free_rates()
+        if market_data_cache is not None
+        else _read_optional_wacc_csv(wacc_risk_free_path or SILVER_RISK_FREE_RATE_PATH)
+    )
+    country_erps = (
+        market_data_cache.country_erps()
+        if market_data_cache is not None
+        else _read_optional_wacc_csv(wacc_erp_path or SILVER_COUNTRY_ERP_PATH)
+    )
+    benchmark_weekly = (
+        market_data_cache.benchmark_weekly_returns()
+        if market_data_cache is not None
+        else _read_optional_wacc_csv(wacc_benchmark_path or SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH)
+    )
+
+    default_beta = market_assumption(assumptions, market, "default_beta")
+    df["beta"] = _daily_beta_series(
+        df,
+        market=market,
+        default_beta=default_beta,
+        benchmark_weekly_returns=benchmark_weekly,
+    )
+    risk_free_rate = risk_free_series_for_market(
+        risk_free,
+        market,
+        df.index,
+        df["trade_date"] if "trade_date" in df.columns else pd.Series(pd.NaT, index=df.index),
+        assumptions,
+    )
+    equity_risk_premium = latest_country_erp(country_erps, market, assumptions)
+    credit_spread = market_assumption(assumptions, market, "credit_spread")
+
+    market_cap = positive_denominator(numeric_column(df, "market_cap"))
+    debt = numeric_column(df, "debt").fillna(0).clip(lower=0)
+    total_capital = market_cap + debt
+    df["wacc_equity_weight"] = market_cap / positive_denominator(total_capital) * 100
+    df["wacc_debt_weight"] = debt / positive_denominator(total_capital) * 100
+
+    df["cost_of_equity"] = risk_free_rate + pd.to_numeric(df["beta"], errors="coerce") * equity_risk_premium
+    tax_rate = _tax_rate_ratio(numeric_column(df, "tax_rate"))
+    avg_debt = numeric_column(df, "avg_debt")
+    avg_debt = avg_debt.where(avg_debt > 0, debt.where(debt > 0))
+    observed_debt_cost = numeric_column(df, "xint").abs() / positive_denominator(avg_debt) * 100
+    observed_debt_cost = observed_debt_cost.where((observed_debt_cost > 0) & (observed_debt_cost <= 100))
+    fallback_debt_cost = risk_free_rate + credit_spread
+    df["cost_of_debt_pre_tax"] = observed_debt_cost.fillna(fallback_debt_cost)
+    df["cost_of_debt_after_tax"] = df["cost_of_debt_pre_tax"] * (1 - tax_rate.fillna(DEFAULT_NOPAT_TAX_RATE))
+    df["wacc"] = (
+        df["wacc_equity_weight"] / 100 * df["cost_of_equity"]
+        + df["wacc_debt_weight"] / 100 * df["cost_of_debt_after_tax"]
+    )
+    return df
+
+
+def _read_optional_wacc_csv(path):
+    path = Path(path)
+    if not path.exists():
+        return pd.DataFrame()
+    return _drop_unnamed_columns(pd.read_csv(path))
+
+
+def _tax_rate_ratio(series):
+    rate = pd.to_numeric(series, errors="coerce")
+    return rate.where(rate <= 1, rate / 100).where(lambda value: (value >= 0) & (value <= 1))
+
+
+def _daily_beta_series(df, *, market, default_beta, benchmark_weekly_returns):
+    result = pd.Series(default_beta, index=df.index, dtype="float64")
+    if df.empty or benchmark_weekly_returns is None or benchmark_weekly_returns.empty:
+        return result
+    price_columns = [column for column in ["security_id", "trade_date", "adj_close", "close"] if column in df.columns]
+    if "trade_date" not in price_columns or "security_id" not in price_columns:
+        return result
+    stock_weekly = normalize_weekly_returns_from_prices(df[price_columns])
+    benchmark_weekly = _select_benchmark_weekly_returns(benchmark_weekly_returns, market)
+    beta_history = calculate_rolling_beta(stock_weekly, benchmark_weekly)
+    if beta_history.empty:
+        return result
+    left = pd.DataFrame({"trade_date": pd.to_datetime(df["trade_date"], errors="coerce")}, index=df.index)
+    beta_history = beta_history.copy()
+    beta_history["week_end_date"] = pd.to_datetime(beta_history["week_end_date"], errors="coerce")
+    merged = pd.merge_asof(
+        left.sort_values("trade_date"),
+        beta_history[["week_end_date", "beta"]].sort_values("week_end_date"),
+        left_on="trade_date",
+        right_on="week_end_date",
+        direction="backward",
+    )
+    merged.index = left.sort_values("trade_date").index
+    return pd.to_numeric(merged["beta"].reindex(df.index), errors="coerce").fillna(default_beta)
+
+
+def _select_benchmark_weekly_returns(frame, market):
+    rows = frame.copy()
+    if "market" in rows.columns:
+        rows = rows.loc[rows["market"].astype(str).str.lower() == str(market).lower()].copy()
+    if rows.empty:
+        return pd.DataFrame()
+    if "benchmark_id" in rows.columns:
+        preference = ["KOSPI", "KOSPI200", "KOSDAQ"] if str(market).lower() == "kr" else ["US_SP500", "SP500", "^GSPC"]
+        ranks = {benchmark_id: index for index, benchmark_id in enumerate(preference)}
+        rows["_rank"] = rows["benchmark_id"].astype(str).str.upper().map(ranks).fillna(len(ranks))
+        rows = rows.sort_values(["_rank", "week_end_date"])
+        rows = rows.loc[rows["_rank"] == rows["_rank"].min()].copy()
+    return rows
+
+
 def create_stock_factor_dataframe(
     stock_code,
     start_date=None,
@@ -1784,6 +1966,11 @@ def create_stock_factor_dataframe(
     market_data_cache=None,
     use_edgartools=True,
     edgartools_provider=None,
+    wacc_risk_free_path=None,
+    wacc_erp_path=None,
+    wacc_assumptions_path=None,
+    wacc_benchmark_path=None,
+    wacc_online_backfill=False,
 ):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
@@ -1896,6 +2083,16 @@ def create_stock_factor_dataframe(
         market_data_cache=market_data_cache,
     )
     daily_df = add_daily_market_valuation_factors(daily_df)
+    daily_df = add_wacc_factors(
+        daily_df,
+        market=market,
+        stock_code=stock_code,
+        market_data_cache=market_data_cache,
+        wacc_risk_free_path=wacc_risk_free_path,
+        wacc_erp_path=wacc_erp_path,
+        wacc_assumptions_path=wacc_assumptions_path,
+        wacc_benchmark_path=wacc_benchmark_path,
+    )
     daily_df = add_price_momentum_factors(daily_df)
     daily_df["updated_at"] = datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
     daily_df["currency"] = market_config(market).currency
@@ -1952,6 +2149,13 @@ def preferred_factor_columns():
         "csho",
         "mcap_mil",
         "enterprise_value",
+        "beta",
+        "cost_of_equity",
+        "cost_of_debt_pre_tax",
+        "cost_of_debt_after_tax",
+        "wacc_equity_weight",
+        "wacc_debt_weight",
+        "wacc",
         "rnd_to_market_cap",
         "gpm",
         "opm",

@@ -179,6 +179,13 @@ GROWTH_FACTORS = {
 }
 
 RISK_FACTORS = {
+    "wacc",
+    "cost_of_equity",
+    "cost_of_debt_pre_tax",
+    "cost_of_debt_after_tax",
+    "wacc_equity_weight",
+    "wacc_debt_weight",
+    "beta",
     "net_debt_to_ebitda",
     "net_debt_to_ocf",
     "net_debt_to_fcf",
@@ -306,6 +313,12 @@ FACTOR_NAME_OVERRIDES = {
     "rnd_to_market_cap": "R&D / Market Cap",
 }
 
+NEUTRAL_FACTORS = {
+    "beta",
+    "wacc_equity_weight",
+    "wacc_debt_weight",
+}
+
 LOWER_IS_BETTER = {
     "per",
     "pbr",
@@ -339,6 +352,10 @@ LOWER_IS_BETTER = {
     "debt_to_equity",
     "debt_ratio",
     "beneish_m_score",
+    "wacc",
+    "cost_of_equity",
+    "cost_of_debt_pre_tax",
+    "cost_of_debt_after_tax",
 }
 
 HIGHER_IS_BETTER = (
@@ -463,6 +480,9 @@ def create_daily_factor_rows(
     if reader_mode not in {"cached", "csv"}:
         raise ValueError("reader_mode must be 'cached' or 'csv'")
 
+    _maybe_backfill_wacc_inputs(market, start_date, end_date, kwargs)
+    kwargs["wacc_online_backfill"] = False
+
     market_data_cache = kwargs.pop("market_data_cache", None)
     if reader_mode == "cached" and market_data_cache is None:
         market_data_cache = FactorMarketDataCache(
@@ -472,6 +492,10 @@ def create_daily_factor_rows(
             dividend_path=kwargs.get("dividend_path"),
             start_date=start_date,
             end_date=end_date,
+            wacc_risk_free_path=kwargs.get("wacc_risk_free_path"),
+            wacc_erp_path=kwargs.get("wacc_erp_path"),
+            wacc_assumptions_path=kwargs.get("wacc_assumptions_path"),
+            wacc_benchmark_path=kwargs.get("wacc_benchmark_path"),
         )
 
     parallel_workers = _normalize_parallel_workers(parallel_workers)
@@ -669,6 +693,32 @@ def _flush_daily_factor_batch(
     return _insert_daily_factor_rows_by_partition(client, batch_df)
 
 
+def _maybe_backfill_wacc_inputs(market: str, start_date: str | None, end_date: str | None, kwargs: dict) -> None:
+    if not kwargs.get("wacc_online_backfill"):
+        return
+    from engine.extractors.erp import download_default_erp_inputs
+    from engine.transformers.erp import normalize_country_erp, normalize_fred_risk_free_rates
+    from engine.transformers.wacc import (
+        BRONZE_US_SP500_BENCHMARK_PATH,
+        SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH,
+        create_default_wacc_assumptions,
+        normalize_benchmark_weekly_returns,
+    )
+
+    paths = download_default_erp_inputs(market=market, start_date=start_date, end_date=end_date)
+    fred_paths = [path for path in paths if "fred" in str(path).lower()]
+    if fred_paths:
+        normalize_fred_risk_free_rates(fred_paths, output_path=kwargs.get("wacc_risk_free_path") or None)
+    normalize_country_erp(output_path=kwargs.get("wacc_erp_path") or None)
+    create_default_wacc_assumptions(output_path=kwargs.get("wacc_assumptions_path") or None)
+    if str(market or "").strip().lower() == "us" and BRONZE_US_SP500_BENCHMARK_PATH.exists():
+        sp500 = pd.read_csv(BRONZE_US_SP500_BENCHMARK_PATH)
+        benchmark = normalize_benchmark_weekly_returns(sp500, market="us", benchmark_id="US_SP500")
+        output = kwargs.get("wacc_benchmark_path") or SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH
+        output = Path(output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        benchmark.to_csv(output, index=False, encoding="utf-8-sig")
+
 def _validate_required_price_data(
     *,
     market: str,
@@ -856,6 +906,12 @@ def infer_factor_unit(factor_id: str) -> str:
         "rsi_14",
         "williams_r_14",
         "mfi_14",
+        "wacc",
+        "cost_of_equity",
+        "cost_of_debt_pre_tax",
+        "cost_of_debt_after_tax",
+        "wacc_equity_weight",
+        "wacc_debt_weight",
     }:
         return "percent"
     if factor_id == "ati":
@@ -914,6 +970,8 @@ def infer_factor_unit(factor_id: str) -> str:
 
 
 def infer_value_direction(factor_id: str) -> str:
+    if factor_id in NEUTRAL_FACTORS:
+        return "NEUTRAL"
     if factor_id in HIGHER_IS_BETTER:
         return "HIGHER_BETTER"
     if factor_id in LOWER_IS_BETTER:
@@ -958,6 +1016,9 @@ def insert_daily_factors(
     if reader_mode not in {"cached", "csv"}:
         raise ValueError("reader_mode must be 'cached' or 'csv'")
 
+    _maybe_backfill_wacc_inputs(market, start_date, end_date, kwargs)
+    kwargs["wacc_online_backfill"] = False
+
     market_data_cache = kwargs.pop("market_data_cache", None)
     if reader_mode == "cached" and market_data_cache is None:
         market_data_cache = FactorMarketDataCache(
@@ -967,6 +1028,10 @@ def insert_daily_factors(
             dividend_path=kwargs.get("dividend_path"),
             start_date=start_date,
             end_date=end_date,
+            wacc_risk_free_path=kwargs.get("wacc_risk_free_path"),
+            wacc_erp_path=kwargs.get("wacc_erp_path"),
+            wacc_assumptions_path=kwargs.get("wacc_assumptions_path"),
+            wacc_benchmark_path=kwargs.get("wacc_benchmark_path"),
         )
 
     _validate_required_price_data(
@@ -1132,6 +1197,11 @@ def main() -> None:
     parser.add_argument("--price-path")
     parser.add_argument("--shares-path")
     parser.add_argument("--dividend-path")
+    parser.add_argument("--wacc-assumptions-path")
+    parser.add_argument("--wacc-risk-free-path")
+    parser.add_argument("--wacc-erp-path")
+    parser.add_argument("--wacc-benchmark-path")
+    parser.add_argument("--wacc-online-backfill", action="store_true")
     parser.add_argument("--no-edgartools", action="store_true")
     args = parser.parse_args()
 
@@ -1151,6 +1221,11 @@ def main() -> None:
         price_path=args.price_path,
         shares_path=args.shares_path,
         dividend_path=args.dividend_path,
+        wacc_assumptions_path=args.wacc_assumptions_path,
+        wacc_risk_free_path=args.wacc_risk_free_path,
+        wacc_erp_path=args.wacc_erp_path,
+        wacc_benchmark_path=args.wacc_benchmark_path,
+        wacc_online_backfill=args.wacc_online_backfill,
         use_edgartools=not args.no_edgartools,
     )
     print(

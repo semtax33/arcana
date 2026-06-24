@@ -63,6 +63,24 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(list(result.columns), FACT_DAILY_FACTOR_COLUMNS)
         self.assertTrue(result.empty)
 
+    def test_prepare_daily_factor_rows_includes_wacc_factors(self):
+        wide_df = pd.DataFrame(
+            [
+                {
+                    "security_id": "SEC_US_AAPL",
+                    "trade_date": "2026-01-02",
+                    "currency": "USD",
+                    "wacc": 8.6,
+                    "beta": 1.2,
+                    "cost_of_equity": 10.0,
+                }
+            ]
+        )
+
+        result = prepare_daily_factor_rows(wide_df)
+
+        self.assertEqual(set(result["factor_id"]), {"wacc", "beta", "cost_of_equity"})
+
     def test_create_daily_factor_rows_reuses_market_data_cache(self):
         wide_df = pd.DataFrame(
             [
@@ -271,6 +289,13 @@ class FactorEltTest(unittest.TestCase):
             "net_margin",
             "total_asset_turnover",
             "rnd_to_market_cap",
+            "wacc",
+            "cost_of_equity",
+            "cost_of_debt_pre_tax",
+            "cost_of_debt_after_tax",
+            "wacc_equity_weight",
+            "wacc_debt_weight",
+            "beta",
         ]
 
         catalog_df = create_factor_catalog_dataframe(factor_ids)
@@ -306,6 +331,14 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(row_by_id.loc["total_asset_turnover", "unit"], "times")
         self.assertEqual(row_by_id.loc["rnd_to_market_cap", "factor_type"], "valuation")
         self.assertEqual(row_by_id.loc["rnd_to_market_cap", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["wacc", "factor_type"], "risk")
+        self.assertEqual(row_by_id.loc["wacc", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["wacc", "value_direction"], "LOWER_BETTER")
+        self.assertEqual(row_by_id.loc["cost_of_equity", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["cost_of_debt_after_tax", "value_direction"], "LOWER_BETTER")
+        self.assertEqual(row_by_id.loc["wacc_equity_weight", "value_direction"], "NEUTRAL")
+        self.assertEqual(row_by_id.loc["beta", "unit"], "ratio")
+        self.assertEqual(row_by_id.loc["beta", "value_direction"], "NEUTRAL")
         higher_better_factor_ids = [
             factor_id
             for factor_id in factor_ids
@@ -316,6 +349,13 @@ class FactorEltTest(unittest.TestCase):
                 "capex_to_sales_pct",
                 "net_debt_to_fcf",
                 "dividend_cut",
+                "wacc",
+                "cost_of_equity",
+                "cost_of_debt_pre_tax",
+                "cost_of_debt_after_tax",
+                "wacc_equity_weight",
+                "wacc_debt_weight",
+                "beta",
             }
         ]
         self.assertTrue(
