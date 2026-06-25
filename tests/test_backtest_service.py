@@ -3,7 +3,7 @@ from datetime import date
 
 import pandas as pd
 
-from api.service.backtest_service import BacktestService, _rebalance_dates
+from api.service.backtest_service import BacktestService, _rebalance_dates, _to_repository_condition
 from api.service.dto import FactorBacktestRequestDto, FactorConditionDto
 
 
@@ -223,6 +223,22 @@ class ChangingRebalanceFakeClickHouseClient(MultiRebalanceFakeClickHouseClient):
             )
         return super().query_df(query, parameters)
 class BacktestServiceTest(unittest.TestCase):
+    def test_repository_condition_canonicalizes_general_factor_aliases(self):
+        ev_condition = _to_repository_condition(
+            FactorConditionDto(factor_id="EV/NOPAT", mode="top_percent", top_percent=20)
+        )
+        working_capital_condition = _to_repository_condition(
+            FactorConditionDto(
+                factor_id="WORKING CAPITAL TURNOVER",
+                mode="threshold",
+                operator=">=",
+                value=1,
+            )
+        )
+
+        self.assertEqual(ev_condition.factor_id, "ev_to_nopat")
+        self.assertEqual(working_capital_condition.factor_id, "working_capital_turnover")
+
     def test_rebalance_dates_include_start_and_period_boundary_execution_dates(self):
         trading_days = [
             date(2026, 1, 2),

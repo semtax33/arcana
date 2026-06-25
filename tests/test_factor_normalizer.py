@@ -247,6 +247,78 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertTrue(pd.isna(latest["tax_rate"]))
         self.assertAlmostEqual(latest["nopat"], 79.0)
 
+    def test_operating_income_falls_back_to_gross_profit_less_sgna(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "PPE": 500,
+                    "EAOP": 500,
+                    "REVENUE": 1_000,
+                    "GROSS_PROFIT": 400,
+                    "SGNA": 150,
+                    "TAX_EXPENSE": 25,
+                    "PBT": 100,
+                }
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+
+        self.assertAlmostEqual(result["oiadp"].iat[0], 250.0)
+        self.assertEqual(result["operating_income_source"].iat[0], "derived_operating_income")
+        self.assertAlmostEqual(result["nopat"].iat[0], 187.5)
+        self.assertEqual(result["nopat_quality_flag"].iat[0], "derived_operating_income")
+
+    def test_reported_operating_income_is_not_overwritten_by_fallback(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "PPE": 500,
+                    "EAOP": 500,
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": 200,
+                    "GROSS_PROFIT": 400,
+                    "SGNA": 50,
+                }
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+
+        self.assertAlmostEqual(result["oiadp"].iat[0], 200.0)
+        self.assertEqual(result["operating_income_source"].iat[0], "reported_operating_income")
+
+    def test_operating_income_stays_missing_when_fallback_inputs_are_incomplete(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "PPE": 500,
+                    "EAOP": 500,
+                    "REVENUE": 1_000,
+                    "GROSS_PROFIT": 400,
+                }
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+
+        self.assertTrue(pd.isna(result["oiadp"].iat[0]))
+        self.assertTrue(pd.isna(result["nopat"].iat[0]))
+        self.assertEqual(result["operating_income_source"].iat[0], "missing_operating_income")
+        self.assertEqual(result["nopat_quality_flag"].iat[0], "missing_operating_income")
+
     def test_missing_rnd_is_imputed_zero_for_non_rnd_intensive_sector(self):
         financial_df = pd.DataFrame(
             [
@@ -475,6 +547,54 @@ class FactorNormalizerTest(unittest.TestCase):
 
         self.assertEqual(result["ev_ebitda_quality_flag"].iat[0], "missing_enterprise_value_inputs")
         self.assertEqual(result["ev_ebitda_quality_flag"].iat[1], "missing_ebitda")
+
+    def test_ev_to_nopat_requires_positive_ev_and_positive_nopat(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(
+                    ["2025-01-02", "2025-01-03", "2025-01-04", "2025-01-05", "2025-01-06"]
+                ),
+                "close": [10, 10, 10, 10, 10],
+                "volume": [100, 100, 100, 100, 100],
+                "shares": [100, 100, 100, 100, 100],
+                "market_cap": [1_000, 1_000, 1_000, 1_000, 1_000],
+                "debt": [200, 200, 200, 200, 200],
+                "che": [100, 100, 100, 1_500, 100],
+                "nopat": [100, 0, -50, 100, None],
+                "oibdp": [100, 100, 100, 100, 100],
+            }
+        )
+
+        result = add_daily_market_valuation_factors(daily_df)
+
+        self.assertAlmostEqual(result["ev_to_nopat"].iat[0], 11.0)
+        self.assertTrue(pd.isna(result["ev_to_nopat"].iat[1]))
+        self.assertEqual(result["ev_nopat_quality_flag"].iat[1], "zero_nopat")
+        self.assertTrue(pd.isna(result["ev_to_nopat"].iat[2]))
+        self.assertEqual(result["ev_nopat_quality_flag"].iat[2], "negative_nopat")
+        self.assertTrue(pd.isna(result["ev_to_nopat"].iat[3]))
+        self.assertEqual(result["ev_nopat_quality_flag"].iat[3], "non_positive_enterprise_value")
+        self.assertTrue(pd.isna(result["ev_to_nopat"].iat[4]))
+        self.assertEqual(result["ev_nopat_quality_flag"].iat[4], "missing_nopat")
+
+    def test_ev_to_nopat_flags_market_cap_only_enterprise_value_inputs(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2025-01-02"]),
+                "close": [10],
+                "volume": [100],
+                "shares": [100],
+                "market_cap": [1_000],
+                "nopat": [100],
+                "oibdp": [100],
+            }
+        )
+
+        result = add_daily_market_valuation_factors(daily_df)
+
+        self.assertAlmostEqual(result["enterprise_value"].iat[0], 1_000.0)
+        self.assertAlmostEqual(result["ev_to_nopat"].iat[0], 10.0)
+        self.assertEqual(result["ev_nopat_quality_flag"].iat[0], "missing_enterprise_value_inputs")
 
     def test_daily_fcf_shareholder_return_factors_use_cash_dividends(self):
         daily_df = pd.DataFrame(

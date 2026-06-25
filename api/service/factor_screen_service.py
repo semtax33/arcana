@@ -17,10 +17,10 @@ from api.repository.factor_screen_query import (
     screen_stocks_by_factors,
 )
 from api.service.dto import FactorConditionDto, FactorScreenRequestDto
+from api.service.factor_identity import canonical_factor_id
 from api.service.style_score_catalog import (
     DEFAULT_FACTOR_SCREEN_STYLE_PROFILE,
     DEFAULT_SCREEN_STYLE_PROFILE,
-    canonical_style_score_factor_id,
     is_style_score_factor,
     style_score_factor_metadata,
 )
@@ -82,7 +82,7 @@ class FactorScreenService:
 
 def _to_repository_condition(condition: FactorConditionDto) -> FactorCondition:
     data = _model_dump(condition)
-    data["factor_id"] = canonical_style_score_factor_id(str(data["factor_id"]))
+    data["factor_id"] = canonical_factor_id(str(data["factor_id"]))
     return FactorCondition(**data)
 
 

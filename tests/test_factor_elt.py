@@ -33,6 +33,9 @@ class FactorEltTest(unittest.TestCase):
                     "roe": 0.12,
                     "per": 11.5,
                     "na_20": None,
+                    "ev_nopat_quality_flag": "negative_nopat",
+                    "nopat_quality_flag": "reported_operating_income",
+                    "operating_income_source": "reported_operating_income",
                 }
             ]
         )
@@ -44,6 +47,9 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(set(result["factor_id"]), {"per", "roe"})
         self.assertNotIn("close", set(result["factor_id"]))
         self.assertNotIn("volume", set(result["factor_id"]))
+        self.assertNotIn("ev_nopat_quality_flag", set(result["factor_id"]))
+        self.assertNotIn("nopat_quality_flag", set(result["factor_id"]))
+        self.assertNotIn("operating_income_source", set(result["factor_id"]))
         self.assertTrue((result["financial_basis"] == "ttm").all())
         self.assertEqual(result.loc[result["factor_id"] == "roe", "factor_value"].iat[0], 0.12)
 

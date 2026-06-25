@@ -53,6 +53,21 @@ class BacktestQueryTest(unittest.TestCase):
         self.assertNotIn("selected_catalog AS", query)
         self.assertIn("FROM arcana.fact_daily_style_score AS s", query)
 
+    def test_factor_snapshot_query_canonicalizes_general_factor_aliases(self):
+        _, params = build_factor_snapshot_query(
+            [
+                FactorCondition.top("EV/NOPAT", 20),
+                FactorCondition.top("EV_TO_NOPAT", 20),
+                FactorCondition.threshold("WORKING CAPITAL TURNOVER", ">=", 1),
+            ],
+            signal_date="2026-03-31",
+        )
+
+        self.assertEqual(
+            params["factor_ids"],
+            ["ev_to_nopat", "working_capital_turnover"],
+        )
+
     def test_factor_snapshot_query_can_filter_industry_groups(self):
         query, params = build_factor_snapshot_query(
             [FactorCondition.top("roe", 30)],

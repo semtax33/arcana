@@ -10,6 +10,7 @@ from api.service.valuation_service import (
     _build_market_stats_query,
     _financial_basis_order,
     _normalize_financial_basis,
+    _normalize_factor_ids,
 )
 from api.model.valuation import ValuationBand, ValuationMetric, ValuationStockMetadata
 
@@ -269,6 +270,18 @@ class TtmHistoricalFallbackClickHouseClient(FakeClickHouseClient):
                     ]
                 )
         return super().query_df(query, parameters=params)
+
+
+class ValuationFactorIdNormalizerTest(unittest.TestCase):
+    def test_normalize_factor_ids_accepts_common_display_aliases(self):
+        self.assertEqual(
+            _normalize_factor_ids(["EV TO NOPAT", "FCF TO EV YIELD", "R&D / Market Cap"]),
+            ["ev_to_nopat", "fcf_to_ev_yield", "rnd_to_market_cap"],
+        )
+
+    def test_normalize_factor_ids_rejects_unsupported_factor_after_canonicalization(self):
+        with self.assertRaises(ValueError):
+            _normalize_factor_ids(["WORKING CAPITAL TURNOVER"])
 
 
 class MultipleValuationServiceTest(unittest.TestCase):

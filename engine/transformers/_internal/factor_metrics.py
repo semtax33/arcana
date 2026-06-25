@@ -95,6 +95,10 @@ NON_FACTOR_COLUMNS = set(BASE_COLUMNS) | {
     "fiscal_month",
     "security_id_fin",
     "stock_code_fin",
+    "ev_ebitda_quality_flag",
+    "ev_nopat_quality_flag",
+    "nopat_quality_flag",
+    "operating_income_source",
 }
 PERCENT_RATIO_FACTOR_COLUMNS = {
     "fcf_margin",
@@ -280,6 +284,12 @@ def positive_denominator(series):
 def nonzero_denominator(series):
     values = pd.to_numeric(series, errors="coerce")
     return values.where(values != 0)
+
+
+def finite_numeric_series(series):
+    values = pd.to_numeric(series, errors="coerce")
+    finite = pd.Series([math.isfinite(value) for value in values], index=values.index)
+    return values.where(values.notna() & finite)
 
 
 def safe_series_div(numerator, denominator):
@@ -1055,8 +1065,28 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["sale"] = numeric_column(df, "REVENUE")
     df["ni"] = numeric_column(df, "NET_INCOME")
     df["ni_parent"] = first_value_frame(df, "NET_INCOME_PARENT", "NET_INCOME")
-    df["oiadp"] = numeric_column(df, "OPERATING_INCOME")
     df["cogs"] = numeric_column(df, "COGS")
+    df["gross_profit"] = first_value_frame(df, "GROSS_PROFIT")
+    df["gross_profit"] = df["gross_profit"].fillna(df["sale"] - df["cogs"])
+    reported_operating_income = numeric_column(df, "OPERATING_INCOME")
+    derived_from_operating_expenses = finite_numeric_series(
+        df["gross_profit"] - numeric_column(df, "OPERATING_EXPENSES_TOTAL")
+    )
+    derived_from_sgna = finite_numeric_series(df["gross_profit"] - numeric_column(df, "SGNA"))
+    df["oiadp"] = reported_operating_income.fillna(derived_from_operating_expenses).fillna(derived_from_sgna)
+    df["operating_income_source"] = pd.Series(pd.NA, index=df.index, dtype="object")
+    df.loc[reported_operating_income.notna(), "operating_income_source"] = "reported_operating_income"
+    df.loc[
+        reported_operating_income.isna() & derived_from_operating_expenses.notna(),
+        "operating_income_source",
+    ] = "derived_operating_income"
+    df.loc[
+        reported_operating_income.isna()
+        & derived_from_operating_expenses.isna()
+        & derived_from_sgna.notna(),
+        "operating_income_source",
+    ] = "derived_operating_income"
+    df.loc[df["oiadp"].isna(), "operating_income_source"] = "missing_operating_income"
     df["xrd"], df["xrd_imputed_zero"] = impute_missing_rnd_zero(
         numeric_column(df, "RND"),
         df,
@@ -1070,8 +1100,6 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     )
     df["tax_expense"] = numeric_column(df, "TAX_EXPENSE")
     df["pbt"] = numeric_column(df, "PBT")
-    df["gross_profit"] = first_value_frame(df, "GROSS_PROFIT")
-    df["gross_profit"] = df["gross_profit"].fillna(df["sale"] - df["cogs"])
 
     cf_depreciation = numeric_column(df, "DEPRECIATION_EXPENSE")
     cf_amortization = numeric_column(df, "AMORTIZATION")
@@ -1115,6 +1143,7 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df.loc[(df["tax_rate"] < 0) | (df["tax_rate"] > 1), "tax_rate"] = math.nan
     nopat_tax_rate = tax_rate_for_nopat(df["tax_rate"], df["oiadp"])
     df["nopat"] = df["oiadp"] * (1 - nopat_tax_rate)
+    df["nopat_quality_flag"] = df["operating_income_source"]
 
     df["avg_parent_equity"] = (df["ceq"] + df["ceq"].shift(lag)) / 2
     df["roe"] = df["ni_parent"] / df["avg_parent_equity"]
@@ -1781,12 +1810,17 @@ def add_daily_market_valuation_factors(daily_df):
     df.loc[df["enterprise_value"].notna() & (df["enterprise_value"] <= 0), "ev_ebitda_quality_flag"] = "non_positive_enterprise_value"
     df.loc[oibdp == 0, "ev_ebitda_quality_flag"] = "zero_ebitda"
     df.loc[oibdp < 0, "ev_ebitda_quality_flag"] = "negative_ebitda"
+    df["ev_nopat_quality_flag"] = pd.Series(pd.NA, index=df.index, dtype="object")
+    df.loc[ev_input_missing, "ev_nopat_quality_flag"] = "missing_enterprise_value_inputs"
+    df.loc[nopat.isna(), "ev_nopat_quality_flag"] = "missing_nopat"
+    df.loc[df["enterprise_value"].notna() & (df["enterprise_value"] <= 0), "ev_nopat_quality_flag"] = "non_positive_enterprise_value"
+    df.loc[nopat == 0, "ev_nopat_quality_flag"] = "zero_nopat"
+    df.loc[nopat < 0, "ev_nopat_quality_flag"] = "negative_nopat"
     df["ebitda_to_ev"] = oibdp / valid_ev
     df["fcf_to_ev_yield"] = fcf / positive_denominator(df["enterprise_value"]) * 100
     df["ev_to_ebitda"] = valid_ev / valid_oibdp
-    df["ev_to_nopat"] = valid_ev / nopat
+    df["ev_to_nopat"] = valid_ev / positive_denominator(nopat)
     df["net_debt_to_ocf"] = net_debt / oancf
-
     df["per"] = close / eps_for_ratio
     df["pbr"] = close / df["bps"]
     df["pcr"] = close / df["cps"]

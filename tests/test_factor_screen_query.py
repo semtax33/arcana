@@ -30,6 +30,17 @@ class FactorScreenQueryTest(unittest.TestCase):
         self.assertIn("f.financial_basis = {financial_basis:String}", query)
         self.assertNotIn("HAVING factor_value >= 0", query)
 
+    def test_build_latest_factor_values_query_canonicalizes_factor_aliases(self):
+        _, params = build_latest_factor_values_query(
+            ["EV/NOPAT", "EV_TO_NOPAT", "WORKING CAPITAL TURNOVER"],
+            as_of_date="2026-05-17",
+        )
+
+        self.assertEqual(
+            params["factor_ids"],
+            ["ev_to_nopat", "working_capital_turnover"],
+        )
+
     def test_queries_default_to_annual_financial_basis(self):
         latest_query, latest_params = build_latest_factor_values_query(
             ["roe"],
@@ -97,6 +108,24 @@ class FactorScreenQueryTest(unittest.TestCase):
         self.assertIn("LIMIT {limit:UInt64}", query)
         self.assertIn("high_roe_0_value", query)
         self.assertIn("cheap_per_1_value", query)
+
+    def test_build_factor_screen_query_canonicalizes_general_factor_aliases(self):
+        _, params = build_factor_screen_query(
+            [
+                FactorCondition.top("EV/NOPAT", 20),
+                FactorCondition.top("EV_TO_NOPAT", 20),
+                FactorCondition.threshold("WORKING CAPITAL TURNOVER", ">=", 1),
+            ],
+            as_of_date="2026-05-17",
+        )
+
+        self.assertEqual(
+            params["factor_ids"],
+            ["ev_to_nopat", "working_capital_turnover"],
+        )
+        self.assertEqual(params["condition_0_factor_id"], "ev_to_nopat")
+        self.assertEqual(params["condition_1_factor_id"], "ev_to_nopat")
+        self.assertEqual(params["condition_2_factor_id"], "working_capital_turnover")
 
     def test_security_universe_exposes_security_id_alias_for_clickhouse(self):
         query, _ = build_factor_screen_query(

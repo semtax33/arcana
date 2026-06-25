@@ -19,6 +19,7 @@ from api.model.valuation import (
     ValuationMetric,
     ValuationStockMetadata,
 )
+from api.service.factor_identity import canonical_factor_id
 
 
 FACTOR_TABLES = ("fact_daily_factors",)
@@ -1768,7 +1769,11 @@ def _normalize_factor_ids(factor_ids: list[str] | None) -> list[str]:
     for factor_id in factor_ids:
         for raw_part in str(factor_id).split(","):
             raw_item = raw_part.strip().lower()
-            item = FACTOR_ALIASES.get(raw_item, raw_item)
+            if not raw_item:
+                continue
+            item = FACTOR_ALIASES.get(raw_item)
+            if item is None:
+                item = canonical_factor_id(raw_item)
             if not item:
                 continue
             if item not in SUPPORTED_MULTIPLE_FACTORS:

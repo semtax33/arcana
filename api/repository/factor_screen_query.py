@@ -7,10 +7,10 @@ import re
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
+from api.service.factor_identity import canonical_factor_id
 from api.service.style_score_catalog import (
     DEFAULT_FACTOR_SCREEN_STYLE_PROFILE,
     STYLE_SCORE_FACTORS,
-    canonical_style_score_factor_id,
     is_style_score_factor,
     style_score_factor_definition,
 )
@@ -610,7 +610,7 @@ def _rank_expression(rank_direction: RankDirection) -> str:
 
 def _coerce_condition(condition: FactorCondition | dict[str, Any]) -> FactorCondition:
     if isinstance(condition, FactorCondition):
-        factor_id = _validate_factor_id(canonical_style_score_factor_id(condition.factor_id))
+        factor_id = _validate_factor_id(canonical_factor_id(condition.factor_id))
         if factor_id == condition.factor_id:
             return condition
         return FactorCondition(
@@ -625,7 +625,7 @@ def _coerce_condition(condition: FactorCondition | dict[str, Any]) -> FactorCond
             alias=condition.alias,
         )
     if isinstance(condition, dict):
-        condition = {**condition, "factor_id": canonical_style_score_factor_id(condition["factor_id"])}
+        condition = {**condition, "factor_id": canonical_factor_id(condition["factor_id"])}
         coerced = FactorCondition(**condition)
         _validate_factor_id(coerced.factor_id)
         return coerced
@@ -703,7 +703,10 @@ def _condition_alias(condition: FactorCondition, index: int) -> str:
 def _validate_factor_ids(factor_ids: list[str]) -> list[str]:
     if not factor_ids:
         raise ValueError("factor_ids must not be empty")
-    return [_validate_factor_id(factor_id) for factor_id in factor_ids]
+    normalized = []
+    for factor_id in factor_ids:
+        normalized.append(_validate_factor_id(canonical_factor_id(factor_id)))
+    return list(dict.fromkeys(normalized))
 
 
 def _validate_factor_id(factor_id: str) -> str:
