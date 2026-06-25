@@ -109,6 +109,34 @@ class FakeClickHouseClient:
         self.closed = True
 
 
+class NoPositionsFakeClickHouseClient(FakeClickHouseClient):
+    def query_df(self, query, parameters=None):
+        parameters = parameters or {}
+        self.queries.append((query, parameters))
+        if "SELECT DISTINCT trade_date" in query:
+            return pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(
+                        ["2026-01-01", "2026-01-02", "2026-01-03"]
+                    )
+                }
+            )
+        if "latest_factor_values AS" in query:
+            return pd.DataFrame()
+        if "FROM benchmark_price_daily" in query:
+            return pd.DataFrame()
+        return pd.DataFrame()
+
+
+class NoPriceHistoryFakeClickHouseClient(FakeClickHouseClient):
+    def query_df(self, query, parameters=None):
+        parameters = parameters or {}
+        if "FROM price_daily" in query and "security_ids" in parameters:
+            self.queries.append((query, parameters))
+            return pd.DataFrame()
+        return super().query_df(query, parameters)
+
+
 class MultiRebalanceFakeClickHouseClient(FakeClickHouseClient):
     def query_df(self, query, parameters=None):
         parameters = parameters or {}
@@ -333,6 +361,51 @@ class BacktestServiceTest(unittest.TestCase):
         self.assertEqual([position.security_id for position in second_rebalance.positions], ["SEC_KR_B"])
         self.assertEqual([position.security_id for position in second_rebalance.entered_positions], ["SEC_KR_B"])
         self.assertEqual([position.security_id for position in second_rebalance.exited_positions], ["SEC_KR_A"])
+
+    def test_factor_backtest_returns_flat_curve_when_no_positions_are_selected(self):
+        client = NoPositionsFakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(factor_id="roe", mode="top_percent", top_percent=10),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 1, 3),
+            rebalance_frequency="quarterly",
+        )
+
+        result = BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        self.assertEqual(
+            [point.trade_date for point in result.equity_curve],
+            [date(2026, 1, 2), date(2026, 1, 3)],
+        )
+        self.assertTrue(all(point.strategy_nav == 1.0 for point in result.equity_curve))
+        self.assertEqual(result.summary.cumulative_return, 0.0)
+        self.assertEqual(result.annual_returns[0].strategy_return, 0.0)
+        self.assertEqual(len(result.rebalance_history), 1)
+        self.assertEqual(result.rebalance_history[0].positions, [])
+        self.assertTrue(any("flat cash equity curve" in warning for warning in result.warnings))
+
+    def test_factor_backtest_returns_flat_curve_when_price_history_is_missing(self):
+        client = NoPriceHistoryFakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(factor_id="roe", mode="top_percent", top_percent=100),
+                FactorConditionDto(factor_id="per", mode="top_percent", top_percent=100),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 1, 3),
+            rebalance_frequency="quarterly",
+            max_positions=1,
+        )
+
+        result = BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        self.assertEqual(len(result.equity_curve), 2)
+        self.assertTrue(all(point.strategy_nav == 1.0 for point in result.equity_curve))
+        self.assertEqual(result.summary.cumulative_return, 0.0)
+        self.assertEqual(len(result.rebalance_history[0].positions), 1)
+        self.assertTrue(any("usable price returns" in warning for warning in result.warnings))
 
     def test_factor_backtest_resolves_default_style_profile_for_style_score_conditions(self):
         client = FakeClickHouseClient()

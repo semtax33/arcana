@@ -84,6 +84,12 @@ class BacktestService:
                 transaction_cost_bps=float(request.transaction_cost_bps),
                 warnings=warnings,
             )
+            if not equity_points:
+                equity_points = _flat_cash_equity_points(visible_days)
+                warnings.append(
+                    "A flat cash equity curve was returned because the strategy produced no "
+                    "investable return points."
+                )
 
             benchmark_navs = self._load_benchmark_navs(
                 client,
@@ -712,6 +718,13 @@ def _deduplicate_equity_points(
 ) -> list[BacktestEquityCurvePoint]:
     by_date = {point.trade_date: point for point in points}
     return [by_date[trade_date] for trade_date in sorted(by_date)]
+
+
+def _flat_cash_equity_points(trading_days: list[date]) -> list[BacktestEquityCurvePoint]:
+    return [
+        BacktestEquityCurvePoint(trade_date=trade_date, strategy_nav=1.0)
+        for trade_date in trading_days
+    ]
 
 
 def _summary(
