@@ -390,6 +390,7 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["operating_profit_margin"], latest["opm"])
         self.assertAlmostEqual(latest["net_margin"], latest["npm"])
         self.assertAlmostEqual(latest["total_asset_turnover"], latest["asset_turnover"])
+        self.assertAlmostEqual(latest["accrual_ratio"], (50 - 40) / ((1_500 + 1_400) / 2))
         self.assertAlmostEqual(latest["sales_growth_1y"], 20.0)
         self.assertAlmostEqual(latest["sales_growth_3y"], 72.8)
         self.assertAlmostEqual(latest["sales_growth_5y"], 148.832)
@@ -442,6 +443,7 @@ class FactorNormalizerTest(unittest.TestCase):
                     "NET_INCOME": 100,
                     "NET_INCOME_PARENT": 100,
                     "OPERATING_INCOME": 150,
+                    "EBITDA": 100,
                     "CFO": 100,
                     "CAPEX_PPE": 20,
                     "DIV_PAID": 20,
@@ -469,6 +471,7 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["fcfe_payout_ratio"], 20 / 90 * 100)
         self.assertAlmostEqual(latest["capex_to_sales_pct"], 2.0)
         self.assertAlmostEqual(latest["capex_to_cfo_pct"], 20.0)
+        self.assertAlmostEqual(latest["net_debt_to_ebitda"], 250 / 100)
         self.assertAlmostEqual(latest["net_debt_to_fcf"], 250 / 80)
         self.assertAlmostEqual(latest["interest_expense_to_fcf_pct"], 5 / 80 * 100)
         self.assertAlmostEqual(latest["fcf_interest_coverage"], 16.0)

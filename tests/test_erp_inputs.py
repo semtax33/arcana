@@ -58,6 +58,19 @@ class ErpInputsTest(unittest.TestCase):
         self.assertEqual(result["country_code"].tolist(), ["US", "US"])
         self.assertEqual(result["risk_free_rate"].tolist(), [4.10, 4.12])
 
+    def test_normalize_fred_risk_free_rate_frame_accepts_uppercase_date_column(self):
+        raw = pd.DataFrame(
+            {
+                "DATE": ["2026-01-01", "2026-01-02"],
+                "DGS10": ["4.10", "."],
+            }
+        )
+
+        result = normalize_fred_risk_free_rate_frame(raw, series_id="DGS10")
+
+        self.assertEqual(result["date"].astype(str).tolist(), ["2026-01-01"])
+        self.assertEqual(result["risk_free_rate"].tolist(), [4.10])
+
     def test_normalize_country_erp_falls_back_to_kr_benchmark_minus_risk_free(self):
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -100,7 +113,7 @@ class ErpInputsTest(unittest.TestCase):
     def test_download_workflow_routes_erp_inputs_for_both_markets(self):
         with (
             patch.object(sys, "argv", ["prog", "--market", "kr", "erp"]),
-            patch.object(download_workflow, "download_default_erp_inputs", return_value=[Path("ctryprem.xlsx")]) as download,
+            patch.object(download_workflow, "download_damodaran_country_erp", return_value=Path("ctryprem.xlsx")) as download,
         ):
             download_workflow.main()
 
@@ -108,11 +121,15 @@ class ErpInputsTest(unittest.TestCase):
 
         with (
             patch.object(sys, "argv", ["prog", "--market", "us", "wacc-inputs"]),
-            patch.object(download_workflow, "download_default_erp_inputs", return_value=[Path("ctryprem.xlsx")]) as download,
+            patch.object(download_workflow, "download_damodaran_country_erp", return_value=Path("ctryprem.xlsx")) as damodaran,
+            patch.object(download_workflow, "download_fred_series", return_value=Path("rate.csv")) as fred,
+            patch.object(download_workflow, "download_us_sp500_benchmark", return_value=Path("us_sp500.csv")) as sp500,
         ):
             download_workflow.main()
 
-        download.assert_called_once()
+        damodaran.assert_called_once()
+        self.assertEqual(fred.call_count, 2)
+        sp500.assert_called_once()
 
 
 if __name__ == "__main__":

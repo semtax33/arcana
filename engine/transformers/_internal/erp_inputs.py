@@ -148,7 +148,7 @@ def normalize_fred_risk_free_rate_frame(frame: pd.DataFrame, *, series_id: str) 
     if frame is None or frame.empty:
         return pd.DataFrame(columns=RISK_FREE_COLUMNS)
 
-    date_col = _pick_column(frame, ["observation_date", "date"])
+    date_col = _pick_column(frame, ["observation_date"], required=False) or _pick_column(frame, ["date"])
     value_col = _pick_column(frame, [series_id], required=False) or frame.columns[-1]
     market, country_code = _risk_free_market(series_id)
     result = pd.DataFrame(

@@ -406,6 +406,8 @@ table together with the other daily factors.
 --insert-batch-size 100
 --insert-max-rows 2000000
 --progress-interval 25
+--factor-ids roe,per,pbr
+--only-factor-ids roe,per,pbr
 --price-path data-lake\silver\us\price\us_normalized_price.csv
 --wacc-assumptions-path data-lake\silver\wacc\wacc_assumptions.csv
 --wacc-risk-free-path data-lake\silver\wacc\risk_free_rates.csv
@@ -413,6 +415,19 @@ table together with the other daily factors.
 --wacc-benchmark-path data-lake\silver\wacc\benchmark_weekly_returns.csv
 --wacc-online-backfill
 ```
+
+Load only selected factor ids:
+
+```powershell
+python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2020-01-01 --end-date 2026-06-26 --factor-ids roe,per,pbr
+python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2020-01-01 --end-date 2026-06-26 --only-factor-ids wacc,beta,cost_of_equity
+python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2020-01-01 --end-date 2026-06-26 --wacc-online-backfill --factor-ids wacc_bundle
+```
+
+`--factor-ids` and `--only-factor-ids` are aliases. They accept comma-separated
+factor ids and only those ids are prepared for ClickHouse insertion. Unknown
+factor ids fail fast instead of producing an empty load. `wacc_bundle` expands
+to every WACC-related factor id.
 
 WACC factor ids loaded to ClickHouse:
 

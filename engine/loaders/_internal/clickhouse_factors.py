@@ -140,6 +140,7 @@ QUALITY_FACTORS = {
     "tax_rate",
     "roe",
     "roa",
+    "accrual_ratio",
     "iroe",
     "roic_financial",
     "roic_operational",
@@ -289,6 +290,7 @@ FACTOR_NAME_OVERRIDES = {
     "fcfe_payout_ratio": "FCFE Payout Ratio",
     "capex_to_sales_pct": "Capex / Sales",
     "capex_to_cfo_pct": "Capex / CFO",
+    "net_debt_to_ebitda": "Net Debt / EBITDA",
     "net_debt_to_fcf": "Net Debt / FCF",
     "fcf_interest_coverage": "FCF Interest Coverage",
     "eps_dividend_coverage": "EPS Dividend Coverage",
@@ -311,6 +313,7 @@ FACTOR_NAME_OVERRIDES = {
     "net_margin": "Net Margin",
     "total_asset_turnover": "Total Asset Turnover",
     "rnd_to_market_cap": "R&D / Market Cap",
+    "accrual_ratio": "Accrual Ratio",
 }
 
 NEUTRAL_FACTORS = {
@@ -318,6 +321,16 @@ NEUTRAL_FACTORS = {
     "wacc_equity_weight",
     "wacc_debt_weight",
 }
+
+WACC_FACTOR_IDS = [
+    "wacc",
+    "cost_of_equity",
+    "cost_of_debt_pre_tax",
+    "cost_of_debt_after_tax",
+    "wacc_equity_weight",
+    "wacc_debt_weight",
+    "beta",
+]
 
 LOWER_IS_BETTER = {
     "per",
@@ -352,6 +365,7 @@ LOWER_IS_BETTER = {
     "debt_to_equity",
     "debt_ratio",
     "beneish_m_score",
+    "accrual_ratio",
     "wacc",
     "cost_of_equity",
     "cost_of_debt_pre_tax",
@@ -482,6 +496,8 @@ def create_daily_factor_rows(
 
     _maybe_backfill_wacc_inputs(market, start_date, end_date, kwargs)
     kwargs["wacc_online_backfill"] = False
+    factor_ids = _normalize_factor_ids(kwargs.get("factor_ids"))
+    kwargs["factor_ids"] = factor_ids
 
     market_data_cache = kwargs.pop("market_data_cache", None)
     if reader_mode == "cached" and market_data_cache is None:
@@ -540,6 +556,9 @@ def _prepare_daily_factor_rows_for_stock(
     market_data_cache,
     kwargs: dict,
 ) -> tuple[str, pd.DataFrame]:
+    factor_ids = _normalize_factor_ids(kwargs.get("factor_ids"))
+    stock_kwargs = dict(kwargs)
+    stock_kwargs.pop("factor_ids", None)
     wide_df = create_stock_factor_dataframe(
         stock_code,
         financial_basis=financial_basis,
@@ -547,11 +566,12 @@ def _prepare_daily_factor_rows_for_stock(
         end_date=end_date,
         market=market,
         market_data_cache=market_data_cache,
-        **kwargs,
+        **stock_kwargs,
     )
     factor_df = prepare_daily_factor_rows(
         wide_df,
         financial_basis=financial_basis,
+        factor_ids=factor_ids,
         sort_rows=False,
     )
     return stock_code, factor_df
@@ -696,7 +716,7 @@ def _flush_daily_factor_batch(
 def _maybe_backfill_wacc_inputs(market: str, start_date: str | None, end_date: str | None, kwargs: dict) -> None:
     if not kwargs.get("wacc_online_backfill"):
         return
-    from engine.extractors.erp import download_default_erp_inputs
+    from engine.extractors.erp import BRONZE_FRED_RATE_DIR, download_default_erp_inputs
     from engine.transformers.erp import normalize_country_erp, normalize_fred_risk_free_rates
     from engine.transformers.wacc import (
         BRONZE_US_SP500_BENCHMARK_PATH,
@@ -707,6 +727,8 @@ def _maybe_backfill_wacc_inputs(market: str, start_date: str | None, end_date: s
 
     paths = download_default_erp_inputs(market=market, start_date=start_date, end_date=end_date)
     fred_paths = [path for path in paths if "fred" in str(path).lower()]
+    if not fred_paths and BRONZE_FRED_RATE_DIR.exists():
+        fred_paths = sorted(BRONZE_FRED_RATE_DIR.glob("*.csv"))
     if fred_paths:
         normalize_fred_risk_free_rates(fred_paths, output_path=kwargs.get("wacc_risk_free_path") or None)
     normalize_country_erp(output_path=kwargs.get("wacc_erp_path") or None)
@@ -933,6 +955,7 @@ def infer_factor_unit(factor_id: str) -> str:
         "shareholder_return_fcf_coverage",
         "fcfe_dividend_coverage",
         "eps_dividend_coverage",
+        "net_debt_to_ebitda",
         "net_debt_to_fcf",
         "fcf_interest_coverage",
     }:
@@ -1018,6 +1041,8 @@ def insert_daily_factors(
 
     _maybe_backfill_wacc_inputs(market, start_date, end_date, kwargs)
     kwargs["wacc_online_backfill"] = False
+    factor_ids = _normalize_factor_ids(kwargs.get("factor_ids"))
+    kwargs["factor_ids"] = factor_ids
 
     market_data_cache = kwargs.pop("market_data_cache", None)
     if reader_mode == "cached" and market_data_cache is None:
@@ -1070,7 +1095,7 @@ def insert_daily_factors(
     started_at = time.monotonic()
     try:
         if insert_catalog:
-            insert_factor_catalog(client, factor_ids=preferred_factor_columns())
+            insert_factor_catalog(client, factor_ids=factor_ids or preferred_factor_columns())
 
         resolved_stock_codes = _resolve_stock_codes(stock_codes, market=market)
         total_stocks = len(resolved_stock_codes)
@@ -1180,6 +1205,31 @@ def _parse_stock_codes(value: str | None, market: str = "kr") -> list[str] | Non
     return [item.strip().upper() for item in value.split(",") if item.strip()]
 
 
+def _normalize_factor_ids(value) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        raw_items = [item.strip() for item in value.split(",") if item.strip()]
+    else:
+        raw_items = [str(item).strip() for item in value if str(item).strip()]
+    factor_ids: list[str] = []
+    for item in raw_items:
+        key = item.lower()
+        if key in {"wacc_bundle", "wacc-related", "wacc_related", "wacc_all", "wacc_factors", "wacc-factors"}:
+            factor_ids.extend(WACC_FACTOR_IDS)
+        else:
+            factor_ids.append(key)
+    factor_ids = list(dict.fromkeys(factor_ids))
+    if not factor_ids:
+        return None
+    known_factor_ids = set(preferred_factor_columns()) | set(WACC_FACTOR_IDS)
+    unknown_factor_ids = [factor_id for factor_id in factor_ids if factor_id not in known_factor_ids]
+    if unknown_factor_ids:
+        unknown = ", ".join(unknown_factor_ids)
+        raise ValueError(f"unknown factor id(s): {unknown}")
+    return factor_ids
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Insert daily factor rows into ClickHouse.")
     parser.add_argument("--market", default="kr", choices=["kr", "us"])
@@ -1194,6 +1244,12 @@ def main() -> None:
     parser.add_argument("--progress-interval", type=int, default=25)
     parser.add_argument("--reader-mode", default="cached", choices=["cached", "csv"])
     parser.add_argument("--parallel-workers", type=int, default=1)
+    parser.add_argument(
+        "--factor-ids",
+        "--only-factor-ids",
+        dest="factor_ids",
+        help="Comma-separated factor ids to calculate and load, e.g. roe,per,wacc. Use wacc_bundle for all WACC-related factors.",
+    )
     parser.add_argument("--price-path")
     parser.add_argument("--shares-path")
     parser.add_argument("--dividend-path")
@@ -1218,6 +1274,7 @@ def main() -> None:
         progress_interval=args.progress_interval,
         reader_mode=args.reader_mode,
         parallel_workers=args.parallel_workers,
+        factor_ids=args.factor_ids,
         price_path=args.price_path,
         shares_path=args.shares_path,
         dividend_path=args.dividend_path,

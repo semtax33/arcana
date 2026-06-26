@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 import ssl
 from urllib.error import URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from engine.core.paths import DATA_LAKE
@@ -41,6 +44,8 @@ def download_fred_series(
     series_id: str,
     *,
     output_path: str | Path | None = None,
+    api_key: str | None = None,
+    timeout: int = 45,
 ) -> Path:
     series_id = str(series_id or "").strip().upper()
     if not series_id:
@@ -48,9 +53,38 @@ def download_fred_series(
 
     output = Path(output_path) if output_path is not None else BRONZE_FRED_RATE_DIR / FRED_OUTPUT_NAMES.get(series_id, f"{series_id.lower()}.csv")
     output.parent.mkdir(parents=True, exist_ok=True)
+    api_key = api_key or os.environ.get("FRED_API_KEY")
+    if api_key:
+        output.write_text(
+            _download_fred_api_csv(series_id, api_key=api_key, timeout=timeout),
+            encoding="utf-8",
+        )
+        return output
+
     url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-    output.write_bytes(_download_bytes(url, user_agent="Arcana FRED loader"))
+    output.write_bytes(_download_bytes(url, user_agent="Arcana FRED loader", timeout=timeout))
     return output
+
+
+def _download_fred_api_csv(series_id: str, *, api_key: str, timeout: int) -> str:
+    query = urlencode(
+        {
+            "series_id": series_id,
+            "api_key": api_key,
+            "file_type": "json",
+        }
+    )
+    url = f"https://api.stlouisfed.org/fred/series/observations?{query}"
+    payload = json.loads(_download_bytes(url, user_agent="Arcana FRED API loader", timeout=timeout).decode("utf-8"))
+    observations = payload.get("observations") or []
+    lines = [f"DATE,{series_id}"]
+    for observation in observations:
+        date_value = str(observation.get("date") or "").strip()
+        rate_value = str(observation.get("value") or "").strip()
+        if not date_value:
+            continue
+        lines.append(f"{date_value},{'' if rate_value == '.' else rate_value}")
+    return "\n".join(lines) + "\n"
 
 
 def download_us_sp500_benchmark(
@@ -101,10 +135,10 @@ def download_default_erp_inputs(
     return paths
 
 
-def _download_bytes(url: str, *, user_agent: str) -> bytes:
+def _download_bytes(url: str, *, user_agent: str, timeout: int = 120) -> bytes:
     request = Request(url, headers={"User-Agent": user_agent})
     try:
-        return _read_url_bytes(request)
+        return _read_url_bytes(request, timeout=timeout)
     except URLError as exc:
         if not _is_ssl_certificate_error(exc):
             raise
@@ -114,11 +148,11 @@ def _download_bytes(url: str, *, user_agent: str) -> bytes:
             raise RuntimeError(
                 "SSL certificate verification failed. Install certifi or fix the local Python certificate store."
             ) from exc
-        return _read_url_bytes(request, context=context)
+        return _read_url_bytes(request, context=context, timeout=timeout)
 
 
-def _read_url_bytes(request: Request, *, context: ssl.SSLContext | None = None) -> bytes:
-    kwargs = {"timeout": 120}
+def _read_url_bytes(request: Request, *, context: ssl.SSLContext | None = None, timeout: int = 120) -> bytes:
+    kwargs = {"timeout": timeout}
     if context is not None:
         kwargs["context"] = context
     with urlopen(request, **kwargs) as response:

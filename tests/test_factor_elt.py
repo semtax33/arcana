@@ -205,6 +205,124 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(column_names, FACT_DAILY_FACTOR_COLUMNS)
         self.assertEqual(set(inserted_df["security_id"]), {"SEC_KR_005930", "SEC_KR_000660"})
 
+    def test_insert_daily_factors_can_filter_to_wacc_bundle(self):
+        class FakeClient:
+            def __init__(self):
+                self.inserted = []
+
+            def insert_df(self, table_name, dataframe, column_names):
+                self.inserted.append((table_name, dataframe.copy(), list(column_names)))
+
+        wide_df = pd.DataFrame(
+            [
+                {
+                    "security_id": "SEC_KR_005930",
+                    "trade_date": "2026-01-02",
+                    "currency": "KRW",
+                    "roe": 10.0,
+                    "per": 11.0,
+                    "wacc": 8.5,
+                    "cost_of_equity": 9.4,
+                    "cost_of_debt_pre_tax": 5.2,
+                    "cost_of_debt_after_tax": 3.9,
+                    "wacc_equity_weight": 80.0,
+                    "wacc_debt_weight": 20.0,
+                    "beta": 1.1,
+                }
+            ]
+        )
+
+        client = FakeClient()
+        with (
+            patch("engine.loaders.factors._resolve_stock_codes", return_value=["005930"]),
+            patch("engine.loaders.factors.create_stock_factor_dataframe", return_value=wide_df),
+        ):
+            result = insert_daily_factors(
+                stock_codes=["005930"],
+                client=client,
+                reader_mode="csv",
+                factor_ids="wacc_bundle",
+            )
+
+        self.assertEqual(result.attrs["inserted_rows"], 7)
+        self.assertEqual(result.attrs["factor_count"], 7)
+        self.assertEqual(client.inserted[0][0], "factor_catalog")
+        self.assertEqual(set(client.inserted[0][1]["factor_id"]), {
+            "wacc",
+            "cost_of_equity",
+            "cost_of_debt_pre_tax",
+            "cost_of_debt_after_tax",
+            "wacc_equity_weight",
+            "wacc_debt_weight",
+            "beta",
+        })
+        inserted_df = client.inserted[1][1]
+        self.assertEqual(
+            set(inserted_df["factor_id"]),
+            {
+                "wacc",
+                "cost_of_equity",
+                "cost_of_debt_pre_tax",
+                "cost_of_debt_after_tax",
+                "wacc_equity_weight",
+                "wacc_debt_weight",
+                "beta",
+            },
+        )
+        self.assertNotIn("roe", set(inserted_df["factor_id"]))
+        self.assertNotIn("per", set(inserted_df["factor_id"]))
+
+    def test_insert_daily_factors_can_filter_to_individual_factor_ids(self):
+        class FakeClient:
+            def __init__(self):
+                self.inserted = []
+
+            def insert_df(self, table_name, dataframe, column_names):
+                self.inserted.append((table_name, dataframe.copy(), list(column_names)))
+
+        wide_df = pd.DataFrame(
+            [
+                {
+                    "security_id": "SEC_KR_005930",
+                    "trade_date": "2026-01-02",
+                    "currency": "KRW",
+                    "roe": 10.0,
+                    "per": 11.0,
+                    "pbr": 1.2,
+                    "wacc": 8.5,
+                }
+            ]
+        )
+
+        client = FakeClient()
+        with (
+            patch("engine.loaders.factors._resolve_stock_codes", return_value=["005930"]),
+            patch("engine.loaders.factors.create_stock_factor_dataframe", return_value=wide_df),
+        ):
+            result = insert_daily_factors(
+                stock_codes=["005930"],
+                client=client,
+                reader_mode="csv",
+                factor_ids="roe,per",
+            )
+
+        self.assertEqual(result.attrs["inserted_rows"], 2)
+        self.assertEqual(result.attrs["factor_count"], 2)
+        self.assertEqual(set(client.inserted[0][1]["factor_id"]), {"roe", "per"})
+        inserted_df = client.inserted[1][1]
+        self.assertEqual(set(inserted_df["factor_id"]), {"roe", "per"})
+        self.assertNotIn("pbr", set(inserted_df["factor_id"]))
+        self.assertNotIn("wacc", set(inserted_df["factor_id"]))
+
+    def test_insert_daily_factors_rejects_unknown_factor_id(self):
+        with self.assertRaisesRegex(ValueError, "unknown factor id"):
+            insert_daily_factors(
+                stock_codes=["005930"],
+                reader_mode="csv",
+                factor_ids="not_a_factor",
+                dry_run=True,
+            )
+
     def test_create_factor_catalog_dataframe_marks_technical_factors(self):
         catalog_df = create_factor_catalog_dataframe(
             [
@@ -270,6 +388,7 @@ class FactorEltTest(unittest.TestCase):
             "fcf_yield_dividend_yield_spread",
             "fcf_negative_freq_5y_pct",
             "capex_to_sales_pct",
+            "net_debt_to_ebitda",
             "net_debt_to_fcf",
             "fcf_interest_coverage",
             "eps_dividend_coverage",
@@ -294,6 +413,7 @@ class FactorEltTest(unittest.TestCase):
             "roe_growth_5y",
             "net_margin",
             "total_asset_turnover",
+            "accrual_ratio",
             "rnd_to_market_cap",
             "wacc",
             "cost_of_equity",
@@ -320,6 +440,9 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(row_by_id.loc["fcf_yield", "unit"], "percent")
         self.assertEqual(row_by_id.loc["fcf_negative_freq_5y_pct", "factor_type"], "risk")
         self.assertEqual(row_by_id.loc["capex_to_sales_pct", "value_direction"], "LOWER_BETTER")
+        self.assertEqual(row_by_id.loc["net_debt_to_ebitda", "factor_name"], "Net Debt / EBITDA")
+        self.assertEqual(row_by_id.loc["net_debt_to_ebitda", "unit"], "times")
+        self.assertEqual(row_by_id.loc["net_debt_to_ebitda", "value_direction"], "LOWER_BETTER")
         self.assertEqual(row_by_id.loc["net_debt_to_fcf", "unit"], "times")
         self.assertEqual(row_by_id.loc["fcf_interest_coverage", "unit"], "times")
         self.assertEqual(row_by_id.loc["eps_dividend_coverage", "factor_type"], "shareholder")
@@ -335,6 +458,10 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(row_by_id.loc["roe_growth_5y", "factor_type"], "growth")
         self.assertEqual(row_by_id.loc["roe_growth_5y", "unit"], "percent")
         self.assertEqual(row_by_id.loc["total_asset_turnover", "unit"], "times")
+        self.assertEqual(row_by_id.loc["accrual_ratio", "factor_name"], "Accrual Ratio")
+        self.assertEqual(row_by_id.loc["accrual_ratio", "factor_type"], "quality")
+        self.assertEqual(row_by_id.loc["accrual_ratio", "unit"], "ratio")
+        self.assertEqual(row_by_id.loc["accrual_ratio", "value_direction"], "LOWER_BETTER")
         self.assertEqual(row_by_id.loc["rnd_to_market_cap", "factor_type"], "valuation")
         self.assertEqual(row_by_id.loc["rnd_to_market_cap", "unit"], "percent")
         self.assertEqual(row_by_id.loc["wacc", "factor_type"], "risk")
@@ -353,6 +480,7 @@ class FactorEltTest(unittest.TestCase):
                 "fcf_payout_ratio",
                 "fcf_negative_freq_5y_pct",
                 "capex_to_sales_pct",
+                "net_debt_to_ebitda",
                 "net_debt_to_fcf",
                 "dividend_cut",
                 "wacc",
@@ -362,6 +490,7 @@ class FactorEltTest(unittest.TestCase):
                 "wacc_equity_weight",
                 "wacc_debt_weight",
                 "beta",
+                "accrual_ratio",
             }
         ]
         self.assertTrue(

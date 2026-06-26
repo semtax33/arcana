@@ -1151,6 +1151,7 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["roe_growth_3y"] = growth_pct(df["roe"], periods=lag * 3)
     df["roe_growth_5y"] = growth_pct(df["roe"], periods=lag * 5)
     df["roa"] = df["ni"] / df["avg_assets"]
+    df["accrual_ratio"] = (df["ni"] - df["oancf"]) / df["avg_assets"]
     df["iroe"] = (
         df["ni_parent"] + df["xrd"].fillna(0) * (1 - nopat_tax_rate.fillna(0))
     ) / df["avg_parent_equity"]
@@ -1245,7 +1246,7 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
             "cfo_yoy_pct": yoy_pct(df["oancf"], periods=lag),
             "fcf_yoy_pct": yoy_pct(df["fcf"], periods=lag),
             "ffo_yoy_pct": yoy_pct(df["ffo"], periods=lag),
-            "net_debt_to_ebitda": df["net_debt"] / df["oibdp"],
+            "net_debt_to_ebitda": df["net_debt"] / positive_denominator(df["oibdp"]),
             "fc_to_ndr": df["fcf"] / df["net_debt"],
             "icr_times": df["oancf"] / df["xint"].abs(),
             "interest_coverage": df["oiadp"] / df["xint"].abs(),
@@ -2228,6 +2229,7 @@ def preferred_factor_columns():
         "roe_growth_3y",
         "roe_growth_5y",
         "roa",
+        "accrual_ratio",
         "iroe",
         "roic_financial",
         "roic_operational",

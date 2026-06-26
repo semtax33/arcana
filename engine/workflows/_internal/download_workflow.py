@@ -3,12 +3,17 @@ from __future__ import annotations
 import argparse
 from datetime import date, datetime
 
+from engine.extractors.erp import (
+    FRED_SERIES_IDS,
+    download_damodaran_country_erp,
+    download_fred_series,
+    download_us_sp500_benchmark,
+)
 from engine.extractors.market_prices import (
     download_us_price_histories,
     fetch_all_prices,
     fetch_all_shares,
 )
-from engine.extractors.erp import download_default_erp_inputs
 
 
 def _stock_codes() -> list[str]:
@@ -120,9 +125,43 @@ def download_all_us_prices(args: argparse.Namespace) -> None:
 
 
 def download_erp_inputs(args: argparse.Namespace) -> None:
-    paths = download_default_erp_inputs(market=args.market, start_date=args.start_date, end_date=args.end_date)
-    for path in paths:
-        print(f"downloaded ERP input: {path}")
+    path = download_damodaran_country_erp()
+    print(f"downloaded ERP input [damodaran_country_erp]: {path}")
+
+
+def download_wacc_inputs(args: argparse.Namespace) -> None:
+    market = str(args.market or "kr").strip().lower()
+    downloads = [
+        ("damodaran_country_erp", download_damodaran_country_erp),
+    ]
+    downloads.extend(
+        (
+            f"fred_{series_id.lower()}",
+            lambda series_id=series_id: download_fred_series(series_id),
+        )
+        for series_id in FRED_SERIES_IDS.values()
+    )
+    if market == "us":
+        downloads.append(
+            (
+                "yfinance_us_sp500_benchmark",
+                lambda: download_us_sp500_benchmark(start_date=args.start_date, end_date=args.end_date),
+            )
+        )
+
+    failures = []
+    for label, download in downloads:
+        try:
+            path = download()
+        except Exception as exc:  # pragma: no cover - exact network errors vary by environment.
+            failures.append((label, exc))
+            print(f"failed WACC input [{label}]: {type(exc).__name__}: {exc}")
+            continue
+        print(f"downloaded WACC input [{label}]: {path}")
+
+    if failures:
+        labels = ", ".join(label for label, _ in failures)
+        raise RuntimeError(f"failed to download required WACC inputs: {labels}")
 
 
 DOWNLOAD_ACTIONS = {
@@ -134,14 +173,14 @@ DOWNLOAD_ACTIONS = {
     "shares": download_all_shares,
     "dividend": download_all_dividend,
     "erp": download_erp_inputs,
-    "wacc-inputs": download_erp_inputs,
+    "wacc-inputs": download_wacc_inputs,
 }
 
 US_DOWNLOAD_ACTIONS = {
     "prices": download_all_us_prices,
     "sec-tickers": download_sec_company_tickers,
     "erp": download_erp_inputs,
-    "wacc-inputs": download_erp_inputs,
+    "wacc-inputs": download_wacc_inputs,
 }
 
 
