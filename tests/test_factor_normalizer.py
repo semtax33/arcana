@@ -402,6 +402,39 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["operating_income_growth_3y"], 100.0)
         self.assertAlmostEqual(latest["operating_income_growth_5y"], 500.0)
 
+    def test_margin_and_roic_growth_factors_are_calculated(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2024 + index,
+                    "financial_period": f"{2024 + index}-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "EAOP": 500,
+                    "PPE": 200,
+                    "TRADE_RECEIVABLES": 100,
+                    "INVENTORIES": 100,
+                    "TRADE_PAYABLES": 50,
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": operating_income,
+                    "NET_INCOME": operating_income,
+                    "NET_INCOME_PARENT": operating_income,
+                    "CFO": operating_income + 20,
+                    "CAPEX_PPE": 20,
+                    "PBT": operating_income,
+                    "TAX_EXPENSE": 0,
+                }
+                for index, operating_income in enumerate([100, 150])
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+        latest = result.iloc[-1]
+
+        self.assertAlmostEqual(latest["operating_margin_growth_1y"], 50.0)
+        self.assertAlmostEqual(latest["fcf_margin_growth_1y"], 50.0)
+        self.assertAlmostEqual(latest["roic_operational_growth_1y"], 50.0)
+
     def test_roe_growth_factors_are_calculated(self):
         net_income_parent = [100, 100, 110, 120, 130, 140, 150]
         financial_df = pd.DataFrame(

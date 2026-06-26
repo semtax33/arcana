@@ -86,6 +86,53 @@ class WaccInputsTest(unittest.TestCase):
         self.assertAlmostEqual(result["wacc_debt_weight"].iat[0], 20.0)
         self.assertAlmostEqual(result["wacc"].iat[0], 8.6)
 
+    def test_add_wacc_factors_calculates_roic_wacc_spread_growth(self):
+        row_count = 253
+        daily = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_AAPL"] * row_count,
+                "trade_date": pd.date_range("2025-01-01", periods=row_count, freq="D"),
+                "close": [10.0] * row_count,
+                "market_cap": [800.0] * row_count,
+                "debt": [200.0] * row_count,
+                "avg_debt": [250.0] * row_count,
+                "xint": [10.0] * row_count,
+                "tax_rate": [25.0] * row_count,
+                "roic_operational": [10.0] + [20.0] * (row_count - 1),
+            }
+        )
+        risk_free = pd.DataFrame(
+            {
+                "market": ["us"],
+                "date": pd.to_datetime(["2025-01-01"]),
+                "risk_free_rate": [4.0],
+            }
+        )
+        erp = pd.DataFrame({"country_code": ["US"], "equity_risk_premium": [5.0]})
+        assumptions = pd.DataFrame(
+            {
+                "market": ["us"],
+                "country_code": ["US"],
+                "risk_free_rate": [4.0],
+                "equity_risk_premium": [5.0],
+                "credit_spread": [2.0],
+                "default_beta": [1.2],
+            }
+        )
+
+        result = add_wacc_factors(
+            daily,
+            market="us",
+            market_data_cache=_WaccCache(risk_free=risk_free, erp=erp, assumptions=assumptions),
+        )
+
+        self.assertAlmostEqual(result["roic_wacc_spread"].iat[0], 1.4)
+        self.assertAlmostEqual(result["roic_wacc_spread"].iat[-1], 11.4)
+        self.assertAlmostEqual(
+            result["roic_wacc_spread_growth_1y"].iat[-1],
+            (11.4 - 1.4) / 1.4 * 100,
+        )
+
     def test_benchmark_weekly_returns_normalizer_supports_sp500(self):
         raw = pd.DataFrame(
             {

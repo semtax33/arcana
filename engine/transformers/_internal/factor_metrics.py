@@ -1133,10 +1133,12 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["gpm"] = df["gross_profit"] / df["sale"]
     df["opm"] = df["oiadp"] / df["sale"]
     df["operating_profit_margin"] = df["opm"]
+    df["operating_margin_growth_1y"] = growth_pct(df["opm"], periods=lag)
     df["ebitda_margin"] = df["oibdp"] / df["sale"]
     df["npm"] = df["ni"] / df["sale"]
     df["net_margin"] = df["npm"]
     df["fcf_margin"] = df["fcf"] / df["sale"]
+    df["fcf_margin_growth_1y"] = growth_pct(df["fcf_margin"], periods=lag)
     df["rnd_margin"] = df["xrd"] / df["sale"]
     df["rnd_to_sales"] = df["xrd"] / df["sale"]
     df["tax_rate"] = df["tax_expense"] / df["pbt"]
@@ -1174,6 +1176,7 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     ).fillna(df["invested_capital_operational"])
     df["roic_financial"] = df["nopat"] / df["avg_ic_financial"]
     df["roic_operational"] = df["nopat"] / df["avg_ic_operational"]
+    df["roic_operational_growth_1y"] = growth_pct(df["roic_operational"], periods=lag)
 
     df["asset_turnover"] = df["sale"] / df["avg_assets"]
     df["total_asset_turnover"] = df["asset_turnover"]
@@ -1930,6 +1933,8 @@ def add_wacc_factors(
         df["wacc_equity_weight"] / 100 * df["cost_of_equity"]
         + df["wacc_debt_weight"] / 100 * df["cost_of_debt_after_tax"]
     )
+    df["roic_wacc_spread"] = numeric_column(df, "roic_operational") - df["wacc"]
+    df["roic_wacc_spread_growth_1y"] = growth_pct(df["roic_wacc_spread"], periods=252)
     return df
 
 
@@ -2199,6 +2204,7 @@ def preferred_factor_columns():
         "npm",
         "net_margin",
         "fcf_margin",
+        "fcf_margin_growth_1y",
         "fcf_payout_ratio",
         "fcf_dividend_coverage",
         "fcf_after_dividends",
@@ -2233,6 +2239,9 @@ def preferred_factor_columns():
         "iroe",
         "roic_financial",
         "roic_operational",
+        "roic_operational_growth_1y",
+        "roic_wacc_spread",
+        "roic_wacc_spread_growth_1y",
         "asset_turnover",
         "total_asset_turnover",
         "receivables_turnover",
@@ -2246,6 +2255,7 @@ def preferred_factor_columns():
         "working_capital_turnover",
         "sales_yoy_pct",
         "op_yoy_pct",
+        "operating_margin_growth_1y",
         "sales_growth_1y",
         "sales_growth_3y",
         "sales_growth_5y",
