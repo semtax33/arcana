@@ -30,6 +30,7 @@ class McpServerTest(unittest.TestCase):
         self.assertIn("get_operating_metric_drivers", tool_names)
         self.assertIn("get_estimates", tool_names)
         self.assertIn("get_estimate_consensus", tool_names)
+        self.assertIn("get_estimate_consensus_history", tool_names)
         self.assertIn("get_estimate_drivers", tool_names)
 
     def test_call_tool_returns_json_text_content(self) -> None:

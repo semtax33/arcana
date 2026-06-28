@@ -414,6 +414,28 @@ CREATE TABLE IF NOT EXISTS arcana_estimate_consensus
 ENGINE = ReplacingMergeTree(as_of_date)
 ORDER BY (stock_code, target_period, metric_id, scenario);
 
+CREATE TABLE IF NOT EXISTS arcana_estimate_consensus_history
+(
+    security_id String,
+    stock_code String,
+    target_period LowCardinality(String),
+    metric_id LowCardinality(String),
+    scenario LowCardinality(String),
+    consensus_mean Nullable(Float64),
+    consensus_median Nullable(Float64),
+    consensus_low Nullable(Float64),
+    consensus_high Nullable(Float64),
+    model_count UInt16,
+    confidence Nullable(Float64),
+    dispersion Nullable(Float64),
+    currency LowCardinality(String),
+    as_of_date Date,
+    updated_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY toYYYYMM(as_of_date)
+ORDER BY (as_of_date, stock_code, target_period, metric_id, scenario);
+
 CREATE TABLE IF NOT EXISTS arcana.fact_daily_style_score
 (
     trade_date Date,

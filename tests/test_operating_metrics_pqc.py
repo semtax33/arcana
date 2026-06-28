@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import pandas as pd
 
@@ -27,12 +28,28 @@ class RecordingClient:
         self.closed = True
 
 
+class QueryClient:
+    def __init__(self, frame):
+        self.frame = frame
+        self.queries = []
+        self.closed = False
+
+    def query_df(self, query, parameters=None):
+        self.queries.append((query, parameters or {}))
+        return self.frame.copy()
+
+    def close(self):
+        self.closed = True
+
+
 def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
     silver_root = tmp_path / "silver" / "business-info"
+    normalized_statement_dir = tmp_path / "silver" / "dart" / "normalized"
     operating_root = tmp_path / "gold" / "operating-metrics"
     estimate_root = tmp_path / "gold" / "estimates"
     stock_dir = silver_root / "123456"
     stock_dir.mkdir(parents=True)
+    normalized_statement_dir.mkdir(parents=True)
 
     table_rows = []
     metric_rows = []
@@ -77,12 +94,54 @@ def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
 
     pd.DataFrame(table_rows).to_csv(stock_dir / "kr_business_info_tables.csv", index=False, encoding="utf-8-sig")
     pd.DataFrame(metric_rows).to_csv(stock_dir / "kr_business_info_rows.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(
+        [
+            {
+                "canonical_account_id": account_id,
+                "canonical_account_name": account_id,
+                "statement_type": "IS",
+                "period": f"{year}.12",
+                "normalized_amount": value,
+                "fiscal_year": year,
+                "fiscal_month": 12,
+                "fiscal_quarter": 4,
+            }
+            for year, values in [
+                (
+                    2025,
+                    {
+                        "REVENUE": 100_000_000,
+                        "OPERATING_INCOME": 20_000_000,
+                        "NET_INCOME": 12_000_000,
+                        "NET_INCOME_PARENT": 11_000_000,
+                        "BASIC_EPS": 1100,
+                        "DILUTED_EPS": 1090,
+                    },
+                ),
+                (
+                    2026,
+                    {
+                        "REVENUE": 120_000_000,
+                        "OPERATING_INCOME": 24_000_000,
+                        "NET_INCOME": 15_000_000,
+                        "NET_INCOME_PARENT": 14_000_000,
+                        "BASIC_EPS": 1400,
+                        "DILUTED_EPS": 1380,
+                    },
+                ),
+            ]
+            for account_id, value in values.items()
+        ]
+    ).to_csv(normalized_statement_dir / "kr_normalized_123456.csv", index=False, encoding="utf-8-sig")
 
     result = create_operating_metric_gold(
         "123456",
         silver_root=silver_root,
         operating_gold_root=operating_root,
         estimate_gold_root=estimate_root,
+        normalized_statement_dir=normalized_statement_dir,
+        as_of_date="2026-06-01",
+        write_history=True,
     )
 
     assert result.raw_rows == 8
@@ -90,6 +149,11 @@ def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
     assert result.unit_rows == 2
     assert result.driver_rows == 2
     assert result.estimate_component_rows >= 4
+    assert result.estimate_consensus_history_path is not None
+    assert result.estimate_consensus_history_path.exists()
+    history_frame = pd.read_csv(result.estimate_consensus_history_path, dtype={"stock_code": str})
+    assert len(history_frame) == result.estimate_consensus_rows
+    assert set(history_frame["as_of_date"]) == {"2026-06-01"}
 
     unit_df = pd.read_csv(result.unit_economics_path)
     latest = unit_df.sort_values(["fiscal_year", "fiscal_month"]).iloc[-1]
@@ -121,12 +185,45 @@ def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
     assert consensus.source == "gold_csv"
     assert consensus.target_period == "2027.12"
     assert any(row.metric_id == "revenue" for row in consensus.rows)
+    assert any(row.metric_id == "operating_income" for row in consensus.rows)
+    assert any(row.metric_id == "net_income" for row in consensus.rows)
+    assert any(row.metric_id == "basic_eps" for row in consensus.rows)
+
+    history = estimate_service.get_consensus_history(
+        "123456",
+        start_date=pd.Timestamp("2026-06-01").date(),
+        end_date=pd.Timestamp("2026-06-01").date(),
+        metric_id="revenue",
+    )
+    assert history.source == "gold_csv_history"
+    assert history.rows
+    assert {row.metric_id for row in history.rows} == {"revenue"}
+
+    clickhouse_history = EstimateService(
+        client_factory=lambda: QueryClient(history_frame),
+        gold_root=estimate_root,
+    ).get_consensus_history("123456", metric_id="revenue")
+    assert clickhouse_history.source == "arcana_estimate_consensus_history"
+    assert clickhouse_history.rows
+
+    repeated_result = create_operating_metric_gold(
+        "123456",
+        silver_root=silver_root,
+        operating_gold_root=operating_root,
+        estimate_gold_root=estimate_root,
+        normalized_statement_dir=normalized_statement_dir,
+        as_of_date="2026-06-01",
+        write_history=True,
+    )
+    repeated_history = pd.read_csv(repeated_result.estimate_consensus_history_path, dtype={"stock_code": str})
+    assert len(repeated_history) == len(history_frame)
 
     historical_result = create_operating_metric_gold(
         "123456",
         silver_root=silver_root,
         operating_gold_root=operating_root,
         estimate_gold_root=estimate_root,
+        normalized_statement_dir=normalized_statement_dir,
         estimate_all_periods=True,
     )
     historical_consensus = pd.read_csv(historical_result.estimate_consensus_path, dtype={"target_period": str})
@@ -139,11 +236,30 @@ def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
         client=client,
         operating_gold_root=operating_root,
         estimate_gold_root=estimate_root,
+        load_history=True,
     )
     assert counts["business_operating_metric"] == 8
     assert counts["arcana_estimate_consensus"] >= 4
+    assert counts["arcana_estimate_consensus_history"] >= 4
+    assert any(table_name == "arcana_estimate_consensus_history" for table_name, _, _ in client.inserts)
+    history_insert = next(frame for table_name, frame, _ in client.inserts if table_name == "arcana_estimate_consensus_history")
+    assert set(history_insert["as_of_date"]) == {date(2026, 6, 1)}
     assert client.inserts
     for _, frame, _ in client.inserts:
         if "stock_code" in frame.columns and not frame.empty:
             assert isinstance(frame["stock_code"].iloc[0], str)
             assert frame["stock_code"].iloc[0] == "123456"
+
+    override_client = RecordingClient()
+    load_operating_metrics(
+        ["123456"],
+        client=override_client,
+        operating_gold_root=operating_root,
+        estimate_gold_root=estimate_root,
+        load_history=True,
+        as_of_date="2026-06-28",
+    )
+    override_history_insert = next(
+        frame for table_name, frame, _ in override_client.inserts if table_name == "arcana_estimate_consensus_history"
+    )
+    assert set(override_history_insert["as_of_date"]) == {date(2026, 6, 28)}

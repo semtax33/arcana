@@ -386,6 +386,7 @@ python -m engine.transformers.operating_metrics --stock-codes 005930
 python -m engine.workflows.operating_metrics --stock-codes 005930
 python -m engine.transformers.operating_metrics --all-periods
 python -m engine.transformers.operating_metrics --start-period 2023.12 --end-period 2026.03
+python -m engine.workflows.operating_metrics --stock-codes 005930 --as-of-date 2026-06-28 --write-history
 ```
 
 Load gold CSV to ClickHouse:
@@ -397,12 +398,14 @@ python -m engine.workflows.operating_metrics --stock-codes 005930 --load --dry-r
 python -m engine.workflows.operating_metrics --stock-codes 005930 --load
 python -m engine.workflows.operating_metrics --all-periods --load --dry-run
 python -m engine.workflows.operating_metrics --start-period 2023.12 --end-period 2026.03 --load
+python -m engine.workflows.operating_metrics --stock-codes 005930 --as-of-date 2026-06-28 --write-history --load --load-history --dry-run
+python -m engine.loaders.operating_metrics --load-history --as-of-date 2026-06-28
 ```
 
 `--dry-run`은 gold CSV row count와 schema 준비만 확인하고 ClickHouse insert는 수행하지
 않습니다. `--stock-codes`를 생략하면 `data-lake/silver/dart/business-info/` 또는
 `data-lake/gold/operating-metrics/` 아래의 종목 디렉터리를 기준으로 처리합니다.
-transformer/workflow는 기본적으로 stock 단위 진행상황을 출력합니다. `--progress-interval 100`으로
+transformer/workflow/loader는 기본적으로 stock 단위 진행상황을 출력합니다. `--progress-interval 100`으로
 출력 간격을 조정하거나 `--no-progress`로 끌 수 있고, 특정 종목 실패 시 즉시 중단하려면
 `--fail-fast`를 사용합니다.
 
@@ -418,6 +421,20 @@ transformer/workflow는 기본적으로 stock 단위 진행상황을 출력합�
 metric별로 집계해 median/low/high/dispersion을 계산합니다. C와 gross profit은 공시 원가 단서가
 있을 때만 계산하고, 없으면 비워둡니다.
 
+normalized 재무제표 CSV가 있으면 유사 컨센서스에 `operating_income`, `net_income`,
+`net_income_parent`, `basic_eps`, `diluted_eps`도 함께 추가합니다. 기본 입력 경로는
+`data-lake/silver/dart/normalized/kr_normalized_{stock_code}.csv`이며, 다른 경로를 쓰려면
+`--normalized-statement-dir`로 지정합니다. 영업이익/순이익은 과거 YoY trend와 P/Q/C 매출
+forecast 기반 margin bridge를 사용하고, EPS는 순이익 bridge 또는 성장률 fallback으로 계산합니다.
+
+유사 컨센서스 히스토리가 필요하면 `--write-history`를 사용합니다. 최신
+`arcana_estimate_consensus.csv`는 기존처럼 갱신하고, 추가로
+`data-lake/gold/estimates/{stock_code}/history/arcana_estimate_consensus_{as_of_date}.csv`
+를 저장합니다. ClickHouse에 히스토리를 적재하려면 workflow 또는 loader에 `--load-history`를
+함께 지정합니다. loader는 history 파일을 적재할 때 기본적으로 파일명 날짜를 `as_of_date`로 사용합니다.
+이미 생성된 CSV를 재생성하지 않고 적재 기준일만 강제로 맞추려면 loader에 `--as-of-date YYYY-MM-DD`를
+지정합니다.
+
 API는 ClickHouse를 먼저 조회하고 실패하거나 데이터가 없으면 gold CSV로 fallback합니다.
 
 ```text
@@ -426,6 +443,7 @@ GET /api/operating-metrics/{stock_code}/unit-economics
 GET /api/operating-metrics/{stock_code}/drivers
 GET /api/estimates/{stock_code}
 GET /api/estimates/{stock_code}/consensus
+GET /api/estimates/{stock_code}/consensus/history
 GET /api/estimates/{stock_code}/drivers
 ```
 

@@ -14,6 +14,10 @@ def run_operating_metrics_workflow(
     start_period: str | None = None,
     end_period: str | None = None,
     all_periods: bool = False,
+    as_of_date: str | None = None,
+    write_history: bool = False,
+    load_history: bool = False,
+    normalized_statement_dir: str | None = None,
     progress: bool = True,
     progress_interval: int = 25,
     fail_fast: bool = False,
@@ -23,11 +27,25 @@ def run_operating_metrics_workflow(
         estimate_start_period=start_period,
         estimate_end_period=end_period,
         estimate_all_periods=all_periods,
+        as_of_date=as_of_date,
+        write_history=write_history,
+        **({"normalized_statement_dir": normalized_statement_dir} if normalized_statement_dir else {}),
         progress=progress,
         progress_interval=progress_interval,
         continue_on_error=not fail_fast,
     )
-    load_counts = load_operating_metrics(stock_codes, dry_run=dry_run) if load else {}
+    load_counts = (
+        load_operating_metrics(
+            stock_codes,
+            dry_run=dry_run,
+            load_history=load_history,
+            as_of_date=as_of_date,
+            progress=progress,
+            progress_interval=progress_interval,
+        )
+        if load
+        else {}
+    )
     return {"transform_results": results, "load_counts": load_counts}
 
 
@@ -45,6 +63,10 @@ def main() -> None:
     parser.add_argument("--start-period", help="First source actual period for estimates, e.g. 2023.12.")
     parser.add_argument("--end-period", help="Last source actual period for estimates, e.g. 2026.03.")
     parser.add_argument("--all-periods", action="store_true")
+    parser.add_argument("--as-of-date")
+    parser.add_argument("--write-history", action="store_true")
+    parser.add_argument("--load-history", action="store_true")
+    parser.add_argument("--normalized-statement-dir")
     parser.add_argument("--progress-interval", type=int, default=25)
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
@@ -56,6 +78,10 @@ def main() -> None:
         start_period=args.start_period,
         end_period=args.end_period,
         all_periods=args.all_periods,
+        as_of_date=args.as_of_date,
+        write_history=args.write_history,
+        load_history=args.load_history,
+        normalized_statement_dir=args.normalized_statement_dir,
         progress=not args.no_progress,
         progress_interval=args.progress_interval,
         fail_fast=args.fail_fast,

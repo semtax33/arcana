@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from engine.core.paths import DATA_LAKE
+from engine.core.paths import DATA_LAKE, statement_symbol_name
 from engine.transformers._internal.estimate_consensus import build_consensus
 from engine.transformers._internal.pqc import assumptions_json, forecast_unit_economics, pct_change, period_end_date
 
@@ -21,6 +21,7 @@ from engine.transformers._internal.pqc import assumptions_json, forecast_unit_ec
 SILVER_ROOT = DATA_LAKE.silver("dart", "business-info")
 OPERATING_METRIC_GOLD_ROOT = DATA_LAKE.root / "gold" / "operating-metrics"
 ESTIMATE_GOLD_ROOT = DATA_LAKE.root / "gold" / "estimates"
+NORMALIZED_STATEMENT_DIR = DATA_LAKE.silver("dart", "normalized")
 
 RAW_COLUMNS = [
     "security_id",
@@ -146,6 +147,14 @@ COMPONENT_COLUMNS = [
 
 MODEL_VERSION = "pqc_mvp_v1"
 _NUMBER_RE = re.compile(r"[-+△▲]?\s*\d[\d,]*(?:\.\d+)?")
+FINANCIAL_ESTIMATE_ACCOUNTS = {
+    "OPERATING_INCOME": "operating_income",
+    "NET_INCOME": "net_income",
+    "NET_INCOME_PARENT": "net_income_parent",
+    "BASIC_EPS": "basic_eps",
+    "DILUTED_EPS": "diluted_eps",
+}
+FINANCIAL_INTERNAL_ACCOUNTS = {"REVENUE", *FINANCIAL_ESTIMATE_ACCOUNTS}
 
 
 @dataclass(frozen=True)
@@ -156,12 +165,14 @@ class TransformResult:
     driver_path: Path
     estimate_component_path: Path
     estimate_consensus_path: Path
+    estimate_consensus_history_path: Path | None
     raw_rows: int
     metric_rows: int
     unit_rows: int
     driver_rows: int
     estimate_component_rows: int
     estimate_consensus_rows: int
+    estimate_consensus_history_rows: int
 
 
 def create_operating_metric_gold(
@@ -170,11 +181,15 @@ def create_operating_metric_gold(
     silver_root: str | Path = SILVER_ROOT,
     operating_gold_root: str | Path = OPERATING_METRIC_GOLD_ROOT,
     estimate_gold_root: str | Path = ESTIMATE_GOLD_ROOT,
+    normalized_statement_dir: str | Path = NORMALIZED_STATEMENT_DIR,
     estimate_start_period: str | None = None,
     estimate_end_period: str | None = None,
     estimate_all_periods: bool = False,
+    as_of_date: str | None = None,
+    write_history: bool = False,
 ) -> TransformResult:
     stock_code = normalize_stock_code(stock_code)
+    as_of_date_text = _resolve_as_of_date_text(as_of_date)
     stock_silver_dir = Path(silver_root) / stock_code
     table_path = stock_silver_dir / "kr_business_info_tables.csv"
     row_path = stock_silver_dir / "kr_business_info_rows.csv"
@@ -193,7 +208,19 @@ def create_operating_metric_gold(
         start_period=estimate_start_period,
         end_period=estimate_end_period,
         all_periods=estimate_all_periods,
+        as_of_date=as_of_date_text,
     )
+    financial_component_df = build_financial_statement_estimate_components(
+        stock_code,
+        pqc_component_df=component_df,
+        normalized_statement_dir=normalized_statement_dir,
+        start_period=estimate_start_period,
+        end_period=estimate_end_period,
+        all_periods=estimate_all_periods,
+        as_of_date=as_of_date_text,
+    )
+    if not financial_component_df.empty:
+        component_df = pd.concat([component_df, financial_component_df], ignore_index=True)
     consensus_df = build_consensus(component_df)
 
     operating_dir = Path(operating_gold_root) / stock_code
@@ -204,6 +231,9 @@ def create_operating_metric_gold(
     driver_path = operating_dir / "business_unit_economics_driver.csv"
     component_path = estimate_dir / "arcana_estimate_component.csv"
     consensus_path = estimate_dir / "arcana_estimate_consensus.csv"
+    consensus_history_path = (
+        estimate_dir / "history" / f"arcana_estimate_consensus_{as_of_date_text}.csv" if write_history else None
+    )
 
     _write_csv(raw_path, raw_df, RAW_COLUMNS)
     _write_csv(metric_path, metric_df, METRIC_COLUMNS)
@@ -211,6 +241,8 @@ def create_operating_metric_gold(
     _write_csv(driver_path, driver_df, DRIVER_COLUMNS)
     _write_csv(component_path, component_df, COMPONENT_COLUMNS)
     _write_csv(consensus_path, consensus_df, list(consensus_df.columns))
+    if consensus_history_path is not None:
+        _write_csv(consensus_history_path, consensus_df, list(consensus_df.columns))
 
     return TransformResult(
         raw_path=raw_path,
@@ -219,12 +251,14 @@ def create_operating_metric_gold(
         driver_path=driver_path,
         estimate_component_path=component_path,
         estimate_consensus_path=consensus_path,
+        estimate_consensus_history_path=consensus_history_path,
         raw_rows=len(raw_df),
         metric_rows=len(metric_df),
         unit_rows=len(unit_df),
         driver_rows=len(driver_df),
         estimate_component_rows=len(component_df),
         estimate_consensus_rows=len(consensus_df),
+        estimate_consensus_history_rows=len(consensus_df) if consensus_history_path is not None else 0,
     )
 
 
@@ -523,6 +557,7 @@ def build_estimate_components(
     start_period: str | None = None,
     end_period: str | None = None,
     all_periods: bool = False,
+    as_of_date: str | None = None,
 ) -> pd.DataFrame:
     if unit_df.empty:
         return pd.DataFrame(columns=COMPONENT_COLUMNS)
@@ -530,7 +565,7 @@ def build_estimate_components(
         (row["stock_code"], row["product_id"], int(row["fiscal_year"]), int(row["fiscal_month"])): pd.Series(row)
         for row in driver_df.to_dict("records")
     }
-    as_of_date = _now_date_text()
+    as_of_date_text = _resolve_as_of_date_text(as_of_date)
     selected_periods = _select_estimate_source_periods(
         unit_df,
         start_period=start_period,
@@ -548,7 +583,7 @@ def build_estimate_components(
             _build_estimate_component_rows_for_period(
                 period_units,
                 driver_lookup=driver_lookup,
-                as_of_date=as_of_date,
+                as_of_date=as_of_date_text,
             )
         )
     return pd.DataFrame(rows, columns=COMPONENT_COLUMNS)
@@ -644,6 +679,337 @@ def _build_estimate_component_rows_for_period(
                 }
             )
     return rows
+
+
+def build_financial_statement_estimate_components(
+    stock_code: str,
+    *,
+    pqc_component_df: pd.DataFrame,
+    normalized_statement_dir: str | Path = NORMALIZED_STATEMENT_DIR,
+    start_period: str | None = None,
+    end_period: str | None = None,
+    all_periods: bool = False,
+    as_of_date: str | None = None,
+) -> pd.DataFrame:
+    financial_df = _load_financial_estimate_source(stock_code, normalized_statement_dir)
+    if financial_df.empty:
+        return pd.DataFrame(columns=COMPONENT_COLUMNS)
+
+    selected_periods = _select_financial_source_periods(
+        financial_df,
+        start_period=start_period,
+        end_period=end_period,
+        all_periods=all_periods,
+    )
+    if not selected_periods:
+        return pd.DataFrame(columns=COMPONENT_COLUMNS)
+
+    lookup = {
+        (row["canonical_id"], int(row["fiscal_year"]), int(row["fiscal_month"])): row
+        for row in financial_df.to_dict("records")
+    }
+    pqc_revenue = _pqc_revenue_estimate_lookup(pqc_component_df)
+    as_of_date_text = _resolve_as_of_date_text(as_of_date)
+    rows: list[dict[str, Any]] = []
+
+    for fiscal_year, fiscal_month in selected_periods:
+        target_period = f"{fiscal_year + 1}.{fiscal_month:02d}"
+        source_actual_period = f"{fiscal_year}.{fiscal_month:02d}"
+        revenue_current = _financial_lookup_value(lookup, "REVENUE", fiscal_year, fiscal_month)
+        revenue_previous = _financial_lookup_value(lookup, "REVENUE", fiscal_year - 1, fiscal_month)
+        revenue_next = pqc_revenue.get((target_period, source_actual_period))
+
+        net_income_current = _financial_lookup_value(lookup, "NET_INCOME_PARENT", fiscal_year, fiscal_month)
+        if net_income_current is None:
+            net_income_current = _financial_lookup_value(lookup, "NET_INCOME", fiscal_year, fiscal_month)
+
+        net_income_next = _estimate_financial_value(
+            lookup,
+            account_id="NET_INCOME_PARENT",
+            fiscal_year=fiscal_year,
+            fiscal_month=fiscal_month,
+            revenue_current=revenue_current,
+            revenue_previous=revenue_previous,
+            revenue_next=revenue_next,
+        )
+        if net_income_next is None:
+            net_income_next = _estimate_financial_value(
+                lookup,
+                account_id="NET_INCOME",
+                fiscal_year=fiscal_year,
+                fiscal_month=fiscal_month,
+                revenue_current=revenue_current,
+                revenue_previous=revenue_previous,
+                revenue_next=revenue_next,
+            )
+
+        for account_id, metric_id in FINANCIAL_ESTIMATE_ACCOUNTS.items():
+            current_value = _financial_lookup_value(lookup, account_id, fiscal_year, fiscal_month)
+            if current_value is None:
+                continue
+            previous_value = _financial_lookup_value(lookup, account_id, fiscal_year - 1, fiscal_month)
+            variants = _financial_pseudo_consensus_variants(
+                account_id=account_id,
+                current_value=current_value,
+                previous_value=previous_value,
+                revenue_current=revenue_current,
+                revenue_previous=revenue_previous,
+                revenue_next=revenue_next,
+                net_income_current=net_income_current,
+                net_income_next=net_income_next,
+            )
+            for variant in variants:
+                rows.append(
+                    {
+                        "security_id": f"SEC_KR_{normalize_stock_code(stock_code)}",
+                        "stock_code": normalize_stock_code(stock_code),
+                        "target_period": target_period,
+                        "metric_id": metric_id,
+                        "model_id": variant["model_id"],
+                        "scenario": "base",
+                        "estimate_value": variant["estimate_value"],
+                        "currency": "KRW",
+                        "source_actual_period": source_actual_period,
+                        "assumptions_json": assumptions_json(
+                            {
+                                "formula": variant["method"],
+                                "source": "normalized_financial_statement",
+                                "canonical_account_id": account_id,
+                                "current_value": current_value,
+                                "previous_year_value": previous_value,
+                                "revenue_current": revenue_current,
+                                "revenue_previous": revenue_previous,
+                                "revenue_next": revenue_next,
+                                "net_income_current": net_income_current,
+                                "net_income_next": net_income_next,
+                            }
+                        ),
+                        "confidence": variant["confidence"],
+                        "quality_flags": "FINANCIAL_STATEMENT_BASED",
+                        "as_of_date": as_of_date_text,
+                    }
+                )
+
+    return pd.DataFrame(rows, columns=COMPONENT_COLUMNS)
+
+
+def _load_financial_estimate_source(stock_code: str, normalized_statement_dir: str | Path) -> pd.DataFrame:
+    path = Path(normalized_statement_dir) / statement_symbol_name(normalize_stock_code(stock_code), market="kr")
+    if not path.exists():
+        return pd.DataFrame(columns=["canonical_id", "fiscal_year", "fiscal_month", "value"])
+
+    try:
+        frame = pd.read_csv(path, dtype=str).fillna("")
+    except Exception:
+        return pd.DataFrame(columns=["canonical_id", "fiscal_year", "fiscal_month", "value"])
+
+    required = {"canonical_account_id", "fiscal_year", "fiscal_month", "normalized_amount"}
+    if not required.issubset(frame.columns):
+        return pd.DataFrame(columns=["canonical_id", "fiscal_year", "fiscal_month", "value"])
+
+    frame = frame[frame["canonical_account_id"].isin(FINANCIAL_INTERNAL_ACCOUNTS)].copy()
+    if "statement_type" in frame.columns:
+        frame = frame[frame["statement_type"].astype(str).str.upper().isin({"IS", "CIS"})]
+    if frame.empty:
+        return pd.DataFrame(columns=["canonical_id", "fiscal_year", "fiscal_month", "value"])
+
+    frame["value"] = pd.to_numeric(frame["normalized_amount"], errors="coerce")
+    frame["fiscal_year"] = pd.to_numeric(frame["fiscal_year"], errors="coerce")
+    frame["fiscal_month"] = pd.to_numeric(frame["fiscal_month"], errors="coerce")
+    frame = frame.dropna(subset=["value", "fiscal_year", "fiscal_month"])
+    if frame.empty:
+        return pd.DataFrame(columns=["canonical_id", "fiscal_year", "fiscal_month", "value"])
+
+    rows: list[dict[str, Any]] = []
+    for key, group in frame.groupby(["canonical_account_id", "fiscal_year", "fiscal_month"], dropna=False):
+        selected = group.iloc[group["value"].abs().argmax()]
+        rows.append(
+            {
+                "canonical_id": str(key[0]).strip().upper(),
+                "fiscal_year": int(key[1]),
+                "fiscal_month": int(key[2]),
+                "value": float(selected["value"]),
+            }
+        )
+    return pd.DataFrame(rows, columns=["canonical_id", "fiscal_year", "fiscal_month", "value"])
+
+
+def _select_financial_source_periods(
+    financial_df: pd.DataFrame,
+    *,
+    start_period: str | None,
+    end_period: str | None,
+    all_periods: bool,
+) -> list[tuple[int, int]]:
+    visible_df = financial_df[financial_df["canonical_id"].isin(FINANCIAL_ESTIMATE_ACCOUNTS)].copy()
+    if visible_df.empty:
+        return []
+
+    period_frame = visible_df[["fiscal_year", "fiscal_month"]].drop_duplicates().sort_values(
+        ["fiscal_year", "fiscal_month"]
+    )
+    periods = [(int(row["fiscal_year"]), int(row["fiscal_month"])) for row in period_frame.to_dict("records")]
+    if not periods:
+        return []
+
+    start_key = _period_filter_key(start_period)
+    end_key = _period_filter_key(end_period)
+    if not all_periods and start_key is None and end_key is None:
+        return [periods[-1]]
+
+    selected = []
+    for fiscal_year, fiscal_month in periods:
+        key = fiscal_year * 100 + fiscal_month
+        if start_key is not None and key < start_key:
+            continue
+        if end_key is not None and key > end_key:
+            continue
+        selected.append((fiscal_year, fiscal_month))
+    return selected
+
+
+def _pqc_revenue_estimate_lookup(component_df: pd.DataFrame) -> dict[tuple[str, str], float]:
+    if component_df.empty or "metric_id" not in component_df.columns:
+        return {}
+    revenue_rows = component_df[
+        (component_df["metric_id"].astype(str) == "revenue")
+        & (component_df["model_id"].astype(str) == "P/Q/C Driver")
+    ]
+    lookup: dict[tuple[str, str], float] = {}
+    for row in revenue_rows.to_dict("records"):
+        value = _to_float(row.get("estimate_value"))
+        if value is None:
+            continue
+        lookup[(str(row.get("target_period")), str(row.get("source_actual_period")))] = value
+    return lookup
+
+
+def _financial_lookup_value(
+    lookup: dict[tuple[str, int, int], dict[str, Any]],
+    account_id: str,
+    fiscal_year: int,
+    fiscal_month: int,
+) -> float | None:
+    row = lookup.get((account_id, int(fiscal_year), int(fiscal_month)))
+    if row is None:
+        return None
+    return _to_float(row.get("value"))
+
+
+def _estimate_financial_value(
+    lookup: dict[tuple[str, int, int], dict[str, Any]],
+    *,
+    account_id: str,
+    fiscal_year: int,
+    fiscal_month: int,
+    revenue_current: float | None,
+    revenue_previous: float | None,
+    revenue_next: float | None,
+) -> float | None:
+    current = _financial_lookup_value(lookup, account_id, fiscal_year, fiscal_month)
+    if current is None:
+        return None
+    previous = _financial_lookup_value(lookup, account_id, fiscal_year - 1, fiscal_month)
+    historical_growth = pct_change(current, previous)
+    if revenue_current not in (None, 0) and revenue_next is not None:
+        return revenue_next * (current / revenue_current)
+    if historical_growth is not None:
+        return current * (1 + historical_growth / 100)
+    return current
+
+
+def _financial_pseudo_consensus_variants(
+    *,
+    account_id: str,
+    current_value: float,
+    previous_value: float | None,
+    revenue_current: float | None,
+    revenue_previous: float | None,
+    revenue_next: float | None,
+    net_income_current: float | None,
+    net_income_next: float | None,
+) -> list[dict[str, Any]]:
+    historical_growth = pct_change(current_value, previous_value)
+    revenue_growth = pct_change(revenue_next, revenue_current)
+    historical_value = _apply_growth_or_current(current_value, historical_growth)
+
+    if account_id in {"BASIC_EPS", "DILUTED_EPS"}:
+        margin_value = _eps_from_income_or_growth(
+            current_value,
+            net_income_current=net_income_current,
+            net_income_next=net_income_next,
+            historical_growth=historical_growth,
+        )
+        pqc_value = _apply_growth_or_current(current_value, revenue_growth if revenue_growth is not None else historical_growth)
+    else:
+        margin_value = _margin_bridge_value(
+            current_value=current_value,
+            previous_value=previous_value,
+            revenue_current=revenue_current,
+            revenue_previous=revenue_previous,
+            revenue_next=revenue_next,
+        )
+        pqc_value = margin_value if margin_value is not None else historical_value
+
+    base_confidence = 0.70 if previous_value is not None else 0.55
+    return [
+        {
+            "model_id": "Historical Trend",
+            "estimate_value": historical_value,
+            "confidence": base_confidence,
+            "method": "current financial statement value grown by year-over-year trend",
+        },
+        {
+            "model_id": "Margin Bridge",
+            "estimate_value": margin_value if margin_value is not None else historical_value,
+            "confidence": max(0.05, base_confidence * 0.85),
+            "method": "current income margin applied to P/Q/C revenue forecast, or EPS bridged from net income",
+        },
+        {
+            "model_id": "P/Q/C Driver",
+            "estimate_value": pqc_value if pqc_value is not None else historical_value,
+            "confidence": max(0.05, base_confidence * 0.80),
+            "method": "P/Q/C revenue growth or margin bridge applied to financial metric",
+        },
+    ]
+
+
+def _apply_growth_or_current(current_value: float, growth_pct: float | None) -> float:
+    if growth_pct is None:
+        return current_value
+    return current_value * (1 + growth_pct / 100)
+
+
+def _margin_bridge_value(
+    *,
+    current_value: float,
+    previous_value: float | None,
+    revenue_current: float | None,
+    revenue_previous: float | None,
+    revenue_next: float | None,
+) -> float | None:
+    if revenue_current in (None, 0) or revenue_next is None:
+        return None
+    current_margin = current_value / revenue_current
+    previous_margin = None
+    if previous_value is not None and revenue_previous not in (None, 0):
+        previous_margin = previous_value / revenue_previous
+    margin = current_margin if previous_margin is None else current_margin + 0.5 * (current_margin - previous_margin)
+    return revenue_next * margin
+
+
+def _eps_from_income_or_growth(
+    current_eps: float,
+    *,
+    net_income_current: float | None,
+    net_income_next: float | None,
+    historical_growth: float | None,
+) -> float:
+    if net_income_current not in (None, 0) and net_income_next is not None:
+        return current_eps * (net_income_next / net_income_current)
+    if historical_growth is not None:
+        return current_eps * (1 + historical_growth / 100)
+    return current_eps
 
 
 def infer_metric_id(label: str, raw_value: str, context: str, row_text: str) -> str | None:
@@ -1022,6 +1388,16 @@ def _now_date_text() -> str:
     return datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
 
 
+def _resolve_as_of_date_text(value: str | None) -> str:
+    if value is None or not str(value).strip():
+        return _now_date_text()
+    text = str(value).strip()
+    try:
+        return datetime.fromisoformat(text[:10]).date().isoformat()
+    except ValueError as exc:
+        raise ValueError(f"as_of_date must be YYYY-MM-DD, got {value!r}") from exc
+
+
 def _parse_stock_codes(value: str | None) -> list[str] | None:
     if value is None or not value.strip():
         return None
@@ -1037,8 +1413,11 @@ def _should_log_progress(index: int, total: int, progress_interval: int) -> bool
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create operating metric and P/Q/C estimate gold CSVs.")
     parser.add_argument("--stock-codes", help="Comma-separated stock codes. Defaults to all silver business-info dirs.")
+    parser.add_argument("--normalized-statement-dir", default=str(NORMALIZED_STATEMENT_DIR))
     parser.add_argument("--start-period", help="First source actual period for estimates, e.g. 2023.12.")
     parser.add_argument("--end-period", help="Last source actual period for estimates, e.g. 2026.03.")
+    parser.add_argument("--as-of-date", help="Snapshot date for estimate outputs, e.g. 2026-06-28.")
+    parser.add_argument("--write-history", action="store_true", help="Also write dated consensus history CSVs.")
     parser.add_argument(
         "--all-periods",
         action="store_true",
@@ -1053,6 +1432,9 @@ def main() -> None:
         estimate_start_period=args.start_period,
         estimate_end_period=args.end_period,
         estimate_all_periods=args.all_periods,
+        normalized_statement_dir=args.normalized_statement_dir,
+        as_of_date=args.as_of_date,
+        write_history=args.write_history,
         progress=not args.no_progress,
         progress_interval=args.progress_interval,
         continue_on_error=not args.fail_fast,

@@ -476,6 +476,7 @@ MCP tool 이름은 FastAPI endpoint 함수명을 소문자/스네이크 케이�
 | `get_operating_metric_drivers` | `GET /api/operating-metrics/{stock_code}/drivers` | `stock_code` | - |
 | `get_estimates` | `GET /api/estimates/{stock_code}` | `stock_code` | - |
 | `get_estimate_consensus` | `GET /api/estimates/{stock_code}/consensus` | `stock_code` | - |
+| `get_estimate_consensus_history` | `GET /api/estimates/{stock_code}/consensus/history` | `stock_code` | `start_date`, `end_date`, `metric_id`, `target_period` |
 | `get_estimate_drivers` | `GET /api/estimates/{stock_code}/drivers` | `stock_code` | - |
 | `get_style_scores` | `GET /api/style-scores` | - | `trade_date`, `style_profile`, `limit`, `min_confidence`, `industry_group_code`, `sector_code` |
 | `get_style_score_detail` | `GET /api/style-scores/{security_id}` | `security_id` | `trade_date`, `style_profile` |

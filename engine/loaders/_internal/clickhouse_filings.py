@@ -28,6 +28,7 @@ DART_REPORT_METADATA_COLUMNS = [
     "source_url",
     "updated_at",
 ]
+DART_REPORT_METADATA_TABLE = "dart_report_metadata"
 
 
 def report_metadata_path_for_market(market: str = "kr") -> Path:
@@ -87,15 +88,27 @@ def insert_report_metadata(
     owns_client = client is None
     client = client or get_clickhouse_client()
     try:
-        client.insert_df(
-            "dart_report_metadata",
-            df,
-            column_names=list(df.columns),
-        )
+        for partition, chunk in _iter_report_metadata_partitions(df):
+            client.insert_df(
+                DART_REPORT_METADATA_TABLE,
+                chunk,
+                column_names=DART_REPORT_METADATA_COLUMNS,
+            )
+            print(f"inserted dart_report_metadata partition={partition}, rows={len(chunk):,}")
     finally:
         if owns_client:
             client.close()
     return len(df)
+
+
+def _iter_report_metadata_partitions(df: pd.DataFrame):
+    if df.empty:
+        return
+    insert_df = df.copy()
+    insert_df["_partition"] = pd.to_datetime(insert_df["report_date"], errors="coerce").dt.strftime("%Y%m")
+    for partition, chunk in insert_df.groupby("_partition", sort=True, dropna=False):
+        chunk = chunk.drop(columns=["_partition"]).copy()
+        yield str(partition), chunk[DART_REPORT_METADATA_COLUMNS]
 
 
 def main() -> None:
