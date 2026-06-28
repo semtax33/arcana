@@ -253,6 +253,167 @@ ORDER BY
 )
 SETTINGS index_granularity = 8192;
 
+CREATE TABLE IF NOT EXISTS business_operating_metric_raw
+(
+    security_id String,
+    stock_code String,
+    fiscal_year UInt16,
+    fiscal_month UInt8,
+    period_end_date Date,
+    report_date Date,
+    rcept_no String,
+    source_url String,
+    section_key LowCardinality(String),
+    section_title String,
+    table_id String,
+    table_kind LowCardinality(String),
+    row_idx Int32,
+    col_idx Int32,
+    raw_label String,
+    raw_value String,
+    raw_unit String,
+    row_text String,
+    header_value_map_json String,
+    metric_candidate LowCardinality(String),
+    product_candidate String,
+    segment_candidate String,
+    parsed_value Nullable(Float64),
+    parsed_unit LowCardinality(String),
+    parser_rule_id LowCardinality(String),
+    confidence Nullable(Float64),
+    created_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(created_at)
+PARTITION BY fiscal_year
+ORDER BY (stock_code, fiscal_year, fiscal_month, table_id, row_idx, col_idx);
+
+CREATE TABLE IF NOT EXISTS business_operating_metric
+(
+    security_id String,
+    stock_code String,
+    fiscal_year UInt16,
+    fiscal_month UInt8,
+    period_end_date Date,
+    business_domain LowCardinality(String),
+    segment_id String,
+    segment_name String,
+    product_id String,
+    product_name String,
+    metric_id LowCardinality(String),
+    metric_name String,
+    metric_value Nullable(Float64),
+    metric_unit LowCardinality(String),
+    value_type LowCardinality(String),
+    source_type LowCardinality(String),
+    source_table_id String,
+    source_row_idx Int32,
+    source_url String,
+    confidence Nullable(Float64),
+    quality_flags String,
+    model_version LowCardinality(String),
+    created_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(created_at)
+PARTITION BY fiscal_year
+ORDER BY (stock_code, fiscal_year, fiscal_month, product_id, metric_id);
+
+CREATE TABLE IF NOT EXISTS business_unit_economics
+(
+    security_id String,
+    stock_code String,
+    fiscal_year UInt16,
+    fiscal_month UInt8,
+    period_end_date Date,
+    business_domain LowCardinality(String),
+    segment_id String,
+    segment_name String,
+    product_id String,
+    product_name String,
+    revenue Nullable(Float64),
+    quantity Nullable(Float64),
+    quantity_unit LowCardinality(String),
+    p Nullable(Float64),
+    asp Nullable(Float64),
+    revenue_source LowCardinality(String),
+    quantity_source LowCardinality(String),
+    revenue_coverage_ratio Nullable(Float64),
+    confidence Nullable(Float64),
+    quality_flags String,
+    model_version LowCardinality(String),
+    created_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3),
+    c Nullable(Float64),
+    gross_profit Nullable(Float64),
+    gross_margin Nullable(Float64),
+    cogs_source LowCardinality(String),
+    cogs_allocation_method LowCardinality(String)
+)
+ENGINE = ReplacingMergeTree(created_at)
+PARTITION BY fiscal_year
+ORDER BY (stock_code, fiscal_year, fiscal_month, product_id);
+
+CREATE TABLE IF NOT EXISTS business_unit_economics_driver
+(
+    security_id String,
+    stock_code String,
+    fiscal_year UInt16,
+    fiscal_month UInt8,
+    period_end_date Date,
+    business_domain LowCardinality(String),
+    segment_id String,
+    segment_name String,
+    product_id String,
+    product_name String,
+    q_yoy_pct Nullable(Float64),
+    asp_yoy_pct Nullable(Float64),
+    unit_cost_yoy_pct Nullable(Float64),
+    revenue_yoy_pct Nullable(Float64),
+    gross_margin_change_pctp Nullable(Float64),
+    model_version LowCardinality(String),
+    created_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(created_at)
+PARTITION BY fiscal_year
+ORDER BY (stock_code, fiscal_year, fiscal_month, product_id);
+
+CREATE TABLE IF NOT EXISTS arcana_estimate_component
+(
+    security_id String,
+    stock_code String,
+    target_period LowCardinality(String),
+    metric_id LowCardinality(String),
+    model_id LowCardinality(String),
+    scenario LowCardinality(String),
+    estimate_value Nullable(Float64),
+    currency LowCardinality(String),
+    source_actual_period LowCardinality(String),
+    assumptions_json String,
+    confidence Nullable(Float64),
+    quality_flags String,
+    as_of_date Date
+)
+ENGINE = ReplacingMergeTree(as_of_date)
+ORDER BY (stock_code, target_period, metric_id, model_id, scenario);
+
+CREATE TABLE IF NOT EXISTS arcana_estimate_consensus
+(
+    security_id String,
+    stock_code String,
+    target_period LowCardinality(String),
+    metric_id LowCardinality(String),
+    scenario LowCardinality(String),
+    consensus_mean Nullable(Float64),
+    consensus_median Nullable(Float64),
+    consensus_low Nullable(Float64),
+    consensus_high Nullable(Float64),
+    model_count UInt16,
+    confidence Nullable(Float64),
+    dispersion Nullable(Float64),
+    currency LowCardinality(String),
+    as_of_date Date
+)
+ENGINE = ReplacingMergeTree(as_of_date)
+ORDER BY (stock_code, target_period, metric_id, scenario);
+
 CREATE TABLE IF NOT EXISTS arcana.fact_daily_style_score
 (
     trade_date Date,

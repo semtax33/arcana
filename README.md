@@ -205,6 +205,27 @@ data-lake/silver/dart/business-info/{stock_code}/kr_business_info_rows.csv
 `source_html_hash`, `header_paths_json`을 포함합니다. `cells`는 rowspan/colspan을
 확장한 cell-level 구조, `rows`는 LLM 재처리와 검수에 쓰기 쉬운 row-level 구조입니다.
 
+business-info silver CSV에서 P/Q/C/ASP 기반 운영지표와 FY1 추정치를 만들 수 있습니다.
+입력은 종목별 `kr_business_info_tables.csv`, `kr_business_info_rows.csv`이며, 변환기는 먼저
+gold CSV를 만든 뒤 loader가 이 gold CSV만 읽어 ClickHouse에 적재합니다. 운영지표 룰과
+제품 alias seed는 아래 파일에서 관리합니다.
+
+```text
+data-lake/meta/rules/operating_metric_rules.yaml
+data-lake/meta/rules/product_alias_rules.yaml
+```
+
+gold 산출물:
+
+```text
+data-lake/gold/operating-metrics/{stock_code}/business_operating_metric_raw.csv
+data-lake/gold/operating-metrics/{stock_code}/business_operating_metric.csv
+data-lake/gold/operating-metrics/{stock_code}/business_unit_economics.csv
+data-lake/gold/operating-metrics/{stock_code}/business_unit_economics_driver.csv
+data-lake/gold/estimates/{stock_code}/arcana_estimate_component.csv
+data-lake/gold/estimates/{stock_code}/arcana_estimate_consensus.csv
+```
+
 US fallback 값은 선택 의존성인 edgartools 패키지를 사용합니다. 패키지가
 설치되지 않았거나 SEC 조회가 실패하면 edgartools fallback만 건너뛰고
 companyfacts/Notes 기반 정규화는 계속 진행합니다. US 가격과 주식수 다운로드는
@@ -353,7 +374,62 @@ CREATE TABLE IF NOT EXISTS arcana.stock_dividend
 `payout_ratio`와 `dividend_percent`는 nullable Float64, `updated_at`은
 Asia/Seoul 기준 loader 실행 시각으로 들어갑니다.
 
-### 5. Load Factors
+### 5. Build / Load Operating Metrics and Estimates
+
+business-info silver CSV를 기반으로 제품/부문별 매출, 수량, 가격, ASP, 단위 원가,
+driver YoY, FY1 추정치와 consensus gold CSV를 생성합니다.
+
+Build gold CSV only:
+
+```powershell
+python -m engine.transformers.operating_metrics --stock-codes 005930
+python -m engine.workflows.operating_metrics --stock-codes 005930
+python -m engine.transformers.operating_metrics --all-periods
+python -m engine.transformers.operating_metrics --start-period 2023.12 --end-period 2026.03
+```
+
+Load gold CSV to ClickHouse:
+
+```powershell
+python -m engine.loaders.operating_metrics --stock-codes 005930 --dry-run
+python -m engine.loaders.operating_metrics --stock-codes 005930
+python -m engine.workflows.operating_metrics --stock-codes 005930 --load --dry-run
+python -m engine.workflows.operating_metrics --stock-codes 005930 --load
+python -m engine.workflows.operating_metrics --all-periods --load --dry-run
+python -m engine.workflows.operating_metrics --start-period 2023.12 --end-period 2026.03 --load
+```
+
+`--dry-run`은 gold CSV row count와 schema 준비만 확인하고 ClickHouse insert는 수행하지
+않습니다. `--stock-codes`를 생략하면 `data-lake/silver/dart/business-info/` 또는
+`data-lake/gold/operating-metrics/` 아래의 종목 디렉터리를 기준으로 처리합니다.
+transformer/workflow는 기본적으로 stock 단위 진행상황을 출력합니다. `--progress-interval 100`으로
+출력 간격을 조정하거나 `--no-progress`로 끌 수 있고, 특정 종목 실패 시 즉시 중단하려면
+`--fail-fast`를 사용합니다.
+
+추정치는 기본적으로 각 종목의 최신 source actual period만 계산합니다. 과거 기간까지 함께
+계산하려면 `--all-periods`를 사용합니다. 기간을 제한하려면 `--start-period YYYY.MM`,
+`--end-period YYYY.MM`을 지정합니다. 예를 들어 source actual period `2023.12`를 기준으로
+계산한 추정치는 target period `2024.12`로 저장됩니다.
+
+추정 로직은 현재 MVP 기준입니다. `Revenue FY1`은 P/Q/C driver 모델의 제품별 forecast를
+회사 단위로 집계합니다. Q는 `quantity_sold`, `shipment_volume`, `quantity_produced`
+순서로 사용하고, ASP는 reported ASP가 있으면 우선 사용하며 없으면 `revenue / quantity`
+로 계산합니다. 유사 컨센서스는 `P/Q/C Driver`, `Historical Trend`, `Industry Peer` 내부 모델을
+metric별로 집계해 median/low/high/dispersion을 계산합니다. C와 gross profit은 공시 원가 단서가
+있을 때만 계산하고, 없으면 비워둡니다.
+
+API는 ClickHouse를 먼저 조회하고 실패하거나 데이터가 없으면 gold CSV로 fallback합니다.
+
+```text
+GET /api/operating-metrics/{stock_code}
+GET /api/operating-metrics/{stock_code}/unit-economics
+GET /api/operating-metrics/{stock_code}/drivers
+GET /api/estimates/{stock_code}
+GET /api/estimates/{stock_code}/consensus
+GET /api/estimates/{stock_code}/drivers
+```
+
+### 6. Load Factors
 
 Dry run:
 
@@ -447,7 +523,7 @@ US 팩터 적재는 `data-lake/silver/sec/normalized/` 재무 CSV와
 rows를 생성합니다. `data-lake/silver/us/shares/us_normalized_shares.csv`가
 있으면 shares/market cap 기반 팩터까지 함께 계산합니다.
 
-### 6. Load Benchmarks
+### 7. Load Benchmarks
 
 ```powershell
 python -m engine.loaders.benchmarks --benchmark-ids KOSPI200,KOSDAQ --start-date 2010-01-01 --dry-run
@@ -460,7 +536,7 @@ Bronze CSV에서 읽을 때:
 python -m engine.loaders.benchmarks --source bronze --bronze-path data-lake\bronze\krx\benchmark\*.csv --dry-run
 ```
 
-### 7. Build Style Scores
+### 8. Build Style Scores
 
 ```powershell
 python -m engine.workflows.score_cli build-factor-scores --trade-date 2026-05-24 --factor-asof-mode asof --include-financials

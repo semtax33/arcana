@@ -25,6 +25,12 @@ class McpServerTest(unittest.TestCase):
         self.assertIn("health_check", tool_names)
         self.assertIn("get_multiple_valuation_bands", tool_names)
         self.assertIn("run_factor_backtest", tool_names)
+        self.assertIn("get_operating_metrics", tool_names)
+        self.assertIn("get_unit_economics", tool_names)
+        self.assertIn("get_operating_metric_drivers", tool_names)
+        self.assertIn("get_estimates", tool_names)
+        self.assertIn("get_estimate_consensus", tool_names)
+        self.assertIn("get_estimate_drivers", tool_names)
 
     def test_call_tool_returns_json_text_content(self) -> None:
         server = McpServer(build_tools())

@@ -471,6 +471,12 @@ MCP tool 이름은 FastAPI endpoint 함수명을 소문자/스네이크 케이�
 | `get_financial_statements` | `GET /api/financials/{stock_code}` | `stock_code` | `period`, `statement` |
 | `get_financial_account_detail` | `GET /api/financials/{stock_code}/accounts/{canonical_id}` | `stock_code`, `canonical_id` | `period` |
 | `get_financial_ratios` | `GET /api/financials/{stock_code}/ratios` | `stock_code` | `period` |
+| `get_operating_metrics` | `GET /api/operating-metrics/{stock_code}` | `stock_code` | - |
+| `get_unit_economics` | `GET /api/operating-metrics/{stock_code}/unit-economics` | `stock_code` | - |
+| `get_operating_metric_drivers` | `GET /api/operating-metrics/{stock_code}/drivers` | `stock_code` | - |
+| `get_estimates` | `GET /api/estimates/{stock_code}` | `stock_code` | - |
+| `get_estimate_consensus` | `GET /api/estimates/{stock_code}/consensus` | `stock_code` | - |
+| `get_estimate_drivers` | `GET /api/estimates/{stock_code}/drivers` | `stock_code` | - |
 | `get_style_scores` | `GET /api/style-scores` | - | `trade_date`, `style_profile`, `limit`, `min_confidence`, `industry_group_code`, `sector_code` |
 | `get_style_score_detail` | `GET /api/style-scores/{security_id}` | `security_id` | `trade_date`, `style_profile` |
 | `get_style_score_components` | `GET /api/style-scores/{security_id}/components` | `security_id` | `trade_date`, `style_profile` |

@@ -1,0 +1,55 @@
+version: 1
+segments:
+  DX:
+    aliases: [DX, Device eXperience]
+    business_domain: consumer_electronics
+  DS:
+    aliases: [DS, 반도체]
+    business_domain: semiconductor
+products:
+  MEMORY:
+    aliases: [DRAM, NAND, NAND Flash, 메모리]
+    segment_id: DS
+    business_domain: semiconductor
+    industry_q_proxy: shipment_volume
+  OLED_PANEL:
+    aliases: [OLED, OLED패널, 디스플레이]
+    segment_id: SDC
+    business_domain: display
+    industry_q_proxy: shipment_volume
+  EV_BATTERY:
+    aliases: [배터리, 전지, 2차전지]
+    segment_id: BATTERY
+    business_domain: battery
+    industry_q_proxy: GWh
+  GASOLINE:
+    aliases: [휘발유, Gasoline]
+    segment_id: REFINING
+    business_domain: energy
+  DIESEL:
+    aliases: [경유, Diesel]
+    segment_id: REFINING
+    business_domain: energy
+  WIRELESS_COMMUNICATION:
+    aliases: [무선통신, 이동전화, 가입자]
+    segment_id: TELECOM
+    business_domain: telecom
+    industry_q_proxy: subscribers
+  NAVER_PLATFORM:
+    aliases: [플랫폼, 검색, 광고]
+    segment_id: PLATFORM
+    business_domain: internet
+    industry_q_proxy: MAU
+  VEHICLE_RV:
+    aliases: [RV, SUV, 차량]
+    segment_id: AUTO
+    business_domain: auto
+    industry_q_proxy: units_sold
+  GAS_CITY:
+    aliases: [도시가스, 가스]
+    segment_id: UTILITY
+    business_domain: utility
+  ELECTRICITY:
+    aliases: [전력, 전기]
+    segment_id: UTILITY
+    business_domain: utility

@@ -1,0 +1,53 @@
+version: 1
+model_version: pqc_mvp_v1
+input_contract:
+  tables_csv: data-lake/silver/dart/business-info/{stock_code}/kr_business_info_tables.csv
+  rows_csv: data-lake/silver/dart/business-info/{stock_code}/kr_business_info_rows.csv
+table_selection_rules:
+  preferred_table_kind:
+    - data_table
+  fallback_table_kind:
+    - paragraph_table
+period_rules:
+  current_period_from_table_metadata: true
+metric_rules:
+  revenue:
+    include: [매출, 영업수익, 판매금액, 금액]
+    exclude: [영업이익, 매입, 내부거래, 비중]
+  quantity_sold:
+    include: [판매량, 판매수량, 출하량, 공급량, 판매대수]
+  quantity_produced:
+    include: [생산량, 생산실적]
+  capacity:
+    include: [생산능력, CAPA, 설비능력]
+  utilization_rate:
+    include: [가동률, 평균가동률]
+  reported_asp:
+    include: [판매가격, 평균판매가격, 가격변동, 요금, ASP]
+  reported_unit_cost:
+    include: [단위당원가, 원가단가]
+unit_rules:
+  currency:
+    천원: 1000
+    백만원: 1000000
+    억원: 100000000
+  quantity:
+    천개: 1000
+    백만개: 1000000
+    MWh: 1
+    GWh: 1000
+entity_rules:
+  segment_key_priority: [사업부문, 부문, 구분]
+  product_key_priority: [품목, 주요 제품, 주요제품]
+confidence_rules:
+  data_table: 0.95
+  paragraph_table: 0.65
+  unit_inferred_multiplier: 0.70
+quality_flags:
+  - UNIT_INFERRED
+  - REVENUE_RECONCILIATION_GAP
+  - COGS_ALLOCATED_BY_REVENUE_SHARE
+  - QUANTITY_PROXY_USED
+  - PRODUCT_NAME_FUZZY_MATCHED
+  - OUTLIER_REPAIRED
+  - LOW_COVERAGE

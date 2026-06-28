@@ -591,6 +591,138 @@ class FinancialRatiosResponseDto(BaseModel):
     auxiliary_sources: list[str] = Field(default_factory=list)
 
 
+class OperatingMetricStockDto(BaseModel):
+    stock_code: str
+    security_id: str
+    country: str = "KR"
+    currency: str = "KRW"
+
+
+class OperatingMetricRowDto(BaseModel):
+    fiscal_year: int
+    fiscal_month: int
+    period_end_date: date | str
+    segment_id: str = ""
+    segment_name: str = ""
+    product_id: str = ""
+    product_name: str = ""
+    metric_id: str = ""
+    metric_name: str = ""
+    metric_value: float | None = None
+    metric_unit: str = ""
+    value_type: str = ""
+    source_type: str = ""
+    confidence: float | None = None
+    quality_flags: str = ""
+
+
+class UnitEconomicsRowDto(BaseModel):
+    fiscal_year: int
+    fiscal_month: int
+    period_end_date: date | str
+    segment_id: str = ""
+    segment_name: str = ""
+    product_id: str = ""
+    product_name: str = ""
+    revenue: float | None = None
+    quantity: float | None = None
+    quantity_unit: str = ""
+    p: float | None = None
+    asp: float | None = None
+    c: float | None = None
+    gross_profit: float | None = None
+    gross_margin: float | None = None
+    revenue_coverage_ratio: float | None = None
+    confidence: float | None = None
+    quality_flags: str = ""
+
+
+class OperatingMetricDriverRowDto(BaseModel):
+    fiscal_year: int
+    fiscal_month: int
+    period_end_date: date | str
+    segment_id: str = ""
+    segment_name: str = ""
+    product_id: str = ""
+    product_name: str = ""
+    q_yoy_pct: float | None = None
+    asp_yoy_pct: float | None = None
+    unit_cost_yoy_pct: float | None = None
+    revenue_yoy_pct: float | None = None
+    gross_margin_change_pctp: float | None = None
+
+
+class OperatingMetricsResponseDto(BaseModel):
+    stock: OperatingMetricStockDto
+    as_of_date: date | str
+    rows: list[OperatingMetricRowDto] = Field(default_factory=list)
+    source: str = "gold_csv"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class UnitEconomicsResponseDto(BaseModel):
+    stock: OperatingMetricStockDto
+    as_of_date: date | str
+    rows: list[UnitEconomicsRowDto] = Field(default_factory=list)
+    source: str = "gold_csv"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class OperatingMetricDriversResponseDto(BaseModel):
+    stock: OperatingMetricStockDto
+    as_of_date: date | str
+    rows: list[OperatingMetricDriverRowDto] = Field(default_factory=list)
+    source: str = "gold_csv"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class EstimateComponentRowDto(BaseModel):
+    target_period: str
+    metric_id: str
+    model_id: str
+    scenario: str
+    estimate_value: float | None = None
+    currency: str = "KRW"
+    source_actual_period: str = ""
+    assumptions_json: str = ""
+    confidence: float | None = None
+    quality_flags: str = ""
+    as_of_date: date | str = ""
+
+
+class EstimateConsensusRowDto(BaseModel):
+    target_period: str
+    metric_id: str
+    scenario: str
+    consensus_mean: float | None = None
+    consensus_median: float | None = None
+    consensus_low: float | None = None
+    consensus_high: float | None = None
+    model_count: int = 0
+    confidence: float | None = None
+    dispersion: float | None = None
+    currency: str = "KRW"
+    as_of_date: date | str = ""
+
+
+class EstimateComponentsResponseDto(BaseModel):
+    stock: OperatingMetricStockDto
+    as_of_date: date | str
+    target_period: str = ""
+    rows: list[EstimateComponentRowDto] = Field(default_factory=list)
+    source: str = "gold_csv"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class EstimateConsensusResponseDto(BaseModel):
+    stock: OperatingMetricStockDto
+    as_of_date: date | str
+    target_period: str = ""
+    rows: list[EstimateConsensusRowDto] = Field(default_factory=list)
+    source: str = "gold_csv"
+    warnings: list[str] = Field(default_factory=list)
+
+
 MultipleValuationBandBasis = Literal["blend", "historical", "industry", "market", "listing_market"]
 
 
