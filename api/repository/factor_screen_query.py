@@ -19,6 +19,7 @@ from api.service.style_score_catalog import (
 ConditionMode = Literal["top_percent", "threshold"]
 MatchMode = Literal["all", "any"]
 RankDirection = Literal["catalog", "higher", "lower"]
+PercentileSide = Literal["top", "bottom"]
 
 
 DEFAULT_FINANCIAL_BASIS = "annual"
@@ -57,6 +58,7 @@ class FactorCondition:
     mode: ConditionMode
     top_percent: float | None = None
     rank_direction: RankDirection = "catalog"
+    percentile_side: PercentileSide = "top"
     operator: str | None = None
     value: float | None = None
     min_value: float | None = None
@@ -70,6 +72,7 @@ class FactorCondition:
         top_percent: float,
         *,
         rank_direction: RankDirection = "catalog",
+        percentile_side: PercentileSide = "top",
         alias: str | None = None,
     ) -> "FactorCondition":
         return cls(
@@ -77,6 +80,24 @@ class FactorCondition:
             mode="top_percent",
             top_percent=top_percent,
             rank_direction=rank_direction,
+            percentile_side=percentile_side,
+            alias=alias,
+        )
+
+    @classmethod
+    def bottom(
+        cls,
+        factor_id: str,
+        bottom_percent: float,
+        *,
+        rank_direction: RankDirection = "catalog",
+        alias: str | None = None,
+    ) -> "FactorCondition":
+        return cls.top(
+            factor_id,
+            bottom_percent,
+            rank_direction=rank_direction,
+            percentile_side="bottom",
             alias=alias,
         )
 
@@ -558,7 +579,7 @@ def _condition_predicate(
         if not math.isfinite(top_percent) or top_percent <= 0 or top_percent > 100:
             raise ValueError(f"condition {index} top_percent must be > 0 and <= 100")
         params[f"condition_{index}_top_percent"] = top_percent
-        rank_expr = _rank_expression(condition.rank_direction)
+        rank_expr = _rank_expression(condition.rank_direction, condition.percentile_side)
         return (
             f"{rank_expr} <= greatest("
             "toUInt64(1), "
@@ -598,13 +619,17 @@ def _condition_predicate(
     raise ValueError(f"condition {index} mode must be 'top_percent' or 'threshold'")
 
 
-def _rank_expression(rank_direction: RankDirection) -> str:
+def _rank_expression(rank_direction: RankDirection, percentile_side: PercentileSide = "top") -> str:
+    if percentile_side not in {"top", "bottom"}:
+        raise ValueError("percentile_side must be 'top' or 'bottom'")
     if rank_direction == "higher":
-        return "rank_high"
+        return "rank_high" if percentile_side == "top" else "rank_low"
     if rank_direction == "lower":
-        return "rank_low"
+        return "rank_low" if percentile_side == "top" else "rank_high"
     if rank_direction == "catalog":
-        return "if(value_direction = 'LOWER_BETTER', rank_low, rank_high)"
+        if percentile_side == "top":
+            return "if(value_direction = 'LOWER_BETTER', rank_low, rank_high)"
+        return "if(value_direction = 'LOWER_BETTER', rank_high, rank_low)"
     raise ValueError("rank_direction must be 'catalog', 'higher', or 'lower'")
 
 
@@ -618,6 +643,7 @@ def _coerce_condition(condition: FactorCondition | dict[str, Any]) -> FactorCond
             mode=condition.mode,
             top_percent=condition.top_percent,
             rank_direction=condition.rank_direction,
+            percentile_side=condition.percentile_side,
             operator=condition.operator,
             value=condition.value,
             min_value=condition.min_value,

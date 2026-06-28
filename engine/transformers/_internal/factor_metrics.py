@@ -1934,6 +1934,17 @@ def add_wacc_factors(
         + df["wacc_debt_weight"] / 100 * df["cost_of_debt_after_tax"]
     )
     df["roic_wacc_spread"] = numeric_column(df, "roic_operational") - df["wacc"]
+    df["economic_profit"] = (
+        df["roic_wacc_spread"]
+        / 100
+        * positive_denominator(numeric_column(df, "avg_ic_operational"))
+    )
+    df["economic_profit_yield"] = (
+        df["economic_profit"]
+        / positive_denominator(numeric_column(df, "enterprise_value"))
+        * 100
+    )
+    df["delta_economic_profit"] = df["economic_profit"] - df["economic_profit"].shift(252)
     df["roic_wacc_spread_growth_1y"] = growth_pct(df["roic_wacc_spread"], periods=252)
     return df
 
@@ -2241,6 +2252,9 @@ def preferred_factor_columns():
         "roic_operational",
         "roic_operational_growth_1y",
         "roic_wacc_spread",
+        "economic_profit",
+        "economic_profit_yield",
+        "delta_economic_profit",
         "roic_wacc_spread_growth_1y",
         "asset_turnover",
         "total_asset_turnover",

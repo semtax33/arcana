@@ -319,6 +319,7 @@ def _coerce_condition(condition: FactorCondition | dict[str, Any]) -> FactorCond
             mode=condition.mode,
             top_percent=condition.top_percent,
             rank_direction=condition.rank_direction,
+            percentile_side=condition.percentile_side,
             operator=condition.operator,
             value=condition.value,
             min_value=condition.min_value,

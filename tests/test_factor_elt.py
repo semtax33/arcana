@@ -80,6 +80,9 @@ class FactorEltTest(unittest.TestCase):
                     "beta": 1.2,
                     "cost_of_equity": 10.0,
                     "roic_wacc_spread": 11.4,
+                    "economic_profit": 57.0,
+                    "economic_profit_yield": 5.7,
+                    "delta_economic_profit": 10.0,
                     "roic_wacc_spread_growth_1y": 25.0,
                 }
             ]
@@ -89,7 +92,16 @@ class FactorEltTest(unittest.TestCase):
 
         self.assertEqual(
             set(result["factor_id"]),
-            {"wacc", "beta", "cost_of_equity", "roic_wacc_spread", "roic_wacc_spread_growth_1y"},
+            {
+                "wacc",
+                "beta",
+                "cost_of_equity",
+                "roic_wacc_spread",
+                "economic_profit",
+                "economic_profit_yield",
+                "delta_economic_profit",
+                "roic_wacc_spread_growth_1y",
+            },
         )
 
     def test_create_daily_factor_rows_reuses_market_data_cache(self):
@@ -234,6 +246,9 @@ class FactorEltTest(unittest.TestCase):
                     "wacc_debt_weight": 20.0,
                     "beta": 1.1,
                     "roic_wacc_spread": 11.5,
+                    "economic_profit": 57.5,
+                    "economic_profit_yield": 5.75,
+                    "delta_economic_profit": 10.0,
                     "roic_wacc_spread_growth_1y": 30.0,
                 }
             ]
@@ -251,8 +266,8 @@ class FactorEltTest(unittest.TestCase):
                 factor_ids="wacc_bundle",
             )
 
-        self.assertEqual(result.attrs["inserted_rows"], 9)
-        self.assertEqual(result.attrs["factor_count"], 9)
+        self.assertEqual(result.attrs["inserted_rows"], 12)
+        self.assertEqual(result.attrs["factor_count"], 12)
         self.assertEqual(client.inserted[0][0], "factor_catalog")
         self.assertEqual(
             set(client.inserted[0][1]["factor_id"]),
@@ -265,6 +280,9 @@ class FactorEltTest(unittest.TestCase):
                 "wacc_debt_weight",
                 "beta",
                 "roic_wacc_spread",
+                "economic_profit",
+                "economic_profit_yield",
+                "delta_economic_profit",
                 "roic_wacc_spread_growth_1y",
             },
         )
@@ -280,6 +298,9 @@ class FactorEltTest(unittest.TestCase):
                 "wacc_debt_weight",
                 "beta",
                 "roic_wacc_spread",
+                "economic_profit",
+                "economic_profit_yield",
+                "delta_economic_profit",
                 "roic_wacc_spread_growth_1y",
             },
         )
@@ -429,6 +450,9 @@ class FactorEltTest(unittest.TestCase):
             "operating_margin_growth_1y",
             "fcf_margin_growth_1y",
             "roic_wacc_spread",
+            "economic_profit",
+            "economic_profit_yield",
+            "delta_economic_profit",
             "roic_wacc_spread_growth_1y",
             "net_margin",
             "total_asset_turnover",
@@ -483,6 +507,15 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(row_by_id.loc["roic_wacc_spread", "factor_name"], "ROIC - WACC Spread")
         self.assertEqual(row_by_id.loc["roic_wacc_spread", "factor_type"], "quality")
         self.assertEqual(row_by_id.loc["roic_wacc_spread", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["economic_profit", "factor_name"], "Economic Profit")
+        self.assertEqual(row_by_id.loc["economic_profit", "factor_type"], "quality")
+        self.assertEqual(row_by_id.loc["economic_profit", "unit"], "krw")
+        self.assertEqual(row_by_id.loc["economic_profit_yield", "factor_name"], "Economic Profit Yield")
+        self.assertEqual(row_by_id.loc["economic_profit_yield", "factor_type"], "valuation")
+        self.assertEqual(row_by_id.loc["economic_profit_yield", "unit"], "percent")
+        self.assertEqual(row_by_id.loc["delta_economic_profit", "factor_name"], "Delta Economic Profit")
+        self.assertEqual(row_by_id.loc["delta_economic_profit", "factor_type"], "growth")
+        self.assertEqual(row_by_id.loc["delta_economic_profit", "unit"], "krw")
         self.assertEqual(row_by_id.loc["roic_wacc_spread_growth_1y", "factor_type"], "growth")
         self.assertEqual(row_by_id.loc["total_asset_turnover", "unit"], "times")
         self.assertEqual(row_by_id.loc["accrual_ratio", "factor_name"], "Accrual Ratio")

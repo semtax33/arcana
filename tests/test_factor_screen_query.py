@@ -109,6 +109,21 @@ class FactorScreenQueryTest(unittest.TestCase):
         self.assertIn("high_roe_0_value", query)
         self.assertIn("cheap_per_1_value", query)
 
+    def test_build_factor_screen_query_supports_bottom_percent_conditions(self):
+        query, params = build_factor_screen_query(
+            [
+                FactorCondition.bottom("roe", 20, alias="low_roe"),
+                FactorCondition.bottom("per", 30, alias="expensive_per"),
+            ],
+            as_of_date="2026-05-17",
+        )
+
+        self.assertEqual(params["condition_0_top_percent"], 20.0)
+        self.assertEqual(params["condition_1_top_percent"], 30.0)
+        self.assertIn("if(value_direction = 'LOWER_BETTER', rank_high, rank_low)", query)
+        self.assertIn("low_roe_0_value", query)
+        self.assertIn("expensive_per_1_value", query)
+
     def test_build_factor_screen_query_canonicalizes_general_factor_aliases(self):
         _, params = build_factor_screen_query(
             [

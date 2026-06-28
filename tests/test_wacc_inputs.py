@@ -47,10 +47,13 @@ class WaccInputsTest(unittest.TestCase):
                 "trade_date": pd.to_datetime(["2026-01-02"]),
                 "close": [10],
                 "market_cap": [800.0],
+                "enterprise_value": [1_000.0],
+                "avg_ic_operational": [500.0],
                 "debt": [200.0],
                 "avg_debt": [250.0],
                 "xint": [10.0],
                 "tax_rate": [25.0],
+                "roic_operational": [12.0],
             }
         )
         risk_free = pd.DataFrame(
@@ -85,6 +88,8 @@ class WaccInputsTest(unittest.TestCase):
         self.assertAlmostEqual(result["wacc_equity_weight"].iat[0], 80.0)
         self.assertAlmostEqual(result["wacc_debt_weight"].iat[0], 20.0)
         self.assertAlmostEqual(result["wacc"].iat[0], 8.6)
+        self.assertAlmostEqual(result["economic_profit"].iat[0], (12.0 - 8.6) / 100 * 500.0)
+        self.assertAlmostEqual(result["economic_profit_yield"].iat[0], (12.0 - 8.6) * 500.0 / 1_000.0)
 
     def test_add_wacc_factors_calculates_roic_wacc_spread_growth(self):
         row_count = 253
@@ -94,6 +99,8 @@ class WaccInputsTest(unittest.TestCase):
                 "trade_date": pd.date_range("2025-01-01", periods=row_count, freq="D"),
                 "close": [10.0] * row_count,
                 "market_cap": [800.0] * row_count,
+                "enterprise_value": [1_000.0] * row_count,
+                "avg_ic_operational": [500.0] * row_count,
                 "debt": [200.0] * row_count,
                 "avg_debt": [250.0] * row_count,
                 "xint": [10.0] * row_count,
@@ -128,6 +135,7 @@ class WaccInputsTest(unittest.TestCase):
 
         self.assertAlmostEqual(result["roic_wacc_spread"].iat[0], 1.4)
         self.assertAlmostEqual(result["roic_wacc_spread"].iat[-1], 11.4)
+        self.assertAlmostEqual(result["delta_economic_profit"].iat[-1], 50.0)
         self.assertAlmostEqual(
             result["roic_wacc_spread_growth_1y"].iat[-1],
             (11.4 - 1.4) / 1.4 * 100,

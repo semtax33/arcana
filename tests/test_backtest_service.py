@@ -3,7 +3,13 @@ from datetime import date
 
 import pandas as pd
 
-from api.service.backtest_service import BacktestService, _rebalance_dates, _to_repository_condition
+from api.repository.factor_screen_query import FactorCondition
+from api.service.backtest_service import (
+    BacktestService,
+    _condition_matches,
+    _rebalance_dates,
+    _to_repository_condition,
+)
 from api.service.dto import FactorBacktestRequestDto, FactorConditionDto
 
 
@@ -266,6 +272,56 @@ class BacktestServiceTest(unittest.TestCase):
 
         self.assertEqual(ev_condition.factor_id, "ev_to_nopat")
         self.assertEqual(working_capital_condition.factor_id, "working_capital_turnover")
+
+    def test_repository_condition_preserves_bottom_percent_side(self):
+        condition = _to_repository_condition(
+            FactorConditionDto(
+                factor_id="roe",
+                mode="top_percent",
+                top_percent=20,
+                percentile_side="bottom",
+            )
+        )
+
+        self.assertEqual(condition.percentile_side, "bottom")
+
+    def test_bottom_percent_condition_matches_the_opposite_catalog_rank(self):
+        high_roe_row = {
+            "factor_value": 20,
+            "value_direction": "HIGHER_BETTER",
+            "rank_high": 1,
+            "rank_low": 2,
+            "factor_count": 2,
+        }
+        low_roe_row = {
+            "factor_value": 10,
+            "value_direction": "HIGHER_BETTER",
+            "rank_high": 2,
+            "rank_low": 1,
+            "factor_count": 2,
+        }
+        cheap_per_row = {
+            "factor_value": 5,
+            "value_direction": "LOWER_BETTER",
+            "rank_high": 2,
+            "rank_low": 1,
+            "factor_count": 2,
+        }
+        expensive_per_row = {
+            "factor_value": 12,
+            "value_direction": "LOWER_BETTER",
+            "rank_high": 1,
+            "rank_low": 2,
+            "factor_count": 2,
+        }
+
+        bottom_condition = FactorCondition.bottom("roe", 50)
+        expensive_condition = FactorCondition.bottom("per", 50)
+
+        self.assertFalse(_condition_matches(bottom_condition, high_roe_row))
+        self.assertTrue(_condition_matches(bottom_condition, low_roe_row))
+        self.assertFalse(_condition_matches(expensive_condition, cheap_per_row))
+        self.assertTrue(_condition_matches(expensive_condition, expensive_per_row))
 
     def test_rebalance_dates_include_start_and_period_boundary_execution_dates(self):
         trading_days = [

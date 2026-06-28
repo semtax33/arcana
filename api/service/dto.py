@@ -11,6 +11,7 @@ from api.service.style_score_catalog import DEFAULT_FACTOR_SCREEN_STYLE_PROFILE
 ConditionMode = Literal["top_percent", "threshold"]
 MatchMode = Literal["all", "any"]
 RankDirection = Literal["catalog", "higher", "lower"]
+PercentileSide = Literal["top", "bottom"]
 RebalanceFrequency = Literal["quarterly", "semiannual", "annual"]
 SectorLeaderSortBy = Literal[
     "strong_stock_ratio",
@@ -205,6 +206,7 @@ class FactorConditionDto(BaseModel):
     mode: ConditionMode
     top_percent: float | None = Field(default=None, gt=0, le=100)
     rank_direction: RankDirection = "catalog"
+    percentile_side: PercentileSide = "top"
     operator: str | None = None
     value: float | None = None
     min_value: float | None = None

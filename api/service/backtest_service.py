@@ -651,14 +651,17 @@ def _condition_matches(condition: FactorCondition, row: dict[str, Any]) -> bool:
 
 
 def _rank_for_condition(condition: FactorCondition, row: dict[str, Any]) -> int | None:
+    side = condition.percentile_side
+    if side not in {"top", "bottom"}:
+        raise ValueError("percentile_side must be 'top' or 'bottom'")
     if condition.rank_direction == "higher":
-        return _int_or_none(row.get("rank_high"))
+        return _int_or_none(row.get("rank_high" if side == "top" else "rank_low"))
     if condition.rank_direction == "lower":
-        return _int_or_none(row.get("rank_low"))
+        return _int_or_none(row.get("rank_low" if side == "top" else "rank_high"))
     if condition.rank_direction == "catalog":
         if str(row.get("value_direction") or "") == "LOWER_BETTER":
-            return _int_or_none(row.get("rank_low"))
-        return _int_or_none(row.get("rank_high"))
+            return _int_or_none(row.get("rank_low" if side == "top" else "rank_high"))
+        return _int_or_none(row.get("rank_high" if side == "top" else "rank_low"))
     raise ValueError("rank_direction must be 'catalog', 'higher', or 'lower'")
 
 

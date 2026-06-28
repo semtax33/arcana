@@ -43,6 +43,7 @@
 | `ConditionMode` | `top_percent`, `threshold` |
 | `MatchMode` | `all`, `any` |
 | `RankDirection` | `catalog`, `higher`, `lower` |
+| `PercentileSide` | `top`, `bottom` |
 | `RebalanceFrequency` | `quarterly`, `semiannual`, `annual` |
 | `SectorLeaderSortBy` | `strong_stock_ratio`, `eps_expected_growth`, `return_1d`, `return_1w`, `roe`, `per`, `pbr` |
 | `SectorLeaderLevel` | `sector`, `industry_group` |
@@ -142,6 +143,7 @@ GET /api/chart/005930?range=1Y
   "mode": "top_percent",
   "top_percent": 20,
   "rank_direction": "catalog",
+  "percentile_side": "top",
   "operator": null,
   "value": null,
   "min_value": null,
@@ -150,9 +152,10 @@ GET /api/chart/005930?range=1Y
 }
 ```
 
-- `mode=top_percent`: `top_percent`와 `rank_direction`을 사용합니다.
+- `mode=top_percent`: `top_percent`, `rank_direction`, `percentile_side`를 사용합니다.
 - `mode=threshold`: `operator`, `value` 또는 `min_value`/`max_value`를 사용합니다.
 - `rank_direction=catalog`는 팩터 카탈로그의 `value_direction`을 따릅니다.
+- `percentile_side=top`은 좋은 방향 상위 N%, `bottom`은 좋은 방향 기준 하위 N%를 선택합니다.
 
 #### `POST /api/factor-screen/screen`
 
@@ -187,7 +190,8 @@ GET /api/chart/005930?range=1Y
       "factor_id": "per",
       "mode": "top_percent",
       "top_percent": 20,
-      "rank_direction": "lower"
+      "rank_direction": "lower",
+      "percentile_side": "top"
     }
   ],
   "market": "KR",
@@ -217,7 +221,8 @@ GET /api/chart/005930?range=1Y
         "factor_id": "per",
         "mode": "top_percent",
         "top_percent": 20,
-        "rank_direction": "lower"
+        "rank_direction": "lower",
+        "percentile_side": "top"
       }
     ]
   }
@@ -494,7 +499,8 @@ MCP tool 이름은 FastAPI endpoint 함수명을 소문자/스네이크 케이�
         "factor_id": "per",
         "mode": "top_percent",
         "top_percent": 20,
-        "rank_direction": "lower"
+        "rank_direction": "lower",
+        "percentile_side": "top"
       }
     ],
     "market": "KR",
@@ -585,7 +591,8 @@ MCP tool 이름은 FastAPI endpoint 함수명을 소문자/스네이크 케이�
           "factor_id": "roe",
           "mode": "top_percent",
           "top_percent": 30,
-          "rank_direction": "higher"
+          "rank_direction": "higher",
+          "percentile_side": "top"
         }
       ],
       "start_date": "2021-01-01",
@@ -627,4 +634,3 @@ MCP tool 이름은 FastAPI endpoint 함수명을 소문자/스네이크 케이�
 | 요청/응답 DTO | `api/service/dto.py` |
 | 서비스 계층 | `api/service/*.py` |
 | Repository/query 계층 | `api/repository/*.py`, `api/factor_screen_query.py` |
-

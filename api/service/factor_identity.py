@@ -17,7 +17,7 @@ def canonical_factor_id(factor_id: str) -> str:
     """Normalize user-facing factor identifiers to runtime factor ids."""
 
     text = str(factor_id).strip()
-    key = _alias_key(text)
+    key = _alias_key(_expand_delta_prefix(text))
     aliases = _factor_aliases()
     if key in aliases:
         return aliases[key]
@@ -35,6 +35,13 @@ def _alias_key(value: str) -> str:
 def _slash_to_alias_key(value: str) -> str:
     expanded = re.sub(r"\s*/\s*", " to ", str(value).strip().lower())
     return _alias_key(expanded)
+
+
+def _expand_delta_prefix(value: str) -> str:
+    text = str(value).strip()
+    if text.startswith(("Δ", "∆")):
+        return f"delta {text[1:].strip()}"
+    return text
 
 
 @lru_cache(maxsize=1)
