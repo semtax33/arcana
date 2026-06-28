@@ -245,7 +245,7 @@ def _load_consensus_history(
         frame = _read_csv(
             path,
             table_name=ESTIMATE_HISTORY_TABLE,
-            as_of_date_override=as_of_date_override or _history_as_of_date_from_path(path),
+            as_of_date_override=as_of_date_override,
         )
         counts[ESTIMATE_HISTORY_TABLE] = counts.get(ESTIMATE_HISTORY_TABLE, 0) + len(frame)
         if dry_run or frame.empty:
@@ -349,14 +349,6 @@ def _parse_as_of_date(value: str | None) -> date | None:
         return date.fromisoformat(str(value).strip()[:10])
     except ValueError as exc:
         raise ValueError(f"as_of_date must be YYYY-MM-DD, got {value!r}") from exc
-
-
-def _history_as_of_date_from_path(path: Path) -> date | None:
-    prefix = "arcana_estimate_consensus_"
-    stem = path.stem
-    if not stem.startswith(prefix):
-        return None
-    return _parse_as_of_date(stem[len(prefix) :])
 
 
 def _should_log_progress(index: int, total: int, progress_interval: int) -> bool:

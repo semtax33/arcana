@@ -42,6 +42,7 @@ from engine.transformers._internal.wacc_inputs import (
 
 
 FINANCIAL_DIR = DATA_LAKE.silver("dart", "normalized")
+ESTIMATE_GOLD_ROOT = DATA_LAKE.root / "gold" / "estimates"
 PRICE_PATH = DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price"))
 LEGACY_PRICE_PATHS = (
     DATA_LAKE.silver("krx", "price", "kr_normalized_price.csv"),
@@ -116,6 +117,56 @@ PERCENT_RATIO_FACTOR_COLUMNS = {
     "roe",
     "roic_financial",
     "roic_operational",
+}
+
+CONSENSUS_FACTOR_COLUMNS = [
+    "eps_expected_growth",
+    "revenue_expected_growth",
+    "operating_income_expected_growth",
+    "net_income_expected_growth",
+    "eps_surprise_pct",
+    "revenue_surprise_pct",
+    "operating_income_surprise_pct",
+    "net_income_surprise_pct",
+]
+
+CONSENSUS_METRIC_SPECS = {
+    "basic_eps": {
+        "actual_columns": ("BASIC_EPS", "eps", "DILUTED_EPS"),
+        "expected_factor": "eps_expected_growth",
+        "surprise_factor": "eps_surprise_pct",
+        "priority": 0,
+    },
+    "diluted_eps": {
+        "actual_columns": ("DILUTED_EPS", "eps", "BASIC_EPS"),
+        "expected_factor": "eps_expected_growth",
+        "surprise_factor": "eps_surprise_pct",
+        "priority": 1,
+    },
+    "revenue": {
+        "actual_columns": ("REVENUE", "sale"),
+        "expected_factor": "revenue_expected_growth",
+        "surprise_factor": "revenue_surprise_pct",
+        "priority": 0,
+    },
+    "operating_income": {
+        "actual_columns": ("OPERATING_INCOME", "oiadp"),
+        "expected_factor": "operating_income_expected_growth",
+        "surprise_factor": "operating_income_surprise_pct",
+        "priority": 0,
+    },
+    "net_income_parent": {
+        "actual_columns": ("NET_INCOME_PARENT", "ni_parent", "NET_INCOME", "ni"),
+        "expected_factor": "net_income_expected_growth",
+        "surprise_factor": "net_income_surprise_pct",
+        "priority": 0,
+    },
+    "net_income": {
+        "actual_columns": ("NET_INCOME", "ni", "NET_INCOME_PARENT", "ni_parent"),
+        "expected_factor": "net_income_expected_growth",
+        "surprise_factor": "net_income_surprise_pct",
+        "priority": 1,
+    },
 }
 
 
@@ -1610,6 +1661,226 @@ def add_dividend_factors(daily_df, stock_code, market="kr", market_data_cache=No
     return add_kr_dividend_factors(daily_df, stock_code)
 
 
+def add_consensus_factors(
+    daily_df,
+    financial_df,
+    stock_code,
+    *,
+    estimate_gold_root=ESTIMATE_GOLD_ROOT,
+    market="kr",
+):
+    df = daily_df.sort_values("trade_date").copy()
+    for column in CONSENSUS_FACTOR_COLUMNS:
+        if column not in df.columns:
+            df[column] = math.nan
+
+    market = str(market or "kr").strip().lower()
+    if market != "kr" or df.empty or financial_df is None or financial_df.empty:
+        return df
+
+    consensus_df = read_estimate_consensus_frame(stock_code, estimate_gold_root=estimate_gold_root)
+    if consensus_df.empty:
+        return df
+
+    actual_df = consensus_actual_frame(financial_df)
+    if actual_df.empty:
+        return df
+
+    events = build_consensus_factor_events(consensus_df, actual_df)
+    if events.empty:
+        return df
+    return merge_consensus_factor_events(df, events)
+
+
+def read_estimate_consensus_frame(stock_code, *, estimate_gold_root=ESTIMATE_GOLD_ROOT):
+    stock_code = normalize_stock_code(stock_code)
+    estimate_dir = Path(estimate_gold_root) / stock_code
+    consensus_path = estimate_dir / "arcana_estimate_consensus.csv"
+    component_path = estimate_dir / "arcana_estimate_component.csv"
+    if not consensus_path.exists() or not component_path.exists():
+        return pd.DataFrame()
+
+    consensus = pd.read_csv(consensus_path, dtype={"stock_code": str, "target_period": str})
+    components = pd.read_csv(
+        component_path,
+        dtype={"stock_code": str, "target_period": str, "source_actual_period": str},
+        usecols=lambda column: column
+        in {"stock_code", "target_period", "metric_id", "scenario", "source_actual_period"},
+    )
+    if consensus.empty or components.empty:
+        return pd.DataFrame()
+
+    consensus["stock_code"] = consensus["stock_code"].map(normalize_stock_code)
+    components["stock_code"] = components["stock_code"].map(normalize_stock_code)
+    consensus["metric_id"] = consensus["metric_id"].astype(str)
+    components["metric_id"] = components["metric_id"].astype(str)
+    consensus = consensus[consensus["metric_id"].isin(CONSENSUS_METRIC_SPECS)].copy()
+    components = components[components["metric_id"].isin(CONSENSUS_METRIC_SPECS)].copy()
+    if consensus.empty or components.empty:
+        return pd.DataFrame()
+
+    source_periods = (
+        components.dropna(subset=["source_actual_period"])
+        .sort_values(["stock_code", "target_period", "metric_id", "scenario", "source_actual_period"])
+        .drop_duplicates(["stock_code", "target_period", "metric_id", "scenario"], keep="last")
+    )
+    keep_columns = ["stock_code", "target_period", "metric_id", "scenario", "source_actual_period"]
+    result = consensus.merge(
+        source_periods[keep_columns],
+        on=["stock_code", "target_period", "metric_id", "scenario"],
+        how="left",
+    )
+    result["consensus_mean"] = pd.to_numeric(result.get("consensus_mean"), errors="coerce")
+    result = result.dropna(subset=["consensus_mean", "source_actual_period"])
+    return result
+
+
+def consensus_actual_frame(financial_df):
+    if financial_df is None or financial_df.empty:
+        return pd.DataFrame()
+    required = {"fiscal_year", "fiscal_month", "report_date"}
+    if not required.issubset(financial_df.columns):
+        return pd.DataFrame()
+
+    df = financial_df.copy()
+    df["fiscal_year"] = pd.to_numeric(df["fiscal_year"], errors="coerce").astype("Int64")
+    df["fiscal_month"] = pd.to_numeric(df["fiscal_month"], errors="coerce").astype("Int64")
+    df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce")
+    df = df.dropna(subset=["fiscal_year", "fiscal_month", "report_date"])
+    if df.empty:
+        return pd.DataFrame()
+
+    result = pd.DataFrame(index=df.index)
+    result["period"] = df["fiscal_year"].astype(int).astype(str) + "." + df["fiscal_month"].astype(int).astype(str).str.zfill(2)
+    result["report_date"] = df["report_date"]
+    for metric_id, spec in CONSENSUS_METRIC_SPECS.items():
+        result[metric_id] = first_value_frame(df, *spec["actual_columns"])
+
+    result = result.sort_values(["period", "report_date"]).drop_duplicates("period", keep="last")
+    return result.reset_index(drop=True)
+
+
+def build_consensus_factor_events(consensus_df, actual_df):
+    if consensus_df.empty or actual_df.empty:
+        return pd.DataFrame(columns=["available_date", "factor_id", "factor_value", "priority"])
+
+    period_report_date = actual_df.set_index("period")["report_date"]
+    actual_by_metric = {
+        metric_id: actual_df.set_index("period")[metric_id]
+        for metric_id in CONSENSUS_METRIC_SPECS
+        if metric_id in actual_df.columns
+    }
+
+    rows = []
+    for row in consensus_df.to_dict("records"):
+        metric_id = str(row.get("metric_id") or "")
+        spec = CONSENSUS_METRIC_SPECS.get(metric_id)
+        if not spec:
+            continue
+
+        consensus_value = _finite_float(row.get("consensus_mean"))
+        if consensus_value is None:
+            continue
+
+        source_period = str(row.get("source_actual_period") or "")
+        target_period = str(row.get("target_period") or "")
+        source_report_date = period_report_date.get(source_period)
+        target_report_date = period_report_date.get(target_period)
+
+        source_actual = _series_lookup_float(actual_by_metric.get(metric_id), source_period)
+        expected_growth = _pct_diff(consensus_value, source_actual)
+        if expected_growth is not None and pd.notna(source_report_date):
+            rows.append(
+                {
+                    "available_date": source_report_date,
+                    "factor_id": spec["expected_factor"],
+                    "factor_value": expected_growth,
+                    "priority": spec["priority"],
+                }
+            )
+
+        target_actual = _series_lookup_float(actual_by_metric.get(metric_id), target_period)
+        surprise = _pct_diff(target_actual, consensus_value)
+        if surprise is not None and pd.notna(target_report_date):
+            if pd.isna(source_report_date) or pd.Timestamp(source_report_date) < pd.Timestamp(target_report_date):
+                rows.append(
+                    {
+                        "available_date": target_report_date,
+                        "factor_id": spec["surprise_factor"],
+                        "factor_value": surprise,
+                        "priority": spec["priority"],
+                    }
+                )
+
+    if not rows:
+        return pd.DataFrame(columns=["available_date", "factor_id", "factor_value", "priority"])
+    events = pd.DataFrame(rows)
+    events["available_date"] = pd.to_datetime(events["available_date"], errors="coerce")
+    events["factor_value"] = pd.to_numeric(events["factor_value"], errors="coerce")
+    events = events.dropna(subset=["available_date", "factor_id", "factor_value"])
+    return events.sort_values(["available_date", "factor_id", "priority"]).reset_index(drop=True)
+
+
+def merge_consensus_factor_events(daily_df, events):
+    df = daily_df.sort_values("trade_date").copy()
+    if events.empty:
+        return df
+
+    event_values = (
+        events.sort_values(["available_date", "factor_id", "priority"])
+        .drop_duplicates(["available_date", "factor_id"], keep="first")
+        .pivot(index="available_date", columns="factor_id", values="factor_value")
+        .sort_index()
+        .ffill()
+    )
+    for column in CONSENSUS_FACTOR_COLUMNS:
+        if column not in event_values.columns:
+            event_values[column] = math.nan
+    event_values = event_values[CONSENSUS_FACTOR_COLUMNS].reset_index()
+
+    merged = pd.merge_asof(
+        df.sort_values("trade_date"),
+        event_values.sort_values("available_date"),
+        left_on="trade_date",
+        right_on="available_date",
+        direction="backward",
+        suffixes=("", "_consensus"),
+    )
+    for column in CONSENSUS_FACTOR_COLUMNS:
+        consensus_column = f"{column}_consensus"
+        if consensus_column in merged.columns:
+            merged[column] = merged[consensus_column]
+    return merged.drop(columns=["available_date", *[f"{column}_consensus" for column in CONSENSUS_FACTOR_COLUMNS]], errors="ignore")
+
+
+def _finite_float(value):
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(result):
+        return None
+    return result
+
+
+def _series_lookup_float(series, key):
+    if series is None:
+        return None
+    try:
+        value = series.get(key)
+    except AttributeError:
+        return None
+    return _finite_float(value)
+
+
+def _pct_diff(current, reference):
+    current_value = _finite_float(current)
+    reference_value = _finite_float(reference)
+    if current_value is None or reference_value is None or reference_value == 0:
+        return None
+    return (current_value - reference_value) / abs(reference_value) * 100
+
+
 def max_drawdown(returns):
     wealth = returns.fillna(0).add(1).cumprod()
     drawdown = wealth / wealth.cummax() - 1
@@ -2022,6 +2293,7 @@ def create_stock_factor_dataframe(
     wacc_assumptions_path=None,
     wacc_benchmark_path=None,
     wacc_online_backfill=False,
+    estimate_gold_root=ESTIMATE_GOLD_ROOT,
 ):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
@@ -2134,6 +2406,13 @@ def create_stock_factor_dataframe(
         market_data_cache=market_data_cache,
     )
     daily_df = add_daily_market_valuation_factors(daily_df)
+    daily_df = add_consensus_factors(
+        daily_df,
+        financial_df,
+        stock_code,
+        estimate_gold_root=estimate_gold_root,
+        market=market,
+    )
     daily_df = add_wacc_factors(
         daily_df,
         market=market,
@@ -2285,6 +2564,14 @@ def preferred_factor_columns():
         "rdsr_pct",
         "rnd_to_sales",
         "eps_yoy_pct",
+        "eps_expected_growth",
+        "revenue_expected_growth",
+        "operating_income_expected_growth",
+        "net_income_expected_growth",
+        "eps_surprise_pct",
+        "revenue_surprise_pct",
+        "operating_income_surprise_pct",
+        "net_income_surprise_pct",
         "asset_yoy_pct",
         "cfo_yoy_pct",
         "fcf_yoy_pct",

@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from engine.core.paths import DATA_LAKE, statement_symbol_name
+from engine.core.paths import DATA_LAKE, first_existing_path, market_csv_name, statement_symbol_name
 from engine.transformers._internal.estimate_consensus import build_consensus
 from engine.transformers._internal.pqc import assumptions_json, forecast_unit_economics, pct_change, period_end_date
 
@@ -22,6 +22,8 @@ SILVER_ROOT = DATA_LAKE.silver("dart", "business-info")
 OPERATING_METRIC_GOLD_ROOT = DATA_LAKE.root / "gold" / "operating-metrics"
 ESTIMATE_GOLD_ROOT = DATA_LAKE.root / "gold" / "estimates"
 NORMALIZED_STATEMENT_DIR = DATA_LAKE.silver("dart", "normalized")
+REPORT_METADATA_PATH = DATA_LAKE.silver("dart", market_csv_name("report_metadata"))
+LEGACY_REPORT_METADATA_PATH = DATA_LAKE.silver("dart", "report_metadata.csv")
 
 RAW_COLUMNS = [
     "security_id",
@@ -182,6 +184,7 @@ def create_operating_metric_gold(
     operating_gold_root: str | Path = OPERATING_METRIC_GOLD_ROOT,
     estimate_gold_root: str | Path = ESTIMATE_GOLD_ROOT,
     normalized_statement_dir: str | Path = NORMALIZED_STATEMENT_DIR,
+    report_metadata_path: str | Path | None = REPORT_METADATA_PATH,
     estimate_start_period: str | None = None,
     estimate_end_period: str | None = None,
     estimate_all_periods: bool = False,
@@ -190,6 +193,7 @@ def create_operating_metric_gold(
 ) -> TransformResult:
     stock_code = normalize_stock_code(stock_code)
     as_of_date_text = _resolve_as_of_date_text(as_of_date)
+    report_date_lookup = _load_report_date_lookup(stock_code, report_metadata_path)
     stock_silver_dir = Path(silver_root) / stock_code
     table_path = stock_silver_dir / "kr_business_info_tables.csv"
     row_path = stock_silver_dir / "kr_business_info_rows.csv"
@@ -209,6 +213,7 @@ def create_operating_metric_gold(
         end_period=estimate_end_period,
         all_periods=estimate_all_periods,
         as_of_date=as_of_date_text,
+        report_date_lookup=report_date_lookup,
     )
     financial_component_df = build_financial_statement_estimate_components(
         stock_code,
@@ -218,6 +223,7 @@ def create_operating_metric_gold(
         end_period=estimate_end_period,
         all_periods=estimate_all_periods,
         as_of_date=as_of_date_text,
+        report_date_lookup=report_date_lookup,
     )
     if not financial_component_df.empty:
         component_df = pd.concat([component_df, financial_component_df], ignore_index=True)
@@ -558,6 +564,7 @@ def build_estimate_components(
     end_period: str | None = None,
     all_periods: bool = False,
     as_of_date: str | None = None,
+    report_date_lookup: dict[tuple[int, int], str] | None = None,
 ) -> pd.DataFrame:
     if unit_df.empty:
         return pd.DataFrame(columns=COMPONENT_COLUMNS)
@@ -575,6 +582,12 @@ def build_estimate_components(
 
     rows: list[dict[str, Any]] = []
     for fiscal_year, fiscal_month in selected_periods:
+        period_as_of_date = _report_date_for_period(
+            report_date_lookup,
+            fiscal_year,
+            fiscal_month,
+            fallback=as_of_date_text,
+        )
         period_units = unit_df[
             (unit_df["fiscal_year"].astype(int) == fiscal_year)
             & (unit_df["fiscal_month"].astype(int) == fiscal_month)
@@ -583,7 +596,7 @@ def build_estimate_components(
             _build_estimate_component_rows_for_period(
                 period_units,
                 driver_lookup=driver_lookup,
-                as_of_date=as_of_date_text,
+                as_of_date=period_as_of_date,
             )
         )
     return pd.DataFrame(rows, columns=COMPONENT_COLUMNS)
@@ -690,6 +703,7 @@ def build_financial_statement_estimate_components(
     end_period: str | None = None,
     all_periods: bool = False,
     as_of_date: str | None = None,
+    report_date_lookup: dict[tuple[int, int], str] | None = None,
 ) -> pd.DataFrame:
     financial_df = _load_financial_estimate_source(stock_code, normalized_statement_dir)
     if financial_df.empty:
@@ -713,6 +727,12 @@ def build_financial_statement_estimate_components(
     rows: list[dict[str, Any]] = []
 
     for fiscal_year, fiscal_month in selected_periods:
+        period_as_of_date = _report_date_for_period(
+            report_date_lookup,
+            fiscal_year,
+            fiscal_month,
+            fallback=as_of_date_text,
+        )
         target_period = f"{fiscal_year + 1}.{fiscal_month:02d}"
         source_actual_period = f"{fiscal_year}.{fiscal_month:02d}"
         revenue_current = _financial_lookup_value(lookup, "REVENUE", fiscal_year, fiscal_month)
@@ -786,7 +806,7 @@ def build_financial_statement_estimate_components(
                         ),
                         "confidence": variant["confidence"],
                         "quality_flags": "FINANCIAL_STATEMENT_BASED",
-                        "as_of_date": as_of_date_text,
+                        "as_of_date": period_as_of_date,
                     }
                 )
 
@@ -1388,6 +1408,71 @@ def _now_date_text() -> str:
     return datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
 
 
+def _load_report_date_lookup(
+    stock_code: str,
+    report_metadata_path: str | Path | None = REPORT_METADATA_PATH,
+) -> dict[tuple[int, int], str]:
+    if report_metadata_path is None:
+        return {}
+    path = Path(report_metadata_path)
+    if path == REPORT_METADATA_PATH:
+        path = first_existing_path(REPORT_METADATA_PATH, LEGACY_REPORT_METADATA_PATH)
+    if not path.exists():
+        return {}
+
+    try:
+        frame = pd.read_csv(path, dtype={"stock_code": str, "rcept_no": str, "source_type": str})
+    except Exception:
+        return {}
+    if frame.empty:
+        return {}
+
+    required = {"stock_code", "fiscal_year", "fiscal_month", "report_date"}
+    if not required.issubset(frame.columns):
+        return {}
+
+    frame = frame.copy()
+    frame["stock_code"] = frame["stock_code"].map(normalize_stock_code)
+    frame = frame[frame["stock_code"].eq(normalize_stock_code(stock_code))]
+    if "source_type" in frame.columns:
+        statement_frame = frame[frame["source_type"].astype(str).str.lower().eq("statement")]
+        if not statement_frame.empty:
+            frame = statement_frame
+    if frame.empty:
+        return {}
+
+    frame["fiscal_year"] = pd.to_numeric(frame["fiscal_year"], errors="coerce")
+    frame["fiscal_month"] = pd.to_numeric(frame["fiscal_month"], errors="coerce")
+    frame["_report_date"] = pd.to_datetime(frame["report_date"], errors="coerce")
+    frame["_rcept_no"] = pd.to_numeric(frame.get("rcept_no"), errors="coerce")
+    frame = frame.dropna(subset=["fiscal_year", "fiscal_month", "_report_date"])
+    if frame.empty:
+        return {}
+
+    frame = (
+        frame.sort_values(["_report_date", "_rcept_no"], kind="stable")
+        .drop_duplicates(["fiscal_year", "fiscal_month"], keep="last")
+    )
+    return {
+        (int(row["fiscal_year"]), int(row["fiscal_month"])): row["_report_date"].date().isoformat()
+        for row in frame.to_dict("records")
+    }
+
+
+def _report_date_for_period(
+    report_date_lookup: dict[tuple[int, int], str] | None,
+    fiscal_year: int,
+    fiscal_month: int,
+    *,
+    fallback: str,
+) -> str:
+    if report_date_lookup:
+        value = report_date_lookup.get((int(fiscal_year), int(fiscal_month)))
+        if value:
+            return value
+    return fallback
+
+
 def _resolve_as_of_date_text(value: str | None) -> str:
     if value is None or not str(value).strip():
         return _now_date_text()
@@ -1414,6 +1499,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Create operating metric and P/Q/C estimate gold CSVs.")
     parser.add_argument("--stock-codes", help="Comma-separated stock codes. Defaults to all silver business-info dirs.")
     parser.add_argument("--normalized-statement-dir", default=str(NORMALIZED_STATEMENT_DIR))
+    parser.add_argument("--report-metadata-path", default=str(REPORT_METADATA_PATH))
     parser.add_argument("--start-period", help="First source actual period for estimates, e.g. 2023.12.")
     parser.add_argument("--end-period", help="Last source actual period for estimates, e.g. 2026.03.")
     parser.add_argument("--as-of-date", help="Snapshot date for estimate outputs, e.g. 2026-06-28.")
@@ -1433,6 +1519,7 @@ def main() -> None:
         estimate_end_period=args.end_period,
         estimate_all_periods=args.all_periods,
         normalized_statement_dir=args.normalized_statement_dir,
+        report_metadata_path=args.report_metadata_path,
         as_of_date=args.as_of_date,
         write_history=args.write_history,
         progress=not args.no_progress,

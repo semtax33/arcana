@@ -557,6 +557,26 @@ class FactorEltTest(unittest.TestCase):
             (row_by_id.loc[higher_better_factor_ids, "value_direction"] == "HIGHER_BETTER").all()
         )
 
+    def test_create_factor_catalog_dataframe_registers_consensus_factors(self):
+        factor_ids = [
+            "eps_expected_growth",
+            "revenue_expected_growth",
+            "operating_income_expected_growth",
+            "net_income_expected_growth",
+            "eps_surprise_pct",
+            "revenue_surprise_pct",
+            "operating_income_surprise_pct",
+            "net_income_surprise_pct",
+        ]
+
+        catalog_df = create_factor_catalog_dataframe(factor_ids)
+        row_by_id = catalog_df.set_index("factor_id")
+
+        self.assertEqual(set(row_by_id.index), set(factor_ids))
+        self.assertTrue((row_by_id["factor_type"] == "growth").all())
+        self.assertTrue((row_by_id["unit"] == "percent").all())
+        self.assertTrue((row_by_id["value_direction"] == "HIGHER_BETTER").all())
+
 
 if __name__ == "__main__":
     unittest.main()

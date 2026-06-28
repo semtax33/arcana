@@ -7,6 +7,7 @@ import pandas as pd
 
 from engine.transformers.factors import (
     FactorMarketDataCache,
+    add_consensus_factors,
     add_annual_financial_factors,
     add_daily_market_valuation_factors,
     add_dividend_factors,
@@ -21,6 +22,82 @@ from engine.transformers.factors import (
 
 
 class FactorNormalizerTest(unittest.TestCase):
+    def test_add_consensus_factors_uses_report_dates_for_expected_growth_and_surprise(self):
+        with TemporaryDirectory() as temp_dir:
+            estimate_dir = Path(temp_dir) / "005930"
+            estimate_dir.mkdir(parents=True)
+            (estimate_dir / "arcana_estimate_consensus.csv").write_text(
+                "\n".join(
+                    [
+                        "security_id,stock_code,target_period,metric_id,scenario,consensus_mean,consensus_median,consensus_low,consensus_high,model_count,confidence,dispersion,currency,as_of_date",
+                        "SEC_KR_005930,005930,2026.12,basic_eps,base,120,120,120,120,3,0.8,0,KRW,2026-06-28",
+                        "SEC_KR_005930,005930,2026.12,revenue,base,1100,1100,1100,1100,3,0.8,0,KRW,2026-06-28",
+                        "SEC_KR_005930,005930,2026.12,operating_income,base,130,130,130,130,3,0.8,0,KRW,2026-06-28",
+                        "SEC_KR_005930,005930,2026.12,net_income_parent,base,70,70,70,70,3,0.8,0,KRW,2026-06-28",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (estimate_dir / "arcana_estimate_component.csv").write_text(
+                "\n".join(
+                    [
+                        "security_id,stock_code,target_period,metric_id,model_id,scenario,estimate_value,currency,source_actual_period,assumptions_json,confidence,quality_flags,as_of_date",
+                        "SEC_KR_005930,005930,2026.12,basic_eps,Historical Trend,base,120,KRW,2025.12,{},0.8,,2026-06-28",
+                        "SEC_KR_005930,005930,2026.12,revenue,Historical Trend,base,1100,KRW,2025.12,{},0.8,,2026-06-28",
+                        "SEC_KR_005930,005930,2026.12,operating_income,Historical Trend,base,130,KRW,2025.12,{},0.8,,2026-06-28",
+                        "SEC_KR_005930,005930,2026.12,net_income_parent,Historical Trend,base,70,KRW,2025.12,{},0.8,,2026-06-28",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            daily_df = pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-03-14", "2026-03-15", "2027-03-14", "2027-03-15"]),
+                    "close": [10, 10, 10, 10],
+                }
+            )
+            financial_df = pd.DataFrame(
+                [
+                    {
+                        "fiscal_year": 2025,
+                        "fiscal_month": 12,
+                        "report_date": "2026-03-15",
+                        "BASIC_EPS": 100,
+                        "REVENUE": 1000,
+                        "OPERATING_INCOME": 100,
+                        "NET_INCOME_PARENT": 50,
+                    },
+                    {
+                        "fiscal_year": 2026,
+                        "fiscal_month": 12,
+                        "report_date": "2027-03-15",
+                        "BASIC_EPS": 130,
+                        "REVENUE": 1250,
+                        "OPERATING_INCOME": 150,
+                        "NET_INCOME_PARENT": 80,
+                    },
+                ]
+            )
+
+            result = add_consensus_factors(
+                daily_df,
+                financial_df,
+                "005930",
+                estimate_gold_root=Path(temp_dir),
+            )
+
+        self.assertTrue(pd.isna(result.loc[0, "eps_expected_growth"]))
+        self.assertAlmostEqual(result.loc[1, "eps_expected_growth"], 20.0)
+        self.assertAlmostEqual(result.loc[1, "revenue_expected_growth"], 10.0)
+        self.assertAlmostEqual(result.loc[1, "operating_income_expected_growth"], 30.0)
+        self.assertAlmostEqual(result.loc[1, "net_income_expected_growth"], 40.0)
+        self.assertTrue(pd.isna(result.loc[2, "eps_surprise_pct"]))
+        self.assertAlmostEqual(result.loc[3, "eps_surprise_pct"], 8.333333333333332)
+        self.assertAlmostEqual(result.loc[3, "revenue_surprise_pct"], 13.636363636363635)
+        self.assertAlmostEqual(result.loc[3, "operating_income_surprise_pct"], 15.384615384615385)
+        self.assertAlmostEqual(result.loc[3, "net_income_surprise_pct"], 14.285714285714285)
+
     def test_balance_component_outlier_falls_back_to_bounded_candidate(self):
         financial_df = pd.DataFrame(
             [

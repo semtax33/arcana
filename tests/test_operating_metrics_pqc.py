@@ -45,6 +45,7 @@ class QueryClient:
 def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
     silver_root = tmp_path / "silver" / "business-info"
     normalized_statement_dir = tmp_path / "silver" / "dart" / "normalized"
+    report_metadata_path = tmp_path / "silver" / "dart" / "kr_report_metadata.csv"
     operating_root = tmp_path / "gold" / "operating-metrics"
     estimate_root = tmp_path / "gold" / "estimates"
     stock_dir = silver_root / "123456"
@@ -133,6 +134,36 @@ def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
             for account_id, value in values.items()
         ]
     ).to_csv(normalized_statement_dir / "kr_normalized_123456.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(
+        [
+            {
+                "security_id": "SEC_KR_123456",
+                "stock_code": "123456",
+                "fiscal_year": 2025,
+                "fiscal_month": 12,
+                "period_end_date": "2025-12-31",
+                "report_date": "2026-03-15",
+                "rcept_no": "20260315000001",
+                "report_name": "사업보고서",
+                "source_type": "statement",
+                "source_url": "https://dart.example/2025",
+                "updated_at": "2026-06-28 00:00:00",
+            },
+            {
+                "security_id": "SEC_KR_123456",
+                "stock_code": "123456",
+                "fiscal_year": 2026,
+                "fiscal_month": 12,
+                "period_end_date": "2026-12-31",
+                "report_date": "2027-03-15",
+                "rcept_no": "20270315000001",
+                "report_name": "사업보고서",
+                "source_type": "statement",
+                "source_url": "https://dart.example/2026",
+                "updated_at": "2027-03-15 00:00:00",
+            },
+        ]
+    ).to_csv(report_metadata_path, index=False, encoding="utf-8-sig")
 
     result = create_operating_metric_gold(
         "123456",
@@ -140,6 +171,7 @@ def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
         operating_gold_root=operating_root,
         estimate_gold_root=estimate_root,
         normalized_statement_dir=normalized_statement_dir,
+        report_metadata_path=report_metadata_path,
         as_of_date="2026-06-01",
         write_history=True,
     )
@@ -153,7 +185,7 @@ def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
     assert result.estimate_consensus_history_path.exists()
     history_frame = pd.read_csv(result.estimate_consensus_history_path, dtype={"stock_code": str})
     assert len(history_frame) == result.estimate_consensus_rows
-    assert set(history_frame["as_of_date"]) == {"2026-06-01"}
+    assert set(history_frame["as_of_date"]) == {"2027-03-15"}
 
     unit_df = pd.read_csv(result.unit_economics_path)
     latest = unit_df.sort_values(["fiscal_year", "fiscal_month"]).iloc[-1]
@@ -191,8 +223,8 @@ def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
 
     history = estimate_service.get_consensus_history(
         "123456",
-        start_date=pd.Timestamp("2026-06-01").date(),
-        end_date=pd.Timestamp("2026-06-01").date(),
+        start_date=pd.Timestamp("2027-03-15").date(),
+        end_date=pd.Timestamp("2027-03-15").date(),
         metric_id="revenue",
     )
     assert history.source == "gold_csv_history"
@@ -212,6 +244,7 @@ def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
         operating_gold_root=operating_root,
         estimate_gold_root=estimate_root,
         normalized_statement_dir=normalized_statement_dir,
+        report_metadata_path=report_metadata_path,
         as_of_date="2026-06-01",
         write_history=True,
     )
@@ -224,10 +257,12 @@ def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
         operating_gold_root=operating_root,
         estimate_gold_root=estimate_root,
         normalized_statement_dir=normalized_statement_dir,
+        report_metadata_path=report_metadata_path,
         estimate_all_periods=True,
     )
     historical_consensus = pd.read_csv(historical_result.estimate_consensus_path, dtype={"target_period": str})
     assert {"2026.12", "2027.12"}.issubset(set(historical_consensus["target_period"]))
+    assert {"2026-03-15", "2027-03-15"}.issubset(set(historical_consensus["as_of_date"]))
     assert historical_consensus["model_count"].min() >= 3
 
     client = RecordingClient()
@@ -243,7 +278,7 @@ def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):
     assert counts["arcana_estimate_consensus_history"] >= 4
     assert any(table_name == "arcana_estimate_consensus_history" for table_name, _, _ in client.inserts)
     history_insert = next(frame for table_name, frame, _ in client.inserts if table_name == "arcana_estimate_consensus_history")
-    assert set(history_insert["as_of_date"]) == {date(2026, 6, 1)}
+    assert set(history_insert["as_of_date"]) == {date(2027, 3, 15)}
     assert client.inserts
     for _, frame, _ in client.inserts:
         if "stock_code" in frame.columns and not frame.empty:

@@ -427,13 +427,16 @@ normalized 재무제표 CSV가 있으면 유사 컨센서스에 `operating_incom
 `--normalized-statement-dir`로 지정합니다. 영업이익/순이익은 과거 YoY trend와 P/Q/C 매출
 forecast 기반 margin bridge를 사용하고, EPS는 순이익 bridge 또는 성장률 fallback으로 계산합니다.
 
+유사 컨센서스의 `as_of_date`는 기본적으로 `data-lake/silver/dart/kr_report_metadata.csv`의
+`report_date`를 사용합니다. 즉 실행일이 아니라 해당 실적 source actual period의 DART 공시일입니다.
+metadata가 없을 때만 `--as-of-date` 또는 실행일을 fallback으로 사용합니다.
+
 유사 컨센서스 히스토리가 필요하면 `--write-history`를 사용합니다. 최신
 `arcana_estimate_consensus.csv`는 기존처럼 갱신하고, 추가로
 `data-lake/gold/estimates/{stock_code}/history/arcana_estimate_consensus_{as_of_date}.csv`
 를 저장합니다. ClickHouse에 히스토리를 적재하려면 workflow 또는 loader에 `--load-history`를
-함께 지정합니다. loader는 history 파일을 적재할 때 기본적으로 파일명 날짜를 `as_of_date`로 사용합니다.
-이미 생성된 CSV를 재생성하지 않고 적재 기준일만 강제로 맞추려면 loader에 `--as-of-date YYYY-MM-DD`를
-지정합니다.
+함께 지정합니다. loader는 기본적으로 CSV 내부의 `as_of_date`를 보존합니다. 이미 생성된 CSV를
+재생성하지 않고 적재 기준일만 강제로 맞추려면 loader에 `--as-of-date YYYY-MM-DD`를 지정합니다.
 
 API는 ClickHouse를 먼저 조회하고 실패하거나 데이터가 없으면 gold CSV로 fallback합니다.
 

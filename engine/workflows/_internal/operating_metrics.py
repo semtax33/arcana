@@ -18,6 +18,7 @@ def run_operating_metrics_workflow(
     write_history: bool = False,
     load_history: bool = False,
     normalized_statement_dir: str | None = None,
+    report_metadata_path: str | None = None,
     progress: bool = True,
     progress_interval: int = 25,
     fail_fast: bool = False,
@@ -30,6 +31,7 @@ def run_operating_metrics_workflow(
         as_of_date=as_of_date,
         write_history=write_history,
         **({"normalized_statement_dir": normalized_statement_dir} if normalized_statement_dir else {}),
+        **({"report_metadata_path": report_metadata_path} if report_metadata_path else {}),
         progress=progress,
         progress_interval=progress_interval,
         continue_on_error=not fail_fast,
@@ -67,6 +69,7 @@ def main() -> None:
     parser.add_argument("--write-history", action="store_true")
     parser.add_argument("--load-history", action="store_true")
     parser.add_argument("--normalized-statement-dir")
+    parser.add_argument("--report-metadata-path")
     parser.add_argument("--progress-interval", type=int, default=25)
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
@@ -82,6 +85,7 @@ def main() -> None:
         write_history=args.write_history,
         load_history=args.load_history,
         normalized_statement_dir=args.normalized_statement_dir,
+        report_metadata_path=args.report_metadata_path,
         progress=not args.no_progress,
         progress_interval=args.progress_interval,
         fail_fast=args.fail_fast,
