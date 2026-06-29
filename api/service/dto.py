@@ -327,6 +327,7 @@ class FactorBacktestRequestDto(BaseModel):
     benchmarks: list[str] = Field(default_factory=lambda: ["KOSPI200", "KOSDAQ"])
     max_positions: int | None = Field(default=None, gt=0)
     transaction_cost_bps: float = Field(default=0, ge=0)
+    factor_table: str | None = None
 
 
 class BacktestSummaryDto(BaseModel):
@@ -378,6 +379,171 @@ class FactorBacktestResponseDto(BaseModel):
     rebalance_history: list[BacktestRebalanceDto] = Field(default_factory=list)
     annual_returns: list[BacktestAnnualReturnDto] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class FactorLabIssueDto(BaseModel):
+    code: str
+    message: str
+    node_id: str | None = None
+    field: str | None = None
+
+
+class FactorLabNodeTypeDto(BaseModel):
+    type: str
+    group: str
+    inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    config_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class FactorLabUniverseDto(BaseModel):
+    type: str = "market"
+    sector_codes: list[str] = Field(default_factory=list)
+    industry_group_codes: list[str] = Field(default_factory=list)
+
+
+class FactorLabRebalanceDto(BaseModel):
+    frequency: RebalanceFrequency = "quarterly"
+    signal_lag_days: int = Field(default=1, ge=0)
+    transaction_cost_bps: float = Field(default=0, ge=0)
+
+
+class FactorLabExperimentConfigDto(BaseModel):
+    name: str = "factor_lab_experiment"
+    market: str = "KR"
+    start_date: date
+    end_date: date
+    universe: FactorLabUniverseDto = Field(default_factory=FactorLabUniverseDto)
+    rebalance: FactorLabRebalanceDto = Field(default_factory=FactorLabRebalanceDto)
+
+
+class FactorLabNodeDto(BaseModel):
+    id: str
+    type: str
+    position: dict[str, float] = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class FactorLabEdgeDto(BaseModel):
+    id: str | None = None
+    source: str
+    source_handle: str = "out"
+    target: str
+    target_handle: str = "input"
+
+
+class FactorLabOutputsDto(BaseModel):
+    final_node_id: str
+
+
+class FactorLabGraphDto(BaseModel):
+    version: int = 1
+    experiment: FactorLabExperimentConfigDto
+    nodes: list[FactorLabNodeDto] = Field(..., min_length=1)
+    edges: list[FactorLabEdgeDto] = Field(default_factory=list)
+    outputs: FactorLabOutputsDto
+
+
+class FactorLabValidationResponseDto(BaseModel):
+    valid: bool
+    errors: list[FactorLabIssueDto] = Field(default_factory=list)
+    warnings: list[FactorLabIssueDto] = Field(default_factory=list)
+    execution_order: list[str] = Field(default_factory=list)
+    final_node_id: str | None = None
+    graph_hash: str = ""
+
+
+class FactorLabCompileResponseDto(BaseModel):
+    query: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    final_node_id: str
+    execution_order: list[str] = Field(default_factory=list)
+    graph_hash: str
+    warnings: list[FactorLabIssueDto] = Field(default_factory=list)
+
+
+class FactorLabExperimentSaveRequestDto(BaseModel):
+    graph: FactorLabGraphDto
+
+
+class FactorLabExperimentResponseDto(BaseModel):
+    experiment_id: str
+    graph: FactorLabGraphDto
+
+
+class FactorLabExperimentDeleteResponseDto(BaseModel):
+    deleted: bool
+
+
+class FactorLabRunRequestDto(BaseModel):
+    graph: FactorLabGraphDto | None = None
+    experiment_id: str | None = None
+
+
+class FactorLabQualitySummaryDto(BaseModel):
+    input_rows: int = 0
+    valid_rows: int = 0
+    invalid_rows: int = 0
+    dropped_rows: int = 0
+    invalid_reason_counts: dict[str, int] = Field(default_factory=dict)
+    date_coverage: dict[str, date | None] = Field(default_factory=dict)
+    security_coverage: int = 0
+
+
+class FactorLabRunRowDto(BaseModel):
+    rank: int | None = None
+    security_id: str
+    ticker: str | None = None
+    stock_name: str | None = None
+    trade_date: date | str
+    factor_id: str | None = None
+    factor_value: float | None = None
+    value: float | None = None
+    score: float | None = None
+    percentile_score: float | None = None
+    is_valid: bool = True
+    invalid_reason: str = ""
+
+
+class FactorLabRunResponseDto(BaseModel):
+    run_id: str
+    experiment_id: str | None = None
+    factor_id: str
+    status: str
+    final_node_id: str
+    graph_hash: str
+    quality: FactorLabQualitySummaryDto = Field(default_factory=FactorLabQualitySummaryDto)
+    warnings: list[str] = Field(default_factory=list)
+    rows: list[FactorLabRunRowDto] = Field(default_factory=list)
+    results: list[FactorLabRunRowDto] = Field(default_factory=list)
+    rankings: list[FactorLabRunRowDto] = Field(default_factory=list)
+    positions: list[FactorLabRunRowDto] = Field(default_factory=list)
+
+
+class FactorLabPreviewRowDto(BaseModel):
+    trade_date: date | str
+    security_id: str
+    value: float | None = None
+    is_valid: bool = True
+    invalid_reason: str = ""
+
+
+class FactorLabNodePreviewResponseDto(BaseModel):
+    run_id: str
+    node_id: str | None = None
+    rows: list[FactorLabPreviewRowDto] = Field(default_factory=list)
+    quality: FactorLabQualitySummaryDto = Field(default_factory=FactorLabQualitySummaryDto)
+
+
+class FactorLabBacktestRequestDto(BaseModel):
+    top_percent: float = Field(default=20, gt=0, le=100)
+    start_date: date
+    end_date: date
+    rebalance_frequency: RebalanceFrequency = "quarterly"
+    market: str | None = None
+    benchmarks: list[str] = Field(default_factory=lambda: ["KOSPI200", "KOSDAQ"])
+    max_positions: int | None = Field(default=None, gt=0)
+    transaction_cost_bps: float = Field(default=0, ge=0)
 
 
 ChartRange = Literal["1M", "3M", "6M", "1Y", "5Y", "MAX"]

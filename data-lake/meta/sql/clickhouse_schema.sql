@@ -504,3 +504,66 @@ ORDER BY
     factor_id
 )
 SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS factor_lab_experiment
+(
+    experiment_id UUID,
+    name String,
+    graph_json String,
+    final_node_id String,
+    market LowCardinality(String),
+    created_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3),
+    updated_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY experiment_id;
+
+CREATE TABLE IF NOT EXISTS factor_lab_run
+(
+    run_id UUID,
+    experiment_id Nullable(UUID),
+    graph_hash String,
+    status LowCardinality(String),
+    start_date Date,
+    end_date Date,
+    error String,
+    started_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3),
+    finished_at Nullable(DateTime64(3, 'Asia/Seoul'))
+)
+ENGINE = ReplacingMergeTree(started_at)
+ORDER BY run_id;
+
+CREATE TABLE IF NOT EXISTS factor_lab_node_cache
+(
+    run_id UUID,
+    node_id String,
+    trade_date Date,
+    security_id String,
+    value Nullable(Float64),
+    is_valid Bool,
+    invalid_reason String,
+    created_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(trade_date)
+ORDER BY (run_id, node_id, trade_date, security_id);
+
+CREATE TABLE IF NOT EXISTS factor_lab_values
+(
+    security_id String,
+    trade_date Date,
+    factor_id LowCardinality(String),
+    financial_basis LowCardinality(String) DEFAULT 'lab',
+    factor_value Nullable(Float64),
+    fiscal_year Nullable(UInt16),
+    financial_period Nullable(Date),
+    currency LowCardinality(String) DEFAULT '',
+    run_id UUID,
+    node_id String,
+    is_valid Bool,
+    invalid_reason String,
+    updated_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY toYYYYMM(trade_date)
+ORDER BY (factor_id, trade_date, security_id);
