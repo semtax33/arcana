@@ -439,6 +439,19 @@ LIMIT 1
         )
 
     def run_backtest(self, run_id: str, request: FactorLabBacktestRequestDto):
+        client = self._client_factory()
+        try:
+            _ensure_tables(client)
+            run_status = _load_run_status(client, run_id)
+            if run_status is None:
+                raise KeyError(run_id)
+            if run_status != "completed":
+                raise ValueError(f"factor lab run is not completed: {run_status}")
+            if _load_run_value_count(client, run_id) <= 0:
+                raise ValueError("factor lab run has no completed factor values")
+        finally:
+            _close(client)
+
         factor_id = _lab_factor_id(run_id)
         backtest_request = FactorBacktestRequestDto(
             conditions=[
@@ -515,6 +528,41 @@ WHERE experiment_id = {experiment_id:UUID}
         )
     )
     return [str(row["run_id"]) for row in rows]
+
+
+def _load_run_status(client: Any, run_id: str) -> str | None:
+    rows = _records(
+        client.query_df(
+            """
+SELECT status
+FROM factor_lab_run FINAL
+WHERE run_id = {run_id:UUID}
+ORDER BY started_at DESC
+LIMIT 1
+""".strip(),
+            parameters={"run_id": run_id},
+        )
+    )
+    if not rows:
+        return None
+    return str(rows[0].get("status") or "")
+
+
+def _load_run_value_count(client: Any, run_id: str) -> int:
+    rows = _records(
+        client.query_df(
+            """
+SELECT count() AS row_count
+FROM factor_lab_values
+WHERE run_id = {run_id:UUID}
+    AND is_valid
+""".strip(),
+            parameters={"run_id": run_id},
+        )
+    )
+    if not rows:
+        return 0
+    return int(_float_or_none(rows[0].get("row_count")) or 0)
 
 
 def _ensure_tables(client: Any) -> None:

@@ -263,6 +263,53 @@ GET /api/chart/005930?range=1Y
 
 ### 3.8 종목 소개
 
+#### `POST /api/factor-lab/runs/{run_id}/backtest`
+
+Runs a factor backtest against the saved output of a completed Factor Lab run.
+The run must already have rows in `factor_lab_values`; this endpoint does not
+compile or execute a graph by itself.
+
+Path parameters:
+
+| name | type | required | description |
+| --- | --- | --- | --- |
+| `run_id` | UUID string | yes | Completed Factor Lab run ID |
+
+Request body `FactorLabBacktestRequestDto`:
+
+| field | type | required | default | description |
+| --- | --- | --- | --- | --- |
+| `top_percent` | number | no | `20` | Selects top-ranked lab factor rows, `0 < value <= 100` |
+| `start_date` | date | yes | - | Backtest start date |
+| `end_date` | date | yes | - | Backtest end date |
+| `rebalance_frequency` | `RebalanceFrequency` | no | `quarterly` | Rebalance frequency |
+| `market` | string | no | `null` | Market filter |
+| `benchmarks` | string[] | no | `["KOSPI200", "KOSDAQ"]` | Benchmark symbols |
+| `max_positions` | integer | no | `null` | Maximum selected positions, `> 0` |
+| `transaction_cost_bps` | number | no | `0` | Transaction cost in bps |
+
+Response: `FactorBacktestResponseDto`.
+
+Error behavior:
+
+- `404 factor_lab_run_not_found`: `run_id` was not found.
+- `422 factor_lab_invalid_backtest`: run is not completed, has no valid Factor Lab values, or request validation fails.
+
+Example:
+
+```json
+{
+  "top_percent": 20,
+  "start_date": "2021-01-01",
+  "end_date": "2025-12-31",
+  "rebalance_frequency": "quarterly",
+  "market": "KR",
+  "benchmarks": ["KOSPI200", "KOSDAQ"],
+  "max_positions": 50,
+  "transaction_cost_bps": 5
+}
+```
+
 #### `GET /api/introduction/{stock_code}`
 
 종목 기본 정보, 시가총액/밸류에이션/52주 범위, 회사 설명, 사업 영역 배지를 조회합니다.

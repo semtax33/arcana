@@ -153,6 +153,8 @@ def run_factor_lab_backtest(
 ) -> FactorBacktestResponseDto:
     try:
         result = FactorLabService().run_backtest(run_id, request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=_error("factor_lab_run_not_found", "run not found")) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=_error("factor_lab_invalid_backtest", str(exc))) from exc
     except Exception as exc:

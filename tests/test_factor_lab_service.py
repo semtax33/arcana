@@ -1,9 +1,17 @@
 import unittest
 import uuid
+from datetime import date
+from unittest.mock import patch
 
 import pandas as pd
 
-from api.service.dto import FactorLabExperimentSaveRequestDto, FactorLabGraphDto, FactorLabRunRequestDto
+from api.model.backtest import BacktestSummary, FactorBacktestResult
+from api.service.dto import (
+    FactorLabBacktestRequestDto,
+    FactorLabExperimentSaveRequestDto,
+    FactorLabGraphDto,
+    FactorLabRunRequestDto,
+)
 from api.service.factor_lab_service import FactorLabService
 
 
@@ -36,6 +44,9 @@ class FakeFactorLabClient:
         self.closed = False
         self.experiment_exists = True
         self.run_ids = [str(uuid.UUID("11111111-1111-1111-1111-111111111111"))]
+        self.run_exists = True
+        self.run_status = "completed"
+        self.run_value_count = 12
 
     def command(self, query, parameters=None):
         self.commands.append((query, parameters or {}))
@@ -49,8 +60,12 @@ class FakeFactorLabClient:
             return pd.DataFrame({"found": [1]}) if self.experiment_exists else pd.DataFrame()
         if "SELECT run_id" in query and "FROM factor_lab_run" in query:
             return pd.DataFrame({"run_id": self.run_ids})
+        if "SELECT status" in query and "FROM factor_lab_run" in query:
+            return pd.DataFrame({"status": [self.run_status]}) if self.run_exists else pd.DataFrame()
         if "invalid_reason" in query and "GROUP BY invalid_reason" in query:
             return pd.DataFrame({"invalid_reason": ["zscore_zero_std"], "row_count": [2]})
+        if "count() AS row_count" in query and "FROM factor_lab_values" in query:
+            return pd.DataFrame({"row_count": [self.run_value_count]})
         if "ranked_values AS" in query:
             return pd.DataFrame(
                 {
@@ -101,6 +116,7 @@ class FactorLabServiceTest(unittest.TestCase):
         }
         self.assertIn(("/api/factor-lab/experiments/{experiment_id}", "PUT"), route_methods)
         self.assertIn(("/api/factor-lab/experiments/{experiment_id}", "DELETE"), route_methods)
+        self.assertIn(("/api/factor-lab/runs/{run_id}/backtest", "POST"), route_methods)
 
     def test_compile_graph_uses_factor_catalog_allowlist(self):
         client = FakeFactorLabClient()
@@ -178,6 +194,76 @@ class FactorLabServiceTest(unittest.TestCase):
             FactorLabService(client_factory=lambda: client).update_experiment(
                 str(uuid.UUID("22222222-2222-2222-2222-222222222222")),
                 FactorLabExperimentSaveRequestDto(graph=graph),
+            )
+
+    def test_run_backtest_validates_run_and_builds_lab_factor_request(self):
+        client = FakeFactorLabClient()
+        run_id = str(uuid.UUID("11111111-1111-1111-1111-111111111111"))
+        result = FactorBacktestResult(
+            summary=BacktestSummary(
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 12, 31),
+                rebalance_frequency="quarterly",
+            ),
+            equity_curve=[],
+            rebalance_history=[],
+            annual_returns=[],
+        )
+
+        with patch("api.service.factor_lab_service.BacktestService") as backtest_service:
+            instance = backtest_service.return_value
+            instance.run_factor_backtest.return_value = result
+
+            response = FactorLabService(client_factory=lambda: client).run_backtest(
+                run_id,
+                FactorLabBacktestRequestDto(
+                    top_percent=15,
+                    start_date=date(2026, 1, 1),
+                    end_date=date(2026, 12, 31),
+                    rebalance_frequency="quarterly",
+                    market="KR",
+                    max_positions=30,
+                    transaction_cost_bps=5,
+                ),
+            )
+
+        self.assertIs(response, result)
+        request = instance.run_factor_backtest.call_args.args[0]
+        self.assertEqual("factor_lab_values", request.factor_table)
+        self.assertEqual("lab", request.financial_basis)
+        self.assertEqual("lab_11111111111111111111111111111111", request.conditions[0].factor_id)
+        self.assertEqual(15, request.conditions[0].top_percent)
+        self.assertEqual("higher", request.conditions[0].rank_direction)
+        self.assertEqual("KR", request.market)
+        self.assertEqual(30, request.max_positions)
+        self.assertEqual(5, request.transaction_cost_bps)
+
+    def test_run_backtest_missing_run_raises_key_error(self):
+        client = FakeFactorLabClient()
+        client.run_exists = False
+
+        with self.assertRaises(KeyError):
+            FactorLabService(client_factory=lambda: client).run_backtest(
+                str(uuid.UUID("11111111-1111-1111-1111-111111111111")),
+                FactorLabBacktestRequestDto(
+                    start_date=date(2026, 1, 1),
+                    end_date=date(2026, 12, 31),
+                    rebalance_frequency="quarterly",
+                ),
+            )
+
+    def test_run_backtest_without_values_raises_value_error(self):
+        client = FakeFactorLabClient()
+        client.run_value_count = 0
+
+        with self.assertRaises(ValueError):
+            FactorLabService(client_factory=lambda: client).run_backtest(
+                str(uuid.UUID("11111111-1111-1111-1111-111111111111")),
+                FactorLabBacktestRequestDto(
+                    start_date=date(2026, 1, 1),
+                    end_date=date(2026, 12, 31),
+                    rebalance_frequency="quarterly",
+                ),
             )
 
     def test_validation_reports_unknown_factor_without_running(self):
