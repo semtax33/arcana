@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from datetime import date, datetime, timedelta, timezone
 import math
 import re
@@ -19,6 +20,7 @@ from engine.core.paths import DATA_LAKE
 
 
 DEFAULT_GICS_RULES_PATH = DATA_LAKE.rules("gics_rules.yaml")
+DEFAULT_BUSINESS_INFO_ROOT = DATA_LAKE.silver("dart", "business-info")
 PRICE_TABLE = "price_daily"
 FACTOR_TABLE = "fact_daily_factor"
 FACTOR_TABLES = ["fact_daily_factor", "fact_daily_factors"]
@@ -45,6 +47,18 @@ INTRODUCTION_COLUMN_CANDIDATES = [
     "summary",
     "profile",
 ]
+BUSINESS_INFO_SECTIONS_FILE_NAME = "kr_business_info_sections.csv"
+BUSINESS_INFO_COMPANY_SECTION_KEYS = {
+    "overview",
+    "business_overview",
+    "company_overview",
+}
+BUSINESS_INFO_COMPANY_SECTION_TITLE_KEYWORDS = (
+    "사업의 개요",
+    "사업 개요",
+    "회사 소개",
+    "기업 소개",
+)
 
 _STOCK_CODE_RE = re.compile(r"^[0-9A-Za-z]{1,12}$")
 
@@ -59,10 +73,12 @@ class IntroductionService:
         client_factory: Callable[[], Any] = get_clickhouse_client,
         today_factory: Callable[[], date] | None = None,
         gics_rules_path: Path = DEFAULT_GICS_RULES_PATH,
+        business_info_root: Path = DEFAULT_BUSINESS_INFO_ROOT,
     ) -> None:
         self._client_factory = client_factory
         self._today_factory = today_factory or _today_kst
         self._gics_rules_path = gics_rules_path
+        self._business_info_root = business_info_root
 
     def get_introduction(self, stock_code: str) -> StockIntroductionResponse:
         normalized_stock_code = _normalize_stock_code(stock_code)
@@ -94,6 +110,11 @@ class IntroductionService:
             close = getattr(client, "close", None)
             if callable(close):
                 close()
+
+        if not company_description:
+            company_description = self._load_business_info_company_description(
+                normalized_stock_code
+            )
 
         if (
             not metadata_row
@@ -269,7 +290,7 @@ WHERE issuer_id = {{issuer_id:String}}
         )
         if not rows:
             return ""
-        return _optional_str(rows[0].get("description")) or ""
+        return _normalize_description_text(rows[0].get("description"))
 
     def _find_introduction_column(self, client: Any) -> str | None:
         try:
@@ -293,6 +314,33 @@ WHERE database = currentDatabase()
             if column_name in existing_columns:
                 return column_name
         return None
+
+    def _load_business_info_company_description(self, stock_code: str) -> str:
+        sections_path = (
+            self._business_info_root
+            / stock_code
+            / BUSINESS_INFO_SECTIONS_FILE_NAME
+        )
+        try:
+            with sections_path.open("r", encoding="utf-8-sig", newline="") as file:
+                rows = list(csv.DictReader(file))
+        except FileNotFoundError:
+            return ""
+        except OSError:
+            return ""
+        if not rows:
+            return ""
+
+        candidates = [
+            row
+            for row in rows
+            if _is_company_description_business_info_section(row)
+        ]
+        if not candidates:
+            return ""
+
+        latest_row = max(candidates, key=_business_info_section_sort_key)
+        return _normalize_description_text(latest_row.get("text"))
 
     def _load_sector_names(self) -> dict[str, str]:
         try:
@@ -491,6 +539,56 @@ def _load_yaml_mapping_without_yaml(path: Path, key_name: str) -> dict[str, str]
         if code and name:
             values[code] = name
     return values
+
+
+def _is_company_description_business_info_section(row: dict[str, Any]) -> bool:
+    text = _normalize_description_text(row.get("text"))
+    if not text or _csv_bool(row.get("is_not_applicable")):
+        return False
+
+    section_key = (_optional_str(row.get("section_key")) or "").strip().lower()
+    if section_key in BUSINESS_INFO_COMPANY_SECTION_KEYS:
+        return True
+
+    title = _optional_str(row.get("section_title")) or ""
+    return any(keyword in title for keyword in BUSINESS_INFO_COMPANY_SECTION_TITLE_KEYWORDS)
+
+
+def _business_info_section_sort_key(row: dict[str, Any]) -> tuple[int, int, int, str]:
+    year, month = _period_sort_key(_optional_str(row.get("period")) or "")
+    report_rank = _report_code_rank(_optional_str(row.get("report_code")) or "")
+    parsed_at = _optional_str(row.get("parsed_at")) or ""
+    return year, month, report_rank, parsed_at
+
+
+def _period_sort_key(period: str) -> tuple[int, int]:
+    match = re.search(r"(?P<year>\d{4})[._-]?(?P<month>\d{1,2})?", period)
+    if not match:
+        return 0, 0
+    year = int(match.group("year"))
+    month = int(match.group("month") or "0")
+    return year, month
+
+
+def _report_code_rank(report_code: str) -> int:
+    return {
+        "11011": 4,
+        "11014": 3,
+        "11012": 2,
+        "11013": 1,
+    }.get(report_code, 0)
+
+
+def _csv_bool(value: Any) -> bool:
+    normalized = (_optional_str(value) or "").strip().lower()
+    return normalized in {"1", "true", "t", "yes", "y"}
+
+
+def _normalize_description_text(value: Any) -> str:
+    text = _optional_str(value)
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _normalize_stock_code(stock_code: str) -> str:

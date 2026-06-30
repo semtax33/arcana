@@ -150,7 +150,6 @@ US price downloads use NasdaqTrader symbol directories for the universe and yfin
 `period=max` history files under `data-lake/bronze/yfinance/price/{TICKER}.csv`.
 Install yfinance first if needed: `pip install yfinance`.
 
-
 WACC input downloads:
 
 ```powershell
@@ -311,7 +310,6 @@ government bond rate. Weekly beta uses Friday week-end returns, `adj_close`
 when available and `close` otherwise. If at least 52 overlapping weekly returns
 are not available, WACC falls back to the market default beta in
 `wacc_assumptions.csv`.
-
 
 아래 loader 명령들은 정규화된 silver 파일을 갱신한 뒤 ClickHouse 적재까지
 이어 수행합니다.
@@ -489,7 +487,6 @@ assumptions, and the US S&P 500 benchmark before preparing rows. Prepared WACC
 factor rows are inserted into the existing ClickHouse `fact_daily_factors`
 table together with the other daily factors.
 
-
 주요 옵션:
 
 ```text
@@ -538,7 +535,6 @@ wacc_debt_weight
 beta
 ```
 
-
 US 팩터 적재는 `data-lake/silver/sec/normalized/` 재무 CSV와
 `data-lake/silver/us/price/us_normalized_price.csv`가 있을 때 daily factor
 rows를 생성합니다. `data-lake/silver/us/shares/us_normalized_shares.csv`가
@@ -560,11 +556,11 @@ python -m engine.loaders.benchmarks --source bronze --bronze-path data-lake\bron
 ### 8. Build Style Scores
 
 ```powershell
-python -m engine.workflows.score_cli build-factor-scores --trade-date 2026-05-24 --factor-asof-mode asof --include-financials
-python -m engine.workflows.score_cli build-style-scores --trade-date 2026-05-24 --style-profile DEFAULT
-python -m engine.workflows.score_cli build-style-scores --start-date 2026-05-01 --end-date 2026-05-24 --skip-existing
-python -m engine.workflows.score_cli validate-style-scores --trade-date 2026-05-24
-python -m engine.workflows.score_cli debug-single-security-score --trade-date 2026-05-24 --security-id SEC_KR_005930
+python -m engine.workflows.score_cli build-factor-scores --trade-date 2026-06-23 --factor-asof-mode asof --include-financials
+python -m engine.workflows.score_cli build-style-scores --trade-date 2026-06-23 --style-profile DEFAULT
+python -m engine.workflows.score_cli build-style-scores --start-date 2026-05-01 --end-date 2026-06-23 --skip-existing
+python -m engine.workflows.score_cli validate-style-scores --trade-date 2026-06-23
+python -m engine.workflows.score_cli debug-single-security-score --trade-date 2026-06-23 --security-id SEC_KR_005930
 ```
 
 ## Tests

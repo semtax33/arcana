@@ -218,22 +218,58 @@ class IntroductionServiceTest(unittest.TestCase):
             factor_rows=[{"factor_id": "per", "factor_value": 10.0}],
         )
 
-        result = IntroductionService(
-            client_factory=lambda: client,
-            today_factory=lambda: date(2026, 5, 21),
-        ).get_introduction("005930")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = IntroductionService(
+                client_factory=lambda: client,
+                today_factory=lambda: date(2026, 5, 21),
+                business_info_root=Path(temp_dir),
+            ).get_introduction("005930")
 
         self.assertEqual(result.company.description, "")
         self.assertFalse(any("any(company_description)" in query for query, _ in client.queries))
 
+    def test_get_introduction_falls_back_to_latest_silver_business_info_overview(self):
+        client = FakeClickHouseClient(
+            metadata_rows=[
+                {
+                    "security_id": "SEC_KR_005930",
+                    "issuer_id": "ISSUER_ID_005930",
+                    "ticker": "005930",
+                    "stock_name": "?쇱꽦?꾩옄",
+                }
+            ],
+            factor_rows=[{"factor_id": "per", "factor_value": 10.0}],
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sections_dir = Path(temp_dir) / "005930"
+            sections_dir.mkdir(parents=True)
+            (sections_dir / "kr_business_info_sections.csv").write_text(
+                "stock_code,period,report_code,section_key,section_title,text,is_not_applicable,parsed_at\n"
+                "005930,2025.12,11011,overview,1. 사업의 개요,old overview,false,2026-03-01T00:00:00Z\n"
+                "005930,2026.03,11013,overview,1. 사업의 개요,latest silver overview,false,2026-06-01T00:00:00Z\n"
+                "005930,2026.03,11013,products_services,2. 주요 제품 및 서비스,product text,false,2026-06-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+
+            result = IntroductionService(
+                client_factory=lambda: client,
+                today_factory=lambda: date(2026, 5, 21),
+                business_info_root=Path(temp_dir),
+            ).get_introduction("005930")
+
+        self.assertEqual(result.company.description, "latest silver overview")
+
     def test_get_introduction_raises_not_found_when_every_source_is_empty(self):
         client = FakeClickHouseClient()
 
-        with self.assertRaises(StockIntroductionNotFoundError):
-            IntroductionService(
-                client_factory=lambda: client,
-                today_factory=lambda: date(2026, 5, 21),
-            ).get_introduction("005930")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(StockIntroductionNotFoundError):
+                IntroductionService(
+                    client_factory=lambda: client,
+                    today_factory=lambda: date(2026, 5, 21),
+                    business_info_root=Path(temp_dir),
+                ).get_introduction("005930")
 
     def test_normalize_stock_code_pads_and_rejects_unsafe_values(self):
         self.assertEqual(_normalize_stock_code("5930"), "005930")
