@@ -436,6 +436,107 @@ ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY toYYYYMM(as_of_date)
 ORDER BY (as_of_date, stock_code, target_period, metric_id, scenario);
 
+CREATE TABLE IF NOT EXISTS real_consensus_reports
+(
+    security_id String,
+    stock_code String,
+    file_register_date Date DEFAULT toDate('1970-01-01'),
+    file_year UInt16 DEFAULT 0,
+    report_idx UInt64 DEFAULT 0,
+    publish_code LowCardinality(String),
+    office_name String,
+    business_code String,
+    business_name String,
+    industry_code String,
+    industry_name String,
+    market_type LowCardinality(String),
+    report_type LowCardinality(String),
+    report_title String,
+    report_writer String,
+    report_content String,
+    report_filepath String,
+    report_filename String,
+    report_date Nullable(Date),
+    grade_code LowCardinality(String),
+    grade_value LowCardinality(String),
+    old_grade_code LowCardinality(String),
+    old_grade_value LowCardinality(String),
+    opinion_end_prices Nullable(Float64),
+    target_stock_prices Nullable(Float64),
+    old_target_stock_prices Nullable(Float64),
+    change_stock_prices Nullable(Float64),
+    stock_settlement_day1 String,
+    stock_eps1 Nullable(Float64),
+    stock_settlement_day2 String,
+    stock_eps2 Nullable(Float64),
+    stock_settlement_day3 String,
+    stock_eps3 Nullable(Float64),
+    stock_old_eps Nullable(Float64),
+    stock_net_profit1 Nullable(Float64),
+    stock_net_profit2 Nullable(Float64),
+    stock_net_profit3 Nullable(Float64),
+    stock_settlement_day String,
+    stock_expected_sales Nullable(Float64),
+    stock_pre_operating_profit Nullable(Float64),
+    stock_pre_net_income Nullable(Float64),
+    stock_pre_eps Nullable(Float64),
+    stock_pre_per Nullable(Float64),
+    stock_pre_pbr Nullable(Float64),
+    stock_pre_ev Nullable(Float64),
+    stock_pre_roe Nullable(Float64),
+    register_date Nullable(Date),
+    update_date Nullable(Date),
+    quality_flags String,
+    payload_json String,
+    updated_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (stock_code, file_register_date, report_idx);
+
+CREATE TABLE IF NOT EXISTS real_consensus_estimates
+(
+    security_id String,
+    stock_code String,
+    file_register_date Date DEFAULT toDate('1970-01-01'),
+    file_year UInt16 DEFAULT 0,
+    report_idx UInt64 DEFAULT 0,
+    broker_code LowCardinality(String),
+    broker_name String,
+    analyst_name String,
+    as_of_date Date DEFAULT toDate('1970-01-01'),
+    target_period LowCardinality(String),
+    metric_id LowCardinality(String),
+    estimate_value Nullable(Float64),
+    currency LowCardinality(String),
+    source_field LowCardinality(String),
+    source_provider LowCardinality(String),
+    quality_flags String,
+    updated_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (stock_code, target_period, metric_id, broker_code, as_of_date, report_idx, source_field);
+
+CREATE TABLE IF NOT EXISTS real_consensus_daily
+(
+    security_id String,
+    stock_code String,
+    as_of_date Date,
+    target_period LowCardinality(String),
+    metric_id LowCardinality(String),
+    consensus_mean Nullable(Float64),
+    consensus_median Nullable(Float64),
+    consensus_low Nullable(Float64),
+    consensus_high Nullable(Float64),
+    report_count UInt32,
+    broker_count UInt32,
+    currency LowCardinality(String),
+    source_provider LowCardinality(String),
+    updated_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY toYYYYMM(as_of_date)
+ORDER BY (stock_code, as_of_date, target_period, metric_id);
+
 CREATE TABLE IF NOT EXISTS arcana.fact_daily_style_score
 (
     trade_date Date,

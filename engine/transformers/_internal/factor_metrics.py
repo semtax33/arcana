@@ -1,6 +1,7 @@
 import math
 import re
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -43,6 +44,7 @@ from engine.transformers._internal.wacc_inputs import (
 
 FINANCIAL_DIR = DATA_LAKE.silver("dart", "normalized")
 ESTIMATE_GOLD_ROOT = DATA_LAKE.root / "gold" / "estimates"
+HANKYUNG_CONSENSUS_DAILY_PATH = DATA_LAKE.silver("consensus", "hankyung", "kr_hankyung_consensus_daily.csv")
 PRICE_PATH = DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price"))
 LEGACY_PRICE_PATHS = (
     DATA_LAKE.silver("krx", "price", "kr_normalized_price.csv"),
@@ -130,6 +132,18 @@ CONSENSUS_FACTOR_COLUMNS = [
     "net_income_surprise_pct",
 ]
 
+REAL_CONSENSUS_FACTOR_COLUMNS = [
+    "real_eps_revision_1m_pct",
+    "real_eps_expected_growth",
+    "real_revenue_expected_growth",
+    "real_operating_income_expected_growth",
+    "real_net_income_expected_growth",
+    "real_eps_surprise_pct",
+    "real_revenue_surprise_pct",
+    "real_operating_income_surprise_pct",
+    "real_net_income_surprise_pct",
+]
+
 CONSENSUS_METRIC_SPECS = {
     "basic_eps": {
         "actual_columns": ("BASIC_EPS", "eps", "DILUTED_EPS"),
@@ -166,6 +180,33 @@ CONSENSUS_METRIC_SPECS = {
         "expected_factor": "net_income_expected_growth",
         "surprise_factor": "net_income_surprise_pct",
         "priority": 1,
+    },
+}
+
+REAL_CONSENSUS_METRIC_SPECS = {
+    "basic_eps": {
+        "actual_columns": ("BASIC_EPS", "eps", "DILUTED_EPS"),
+        "expected_factor": "real_eps_expected_growth",
+        "surprise_factor": "real_eps_surprise_pct",
+        "priority": 0,
+    },
+    "revenue": {
+        "actual_columns": ("REVENUE", "sale"),
+        "expected_factor": "real_revenue_expected_growth",
+        "surprise_factor": "real_revenue_surprise_pct",
+        "priority": 0,
+    },
+    "operating_income": {
+        "actual_columns": ("OPERATING_INCOME", "oiadp"),
+        "expected_factor": "real_operating_income_expected_growth",
+        "surprise_factor": "real_operating_income_surprise_pct",
+        "priority": 0,
+    },
+    "net_income": {
+        "actual_columns": ("NET_INCOME", "ni", "NET_INCOME_PARENT", "ni_parent"),
+        "expected_factor": "real_net_income_expected_growth",
+        "surprise_factor": "real_net_income_surprise_pct",
+        "priority": 0,
     },
 }
 
@@ -1822,6 +1863,190 @@ def build_consensus_factor_events(consensus_df, actual_df):
 
 
 def merge_consensus_factor_events(daily_df, events):
+    return _merge_factor_events(daily_df, events, CONSENSUS_FACTOR_COLUMNS)
+
+
+def add_real_consensus_factors(
+    daily_df,
+    financial_df,
+    stock_code,
+    *,
+    real_consensus_daily_path=HANKYUNG_CONSENSUS_DAILY_PATH,
+    market="kr",
+):
+    df = daily_df.sort_values("trade_date").copy()
+    for column in REAL_CONSENSUS_FACTOR_COLUMNS:
+        if column not in df.columns:
+            df[column] = math.nan
+
+    market = str(market or "kr").strip().lower()
+    if market != "kr" or df.empty:
+        return df
+
+    consensus_df = read_real_consensus_daily_frame(
+        stock_code,
+        real_consensus_daily_path=real_consensus_daily_path,
+    )
+    if consensus_df.empty:
+        return df
+
+    events = build_real_consensus_factor_events(consensus_df, consensus_actual_frame(financial_df))
+    if events.empty:
+        return df
+    return merge_real_consensus_factor_events(df, events)
+
+
+def read_real_consensus_daily_frame(stock_code, *, real_consensus_daily_path=HANKYUNG_CONSENSUS_DAILY_PATH):
+    path = Path(real_consensus_daily_path)
+    frame = _cached_real_consensus_daily_frame(str(path))
+    if frame.empty:
+        return pd.DataFrame()
+    stock_code = normalize_stock_code(stock_code)
+    result = frame.loc[frame["stock_code"].astype(str).map(normalize_stock_code) == stock_code].copy()
+    if result.empty:
+        return result
+    result["stock_code"] = result["stock_code"].map(normalize_stock_code)
+    result["as_of_date"] = pd.to_datetime(result["as_of_date"], errors="coerce")
+    result["target_period"] = result["target_period"].astype(str)
+    result["metric_id"] = result["metric_id"].astype(str)
+    result["consensus_mean"] = pd.to_numeric(result["consensus_mean"], errors="coerce")
+    return result.dropna(subset=["as_of_date", "target_period", "metric_id", "consensus_mean"])
+
+
+@lru_cache(maxsize=4)
+def _cached_real_consensus_daily_frame(path_text):
+    path = Path(path_text)
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.read_csv(path, dtype={"stock_code": str, "target_period": str, "metric_id": str})
+
+
+def build_real_consensus_factor_events(consensus_df, actual_df):
+    if consensus_df.empty:
+        return pd.DataFrame(columns=["available_date", "factor_id", "factor_value", "priority"])
+
+    rows = []
+    rows.extend(build_real_eps_revision_events(consensus_df).to_dict("records"))
+    if not actual_df.empty:
+        rows.extend(build_real_expected_growth_events(consensus_df, actual_df).to_dict("records"))
+        rows.extend(build_real_surprise_events(consensus_df, actual_df).to_dict("records"))
+
+    if not rows:
+        return pd.DataFrame(columns=["available_date", "factor_id", "factor_value", "priority"])
+    events = pd.DataFrame(rows)
+    events["available_date"] = pd.to_datetime(events["available_date"], errors="coerce")
+    events["factor_value"] = pd.to_numeric(events["factor_value"], errors="coerce")
+    events = events.dropna(subset=["available_date", "factor_id", "factor_value"])
+    return events.sort_values(["available_date", "factor_id", "priority"]).reset_index(drop=True)
+
+
+def build_real_eps_revision_events(consensus_df):
+    eps_rows = consensus_df.loc[consensus_df["metric_id"].astype(str) == "basic_eps"].copy()
+    if eps_rows.empty:
+        return pd.DataFrame(columns=["available_date", "factor_id", "factor_value", "priority"])
+    eps_rows = eps_rows.sort_values(["target_period", "as_of_date"])
+    rows = []
+    for _, group in eps_rows.groupby("target_period", dropna=False):
+        group = group.sort_values("as_of_date").reset_index(drop=True)
+        for row in group.to_dict("records"):
+            current_value = _finite_float(row.get("consensus_mean"))
+            if current_value is None:
+                continue
+            lookup_date = pd.Timestamp(row["as_of_date"]) - pd.DateOffset(months=1)
+            prior = group.loc[group["as_of_date"] <= lookup_date]
+            if prior.empty:
+                continue
+            prior_value = _finite_float(prior.iloc[-1].get("consensus_mean"))
+            revision = _pct_diff(current_value, prior_value)
+            if revision is None:
+                continue
+            rows.append(
+                {
+                    "available_date": row["as_of_date"],
+                    "factor_id": "real_eps_revision_1m_pct",
+                    "factor_value": revision,
+                    "priority": 0,
+                }
+            )
+    return pd.DataFrame(rows, columns=["available_date", "factor_id", "factor_value", "priority"])
+
+
+def build_real_expected_growth_events(consensus_df, actual_df):
+    if consensus_df.empty or actual_df.empty:
+        return pd.DataFrame(columns=["available_date", "factor_id", "factor_value", "priority"])
+
+    actual_by_metric = {
+        metric_id: actual_df.set_index("period")[metric_id]
+        for metric_id in REAL_CONSENSUS_METRIC_SPECS
+        if metric_id in actual_df.columns
+    }
+    rows = []
+    for row in consensus_df.to_dict("records"):
+        metric_id = str(row.get("metric_id") or "")
+        spec = REAL_CONSENSUS_METRIC_SPECS.get(metric_id)
+        if not spec:
+            continue
+        consensus_value = _finite_float(row.get("consensus_mean"))
+        source_period = _previous_target_period(row.get("target_period"))
+        source_actual = _series_lookup_float(actual_by_metric.get(metric_id), source_period)
+        expected_growth = _pct_diff(consensus_value, source_actual)
+        if expected_growth is None:
+            continue
+        rows.append(
+            {
+                "available_date": row.get("as_of_date"),
+                "factor_id": spec["expected_factor"],
+                "factor_value": expected_growth,
+                "priority": spec["priority"],
+            }
+        )
+    return pd.DataFrame(rows, columns=["available_date", "factor_id", "factor_value", "priority"])
+
+
+def build_real_surprise_events(consensus_df, actual_df):
+    if consensus_df.empty or actual_df.empty:
+        return pd.DataFrame(columns=["available_date", "factor_id", "factor_value", "priority"])
+
+    period_report_date = actual_df.set_index("period")["report_date"]
+    actual_by_metric = {
+        metric_id: actual_df.set_index("period")[metric_id]
+        for metric_id in REAL_CONSENSUS_METRIC_SPECS
+        if metric_id in actual_df.columns
+    }
+    rows = []
+    for (target_period, metric_id), group in consensus_df.groupby(["target_period", "metric_id"], dropna=False):
+        spec = REAL_CONSENSUS_METRIC_SPECS.get(str(metric_id))
+        if not spec:
+            continue
+        target_report_date = period_report_date.get(str(target_period))
+        if pd.isna(target_report_date):
+            continue
+        target_actual = _series_lookup_float(actual_by_metric.get(str(metric_id)), str(target_period))
+        if target_actual is None:
+            continue
+        available_consensus = group.loc[group["as_of_date"] <= pd.Timestamp(target_report_date)].sort_values("as_of_date")
+        if available_consensus.empty:
+            continue
+        consensus_value = _finite_float(available_consensus.iloc[-1].get("consensus_mean"))
+        surprise = _pct_diff(target_actual, consensus_value)
+        if surprise is None:
+            continue
+        rows.append(
+            {
+                "available_date": target_report_date,
+                "factor_id": spec["surprise_factor"],
+                "factor_value": surprise,
+                "priority": spec["priority"],
+            }
+        )
+    return pd.DataFrame(rows, columns=["available_date", "factor_id", "factor_value", "priority"])
+
+
+def merge_real_consensus_factor_events(daily_df, events):
+    return _merge_factor_events(daily_df, events, REAL_CONSENSUS_FACTOR_COLUMNS)
+
+
+def _merge_factor_events(daily_df, events, columns):
     df = daily_df.sort_values("trade_date").copy()
     if events.empty:
         return df
@@ -1833,10 +2058,10 @@ def merge_consensus_factor_events(daily_df, events):
         .sort_index()
         .ffill()
     )
-    for column in CONSENSUS_FACTOR_COLUMNS:
+    for column in columns:
         if column not in event_values.columns:
             event_values[column] = math.nan
-    event_values = event_values[CONSENSUS_FACTOR_COLUMNS].reset_index()
+    event_values = event_values[columns].reset_index()
 
     merged = pd.merge_asof(
         df.sort_values("trade_date"),
@@ -1846,11 +2071,19 @@ def merge_consensus_factor_events(daily_df, events):
         direction="backward",
         suffixes=("", "_consensus"),
     )
-    for column in CONSENSUS_FACTOR_COLUMNS:
+    for column in columns:
         consensus_column = f"{column}_consensus"
         if consensus_column in merged.columns:
             merged[column] = merged[consensus_column]
-    return merged.drop(columns=["available_date", *[f"{column}_consensus" for column in CONSENSUS_FACTOR_COLUMNS]], errors="ignore")
+    return merged.drop(columns=["available_date", *[f"{column}_consensus" for column in columns]], errors="ignore")
+
+
+def _previous_target_period(target_period):
+    text = str(target_period or "").strip()
+    match = re.match(r"^(?P<year>\d{4})[.:-]?(?P<month>\d{2})$", text)
+    if not match:
+        return ""
+    return f"{int(match.group('year')) - 1}.{match.group('month')}"
 
 
 def _finite_float(value):
@@ -2294,6 +2527,7 @@ def create_stock_factor_dataframe(
     wacc_benchmark_path=None,
     wacc_online_backfill=False,
     estimate_gold_root=ESTIMATE_GOLD_ROOT,
+    real_consensus_daily_path=HANKYUNG_CONSENSUS_DAILY_PATH,
 ):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
@@ -2411,6 +2645,13 @@ def create_stock_factor_dataframe(
         financial_df,
         stock_code,
         estimate_gold_root=estimate_gold_root,
+        market=market,
+    )
+    daily_df = add_real_consensus_factors(
+        daily_df,
+        financial_df,
+        stock_code,
+        real_consensus_daily_path=real_consensus_daily_path,
         market=market,
     )
     daily_df = add_wacc_factors(
@@ -2572,6 +2813,15 @@ def preferred_factor_columns():
         "revenue_surprise_pct",
         "operating_income_surprise_pct",
         "net_income_surprise_pct",
+        "real_eps_revision_1m_pct",
+        "real_eps_expected_growth",
+        "real_revenue_expected_growth",
+        "real_operating_income_expected_growth",
+        "real_net_income_expected_growth",
+        "real_eps_surprise_pct",
+        "real_revenue_surprise_pct",
+        "real_operating_income_surprise_pct",
+        "real_net_income_surprise_pct",
         "asset_yoy_pct",
         "cfo_yoy_pct",
         "fcf_yoy_pct",

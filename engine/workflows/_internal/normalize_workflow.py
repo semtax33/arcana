@@ -277,6 +277,14 @@ def normalize_business_infos(
     return written_paths
 
 
+def normalize_consensus(args: argparse.Namespace) -> dict[str, Path | int]:
+    if args.market != "kr":
+        raise ValueError("consensus normalization is only supported for --market kr")
+    from engine.transformers.consensus import normalize_hankyung_consensus
+
+    return normalize_hankyung_consensus(stale_days=args.consensus_stale_days)
+
+
 def normalize_all_statements() -> None:
     corps_list = kospi_kosdaq_corp_list()
     stock_codes = sorted(corps_list["stock_code"].tolist())
@@ -519,7 +527,7 @@ def main() -> None:
     parser.add_argument(
         "--target",
         default="statements",
-        choices=["statements", "business-info", "all"],
+        choices=["statements", "business-info", "consensus", "all"],
         help="Normalize financial statements, DART business-info HTML, or both. business-info is KR-only.",
     )
     parser.add_argument("--symbols", help="Comma-separated symbols. US examples: AAPL,MSFT")
@@ -540,6 +548,12 @@ def main() -> None:
         default=100,
         help="US normalize progress log interval by processed symbols/files.",
     )
+    parser.add_argument(
+        "--consensus-stale-days",
+        type=int,
+        default=180,
+        help="Maximum age in days for active Hankyung consensus estimates.",
+    )
     args = parser.parse_args()
     symbols = _parse_symbols(args.symbols)
 
@@ -553,6 +567,8 @@ def main() -> None:
                 end_year=args.end_year,
                 workers=args.workers,
             )
+        if args.target in {"consensus", "all"}:
+            normalize_consensus(args)
         return
 
     if args.target != "statements":

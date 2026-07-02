@@ -115,12 +115,20 @@ python -m engine.workflows.download --force business-info
 python -m engine.workflows.download --market us sec-tickers
 python -m engine.workflows.download --market us prices --symbols AAPL,MSFT --limit 2
 python -m engine.workflows.download --market us prices --offset 100 --limit 500 --sleep-seconds 0.2
+python -m engine.workflows.download consensus --market kr
+python -m engine.workflows.normalize --target consensus --market kr
+python -m engine.loaders.consensus --market kr --dry-run
+python -m engine.loaders.consensus --market kr
 ```
 
 `--start-date`, `--end-date` accepts `YYYYMMDD` or `YYYY-MM-DD` and limits the download range.
 `--start-year`, `--end-year` accepts `YYYY` and expands to full-year date ranges.
 DART statement/comment/business-info searches automatically split ranges longer than 10 years
 into multiple DART search requests, so older 20-30 year windows can be downloaded.
+
+Hankyung consensus downloads save raw JSON files to `data-lake/bronze/consensus/hankyung/`.
+Normalize writes silver CSV files to `data-lake/silver/consensus/hankyung/`, and the
+ClickHouse consensus loader reads only those silver CSV files.
 
 `prices`와 `shares`는 KRX bronze CSV를 `data-lake/bronze/krx/...` 아래에
 저장합니다. DART 재무제표, 주석, 메타데이터, 배당 공시는

@@ -164,6 +164,29 @@ def download_wacc_inputs(args: argparse.Namespace) -> None:
         raise RuntimeError(f"failed to download required WACC inputs: {labels}")
 
 
+def download_kr_consensus(args: argparse.Namespace) -> None:
+    from engine.extractors.consensus import download_hankyung_consensus_reports
+
+    counts = download_hankyung_consensus_reports(
+        start_date=args.start_date,
+        end_date=args.end_date,
+        token=args.hankyung_token,
+        force=args.force,
+        sleep_seconds=args.sleep_seconds if args.sleep_seconds > 0 else None,
+    )
+    print(
+        "[DONE] hankyung consensus download "
+        f"years={counts.get('years', 0):,}, pages={counts.get('pages', 0):,}, "
+        f"rows={counts.get('rows', 0):,}, written={counts.get('written', 0):,}, "
+        f"skipped={counts.get('skipped', 0):,}, invalid={counts.get('invalid', 0):,}",
+        flush=True,
+    )
+
+
+def download_us_consensus(args: argparse.Namespace) -> None:
+    raise NotImplementedError("US consensus not supported yet")
+
+
 DOWNLOAD_ACTIONS = {
     "statements": download_all_statements,
     "comments": download_all_statement_comments,
@@ -172,6 +195,7 @@ DOWNLOAD_ACTIONS = {
     "prices": download_all_prices,
     "shares": download_all_shares,
     "dividend": download_all_dividend,
+    "consensus": download_kr_consensus,
     "erp": download_erp_inputs,
     "wacc-inputs": download_wacc_inputs,
 }
@@ -179,6 +203,7 @@ DOWNLOAD_ACTIONS = {
 US_DOWNLOAD_ACTIONS = {
     "prices": download_all_us_prices,
     "sec-tickers": download_sec_company_tickers,
+    "consensus": download_us_consensus,
     "erp": download_erp_inputs,
     "wacc-inputs": download_wacc_inputs,
 }
@@ -195,6 +220,7 @@ def main() -> None:
     parser.add_argument("--sleep-seconds", type=float, default=0.0)
     parser.add_argument("--stock-retries", type=int, default=3, help="Per-symbol retry count for supported downloads.")
     parser.add_argument("--stock-retry-backoff", type=float, default=30.0, help="Base seconds for per-symbol retry backoff.")
+    parser.add_argument("--hankyung-token", help="JWT bearer token for Hankyung consensus downloads.")
     parser.add_argument(
         "--start-date",
         type=_parse_date_arg,
