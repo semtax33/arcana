@@ -65,10 +65,22 @@ class FactorScreenService:
             if callable(close):
                 close()
 
-        factor_columns = _build_factor_columns(conditions, factor_meta)
+        display_condition_indexes = _unique_condition_indexes_by_factor_id(conditions)
+        factor_columns = _build_factor_columns(
+            conditions,
+            factor_meta,
+            condition_indexes=display_condition_indexes,
+        )
         rows = all_rows[: request.limit] if request.limit is not None else all_rows
         screened_rows = [
-            _to_screened_row(index, row, conditions, factor_columns, factor_meta)
+            _to_screened_row(
+                index,
+                row,
+                conditions,
+                factor_columns,
+                factor_meta,
+                condition_indexes=display_condition_indexes,
+            )
             for index, row in enumerate(rows, start=1)
         ]
 
@@ -134,9 +146,13 @@ def _resolve_style_profile(
 def _build_factor_columns(
     conditions: list[FactorCondition],
     factor_meta: dict[str, dict[str, Any]],
+    *,
+    condition_indexes: list[int] | None = None,
 ) -> list[FactorScreenColumn]:
     columns = []
-    for index, condition in enumerate(conditions):
+    indexes = condition_indexes if condition_indexes is not None else list(range(len(conditions)))
+    for index in indexes:
+        condition = conditions[index]
         meta = factor_meta.get(condition.factor_id, {})
         factor_name = _factor_name(condition, meta)
         columns.append(
@@ -160,10 +176,13 @@ def _to_screened_row(
     conditions: list[FactorCondition],
     factor_columns: list[FactorScreenColumn],
     factor_meta: dict[str, dict[str, Any]],
+    *,
+    condition_indexes: list[int] | None = None,
 ) -> ScreenedStockRow:
     factor_values = {}
-    for index, condition in enumerate(conditions):
-        column = factor_columns[index]
+    indexes = condition_indexes if condition_indexes is not None else list(range(len(conditions)))
+    for column, index in zip(factor_columns, indexes):
+        condition = conditions[index]
         meta = factor_meta.get(condition.factor_id, {})
         factor_name = _factor_name(condition, meta)
         factor_values[column.key] = FactorScreenValue(
@@ -199,6 +218,18 @@ def _model_dump(model: Any) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+def _unique_condition_indexes_by_factor_id(conditions: list[FactorCondition]) -> list[int]:
+    seen = set()
+    indexes = []
+    for index, condition in enumerate(conditions):
+        key = condition.factor_id.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        indexes.append(index)
+    return indexes
 
 
 def _factor_name(condition: FactorCondition, meta: dict[str, Any]) -> str:

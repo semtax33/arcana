@@ -76,6 +76,7 @@ ORDER BY factor_type ASC, factor_group ASC, factor_id ASC
             for row in rows
         ]
         factors.extend(_style_score_factors())
+        factors = _dedupe_factors_by_id(factors)
         return _filter_and_sort_factors(
             factors,
             factor_type=factor_type,
@@ -105,6 +106,14 @@ def _style_score_factors() -> list[Factor]:
         )
         for definition in STYLE_SCORE_FACTORS.values()
     ]
+
+
+def _dedupe_factors_by_id(factors: list[Factor]) -> list[Factor]:
+    deduped: dict[str, Factor] = {}
+    for factor in factors:
+        key = factor.factor_id.strip().lower()
+        deduped[key] = factor
+    return list(deduped.values())
 
 
 def _filter_and_sort_factors(

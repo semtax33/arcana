@@ -29,6 +29,31 @@ class FakeClickHouseClient:
         parameters = parameters or {}
         self.queries.append((query, parameters))
         if "latest_factor_values AS" in query:
+            if parameters.get("condition_0_factor_id") == "roe":
+                return FakeDataFrame(
+                    [
+                        {
+                            "security_id": "SEC_KR_A",
+                            "ticker": "A",
+                            "issuer_name": "A Corp",
+                            "country": "KR",
+                            "market_cap": 1000,
+                            "sector_code": "45",
+                            "industry_group_code": "4510",
+                            "industry_group_name": "Software",
+                            "matched_condition_count": 2,
+                            "matched_conditions": [
+                                "0:top_percent:roe",
+                                "1:threshold:roe",
+                            ],
+                            "latest_trade_date": date(2026, 5, 17),
+                            "roe_0_value": 12.5,
+                            "roe_0_trade_date": date(2026, 5, 17),
+                            "roe_1_value": 9.5,
+                            "roe_1_trade_date": date(2026, 5, 17),
+                        }
+                    ]
+                )
             return FakeDataFrame(
                 [
                     {
@@ -45,6 +70,17 @@ class FakeClickHouseClient:
                         "latest_trade_date": date(2026, 5, 17),
                         "style_total_score_0_value": 82,
                         "style_total_score_0_trade_date": date(2026, 5, 17),
+                    }
+                ]
+            )
+        if "FROM factor_catalog" in query:
+            return FakeDataFrame(
+                [
+                    {
+                        "factor_id": "roe",
+                        "factor_name": "ROE",
+                        "unit": "percent",
+                        "value_direction": "HIGHER_BETTER",
                     }
                 ]
             )
@@ -109,6 +145,43 @@ class FactorScreenServiceTest(unittest.TestCase):
         query, params = screen_queries[0]
         self.assertEqual(params["market_country"], "US")
         self.assertIn("AND sm.country = {market_country:String}", query)
+
+    def test_screen_deduplicates_display_factors_without_dropping_conditions(self):
+        client = FakeClickHouseClient()
+        request = FactorScreenRequestDto(
+            conditions=[
+                FactorConditionDto(
+                    factor_id="roe",
+                    mode="top_percent",
+                    top_percent=30,
+                ),
+                FactorConditionDto(
+                    factor_id="ROE",
+                    mode="threshold",
+                    operator=">",
+                    value=10,
+                ),
+            ],
+        )
+
+        result = FactorScreenService(client_factory=lambda: client).screen_stocks(request)
+
+        screen_queries = [
+            (query, params)
+            for query, params in client.queries
+            if "latest_factor_values AS" in query
+        ]
+        self.assertEqual(len(screen_queries), 1)
+        _, params = screen_queries[0]
+        self.assertEqual(params["required_condition_count"], 2)
+        self.assertEqual(params["factor_ids"], ["roe"])
+        self.assertEqual(params["condition_0_factor_id"], "roe")
+        self.assertEqual(params["condition_1_factor_id"], "roe")
+        self.assertEqual(len(result.factor_columns), 1)
+        self.assertEqual(result.factor_columns[0].factor_id, "roe")
+        self.assertEqual(len(result.rows[0].factor_values), 1)
+        self.assertEqual(result.rows[0].factor_values["roe_0"].value, 12.5)
+        self.assertEqual(result.rows[0].matched_condition_count, 2)
 
 
 if __name__ == "__main__":

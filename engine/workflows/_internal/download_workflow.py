@@ -14,6 +14,7 @@ from engine.extractors.market_prices import (
     fetch_all_prices,
     fetch_all_shares,
 )
+from engine.extractors.sec_filings import download_us_companyfacts
 
 
 def _stock_codes() -> list[str]:
@@ -124,6 +125,16 @@ def download_all_us_prices(args: argparse.Namespace) -> None:
     )
 
 
+def download_all_us_statements(args: argparse.Namespace) -> None:
+    download_us_companyfacts(
+        symbols=_parse_symbols(args.symbols),
+        offset=args.offset,
+        limit=args.limit,
+        force=args.force,
+        sleep_seconds=args.sleep_seconds if args.sleep_seconds > 0 else 0.1,
+    )
+
+
 def download_erp_inputs(args: argparse.Namespace) -> None:
     path = download_damodaran_country_erp()
     print(f"downloaded ERP input [damodaran_country_erp]: {path}")
@@ -201,6 +212,7 @@ DOWNLOAD_ACTIONS = {
 }
 
 US_DOWNLOAD_ACTIONS = {
+    "statements": download_all_us_statements,
     "prices": download_all_us_prices,
     "sec-tickers": download_sec_company_tickers,
     "consensus": download_us_consensus,

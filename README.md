@@ -113,6 +113,7 @@ python -m engine.workflows.download --workers 4 --sleep-seconds 3 business-info
 python -m engine.workflows.download --workers 2 --sleep-seconds 8 --stock-retries 5 --stock-retry-backoff 60 business-info
 python -m engine.workflows.download --force business-info
 python -m engine.workflows.download --market us sec-tickers
+python -m engine.workflows.download --market us statements --symbols AAPL,MSFT --limit 2
 python -m engine.workflows.download --market us prices --symbols AAPL,MSFT --limit 2
 python -m engine.workflows.download --market us prices --offset 100 --limit 500 --sleep-seconds 0.2
 python -m engine.workflows.download consensus --market kr
@@ -153,6 +154,10 @@ Financial Statement and Notes Data Sets 파일은 아래 위치를 사용합니�
 data-lake/bronze/sec/companyfacts/
 data-lake/bronze/sec/financial-statement-and-notes-data-set/
 ```
+
+`--market us statements` downloads SEC companyfacts JSON files to
+`data-lake/bronze/sec/companyfacts/`. Use `--symbols AAPL,MSFT` for a subset,
+or omit `--symbols` to download the SEC ticker map universe.
 
 US price downloads use NasdaqTrader symbol directories for the universe and yfinance
 `period=max` history files under `data-lake/bronze/yfinance/price/{TICKER}.csv`.
