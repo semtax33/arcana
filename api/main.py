@@ -9,7 +9,10 @@ from api.controller.backtest_controller import router as backtest_router
 from api.controller.chart_controller import router as chart_router
 from api.controller.factor_controller import router as factor_router
 from api.controller.factor_lab_controller import router as factor_lab_router
-from api.controller.factor_screen_controller import router as factor_screen_router
+from api.controller.factor_screen_controller import (
+    router as factor_screen_router,
+    strategy_router,
+)
 from api.controller.financials_controller import router as financials_router
 from api.controller.introduction_controller import router as introduction_router
 from api.controller.operating_metrics_controller import router as operating_metrics_router
@@ -29,6 +32,7 @@ app.include_router(sector_leader_router)
 app.include_router(factor_router)
 app.include_router(factor_lab_router)
 app.include_router(factor_screen_router)
+app.include_router(strategy_router)
 app.include_router(introduction_router)
 app.include_router(financials_router)
 app.include_router(operating_metrics_router)

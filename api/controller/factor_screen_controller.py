@@ -18,10 +18,20 @@ from api.service.factor_screen_service import FactorScreenService
 from api.service.screener_strategy_service import ScreenerStrategyService
 
 router = APIRouter(prefix="/api/factor-screen", tags=["factor-screen"])
+strategy_router = APIRouter(prefix="/api", tags=["strategies"])
 
 
 @router.get("/strategies", response_model=ScreenerStrategyListResponseDto)
 def list_screener_strategies() -> ScreenerStrategyListResponseDto:
+    return _list_screener_strategies_response()
+
+
+@strategy_router.get("/strategies", response_model=ScreenerStrategyListResponseDto)
+def list_strategies() -> ScreenerStrategyListResponseDto:
+    return _list_screener_strategies_response()
+
+
+def _list_screener_strategies_response() -> ScreenerStrategyListResponseDto:
     strategies = ScreenerStrategyService().list_strategies()
     return ScreenerStrategyListResponseDto(strategies=strategies)
 
@@ -61,6 +71,25 @@ def delete_screener_strategy(strategy_id: int) -> ScreenerStrategyDeleteResponse
 
 @router.post("/screen", response_model=FactorScreenResponseDto)
 def screen_stocks(request: FactorScreenRequestDto) -> FactorScreenResponseDto:
+    return _screen_factor_request(request)
+
+
+@strategy_router.post(
+    "/strategies/{strategy_id}/screen",
+    response_model=FactorScreenResponseDto,
+)
+def screen_strategy(strategy_id: int) -> FactorScreenResponseDto:
+    try:
+        strategy = ScreenerStrategyService().get_strategy(strategy_id).strategy
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="screener strategy not found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return _screen_factor_request(strategy)
+
+
+def _screen_factor_request(request: FactorScreenRequestDto) -> FactorScreenResponseDto:
     try:
         result = FactorScreenService().screen_stocks(request)
     except ValueError as exc:

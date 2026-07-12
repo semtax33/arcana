@@ -4,10 +4,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from api.main import app
+from api.model.screening import FactorScreenResult
 
 
 class ScreenerStrategyControllerTest(unittest.TestCase):
@@ -88,6 +90,48 @@ class ScreenerStrategyControllerTest(unittest.TestCase):
 
         missing_response = self.client.get(f"/api/factor-screen/strategies/{strategy_id}")
         self.assertEqual(404, missing_response.status_code)
+
+    def test_strategy_alias_routes_list_and_screen_saved_strategy(self) -> None:
+        save_response = self.client.post(
+            "/api/factor-screen/strategies",
+            json={
+                "name": "Quality screen",
+                "strategy": {
+                    "market": "KR",
+                    "conditions": [
+                        {
+                            "factor_id": "roe",
+                            "mode": "top_percent",
+                            "top_percent": 30,
+                            "rank_direction": "catalog",
+                        }
+                    ],
+                },
+            },
+        )
+        self.assertEqual(200, save_response.status_code)
+        strategy_id = save_response.json()["id"]
+
+        list_response = self.client.get("/api/strategies")
+        self.assertEqual(200, list_response.status_code)
+        self.assertEqual("Quality screen", list_response.json()["strategies"][0]["name"])
+
+        with patch(
+            "api.controller.factor_screen_controller.FactorScreenService.screen_stocks",
+            return_value=FactorScreenResult(
+                total_count=0,
+                fixed_columns=[],
+                factor_columns=[],
+                rows=[],
+            ),
+        ) as screen_stocks:
+            screen_response = self.client.post(f"/api/strategies/{strategy_id}/screen")
+
+        self.assertEqual(200, screen_response.status_code)
+        self.assertEqual("EMPTY", screen_response.json()["summary"]["screening_result"])
+        screen_stocks.assert_called_once()
+        request = screen_stocks.call_args.args[-1]
+        self.assertEqual("KR", request.market)
 
     def test_rejects_blank_strategy_name(self) -> None:
         response = self.client.post(
