@@ -210,6 +210,7 @@ GET /api/chart/005930?range=1Y
 | `GET` | `/api/factor-screen/strategies/{strategy_id}` | 전략 상세 조회 | 응답 `ScreenerStrategyDetailDto` |
 | `DELETE` | `/api/factor-screen/strategies/{strategy_id}` | 전략 삭제 | 응답 `{"deleted": true}` |
 | `GET` | `/api/strategies` | 저장된 전략 목록 조회 | 응답 `ScreenerStrategyListResponseDto` |
+| `GET` | `/api/strategies/{strategy_id}` | 전략 상세 조회 | 응답 `ScreenerStrategyDetailDto` |
 | `POST` | `/api/strategies/{strategy_id}/screen` | 저장된 전략으로 스크리닝 실행 | 응답 `FactorScreenResponseDto` |
 
 `ScreenerStrategySaveRequestDto`:
@@ -491,7 +492,7 @@ stdio 서버는 줄 단위 JSON 또는 `Content-Length` 헤더가 있는 MCP 메
 
 | MCP method | 설명 |
 | --- | --- |
-| `initialize` | 프로토콜 버전, capabilities, 서버 정보를 반환 |
+| `initialize` | 프로토콜 버전, capabilities, 서버 정보, Arcana 주식 분석 instructions를 반환 |
 | `ping` | 빈 객체 반환 |
 | `tools/list` | REST 라우트에서 생성한 tool 메타데이터 목록 반환 |
 | `tools/call` | 지정한 tool을 호출하고 REST 결과를 MCP content로 반환 |
@@ -515,6 +516,7 @@ MCP tool 이름은 FastAPI endpoint 함수명을 소문자/스네이크 케이�
 | `get_screener_strategy` | `GET /api/factor-screen/strategies/{strategy_id}` | `strategy_id` | - |
 | `delete_screener_strategy` | `DELETE /api/factor-screen/strategies/{strategy_id}` | `strategy_id` | - |
 | `list_strategies` | `GET /api/strategies` | - | - |
+| `get_strategy` | `GET /api/strategies/{strategy_id}` | `strategy_id` | - |
 | `screen_strategy` | `POST /api/strategies/{strategy_id}/screen` | `strategy_id` | - |
 | `screen_stocks` | `POST /api/factor-screen/screen` | `conditions` | `as_of_date`, `market`, `financial_basis`, `style_profile`, `sector_codes`, `industry_group_codes`, `match_mode`, `limit` |
 | `run_factor_backtest` | `POST /api/backtests/factor` | `conditions`, `start_date`, `end_date`, `rebalance_frequency` | `market`, `financial_basis`, `style_profile`, `sector_codes`, `industry_group_codes`, `match_mode`, `benchmarks`, `max_positions`, `transaction_cost_bps` |

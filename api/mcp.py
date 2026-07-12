@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
+from pathlib import Path
 from types import UnionType
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
@@ -19,6 +20,10 @@ from api.main import app
 
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
+ARCANA_MCP_INSTRUCTIONS_PATH = (
+    Path(__file__).resolve().parent / "prompts" / "arcana_stock_analysis_ko.txt"
+)
+ARCANA_MCP_INSTRUCTIONS = ARCANA_MCP_INSTRUCTIONS_PATH.read_bytes().decode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -133,6 +138,7 @@ class McpServer:
                 "protocolVersion": requested_version,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "arcana-api", "version": "0.1.0"},
+                "instructions": ARCANA_MCP_INSTRUCTIONS,
             }
         if method == "ping":
             return {}

@@ -116,6 +116,11 @@ class ScreenerStrategyControllerTest(unittest.TestCase):
         self.assertEqual(200, list_response.status_code)
         self.assertEqual("Quality screen", list_response.json()["strategies"][0]["name"])
 
+        detail_response = self.client.get(f"/api/strategies/{strategy_id}")
+        self.assertEqual(200, detail_response.status_code)
+        self.assertEqual("Quality screen", detail_response.json()["name"])
+        self.assertEqual("KR", detail_response.json()["strategy"]["market"])
+
         with patch(
             "api.controller.factor_screen_controller.FactorScreenService.screen_stocks",
             return_value=FactorScreenResult(

@@ -11,7 +11,13 @@ from fastapi.testclient import TestClient
 
 
 from api.main import app
-from api.mcp import McpServer, _iter_api_routes, build_tools
+from api.mcp import (
+    ARCANA_MCP_INSTRUCTIONS,
+    ARCANA_MCP_INSTRUCTIONS_PATH,
+    McpServer,
+    _iter_api_routes,
+    build_tools,
+)
 from api.model.screening import FactorScreenResult
 
 
@@ -41,7 +47,20 @@ class McpServerTest(unittest.TestCase):
         self.assertIn("save_screener_strategy", tool_names)
         self.assertIn("get_screener_strategy", tool_names)
         self.assertIn("list_strategies", tool_names)
+        self.assertIn("get_strategy", tool_names)
         self.assertIn("screen_strategy", tool_names)
+
+    def test_initialize_returns_arcana_analysis_instructions(self) -> None:
+        server = McpServer(build_tools())
+        response = server._dispatch("initialize", {})
+
+        source_prompt = ARCANA_MCP_INSTRUCTIONS_PATH.read_bytes().decode("utf-8")
+        self.assertEqual(ARCANA_MCP_INSTRUCTIONS, response["instructions"])
+        self.assertEqual(source_prompt, response["instructions"])
+        self.assertTrue(response["instructions"].startswith("너는 Arcana MCP 연동 API"))
+        self.assertIn("get_stock_introduction", response["instructions"])
+        self.assertIn("list_strategies", response["instructions"])
+        self.assertIn("screen_strategy", response["instructions"])
 
     def test_call_tool_returns_json_text_content(self) -> None:
         server = McpServer(build_tools())
@@ -101,6 +120,19 @@ class McpServerTest(unittest.TestCase):
                 self.assertEqual(saved["id"], loaded["id"])
                 self.assertEqual("Quality screen", loaded["name"])
                 self.assertEqual("KR", loaded["strategy"]["market"])
+
+                alias_load_response = server._dispatch(
+                    "tools/call",
+                    {
+                        "name": "get_strategy",
+                        "arguments": {"strategy_id": saved["id"]},
+                    },
+                )
+
+                self.assertFalse(alias_load_response["isError"])
+                alias_loaded = json.loads(alias_load_response["content"][0]["text"])
+                self.assertEqual(saved["id"], alias_loaded["id"])
+                self.assertEqual("Quality screen", alias_loaded["name"])
 
                 list_response = server._dispatch(
                     "tools/call",

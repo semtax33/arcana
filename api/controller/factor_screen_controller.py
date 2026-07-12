@@ -31,6 +31,11 @@ def list_strategies() -> ScreenerStrategyListResponseDto:
     return _list_screener_strategies_response()
 
 
+@strategy_router.get("/strategies/{strategy_id}", response_model=ScreenerStrategyDetailDto)
+def get_strategy(strategy_id: int) -> ScreenerStrategyDetailDto:
+    return _get_screener_strategy_response(strategy_id)
+
+
 def _list_screener_strategies_response() -> ScreenerStrategyListResponseDto:
     strategies = ScreenerStrategyService().list_strategies()
     return ScreenerStrategyListResponseDto(strategies=strategies)
@@ -50,6 +55,10 @@ def save_screener_strategy(
 
 @router.get("/strategies/{strategy_id}", response_model=ScreenerStrategyDetailDto)
 def get_screener_strategy(strategy_id: int) -> ScreenerStrategyDetailDto:
+    return _get_screener_strategy_response(strategy_id)
+
+
+def _get_screener_strategy_response(strategy_id: int) -> ScreenerStrategyDetailDto:
     try:
         return ScreenerStrategyService().get_strategy(strategy_id)
     except KeyError as exc:
