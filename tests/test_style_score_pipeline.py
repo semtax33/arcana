@@ -88,6 +88,30 @@ class StyleScorePipelineTest(unittest.TestCase):
         self.assertIn("WHERE f.trade_date = source_date", client.query)
         self.assertIn("f.financial_basis = {financial_basis:String}", client.query)
 
+    def test_load_factor_values_uses_ttm_fallback_for_price_style_factors(self):
+        client = _BasisFallbackQueryClient()
+        schema = FactorTableSchema(
+            table_name="fact_daily_factors",
+            value_column="factor_value",
+            has_financial_basis=True,
+            has_updated_at=True,
+            has_source_trade_date=False,
+        )
+
+        result = load_factor_values(
+            client,
+            date(2026, 7, 10),
+            schema=schema,
+            factor_ids=["epr", "tr_12_1"],
+            factor_asof_mode="exact",
+            financial_basis="annual",
+        )
+
+        by_factor = result.set_index("factor_id")
+        self.assertEqual(client.parameters["basis_agnostic_factor_ids"], ["tr_12_1"])
+        self.assertEqual(by_factor.loc["epr", "_financial_basis"], "annual")
+        self.assertEqual(by_factor.loc["tr_12_1", "_financial_basis"], "ttm")
+
     def test_industry_fallback_uses_factor_level_peer_counts(self):
         universe = _universe(
             [
@@ -155,12 +179,12 @@ class StyleScorePipelineTest(unittest.TestCase):
         self.assertEqual(row["available_factor_count"], 2)
         self.assertIn("roe", row["missing_factor_ids"])
 
-    def test_growth_style_score_includes_real_consensus_factors(self):
+    def test_consensus_style_score_includes_real_consensus_factors(self):
         factor_scores = pd.DataFrame(
             [
-                _factor_score_row("real_eps_expected_growth", 90.0, style_group="GROWTH"),
-                _factor_score_row("real_eps_revision_1m_pct", 70.0, style_group="GROWTH"),
-                _factor_score_row("real_eps_surprise_pct", 80.0, style_group="GROWTH"),
+                _factor_score_row("real_eps_expected_growth", 90.0, style_group="CONSENSUS"),
+                _factor_score_row("real_eps_revision_1m_pct", 70.0, style_group="CONSENSUS"),
+                _factor_score_row("real_eps_surprise_pct", 80.0, style_group="CONSENSUS"),
             ]
         )
 
@@ -171,24 +195,24 @@ class StyleScorePipelineTest(unittest.TestCase):
         )
 
         row = result.iloc[0]
-        growth_weights = STYLE_WEIGHTS["GROWTH"]
+        consensus_weights = STYLE_WEIGHTS["CONSENSUS"]
         used_weights = {
-            factor_id: growth_weights[factor_id]
+            factor_id: consensus_weights[factor_id]
             for factor_id in [
                 "real_eps_expected_growth",
                 "real_eps_revision_1m_pct",
                 "real_eps_surprise_pct",
             ]
         }
-        expected_growth_score = (
+        expected_consensus_score = (
             90.0 * used_weights["real_eps_expected_growth"]
             + 70.0 * used_weights["real_eps_revision_1m_pct"]
             + 80.0 * used_weights["real_eps_surprise_pct"]
         ) / sum(used_weights.values())
 
         self.assertIn("real_eps_expected_growth", STYLE_FACTOR_DEFINITIONS)
-        self.assertAlmostEqual(row["growth_score"], expected_growth_score)
-        self.assertAlmostEqual(row["total_score"], expected_growth_score)
+        self.assertAlmostEqual(row["consensus_score"], expected_consensus_score)
+        self.assertAlmostEqual(row["total_score"], expected_consensus_score)
         self.assertAlmostEqual(row["score_confidence"], sum(used_weights.values()))
         self.assertEqual(row["available_factor_count"], 3)
         self.assertIn("real_revenue_expected_growth", row["missing_factor_ids"])
@@ -404,6 +428,47 @@ class _CaptureQueryClient:
         self.query = query
         self.parameters = parameters or {}
         return pd.DataFrame()
+
+
+class _BasisFallbackQueryClient:
+    def __init__(self):
+        self.query = ""
+        self.parameters = {}
+
+    def query_df(self, query, parameters=None):
+        self.query = query
+        self.parameters = parameters or {}
+        return pd.DataFrame(
+            [
+                {
+                    "security_id": "SEC_A",
+                    "trade_date": date(2026, 7, 10),
+                    "factor_id": "epr",
+                    "factor_value": 1.0,
+                    "_financial_basis": "annual",
+                    "source_trade_date": date(2026, 7, 10),
+                    "updated_at": pd.Timestamp("2026-07-10 09:00:00"),
+                },
+                {
+                    "security_id": "SEC_A",
+                    "trade_date": date(2026, 7, 10),
+                    "factor_id": "epr",
+                    "factor_value": 2.0,
+                    "_financial_basis": "ttm",
+                    "source_trade_date": date(2026, 7, 10),
+                    "updated_at": pd.Timestamp("2026-07-10 09:00:00"),
+                },
+                {
+                    "security_id": "SEC_A",
+                    "trade_date": date(2026, 7, 10),
+                    "factor_id": "tr_12_1",
+                    "factor_value": 0.2,
+                    "_financial_basis": "ttm",
+                    "source_trade_date": date(2026, 7, 10),
+                    "updated_at": pd.Timestamp("2026-07-10 09:00:00"),
+                },
+            ]
+        )
 
 
 class _RangeQueryClient:

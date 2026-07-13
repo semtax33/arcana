@@ -30,6 +30,7 @@ COMPONENT_SCORE_FIELDS = {
     "VALUE": "value_score",
     "QUALITY": "quality_score",
     "GROWTH": "growth_score",
+    "CONSENSUS": "consensus_score",
     "MOMENTUM": "momentum_score",
     "RISK": "risk_score",
     "DIVIDEND": "dividend_score",
@@ -38,7 +39,8 @@ COMPONENT_LABELS = {
     "COMPOSITE": "Composite Score",
     "VALUE": "Value",
     "QUALITY": "Quality",
-    "GROWTH": "Growth & Real Consensus",
+    "GROWTH": "Growth",
+    "CONSENSUS": "Real Consensus",
     "MOMENTUM": "Momentum",
     "RISK": "Risk",
     "DIVIDEND": "Dividend & Shareholder Return",
@@ -98,12 +100,14 @@ class StyleScoreService:
         client = self._client_factory()
         try:
             target_date = _resolve_available_trade_date(client, requested_date, profile)
+            style_score_columns = _style_score_table_columns(client)
             rows = _records(
                 client.query_df(
                     _build_style_score_list_query(
                         has_min_confidence=normalized_confidence is not None,
                         has_industry_group_code=bool(industry_group_code),
                         has_sector_code=bool(sector_code),
+                        has_consensus_score="consensus_score" in style_score_columns,
                     ),
                     parameters={
                         "trade_date": target_date.isoformat(),
@@ -147,9 +151,12 @@ class StyleScoreService:
                 profile,
                 security_id=security_id,
             )
+            style_score_columns = _style_score_table_columns(client)
             style_rows = _records(
                 client.query_df(
-                    _build_style_score_detail_query(),
+                    _build_style_score_detail_query(
+                        has_consensus_score="consensus_score" in style_score_columns,
+                    ),
                     parameters={
                         "trade_date": target_date.isoformat(),
                         "style_profile": profile,
@@ -302,6 +309,7 @@ def _build_style_score_list_query(
     has_min_confidence: bool,
     has_industry_group_code: bool,
     has_sector_code: bool,
+    has_consensus_score: bool = True,
 ) -> str:
     filters = [
         "s.trade_date = {trade_date:Date}",
@@ -314,6 +322,11 @@ def _build_style_score_list_query(
     if has_sector_code:
         filters.append("iss.sector_code = {sector_code:String}")
     where_clause = "\n    AND ".join(filters)
+    consensus_score_expr = (
+        "s.consensus_score AS consensus_score"
+        if has_consensus_score
+        else "CAST(NULL, 'Nullable(Float64)') AS consensus_score"
+    )
     return f"""
 SELECT
     s.trade_date AS trade_date,
@@ -328,6 +341,7 @@ SELECT
     s.value_score AS value_score,
     s.quality_score AS quality_score,
     s.growth_score AS growth_score,
+    {consensus_score_expr},
     s.momentum_score AS momentum_score,
     s.risk_score AS risk_score,
     s.dividend_score AS dividend_score,
@@ -354,8 +368,13 @@ LIMIT {{limit:UInt64}}
 """.strip()
 
 
-def _build_style_score_detail_query() -> str:
-    return """
+def _build_style_score_detail_query(*, has_consensus_score: bool = True) -> str:
+    consensus_score_expr = (
+        "s.consensus_score AS consensus_score"
+        if has_consensus_score
+        else "CAST(NULL, 'Nullable(Float64)') AS consensus_score"
+    )
+    return f"""
 SELECT
     s.trade_date AS trade_date,
     s.security_id AS security_id,
@@ -369,6 +388,7 @@ SELECT
     s.value_score AS value_score,
     s.quality_score AS quality_score,
     s.growth_score AS growth_score,
+    {consensus_score_expr},
     s.momentum_score AS momentum_score,
     s.risk_score AS risk_score,
     s.dividend_score AS dividend_score,
@@ -387,11 +407,11 @@ LEFT JOIN arcana.security_master AS sm
     ON sm.security_id = s.security_id
 LEFT JOIN arcana.issuers AS iss
     ON iss.issuer_id = sm.issuer_id
-WHERE s.trade_date = {trade_date:Date}
-    AND s.style_profile = {style_profile:String}
+WHERE s.trade_date = {{trade_date:Date}}
+    AND s.style_profile = {{style_profile:String}}
     AND (
-        s.security_id = {security_id:String}
-        OR endsWith(s.security_id, concat('_', {security_id:String}))
+        s.security_id = {{security_id:String}}
+        OR endsWith(s.security_id, concat('_', {{security_id:String}}))
     )
 LIMIT 1
 """.strip()
@@ -444,6 +464,7 @@ def _to_style_row(rank: int, row: dict[str, Any]) -> StyleScoreRow:
         value_score=_float_or_none(row.get("value_score")),
         quality_score=_float_or_none(row.get("quality_score")),
         growth_score=_float_or_none(row.get("growth_score")),
+        consensus_score=_float_or_none(row.get("consensus_score")),
         momentum_score=_float_or_none(row.get("momentum_score")),
         risk_score=_float_or_none(row.get("risk_score")),
         dividend_score=_float_or_none(row.get("dividend_score")),
@@ -486,6 +507,7 @@ def _build_components(
         _build_component(row, factors, "VALUE", style_profile),
         _build_component(row, factors, "QUALITY", style_profile),
         _build_component(row, factors, "GROWTH", style_profile),
+        _build_component(row, factors, "CONSENSUS", style_profile),
         _build_component(row, factors, "MOMENTUM", style_profile),
         _build_component(row, factors, "RISK", style_profile),
         _build_component(row, factors, "DIVIDEND", style_profile),
@@ -516,6 +538,8 @@ def _build_component(
     available_weight = sum(factor_weights[factor.factor_id] for factor in available_factors)
     required_weight = sum(factor_weights.values())
     score = getattr(row, COMPONENT_SCORE_FIELDS[component_key])
+    if score is None and component_key != "COMPOSITE":
+        score = _component_score_from_factors(factors, factor_weights)
     confidence = (
         available_weight / required_weight
         if required_weight and component_key != "COMPOSITE"
@@ -605,6 +629,9 @@ def _normalize_component_key(value: str) -> str:
         "TOTAL_SCORE": "COMPOSITE",
         "COMPOSITESCORE": "COMPOSITE",
         "COMPOSITE_SCORE": "COMPOSITE",
+        "REALCONSENSUS": "CONSENSUS",
+        "REAL_CONSENSUS": "CONSENSUS",
+        "CONSENSUS_SCORE": "CONSENSUS",
         "UNDERVALUED": "VALUE",
         "PROFITABILITY": "QUALITY",
         "FINANCIALSTABILITY": "RISK",
@@ -629,6 +656,37 @@ def _factor_label(factor_id: str) -> str:
         return FACTOR_LABELS[factor_id]
     reverse_aliases = {value: key for key, value in FACTOR_ALIASES.items()}
     return reverse_aliases.get(factor_id, factor_id.upper())
+
+
+def _component_score_from_factors(
+    factors: list[FactorScoreBreakdown],
+    factor_weights: dict[str, float],
+) -> float | None:
+    total = 0.0
+    available_weight = 0.0
+    factor_by_id = {factor.factor_id: factor for factor in factors}
+    for factor_id, weight in factor_weights.items():
+        factor = factor_by_id.get(factor_id)
+        if factor is None or not factor.is_valid or factor.percentile_score is None:
+            continue
+        total += factor.percentile_score * weight
+        available_weight += weight
+    if available_weight == 0:
+        return None
+    return total / available_weight
+
+
+def _style_score_table_columns(client: Any) -> set[str]:
+    try:
+        rows = _records(client.query_df("DESCRIBE TABLE arcana.fact_daily_style_score"))
+    except Exception:
+        return set()
+    columns: set[str] = set()
+    for row in rows:
+        name = row.get("name") or row.get("column") or row.get("Column") or row.get("Name")
+        if name:
+            columns.add(str(name))
+    return columns
 
 
 def _normalize_style_profile(value: str) -> str:

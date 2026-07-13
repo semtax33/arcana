@@ -38,10 +38,21 @@ STYLE_SCORE_COLUMNS = {
     "VALUE": "value_score",
     "QUALITY": "quality_score",
     "GROWTH": "growth_score",
+    "CONSENSUS": "consensus_score",
     "MOMENTUM": "momentum_score",
     "RISK": "risk_score",
     "DIVIDEND": "dividend_score",
 }
+FINANCIAL_BASIS_FALLBACK_STYLE_FACTORS = {
+    "tr_12_1",
+    "tr_6_1",
+    "tr_3_1",
+    "high52w_gap_pct",
+    "adturn_pct_12_1",
+    "vol_12_1_ann",
+    "mdd1yr_12_1_pct",
+}
+FINANCIAL_BASIS_FALLBACKS = ("ttm", "annual", "quarterly", "")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
 
 
@@ -447,12 +458,28 @@ def load_factor_values(
         "factor_ids": sorted({canonical_factor_id(factor_id) for factor_id in factor_ids}),
     }
     if financial_basis and schema.has_financial_basis:
-        basis_filter = "\n    AND f.financial_basis = {financial_basis:String}"
+        basis_agnostic_factor_ids = sorted(
+            set(params["factor_ids"]) & FINANCIAL_BASIS_FALLBACK_STYLE_FACTORS
+        )
+        if basis_agnostic_factor_ids:
+            basis_filter = """
+    AND (
+        f.financial_basis = {financial_basis:String}
+        OR (
+            has({basis_agnostic_factor_ids:Array(String)}, f.factor_id)
+            AND has({basis_fallbacks:Array(String)}, f.financial_basis)
+        )
+    )"""
+            params["basis_agnostic_factor_ids"] = basis_agnostic_factor_ids
+            params["basis_fallbacks"] = list(FINANCIAL_BASIS_FALLBACKS)
+        else:
+            basis_filter = "\n    AND f.financial_basis = {financial_basis:String}"
         params["financial_basis"] = financial_basis
 
     value_expr = f"f.{schema.value_column}"
     updated_expr = "f.updated_at" if schema.has_updated_at else "now64(3)"
     source_date_expr = "f.source_trade_date" if schema.has_source_trade_date else "f.trade_date"
+    financial_basis_expr = "f.financial_basis" if schema.has_financial_basis else "''"
 
     if mode == "exact":
         query = f"""
@@ -461,6 +488,7 @@ SELECT
     f.trade_date,
     f.factor_id,
     toFloat64({value_expr}) AS factor_value,
+    {financial_basis_expr} AS _financial_basis,
     {source_date_expr} AS source_trade_date,
     {updated_expr} AS updated_at
 FROM {schema.table_name} AS f
@@ -468,7 +496,10 @@ WHERE f.trade_date = {{trade_date:Date}}
     AND has({{factor_ids:Array(String)}}, f.factor_id)
     AND {value_expr} IS NOT NULL{basis_filter}
 """.strip()
-        return client.query_df(query, parameters=params)
+        return _deduplicate_factor_basis(
+            client.query_df(query, parameters=params),
+            financial_basis=financial_basis,
+        )
 
     query = f"""
 WITH
@@ -484,6 +515,7 @@ SELECT
     f.trade_date,
     f.factor_id,
     toFloat64({value_expr}) AS factor_value,
+    {financial_basis_expr} AS _financial_basis,
     {source_date_expr} AS source_trade_date,
     {updated_expr} AS updated_at
 FROM {schema.table_name} AS f
@@ -491,7 +523,45 @@ WHERE f.trade_date = source_date
     AND has({{factor_ids:Array(String)}}, f.factor_id)
     AND {value_expr} IS NOT NULL{basis_filter}
 """.strip()
-    return client.query_df(query, parameters=params)
+    return _deduplicate_factor_basis(
+        client.query_df(query, parameters=params),
+        financial_basis=financial_basis,
+    )
+
+
+def _deduplicate_factor_basis(
+    frame: pd.DataFrame,
+    *,
+    financial_basis: str | None,
+) -> pd.DataFrame:
+    if frame.empty or "_financial_basis" not in frame.columns:
+        return frame
+
+    result = frame.copy()
+    requested = str(financial_basis or "").strip()
+    basis = result["_financial_basis"].fillna("").astype(str)
+    result["_basis_priority"] = basis.map(
+        lambda value: (
+            0
+            if requested and value == requested
+            else 1
+            if value == "ttm"
+            else 2
+            if value == "annual"
+            else 3
+            if value == "quarterly"
+            else 4
+        )
+    )
+    sort_columns = ["security_id", "factor_id", "_basis_priority"]
+    if "updated_at" in result.columns:
+        sort_columns.append("updated_at")
+    result = result.sort_values(sort_columns, ascending=[True, True, True, False][: len(sort_columns)])
+    return (
+        result.drop_duplicates(["security_id", "factor_id"], keep="first")
+        .drop(columns=["_basis_priority"], errors="ignore")
+        .reset_index(drop=True)
+    )
 
 
 def calculate_factor_scores(
@@ -990,6 +1060,7 @@ def _style_score_columns() -> list[str]:
         "value_score",
         "quality_score",
         "growth_score",
+        "consensus_score",
         "momentum_score",
         "risk_score",
         "dividend_score",

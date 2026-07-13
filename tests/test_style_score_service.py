@@ -48,6 +48,7 @@ class FakeClickHouseClient:
                         "value_score": 70.0,
                         "quality_score": 80.0,
                         "growth_score": None,
+                        "consensus_score": None,
                         "momentum_score": 90.0,
                         "risk_score": 60.0,
                         "dividend_score": 55.0,
@@ -180,7 +181,7 @@ class StyleScoreServiceTest(unittest.TestCase):
         self.assertEqual(result.rows[0].security_id, "SEC_A")
         self.assertEqual(result.rows[0].total_score, 77.0)
         self.assertEqual(result.rows[0].missing_factor_ids, ["eps_yoy_pct"])
-        query, params = client.queries[1]
+        query, params = client.queries[2]
         self.assertIn("iss.industry_group_code = {industry_group_code:String}", query)
         self.assertIn("s.score_confidence >= {min_confidence:Float64}", query)
         self.assertEqual(params["trade_date"], "2026-05-22")
@@ -199,11 +200,11 @@ class StyleScoreServiceTest(unittest.TestCase):
         self.assertEqual(result.row.trade_date, date(2026, 5, 22))
         self.assertEqual(result.factors[0].factor_id, "epr")
         self.assertEqual(result.factors[0].percentile_score, 75.0)
-        self.assertEqual(len(client.queries), 3)
+        self.assertEqual(len(client.queries), 4)
         self.assertIn("endsWith(s.security_id, concat('_', {security_id:String}))", client.queries[0][0])
         self.assertEqual(client.queries[0][1]["security_id"], "SEC_A")
-        self.assertEqual(client.queries[1][1]["trade_date"], "2026-05-22")
         self.assertEqual(client.queries[2][1]["trade_date"], "2026-05-22")
+        self.assertEqual(client.queries[3][1]["trade_date"], "2026-05-22")
 
     def test_get_style_score_components_returns_card_scores(self):
         client = FakeClickHouseClient()
@@ -221,6 +222,9 @@ class StyleScoreServiceTest(unittest.TestCase):
         self.assertEqual(by_key["COMPOSITE"].score, 77.0)
         self.assertEqual(by_key["VALUE"].score, 70.0)
         self.assertEqual(by_key["QUALITY"].score, 80.0)
+        self.assertEqual(by_key["CONSENSUS"].label, "Real Consensus")
+        self.assertEqual(by_key["CONSENSUS"].required_factor_count, 9)
+        self.assertEqual(by_key["CONSENSUS"].available_factor_count, 1)
         self.assertEqual(by_key["DIVIDEND"].label, "Dividend & Shareholder Return")
         self.assertEqual(by_key["DIVIDEND"].score, 55.0)
         self.assertEqual(by_key["DIVIDEND"].required_factor_count, 12)
@@ -260,7 +264,7 @@ class StyleScoreServiceTest(unittest.TestCase):
         self.assertEqual(by_factor["fcf_dividend_coverage"].label, "FCF_DIVIDEND_COVERAGE")
         self.assertEqual(by_factor["fcf_payout_ratio"].label, "FCF_PAYOUT_RATIO")
 
-    def test_growth_component_detail_includes_real_consensus_factors(self):
+    def test_growth_component_detail_uses_historical_growth_factors(self):
         client = FakeClickHouseClient()
 
         result = StyleScoreService(
@@ -269,11 +273,24 @@ class StyleScoreServiceTest(unittest.TestCase):
         ).get_style_score_component_detail("SEC_A", "GROWTH")
 
         by_factor = {factor.factor_id: factor for factor in result.factors}
-        self.assertEqual(result.component.label, "Growth & Real Consensus")
+        self.assertEqual(result.component.label, "Growth")
+        self.assertIn("sales_yoy_pct", by_factor)
+        self.assertNotIn("real_eps_expected_growth", by_factor)
+
+    def test_consensus_component_detail_includes_real_consensus_factors(self):
+        client = FakeClickHouseClient()
+
+        result = StyleScoreService(
+            client_factory=lambda: client,
+            today_factory=lambda: date(2026, 5, 24),
+        ).get_style_score_component_detail("SEC_A", "CONSENSUS")
+
+        by_factor = {factor.factor_id: factor for factor in result.factors}
+        self.assertEqual(result.component.label, "Real Consensus")
         self.assertIn("real_eps_expected_growth", by_factor)
         self.assertEqual(by_factor["real_eps_expected_growth"].label, "REAL_EPS_EXPECTED_GROWTH")
-        self.assertAlmostEqual(by_factor["real_eps_expected_growth"].factor_weight, 0.08)
-        self.assertAlmostEqual(by_factor["real_eps_expected_growth"].weighted_score, 7.2)
+        self.assertAlmostEqual(by_factor["real_eps_expected_growth"].factor_weight, 0.20)
+        self.assertAlmostEqual(by_factor["real_eps_expected_growth"].weighted_score, 18.0)
         self.assertEqual(by_factor["real_revenue_expected_growth"].invalid_reason, "MISSING")
 
     def test_resolve_available_trade_date_returns_latest_loaded_date(self):
@@ -294,7 +311,7 @@ class StyleScoreServiceTest(unittest.TestCase):
         self.assertEqual(result.trade_date, date(2026, 5, 24))
         self.assertEqual(result.style_profile, "MINERVINI_ZWEIG")
         self.assertEqual(result.total_count, 0)
-        self.assertEqual(client.queries[1][1]["trade_date"], "2026-05-24")
+        self.assertEqual(client.queries[2][1]["trade_date"], "2026-05-24")
 
     def test_style_score_query_uses_sector_and_industry_group_not_industry_code(self):
         query = _build_style_score_list_query(

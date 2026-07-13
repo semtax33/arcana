@@ -6,6 +6,7 @@ from dataclasses import dataclass
 STYLE_VALUE = "VALUE"
 STYLE_QUALITY = "QUALITY"
 STYLE_GROWTH = "GROWTH"
+STYLE_CONSENSUS = "CONSENSUS"
 STYLE_MOMENTUM = "MOMENTUM"
 STYLE_RISK = "RISK"
 STYLE_DIVIDEND = "DIVIDEND"
@@ -104,18 +105,20 @@ STYLE_WEIGHTS = {
     STYLE_GROWTH: {
         "sales_yoy_pct": 0.15,
         "op_yoy_pct": 0.15,
-        "eps_yoy_pct": 0.10,
-        "cfo_yoy_pct": 0.07,
-        "fcf_yoy_pct": 0.08,
-        "real_eps_revision_1m_pct": 0.06,
-        "real_eps_expected_growth": 0.08,
-        "real_revenue_expected_growth": 0.06,
-        "real_operating_income_expected_growth": 0.07,
-        "real_net_income_expected_growth": 0.05,
-        "real_eps_surprise_pct": 0.04,
-        "real_revenue_surprise_pct": 0.03,
-        "real_operating_income_surprise_pct": 0.03,
-        "real_net_income_surprise_pct": 0.03,
+        "eps_yoy_pct": 0.20,
+        "cfo_yoy_pct": 0.20,
+        "fcf_yoy_pct": 0.30,
+    },
+    STYLE_CONSENSUS: {
+        "real_eps_revision_1m_pct": 0.15,
+        "real_eps_expected_growth": 0.20,
+        "real_revenue_expected_growth": 0.15,
+        "real_operating_income_expected_growth": 0.18,
+        "real_net_income_expected_growth": 0.12,
+        "real_eps_surprise_pct": 0.08,
+        "real_revenue_surprise_pct": 0.04,
+        "real_operating_income_surprise_pct": 0.04,
+        "real_net_income_surprise_pct": 0.04,
     },
     STYLE_MOMENTUM: {
         "tr_12_1": 0.35,
@@ -152,23 +155,26 @@ TOTAL_WEIGHTS = {
     "DEFAULT": {
         STYLE_VALUE: 0.22,
         STYLE_QUALITY: 0.22,
-        STYLE_GROWTH: 0.18,
-        STYLE_MOMENTUM: 0.18,
+        STYLE_GROWTH: 0.14,
+        STYLE_CONSENSUS: 0.08,
+        STYLE_MOMENTUM: 0.16,
         STYLE_RISK: 0.10,
-        STYLE_DIVIDEND: 0.10,
+        STYLE_DIVIDEND: 0.08,
     },
     "MINERVINI_ZWEIG": {
         STYLE_VALUE: 0.20,
         STYLE_QUALITY: 0.20,
-        STYLE_GROWTH: 0.25,
-        STYLE_MOMENTUM: 0.25,
+        STYLE_GROWTH: 0.22,
+        STYLE_CONSENSUS: 0.08,
+        STYLE_MOMENTUM: 0.20,
         STYLE_RISK: 0.10,
         STYLE_DIVIDEND: 0.00,
     },
     "DIVIDEND_QUALITY": {
         STYLE_VALUE: 0.20,
         STYLE_QUALITY: 0.30,
-        STYLE_GROWTH: 0.10,
+        STYLE_GROWTH: 0.07,
+        STYLE_CONSENSUS: 0.03,
         STYLE_MOMENTUM: 0.05,
         STYLE_RISK: 0.10,
         STYLE_DIVIDEND: 0.25,
@@ -240,7 +246,11 @@ def style_factor_definitions() -> dict[str, FactorDefinition]:
             existing = definitions.get(factor_id)
             if existing is not None and weight <= existing.weight:
                 continue
-            low, high = (0.05, 0.95) if style_group in {STYLE_GROWTH, STYLE_DIVIDEND} else (0.01, 0.99)
+            low, high = (
+                (0.05, 0.95)
+                if style_group in {STYLE_GROWTH, STYLE_CONSENSUS, STYLE_DIVIDEND}
+                else (0.01, 0.99)
+            )
             definitions[factor_id] = FactorDefinition(
                 factor_id=factor_id,
                 canonical_id=reverse_aliases.get(factor_id, factor_id.upper()),

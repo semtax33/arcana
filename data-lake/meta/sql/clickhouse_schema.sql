@@ -553,6 +553,7 @@ CREATE TABLE IF NOT EXISTS arcana.fact_daily_style_score
     value_score Nullable(Float64),
     quality_score Nullable(Float64),
     growth_score Nullable(Float64),
+    consensus_score Nullable(Float64),
     momentum_score Nullable(Float64),
     risk_score Nullable(Float64),
     dividend_score Nullable(Float64),

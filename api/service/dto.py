@@ -31,6 +31,7 @@ StyleScoreComponentKey = Literal[
     "VALUE",
     "QUALITY",
     "GROWTH",
+    "CONSENSUS",
     "MOMENTUM",
     "RISK",
     "DIVIDEND",
@@ -99,6 +100,7 @@ class StyleScoreRowDto(BaseModel):
     value_score: float | None = None
     quality_score: float | None = None
     growth_score: float | None = None
+    consensus_score: float | None = None
     momentum_score: float | None = None
     risk_score: float | None = None
     dividend_score: float | None = None
