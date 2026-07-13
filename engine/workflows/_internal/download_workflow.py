@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import date, datetime
 
+from engine.extractors.benchmarks import fetch_benchmark_prices, fetch_yfinance_benchmark_prices
 from engine.extractors.erp import (
     FRED_SERIES_IDS,
     download_damodaran_country_erp,
@@ -15,6 +16,10 @@ from engine.extractors.market_prices import (
     fetch_all_shares,
 )
 from engine.extractors.sec_filings import download_us_companyfacts
+from engine.transformers.benchmarks import (
+    DEFAULT_BENCHMARK_INDEX_CODES,
+    DEFAULT_YFINANCE_BENCHMARK_TICKERS,
+)
 
 
 def _stock_codes() -> list[str]:
@@ -107,6 +112,15 @@ def download_all_dividend(args: argparse.Namespace) -> None:
     )
 
 
+def download_kr_benchmarks(args: argparse.Namespace) -> None:
+    frame = fetch_benchmark_prices(
+        args.start_date or DEFAULT_MARKET_START_DATE,
+        args.end_date or date.today().strftime("%Y%m%d"),
+        benchmark_ids=_parse_benchmark_ids(args.benchmark_ids),
+    )
+    _print_benchmark_download_result(frame)
+
+
 def download_sec_company_tickers(args: argparse.Namespace) -> None:
     from engine.extractors.sec_filings import download_sec_company_tickers as _download_sec_company_tickers
 
@@ -123,6 +137,15 @@ def download_all_us_prices(args: argparse.Namespace) -> None:
         start_date=args.start_date,
         end_date=args.end_date,
     )
+
+
+def download_us_benchmarks(args: argparse.Namespace) -> None:
+    frame = fetch_yfinance_benchmark_prices(
+        args.start_date or DEFAULT_MARKET_START_DATE,
+        args.end_date or date.today().strftime("%Y%m%d"),
+        benchmark_ids=_parse_benchmark_ids(args.benchmark_ids),
+    )
+    _print_benchmark_download_result(frame)
 
 
 def download_all_us_statements(args: argparse.Namespace) -> None:
@@ -206,6 +229,7 @@ DOWNLOAD_ACTIONS = {
     "prices": download_all_prices,
     "shares": download_all_shares,
     "dividend": download_all_dividend,
+    "benchmarks": download_kr_benchmarks,
     "consensus": download_kr_consensus,
     "erp": download_erp_inputs,
     "wacc-inputs": download_wacc_inputs,
@@ -214,6 +238,7 @@ DOWNLOAD_ACTIONS = {
 US_DOWNLOAD_ACTIONS = {
     "statements": download_all_us_statements,
     "prices": download_all_us_prices,
+    "benchmarks": download_us_benchmarks,
     "sec-tickers": download_sec_company_tickers,
     "consensus": download_us_consensus,
     "erp": download_erp_inputs,
@@ -225,6 +250,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Download bronze/source market and DART data.")
     parser.add_argument("--market", default="kr", choices=["kr", "us"])
     parser.add_argument("--symbols", help="Comma-separated symbols for US price downloads.")
+    parser.add_argument(
+        "--benchmark-ids",
+        help=(
+            "Comma-separated benchmark ids. Defaults: "
+            f"kr={','.join(sorted(DEFAULT_BENCHMARK_INDEX_CODES))}; "
+            f"us={','.join(sorted(DEFAULT_YFINANCE_BENCHMARK_TICKERS))}."
+        ),
+    )
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--force", action="store_true")
@@ -261,6 +294,23 @@ def _parse_symbols(value: str | None) -> list[str] | None:
     if value is None or not value.strip():
         return None
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _parse_benchmark_ids(value: str | None) -> list[str] | None:
+    if value is None or not value.strip():
+        return None
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _print_benchmark_download_result(frame) -> None:
+    benchmark_ids = []
+    if frame is not None and not frame.empty and "benchmark_id" in frame.columns:
+        benchmark_ids = sorted(frame["benchmark_id"].dropna().astype(str).unique())
+    print(
+        "[DONE] benchmark download "
+        f"rows={0 if frame is None else len(frame):,}, "
+        f"benchmark_ids={','.join(benchmark_ids) if benchmark_ids else '-'}"
+    )
 
 
 def _parse_date_arg(value: str) -> str:

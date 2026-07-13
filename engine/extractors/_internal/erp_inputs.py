@@ -97,7 +97,12 @@ def download_us_sp500_benchmark(
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    frame = fetch_yfinance_price("^GSPC", start_date=start_date, end_date=end_date)
+    frame = fetch_yfinance_price(
+        "^GSPC",
+        start_date=start_date,
+        end_date=end_date,
+        normalize_ticker=False,
+    )
     if frame.empty:
         raise RuntimeError("empty yfinance result for S&P 500 benchmark")
     frame.to_csv(output, index=False, encoding="utf-8-sig")

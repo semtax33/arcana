@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 import re
@@ -107,11 +107,16 @@ def download_us_price_histories(
 def fetch_yfinance_price(
     ticker: str,
     *,
-    start_date: str | None = None,
-    end_date: str | None = None,
+    start_date: str | date | None = None,
+    end_date: str | date | None = None,
+    normalize_ticker: bool = True,
 ) -> pd.DataFrame:
     yf = _import_yfinance()
-    ticker = normalize_yfinance_ticker(ticker)
+    ticker = (
+        normalize_yfinance_ticker(ticker)
+        if normalize_ticker
+        else str(ticker or "").strip().upper()
+    )
     download_kwargs = {
         "interval": "1d",
         "auto_adjust": False,
@@ -401,8 +406,17 @@ def _import_yfinance():
     return yf
 
 
-def _to_yfinance_date(value: str, *, add_day: bool = False) -> str:
-    parsed = datetime.strptime(value, "%Y%m%d")
+def _to_yfinance_date(value: str | date, *, add_day: bool = False) -> str:
+    if isinstance(value, datetime):
+        parsed = value.date()
+    elif isinstance(value, date):
+        parsed = value
+    else:
+        text = str(value).strip()
+        if len(text) == 8 and text.isdigit():
+            parsed = datetime.strptime(text, "%Y%m%d").date()
+        else:
+            parsed = date.fromisoformat(text)
     if add_day:
         parsed += timedelta(days=1)
     return parsed.strftime("%Y-%m-%d")

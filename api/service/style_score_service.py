@@ -38,7 +38,7 @@ COMPONENT_LABELS = {
     "COMPOSITE": "Composite Score",
     "VALUE": "Value",
     "QUALITY": "Quality",
-    "GROWTH": "Growth",
+    "GROWTH": "Growth & Real Consensus",
     "MOMENTUM": "Momentum",
     "RISK": "Risk",
     "DIVIDEND": "Dividend & Shareholder Return",
@@ -59,6 +59,15 @@ FACTOR_LABELS = {
     "dividend_consistency_streak": "DIVIDEND_CONSISTENCY_STREAK",
     "dps_volatility_5y": "DPS_VOLATILITY_5Y",
     "dividend_cut": "DIVIDEND_CUT",
+    "real_eps_revision_1m_pct": "REAL_EPS_REVISION_1M",
+    "real_eps_expected_growth": "REAL_EPS_EXPECTED_GROWTH",
+    "real_revenue_expected_growth": "REAL_REVENUE_EXPECTED_GROWTH",
+    "real_operating_income_expected_growth": "REAL_OPERATING_INCOME_EXPECTED_GROWTH",
+    "real_net_income_expected_growth": "REAL_NET_INCOME_EXPECTED_GROWTH",
+    "real_eps_surprise_pct": "REAL_EPS_SURPRISE",
+    "real_revenue_surprise_pct": "REAL_REVENUE_SURPRISE",
+    "real_operating_income_surprise_pct": "REAL_OPERATING_INCOME_SURPRISE",
+    "real_net_income_surprise_pct": "REAL_NET_INCOME_SURPRISE",
 }
 
 

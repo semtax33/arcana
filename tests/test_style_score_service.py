@@ -98,6 +98,23 @@ class FakeClickHouseClient:
                         "score_confidence": 1.0,
                     },
                     {
+                        "factor_id": "real_eps_expected_growth",
+                        "style_group": "GROWTH",
+                        "factor_direction": 1,
+                        "raw_factor_value": 20.0,
+                        "winsorized_value": 20.0,
+                        "percentile_score": 90.0,
+                        "robust_z_score": 1.5,
+                        "n_peers": 25,
+                        "industry_level": "INDUSTRY_GROUP",
+                        "industry_code": "4530",
+                        "industry_name": "Semiconductors",
+                        "is_valid": True,
+                        "invalid_reason": "",
+                        "is_winsorized": False,
+                        "score_confidence": 1.0,
+                    },
+                    {
                         "factor_id": "fcf_dividend_coverage",
                         "style_group": "DIVIDEND",
                         "factor_direction": 1,
@@ -242,6 +259,22 @@ class StyleScoreServiceTest(unittest.TestCase):
         self.assertAlmostEqual(by_factor["fcf_dividend_coverage"].factor_weight, 0.12)
         self.assertEqual(by_factor["fcf_dividend_coverage"].label, "FCF_DIVIDEND_COVERAGE")
         self.assertEqual(by_factor["fcf_payout_ratio"].label, "FCF_PAYOUT_RATIO")
+
+    def test_growth_component_detail_includes_real_consensus_factors(self):
+        client = FakeClickHouseClient()
+
+        result = StyleScoreService(
+            client_factory=lambda: client,
+            today_factory=lambda: date(2026, 5, 24),
+        ).get_style_score_component_detail("SEC_A", "GROWTH")
+
+        by_factor = {factor.factor_id: factor for factor in result.factors}
+        self.assertEqual(result.component.label, "Growth & Real Consensus")
+        self.assertIn("real_eps_expected_growth", by_factor)
+        self.assertEqual(by_factor["real_eps_expected_growth"].label, "REAL_EPS_EXPECTED_GROWTH")
+        self.assertAlmostEqual(by_factor["real_eps_expected_growth"].factor_weight, 0.08)
+        self.assertAlmostEqual(by_factor["real_eps_expected_growth"].weighted_score, 7.2)
+        self.assertEqual(by_factor["real_revenue_expected_growth"].invalid_reason, "MISSING")
 
     def test_resolve_available_trade_date_returns_latest_loaded_date(self):
         client = FakeClickHouseClient()

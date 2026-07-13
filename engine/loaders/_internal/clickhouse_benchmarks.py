@@ -7,9 +7,18 @@ from typing import Any
 import pandas as pd
 
 from engine.core.clickhouse import get_clickhouse_client
-from engine.extractors.benchmarks import fetch_benchmark_prices
-from engine.transformers.benchmarks import DEFAULT_BENCHMARK_INDEX_CODES, normalize_benchmark_prices
-from engine.workflows.benchmarks import DEFAULT_PROVIDER_SOURCE, create_benchmark_price_dataframe
+from engine.extractors.benchmarks import fetch_benchmark_prices, fetch_yfinance_benchmark_prices
+from engine.transformers.benchmarks import (
+    DEFAULT_BENCHMARK_INDEX_CODES,
+    DEFAULT_YFINANCE_BENCHMARK_TICKERS,
+    normalize_benchmark_prices,
+)
+from engine.workflows.benchmarks import (
+    BRONZE_PROVIDER_SOURCE,
+    DEFAULT_PROVIDER_SOURCE,
+    YFINANCE_PROVIDER_SOURCE,
+    create_benchmark_price_dataframe,
+)
 
 
 BENCHMARK_TABLE = "benchmark_price_daily"
@@ -67,14 +76,24 @@ def download_benchmark_prices(
     benchmark_ids: list[str] | None = None,
     start_date: str | date = "2010-01-01",
     end_date: str | date | None = None,
+    source: str = DEFAULT_PROVIDER_SOURCE,
     output_dir: str | None = None,
 ) -> pd.DataFrame:
-    return fetch_benchmark_prices(
-        start_date,
-        end_date or date.today(),
-        benchmark_ids=benchmark_ids,
-        output_dir=output_dir,
-    )
+    if source == DEFAULT_PROVIDER_SOURCE:
+        return fetch_benchmark_prices(
+            start_date,
+            end_date or date.today(),
+            benchmark_ids=benchmark_ids,
+            output_dir=output_dir,
+        )
+    if source == YFINANCE_PROVIDER_SOURCE:
+        return fetch_yfinance_benchmark_prices(
+            start_date,
+            end_date or date.today(),
+            benchmark_ids=benchmark_ids,
+            output_dir=output_dir,
+        )
+    raise ValueError(f"source must be '{DEFAULT_PROVIDER_SOURCE}' or '{YFINANCE_PROVIDER_SOURCE}'")
 
 
 def normalize_downloaded_benchmark_prices(path: str | None = None) -> pd.DataFrame:
@@ -91,12 +110,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Insert benchmark index prices into ClickHouse.")
     parser.add_argument(
         "--benchmark-ids",
-        default=",".join(sorted(DEFAULT_BENCHMARK_INDEX_CODES)),
-        help="Comma-separated benchmark ids. Defaults to KOSPI200,KOSDAQ.",
+        help=(
+            "Comma-separated benchmark ids. Provider defaults: "
+            f"{DEFAULT_PROVIDER_SOURCE}={','.join(sorted(DEFAULT_BENCHMARK_INDEX_CODES))}; "
+            f"{YFINANCE_PROVIDER_SOURCE}={','.join(sorted(DEFAULT_YFINANCE_BENCHMARK_TICKERS))}."
+        ),
     )
     parser.add_argument("--start-date", default="2010-01-01")
     parser.add_argument("--end-date", default=date.today().isoformat())
-    parser.add_argument("--source", choices=[DEFAULT_PROVIDER_SOURCE, "bronze"], default=DEFAULT_PROVIDER_SOURCE)
+    parser.add_argument(
+        "--source",
+        choices=[DEFAULT_PROVIDER_SOURCE, YFINANCE_PROVIDER_SOURCE, BRONZE_PROVIDER_SOURCE],
+        default=DEFAULT_PROVIDER_SOURCE,
+    )
     parser.add_argument("--bronze-path")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

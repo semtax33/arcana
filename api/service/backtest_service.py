@@ -30,6 +30,7 @@ from api.service.style_score_catalog import (
     DEFAULT_SCREEN_STYLE_PROFILE,
     is_style_score_factor,
 )
+from engine.transformers.benchmarks import normalize_benchmark_id
 
 
 SURVIVOR_BIAS_WARNING = (
@@ -37,6 +38,8 @@ SURVIVOR_BIAS_WARNING = (
     "The backtest does not filter by current security_master.is_active and only uses securities "
     "with point-in-time factor and price data."
 )
+DEFAULT_KR_BENCHMARK_IDS = ["KOSPI200", "KOSDAQ"]
+DEFAULT_US_BENCHMARK_IDS = ["US_NASDAQ", "US_SP500"]
 
 
 class BacktestService:
@@ -47,7 +50,7 @@ class BacktestService:
         _validate_request(request)
         conditions = [_to_repository_condition(condition) for condition in request.conditions]
         style_profile = _resolve_style_profile(request.style_profile, conditions)
-        benchmark_ids = _normalize_benchmark_ids(request.benchmarks)
+        benchmark_ids = _resolve_benchmark_ids(request.benchmarks, market=request.market)
         warnings = [SURVIVOR_BIAS_WARNING]
 
         client = self._client_factory()
@@ -505,12 +508,13 @@ def _rebalance_dates(
 
 def _period_boundaries(start_date: date, end_date: date, frequency: str) -> list[date]:
     months_by_frequency = {
+        "monthly": set(range(1, 13)),
         "quarterly": {3, 6, 9, 12},
         "semiannual": {6, 12},
         "annual": {12},
     }
     if frequency not in months_by_frequency:
-        raise ValueError("rebalance_frequency must be one of: quarterly, semiannual, annual")
+        raise ValueError("rebalance_frequency must be one of: monthly, quarterly, semiannual, annual")
 
     boundaries: list[date] = []
     year = start_date.year
@@ -869,8 +873,18 @@ def _last_present_benchmark(rows: list[BacktestEquityCurvePoint], benchmark_id: 
     return None
 
 
+def _resolve_benchmark_ids(values: list[str], *, market: str | None) -> list[str]:
+    benchmark_ids = _normalize_benchmark_ids(values)
+    normalized_market = str(market or "").strip().lower()
+    if normalized_market == "us" and (not benchmark_ids or benchmark_ids == sorted(DEFAULT_KR_BENCHMARK_IDS)):
+        return sorted(DEFAULT_US_BENCHMARK_IDS)
+    if normalized_market == "kr" and not benchmark_ids:
+        return sorted(DEFAULT_KR_BENCHMARK_IDS)
+    return benchmark_ids
+
+
 def _normalize_benchmark_ids(values: list[str]) -> list[str]:
-    return sorted({str(value).strip().upper() for value in values if str(value).strip()})
+    return sorted({normalize_benchmark_id(value) for value in values if str(value).strip()})
 
 
 def _records(frame: Any) -> list[dict[str, Any]]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from glob import glob
 from pathlib import Path
+import re
 from typing import Any
 
 import pandas as pd
@@ -10,7 +11,9 @@ import pandas as pd
 from engine.core.paths import DATA_LAKE, PROJECT_ROOT, market_csv_name
 
 ENGINE_DIR = Path(__file__).resolve().parent
-BRONZE_BENCHMARK_DIR = DATA_LAKE.bronze("krx", "benchmark")
+BRONZE_KRX_BENCHMARK_DIR = DATA_LAKE.bronze("krx", "benchmark")
+BRONZE_BENCHMARK_DIR = BRONZE_KRX_BENCHMARK_DIR
+BRONZE_YFINANCE_BENCHMARK_DIR = DATA_LAKE.bronze("yfinance", "benchmark")
 SILVER_BENCHMARK_PATH = DATA_LAKE.silver(
     "krx",
     "benchmark",
@@ -20,6 +23,51 @@ SILVER_BENCHMARK_PATH = DATA_LAKE.silver(
 DEFAULT_BENCHMARK_INDEX_CODES = {
     "KOSPI200": "1028",
     "KOSDAQ": "2001",
+}
+DEFAULT_YFINANCE_BENCHMARK_TICKERS = {
+    "US_NASDAQ": "^IXIC",
+    "US_SP500": "^GSPC",
+}
+YFINANCE_BENCHMARK_OUTPUT_NAMES = {
+    "US_NASDAQ": "us_nasdaq.csv",
+    "US_SP500": "us_sp500.csv",
+}
+
+BENCHMARK_ID_ALIASES = {
+    "GSPC": "US_SP500",
+    "SP500": "US_SP500",
+    "USSP500": "US_SP500",
+    "IXIC": "US_NASDAQ",
+    "NASDAQ": "US_NASDAQ",
+    "NASDAQCOMPOSITE": "US_NASDAQ",
+    "USNASDAQ": "US_NASDAQ",
+}
+
+BENCHMARK_METADATA = {
+    "KOSPI200": {
+        "country": "KR",
+        "market_mic": "KRX",
+        "benchmark_family": "KOSPI",
+        "currency": "KRW",
+    },
+    "KOSDAQ": {
+        "country": "KR",
+        "market_mic": "KRX",
+        "benchmark_family": "KOSDAQ",
+        "currency": "KRW",
+    },
+    "US_NASDAQ": {
+        "country": "US",
+        "market_mic": "XNAS",
+        "benchmark_family": "NASDAQ",
+        "currency": "USD",
+    },
+    "US_SP500": {
+        "country": "US",
+        "market_mic": "",
+        "benchmark_family": "SP500",
+        "currency": "USD",
+    },
 }
 
 BENCHMARK_PRICE_COLUMNS = [
@@ -48,7 +96,7 @@ def normalize_benchmark_id(benchmark_id: str) -> str:
     text = str(benchmark_id or "").strip().upper()
     if not text:
         raise ValueError("benchmark_id must not be empty")
-    return text
+    return BENCHMARK_ID_ALIASES.get(_compact_benchmark_id(text), text)
 
 
 def normalize_provider_date(value: str | date | datetime) -> str:
@@ -87,19 +135,20 @@ def normalize_benchmark_price_frame(
     if missing:
         raise ValueError(f"benchmark frame is missing required columns: {', '.join(missing)}")
 
+    metadata = _benchmark_metadata(benchmark_id)
     result = pd.DataFrame(
         {
             "benchmark_id": benchmark_id,
             "trade_date": pd.to_datetime(df[column_map["trade_date"]], errors="coerce"),
-            "country": "KR",
-            "market_mic": "KRX",
-            "benchmark_family": benchmark_id,
+            "country": metadata["country"],
+            "market_mic": metadata["market_mic"],
+            "benchmark_family": metadata["benchmark_family"],
             "open": _numeric(df[column_map["open"]]),
             "high": _numeric(df[column_map["high"]]),
             "low": _numeric(df[column_map["low"]]),
             "close": _numeric(df[column_map["close"]]),
             "volume": _numeric(df[column_map["volume"]]) if column_map["volume"] else pd.NA,
-            "currency": "KRW",
+            "currency": metadata["currency"],
         }
     )
     result = result.dropna(subset=["trade_date", "close"])
@@ -139,7 +188,7 @@ def _resolve_benchmark_ids(
 ) -> list[str]:
     if benchmark_ids is None:
         return sorted(index_codes)
-    return [normalize_benchmark_id(benchmark_id) for benchmark_id in benchmark_ids]
+    return list(dict.fromkeys(normalize_benchmark_id(benchmark_id) for benchmark_id in benchmark_ids))
 
 
 def _concat_benchmark_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
@@ -165,6 +214,29 @@ def _glob_files(path: str) -> list[str]:
         if files:
             return files
     return files
+
+
+def _compact_benchmark_id(value: str) -> str:
+    return re.sub(r"[^A-Z0-9]+", "", value.upper())
+
+
+def _benchmark_metadata(benchmark_id: str) -> dict[str, str]:
+    metadata = BENCHMARK_METADATA.get(benchmark_id)
+    if metadata is not None:
+        return metadata
+    if benchmark_id.startswith("US_"):
+        return {
+            "country": "US",
+            "market_mic": "",
+            "benchmark_family": benchmark_id,
+            "currency": "USD",
+        }
+    return {
+        "country": "KR",
+        "market_mic": "KRX",
+        "benchmark_family": benchmark_id,
+        "currency": "KRW",
+    }
 
 
 def _pick_column(df: pd.DataFrame, candidates: list[str], *, required: bool = True) -> str | None:

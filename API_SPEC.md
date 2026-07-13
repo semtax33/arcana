@@ -44,7 +44,7 @@
 | `MatchMode` | `all`, `any` |
 | `RankDirection` | `catalog`, `higher`, `lower` |
 | `PercentileSide` | `top`, `bottom` |
-| `RebalanceFrequency` | `quarterly`, `semiannual`, `annual` |
+| `RebalanceFrequency` | `monthly`, `quarterly`, `semiannual`, `annual` |
 | `SectorLeaderSortBy` | `strong_stock_ratio`, `eps_expected_growth`, `return_1d`, `return_1w`, `roe`, `per`, `pbr` |
 | `SectorLeaderLevel` | `sector`, `industry_group` |
 | `SortDirection` | `asc`, `desc` |

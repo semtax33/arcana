@@ -77,6 +77,35 @@ class BenchmarkEltTest(unittest.TestCase):
         self.assertEqual(result.attrs["inserted_rows"], 1)
         self.assertEqual(result["benchmark_id"].tolist(), ["KOSDAQ"])
 
+    def test_insert_benchmark_prices_routes_yfinance_source(self):
+        benchmark_df = pd.DataFrame(
+            {
+                "benchmark_id": ["US_SP500"],
+                "trade_date": pd.to_datetime(["2026-01-02"]).date,
+                "open": [100],
+                "high": [101],
+                "low": [99],
+                "close": [100.5],
+                "volume": [1_000],
+                "currency": ["USD"],
+            }
+        )
+
+        with patch(
+            "engine.loaders.benchmarks.create_benchmark_price_dataframe",
+            return_value=benchmark_df,
+        ) as create:
+            result = insert_benchmark_prices(
+                benchmark_ids=["US_SP500"],
+                source="yfinance",
+                dry_run=True,
+            )
+
+        self.assertEqual(result.attrs["inserted_rows"], 1)
+        create.assert_called_once()
+        self.assertEqual(create.call_args.kwargs["benchmark_ids"], ["US_SP500"])
+        self.assertEqual(create.call_args.kwargs["source"], "yfinance")
+
 
 if __name__ == "__main__":
     unittest.main()

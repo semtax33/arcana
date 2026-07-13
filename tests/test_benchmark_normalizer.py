@@ -32,6 +32,25 @@ class BenchmarkNormalizerTest(unittest.TestCase):
         self.assertEqual(result["close"].tolist(), [105.0, 106.0])
         self.assertEqual(result["currency"].tolist(), ["KRW", "KRW"])
 
+    def test_normalize_benchmark_price_frame_handles_yfinance_us_metadata_and_alias(self):
+        raw = pd.DataFrame(
+            {
+                "Date": ["2026-01-02", "2026-01-05"],
+                "Open": [4_800.0, 4_850.0],
+                "High": [4_900.0, 4_950.0],
+                "Low": [4_750.0, 4_820.0],
+                "Close": [4_875.0, 4_925.0],
+                "Volume": [1_000_000, 1_100_000],
+            }
+        )
+
+        result = normalize_benchmark_price_frame(raw, benchmark_id="S&P500")
+
+        self.assertEqual(result["benchmark_id"].tolist(), ["US_SP500", "US_SP500"])
+        self.assertEqual(result["country"].tolist(), ["US", "US"])
+        self.assertEqual(result["benchmark_family"].tolist(), ["SP500", "SP500"])
+        self.assertEqual(result["currency"].tolist(), ["USD", "USD"])
+
     def test_normalize_benchmark_prices_reads_bronze_files_and_writes_silver(self):
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

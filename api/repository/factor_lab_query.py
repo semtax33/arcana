@@ -107,7 +107,7 @@ def node_type_specs() -> list[NodeTypeSpec]:
         NodeTypeSpec("long_short", "evaluate", ["score"], [], {"bucket_count": 5, "horizons": [1, 5, 20]}),
         NodeTypeSpec("turnover", "evaluate", ["score"], [], {"top_percent": 20}),
         NodeTypeSpec("decay_test", "evaluate", ["score"], [], {"horizons": [1, 5, 20]}),
-        NodeTypeSpec("backtest", "evaluate", ["score"], [], {"top_percent": 20, "rebalance_frequency": "quarterly"}),
+        NodeTypeSpec("backtest", "evaluate", ["score"], [], {"top_percent": 20, "rebalance_frequency": "monthly|quarterly|semiannual|annual"}),
     ]
 
 

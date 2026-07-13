@@ -4,7 +4,12 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from engine.transformers.style_score_definitions import canonical_factor_id, factor_direction
+from engine.transformers.style_score_definitions import (
+    STYLE_FACTOR_DEFINITIONS,
+    STYLE_WEIGHTS,
+    canonical_factor_id,
+    factor_direction,
+)
 from engine.workflows.score import (
     FactorTableSchema,
     KR_MIN_UNIVERSE_MARKET_CAP,
@@ -29,10 +34,12 @@ class StyleScorePipelineTest(unittest.TestCase):
         self.assertEqual(canonical_factor_id("FCF_DIVIDEND_COVERAGE"), "fcf_dividend_coverage")
         self.assertEqual(canonical_factor_id("SHAREHOLDER_YIELD"), "shareholder_yield")
         self.assertEqual(canonical_factor_id("roe"), "roe")
+        self.assertEqual(canonical_factor_id("REAL_EPS_EXPECTED_GROWTH"), "real_eps_expected_growth")
         self.assertEqual(factor_direction("EARNINGS_YIELD"), 1)
         self.assertEqual(factor_direction("DEBT_TO_EQUITY"), -1)
         self.assertEqual(factor_direction("FCF_PAYOUT_RATIO"), -1)
         self.assertEqual(factor_direction("DIVIDEND_CUT"), -1)
+        self.assertEqual(factor_direction("REAL_EPS_EXPECTED_GROWTH"), 1)
 
     def test_universe_query_uses_current_industry_columns(self):
         query = _build_universe_query()
@@ -147,6 +154,44 @@ class StyleScorePipelineTest(unittest.TestCase):
         self.assertAlmostEqual(row["score_confidence"], 0.5)
         self.assertEqual(row["available_factor_count"], 2)
         self.assertIn("roe", row["missing_factor_ids"])
+
+    def test_growth_style_score_includes_real_consensus_factors(self):
+        factor_scores = pd.DataFrame(
+            [
+                _factor_score_row("real_eps_expected_growth", 90.0, style_group="GROWTH"),
+                _factor_score_row("real_eps_revision_1m_pct", 70.0, style_group="GROWTH"),
+                _factor_score_row("real_eps_surprise_pct", 80.0, style_group="GROWTH"),
+            ]
+        )
+
+        result = calculate_style_scores(
+            factor_scores,
+            trade_date="2026-05-24",
+            style_profile="DEFAULT",
+        )
+
+        row = result.iloc[0]
+        growth_weights = STYLE_WEIGHTS["GROWTH"]
+        used_weights = {
+            factor_id: growth_weights[factor_id]
+            for factor_id in [
+                "real_eps_expected_growth",
+                "real_eps_revision_1m_pct",
+                "real_eps_surprise_pct",
+            ]
+        }
+        expected_growth_score = (
+            90.0 * used_weights["real_eps_expected_growth"]
+            + 70.0 * used_weights["real_eps_revision_1m_pct"]
+            + 80.0 * used_weights["real_eps_surprise_pct"]
+        ) / sum(used_weights.values())
+
+        self.assertIn("real_eps_expected_growth", STYLE_FACTOR_DEFINITIONS)
+        self.assertAlmostEqual(row["growth_score"], expected_growth_score)
+        self.assertAlmostEqual(row["total_score"], expected_growth_score)
+        self.assertAlmostEqual(row["score_confidence"], sum(used_weights.values()))
+        self.assertEqual(row["available_factor_count"], 3)
+        self.assertIn("real_revenue_expected_growth", row["missing_factor_ids"])
 
     def test_style_score_decodes_clickhouse_fixed_string_stock_code(self):
         fixed_stock_code = b"278470" + (b"\x00" * 58)

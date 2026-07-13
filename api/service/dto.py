@@ -12,7 +12,7 @@ ConditionMode = Literal["top_percent", "threshold"]
 MatchMode = Literal["all", "any"]
 RankDirection = Literal["catalog", "higher", "lower"]
 PercentileSide = Literal["top", "bottom"]
-RebalanceFrequency = Literal["quarterly", "semiannual", "annual"]
+RebalanceFrequency = Literal["monthly", "quarterly", "semiannual", "annual"]
 SectorLeaderSortBy = Literal[
     "strong_stock_ratio",
     "eps_expected_growth",

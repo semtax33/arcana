@@ -8,6 +8,7 @@ from api.service.backtest_service import (
     BacktestService,
     _condition_matches,
     _rebalance_dates,
+    _resolve_benchmark_ids,
     _to_repository_condition,
 )
 from api.service.dto import FactorBacktestRequestDto, FactorConditionDto
@@ -344,6 +345,34 @@ class BacktestServiceTest(unittest.TestCase):
             [date(2026, 1, 2), date(2026, 4, 1), date(2026, 7, 1)],
         )
 
+    def test_rebalance_dates_support_monthly_execution_dates(self):
+        trading_days = [
+            date(2026, 1, 2),
+            date(2026, 1, 30),
+            date(2026, 2, 2),
+            date(2026, 2, 27),
+            date(2026, 3, 2),
+            date(2026, 3, 31),
+            date(2026, 4, 1),
+        ]
+
+        result = _rebalance_dates(
+            trading_days,
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 4, 1),
+            frequency="monthly",
+        )
+
+        self.assertEqual(
+            result,
+            [
+                date(2026, 1, 2),
+                date(2026, 2, 2),
+                date(2026, 3, 2),
+                date(2026, 4, 1),
+            ],
+        )
+
     def test_factor_backtest_sorts_by_average_score_and_limits_positions(self):
         client = FakeClickHouseClient()
         request = FactorBacktestRequestDto(
@@ -368,6 +397,25 @@ class BacktestServiceTest(unittest.TestCase):
         self.assertEqual(result.rebalance_history[0].positions[0].weight, 1.0)
         self.assertEqual(result.rebalance_history[0].positions[0].score, 100.0)
         self.assertTrue(any("Survivor bias" in warning for warning in result.warnings))
+
+    def test_factor_backtest_accepts_monthly_rebalance_frequency(self):
+        client = FakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(factor_id="roe", mode="top_percent", top_percent=100),
+                FactorConditionDto(factor_id="per", mode="top_percent", top_percent=100),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 1, 3),
+            rebalance_frequency="monthly",
+            max_positions=1,
+        )
+
+        result = BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        self.assertEqual(result.summary.rebalance_frequency, "monthly")
+        self.assertEqual(result.summary.rebalance_count, 1)
+        self.assertAlmostEqual(result.summary.cumulative_return, 0.1)
 
     def test_factor_backtest_loads_price_history_once_for_multiple_rebalances(self):
         client = MultiRebalanceFakeClickHouseClient()
@@ -519,6 +567,39 @@ class BacktestServiceTest(unittest.TestCase):
         self.assertIn("FROM arcana.fact_daily_style_score AS s", query)
         self.assertEqual(params["style_profile"], "MINERVINI_ZWEIG")
         self.assertEqual(params["market_country"], "KR")
+
+    def test_us_factor_backtest_uses_us_default_benchmarks(self):
+        client = FakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(factor_id="roe", mode="top_percent", top_percent=100),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 1, 3),
+            rebalance_frequency="quarterly",
+            market="US",
+            max_positions=1,
+        )
+
+        result = BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        benchmark_queries = [
+            params
+            for query, params in client.queries
+            if "FROM benchmark_price_daily" in query
+        ]
+        self.assertEqual(len(benchmark_queries), 1)
+        self.assertEqual(benchmark_queries[0]["benchmark_ids"], ["US_NASDAQ", "US_SP500"])
+        self.assertEqual(
+            set(result.equity_curve[0].benchmark_navs),
+            {"US_NASDAQ", "US_SP500"},
+        )
+
+    def test_benchmark_resolver_preserves_explicit_us_aliases(self):
+        self.assertEqual(
+            _resolve_benchmark_ids(["S&P500", "nasdaq"], market="US"),
+            ["US_NASDAQ", "US_SP500"],
+        )
 
 
 if __name__ == "__main__":
