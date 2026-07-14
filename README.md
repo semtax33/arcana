@@ -542,6 +542,28 @@ factor ids and only those ids are prepared for ClickHouse insertion. Unknown
 factor ids fail fast instead of producing an empty load. `wacc_bundle` expands
 to every WACC-related factor id.
 
+Build the fast factor snapshot table used by screening and backtests:
+
+```powershell
+python -m engine.loaders.factor_snapshots --create-only
+python -m engine.loaders.factor_snapshots --financial-basis annual --start-date 2020-01-01 --end-date 2026-07-10 --factor-ids roe,per,pbr
+python -m engine.loaders.factor_snapshots --financial-basis ttm --start-date 2020-01-01 --end-date 2026-07-10
+python -m engine.loaders.factor_snapshots --financial-basis annual --start-date 2026-03-01 --end-date 2026-03-31 --factor-ids roe,per,pbr --factor-chunk-size 16 --max-threads 2 --max-lookback-days 540
+```
+
+The APIs automatically use `fact_daily_factor_snapshot` when it has rows for
+the requested factor ids and financial basis. If the snapshot table is absent
+or empty for the request, they fall back to `fact_daily_factors`.
+The snapshot loader builds carry-forward daily rows incrementally by default:
+the first date is seeded from raw history, then each following date copies the
+previous snapshot and overwrites keys that have raw rows on that date. Use
+`--full-asof` only when you need to rebuild every snapshot date directly from
+raw history, and use `--copy-raw-only` only when you explicitly want a direct
+copy of raw factor rows.
+Raw-table fallback queries are limited to the last 540 days by default. Override
+that window with `ARCANA_FACTOR_RAW_LOOKBACK_DAYS`, or set it to `0` to disable
+the fallback date window.
+
 WACC factor ids loaded to ClickHouse:
 
 ```text

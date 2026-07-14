@@ -1,6 +1,6 @@
 import unittest
 
-from api.repository.backtest_query import build_factor_snapshot_query
+from api.repository.backtest_query import build_factor_snapshot_batch_query, build_factor_snapshot_query
 from api.repository.factor_screen_query import FactorCondition
 
 
@@ -91,6 +91,38 @@ class BacktestQueryTest(unittest.TestCase):
         self.assertIn("security_universe AS", query)
         self.assertIn("sm.country = {market_country:String}", query)
         self.assertIn("INNER JOIN security_universe AS u", query)
+
+    def test_factor_snapshot_query_can_use_daily_snapshot_table(self):
+        query, params = build_factor_snapshot_query(
+            [FactorCondition.top("roe", 20), FactorCondition.top("per", 20)],
+            signal_date="2026-03-31",
+            financial_basis="annual",
+            factor_table="fact_daily_factor_snapshot",
+            factor_table_is_snapshot=True,
+        )
+
+        self.assertEqual(params["signal_date"], "2026-03-31")
+        self.assertIn("latest_snapshot_date AS", query)
+        self.assertIn("FROM fact_daily_factor_snapshot", query)
+        self.assertIn("f.trade_date = (SELECT snapshot_date FROM latest_snapshot_date)", query)
+        self.assertIn("argMax(f.source_trade_date, tuple(f.trade_date, f.updated_at)) AS trade_date", query)
+        self.assertNotIn("WHERE f.trade_date <= {signal_date:Date}", query)
+
+    def test_factor_snapshot_batch_query_uses_snapshot_dates_for_multiple_signals(self):
+        query, params = build_factor_snapshot_batch_query(
+            [FactorCondition.top("roe", 20), FactorCondition.top("per", 20)],
+            signal_dates=["2026-03-31", "2026-06-30"],
+            market="KR",
+            financial_basis="annual",
+        )
+
+        self.assertEqual(params["signal_dates"], ["2026-03-31", "2026-06-30"])
+        self.assertEqual(params["factor_ids"], ["per", "roe"])
+        self.assertEqual(params["market_country"], "KR")
+        self.assertIn("arrayJoin({signal_dates:Array(Date)}) AS signal_date", query)
+        self.assertIn("latest_snapshot_dates AS", query)
+        self.assertIn("PARTITION BY signal_date, factor_id", query)
+        self.assertIn("rf.signal_date AS signal_date", query)
 
 
 if __name__ == "__main__":

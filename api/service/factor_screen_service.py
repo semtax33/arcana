@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 from typing import Any, Callable
 
@@ -13,6 +14,8 @@ from api.model.screening import (
 )
 from api.repository.factor_screen_query import (
     DEFAULT_FINANCIAL_BASIS,
+    DEFAULT_FACTOR_SNAPSHOT_TABLE,
+    DEFAULT_FACTOR_TABLE,
     FactorCondition,
     screen_stocks_by_factors,
 )
@@ -46,6 +49,12 @@ class FactorScreenService:
         client = self._client_factory()
         try:
             factor_meta = _load_factor_metadata(client, conditions)
+            factor_table, factor_table_is_snapshot = _resolve_factor_table(
+                client,
+                conditions=conditions,
+                financial_basis=request.financial_basis or DEFAULT_FINANCIAL_BASIS,
+                as_of_date=request.as_of_date,
+            )
             result_df = screen_stocks_by_factors(
                 client,
                 conditions,
@@ -56,7 +65,10 @@ class FactorScreenService:
                 sector_codes=request.sector_codes,
                 industry_group_codes=request.industry_group_codes,
                 match_mode=request.match_mode,
-                limit=None,
+                limit=request.limit,
+                factor_table=factor_table,
+                factor_table_is_snapshot=factor_table_is_snapshot,
+                raw_lookback_days=None if factor_table_is_snapshot else _raw_lookback_days(),
                 include_security_metadata=True,
             )
             all_rows = result_df.to_dict("records")
@@ -71,7 +83,8 @@ class FactorScreenService:
             factor_meta,
             condition_indexes=display_condition_indexes,
         )
-        rows = all_rows[: request.limit] if request.limit is not None else all_rows
+        total_count = _extract_total_count(all_rows)
+        rows = all_rows
         screened_rows = [
             _to_screened_row(
                 index,
@@ -85,7 +98,7 @@ class FactorScreenService:
         ]
 
         return FactorScreenResult(
-            total_count=len(all_rows),
+            total_count=total_count,
             fixed_columns=FIXED_COLUMNS,
             factor_columns=factor_columns,
             rows=screened_rows,
@@ -128,6 +141,100 @@ WHERE has({factor_ids:Array(String)}, factor_id)
     rows = client.query_df(query, parameters={"factor_ids": factor_ids}).to_dict("records")
     metadata.update({str(row["factor_id"]): row for row in rows})
     return metadata
+
+
+def _resolve_factor_table(
+    client: Any,
+    *,
+    conditions: list[FactorCondition],
+    financial_basis: str,
+    as_of_date: Any,
+) -> tuple[str, bool]:
+    factor_ids = sorted(
+        {
+            condition.factor_id
+            for condition in conditions
+            if not is_style_score_factor(condition.factor_id)
+        }
+    )
+    if factor_ids and _snapshot_table_has_rows(
+        client,
+        DEFAULT_FACTOR_SNAPSHOT_TABLE,
+        factor_ids=factor_ids,
+        financial_basis=financial_basis,
+        as_of_date=as_of_date,
+    ):
+        return DEFAULT_FACTOR_SNAPSHOT_TABLE, True
+    return DEFAULT_FACTOR_TABLE, False
+
+
+def _snapshot_table_has_rows(
+    client: Any,
+    table_name: str,
+    *,
+    factor_ids: list[str],
+    financial_basis: str,
+    as_of_date: Any,
+) -> bool:
+    query = getattr(client, "query", None)
+    if not callable(query):
+        return False
+    if not _table_exists(client, table_name):
+        return False
+    params: dict[str, Any] = {
+        "factor_ids": factor_ids,
+        "financial_basis": financial_basis,
+    }
+    date_filter = ""
+    if as_of_date is not None:
+        params["as_of_date"] = as_of_date.isoformat() if hasattr(as_of_date, "isoformat") else str(as_of_date)
+        date_filter = "\n    AND trade_date <= {as_of_date:Date}"
+    try:
+        rows = query(
+            f"""
+SELECT countDistinct(factor_id) AS factor_count
+FROM {table_name}
+WHERE has({{factor_ids:Array(String)}}, factor_id)
+    AND financial_basis = {{financial_basis:String}}{date_filter}
+""".strip(),
+            parameters=params,
+        ).result_rows
+    except Exception:
+        return False
+    return bool(rows and int(rows[0][0]) >= len(factor_ids))
+
+
+def _table_exists(client: Any, table_name: str) -> bool:
+    query = getattr(client, "query", None)
+    if not callable(query):
+        return False
+    try:
+        rows = query(f"EXISTS TABLE {table_name}").result_rows
+    except Exception:
+        return False
+    return bool(rows and rows[0][0])
+
+
+def _extract_total_count(rows: list[dict[str, Any]]) -> int:
+    if not rows:
+        return 0
+    raw_value = rows[0].get("total_count")
+    if raw_value is None:
+        return len(rows)
+    if hasattr(raw_value, "item"):
+        raw_value = raw_value.item()
+    return int(raw_value)
+
+
+def _raw_lookback_days() -> int | None:
+    value = os.getenv("ARCANA_FACTOR_RAW_LOOKBACK_DAYS", "540").strip()
+    if not value:
+        return None
+    try:
+        days = int(value)
+    except ValueError:
+        return 540
+    return days if days > 0 else None
 
 
 def _resolve_style_profile(

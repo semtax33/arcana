@@ -20,6 +20,11 @@ class FakeDataFrame:
         return self._records
 
 
+class FakeQueryResult:
+    def __init__(self, rows):
+        self.result_rows = rows
+
+
 class FakeClickHouseClient:
     def __init__(self):
         self.closed = False
@@ -88,6 +93,16 @@ class FakeClickHouseClient:
 
     def close(self):
         self.closed = True
+
+
+class SnapshotAvailableFakeClickHouseClient(FakeClickHouseClient):
+    def query(self, query, parameters=None):
+        self.queries.append((query, parameters or {}))
+        if query.startswith("EXISTS TABLE fact_daily_factor_snapshot"):
+            return FakeQueryResult([(1,)])
+        if "FROM fact_daily_factor_snapshot" in query:
+            return FakeQueryResult([(len((parameters or {}).get("factor_ids", [])),)])
+        return FakeQueryResult([])
 
 
 @unittest.skipIf(
@@ -182,6 +197,32 @@ class FactorScreenServiceTest(unittest.TestCase):
         self.assertEqual(len(result.rows[0].factor_values), 1)
         self.assertEqual(result.rows[0].factor_values["roe_0"].value, 12.5)
         self.assertEqual(result.rows[0].matched_condition_count, 2)
+
+    def test_screen_uses_snapshot_table_when_snapshot_rows_exist(self):
+        client = SnapshotAvailableFakeClickHouseClient()
+        request = FactorScreenRequestDto(
+            conditions=[
+                FactorConditionDto(
+                    factor_id="roe",
+                    mode="top_percent",
+                    top_percent=30,
+                )
+            ],
+            limit=25,
+        )
+
+        FactorScreenService(client_factory=lambda: client).screen_stocks(request)
+
+        screen_queries = [
+            (query, params)
+            for query, params in client.queries
+            if "latest_factor_values AS" in query
+        ]
+        self.assertEqual(len(screen_queries), 1)
+        query, params = screen_queries[0]
+        self.assertEqual(params["limit"], 25)
+        self.assertIn("FROM fact_daily_factor_snapshot AS f", query)
+        self.assertIn("f.trade_date = (SELECT latest_date FROM latest_trade_date)", query)
 
 
 if __name__ == "__main__":

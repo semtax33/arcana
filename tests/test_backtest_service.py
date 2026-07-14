@@ -14,6 +14,11 @@ from api.service.backtest_service import (
 from api.service.dto import FactorBacktestRequestDto, FactorConditionDto
 
 
+class FakeQueryResult:
+    def __init__(self, rows):
+        self.result_rows = rows
+
+
 class FakeClickHouseClient:
     def __init__(self):
         self.closed = False
@@ -116,6 +121,16 @@ class FakeClickHouseClient:
         self.closed = True
 
 
+class SnapshotAvailableFakeClickHouseClient(FakeClickHouseClient):
+    def query(self, query, parameters=None):
+        self.queries.append((query, parameters or {}))
+        if query.startswith("EXISTS TABLE fact_daily_factor_snapshot"):
+            return FakeQueryResult([(1,)])
+        if "FROM fact_daily_factor_snapshot" in query:
+            return FakeQueryResult([(len((parameters or {}).get("factor_ids", [])),)])
+        return FakeQueryResult([])
+
+
 class NoPositionsFakeClickHouseClient(FakeClickHouseClient):
     def query_df(self, query, parameters=None):
         parameters = parameters or {}
@@ -179,6 +194,81 @@ class MultiRebalanceFakeClickHouseClient(FakeClickHouseClient):
         if "FROM benchmark_price_daily" in query:
             return pd.DataFrame()
         return pd.DataFrame()
+
+
+class SnapshotAvailableMultiRebalanceFakeClickHouseClient(MultiRebalanceFakeClickHouseClient):
+    def query(self, query, parameters=None):
+        self.queries.append((query, parameters or {}))
+        if query.startswith("EXISTS TABLE fact_daily_factor_snapshot"):
+            return FakeQueryResult([(1,)])
+        if "FROM fact_daily_factor_snapshot" in query:
+            return FakeQueryResult([(len((parameters or {}).get("factor_ids", [])),)])
+        return FakeQueryResult([])
+
+    def query_df(self, query, parameters=None):
+        parameters = parameters or {}
+        if "latest_snapshot_dates AS" in query:
+            self.queries.append((query, parameters))
+            rows = []
+            for signal_date in parameters.get("signal_dates", []):
+                rows.extend(
+                    [
+                        {
+                            "signal_date": signal_date,
+                            "security_id": "SEC_KR_A",
+                            "ticker": "A",
+                            "stock_name": "A Corp",
+                            "factor_id": "roe",
+                            "value_direction": "HIGHER_BETTER",
+                            "factor_value": 20,
+                            "rank_high": 1,
+                            "rank_low": 2,
+                            "factor_count": 2,
+                            "percentile_score": 100,
+                        },
+                        {
+                            "signal_date": signal_date,
+                            "security_id": "SEC_KR_A",
+                            "ticker": "A",
+                            "stock_name": "A Corp",
+                            "factor_id": "per",
+                            "value_direction": "LOWER_BETTER",
+                            "factor_value": 5,
+                            "rank_high": 2,
+                            "rank_low": 1,
+                            "factor_count": 2,
+                            "percentile_score": 100,
+                        },
+                        {
+                            "signal_date": signal_date,
+                            "security_id": "SEC_KR_B",
+                            "ticker": "B",
+                            "stock_name": "B Corp",
+                            "factor_id": "roe",
+                            "value_direction": "HIGHER_BETTER",
+                            "factor_value": 10,
+                            "rank_high": 2,
+                            "rank_low": 1,
+                            "factor_count": 2,
+                            "percentile_score": 0,
+                        },
+                        {
+                            "signal_date": signal_date,
+                            "security_id": "SEC_KR_B",
+                            "ticker": "B",
+                            "stock_name": "B Corp",
+                            "factor_id": "per",
+                            "value_direction": "LOWER_BETTER",
+                            "factor_value": 12,
+                            "rank_high": 1,
+                            "rank_low": 2,
+                            "factor_count": 2,
+                            "percentile_score": 0,
+                        },
+                    ]
+                )
+            return pd.DataFrame(rows)
+        return super().query_df(query, parameters)
 
 
 
@@ -567,6 +657,58 @@ class BacktestServiceTest(unittest.TestCase):
         self.assertIn("FROM arcana.fact_daily_style_score AS s", query)
         self.assertEqual(params["style_profile"], "MINERVINI_ZWEIG")
         self.assertEqual(params["market_country"], "KR")
+
+    def test_factor_backtest_uses_snapshot_table_when_snapshot_rows_exist(self):
+        client = SnapshotAvailableFakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(factor_id="roe", mode="top_percent", top_percent=100),
+                FactorConditionDto(factor_id="per", mode="top_percent", top_percent=100),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 1, 3),
+            rebalance_frequency="quarterly",
+            max_positions=1,
+        )
+
+        BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        snapshot_queries = [
+            (query, params)
+            for query, params in client.queries
+            if "latest_factor_values AS" in query
+        ]
+        self.assertEqual(len(snapshot_queries), 1)
+        query, _ = snapshot_queries[0]
+        self.assertIn("latest_snapshot_date AS", query)
+        self.assertIn("FROM fact_daily_factor_snapshot AS f", query)
+        self.assertIn("f.trade_date = (SELECT snapshot_date FROM latest_snapshot_date)", query)
+
+    def test_factor_backtest_batches_snapshot_queries_for_multiple_rebalances(self):
+        client = SnapshotAvailableMultiRebalanceFakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(factor_id="roe", mode="top_percent", top_percent=100),
+                FactorConditionDto(factor_id="per", mode="top_percent", top_percent=100),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 4, 3),
+            rebalance_frequency="quarterly",
+            max_positions=1,
+        )
+
+        result = BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        snapshot_queries = [
+            (query, params)
+            for query, params in client.queries
+            if "latest_factor_values AS" in query
+        ]
+        self.assertEqual(len(result.rebalance_history), 2)
+        self.assertEqual(len(snapshot_queries), 1)
+        query, params = snapshot_queries[0]
+        self.assertIn("arrayJoin({signal_dates:Array(Date)}) AS signal_date", query)
+        self.assertEqual(params["signal_dates"], ["2026-01-01", "2026-03-31"])
 
     def test_us_factor_backtest_uses_us_default_benchmarks(self):
         client = FakeClickHouseClient()

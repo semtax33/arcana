@@ -18,6 +18,8 @@ from api.service.factor_identity import canonical_factor_id
 
 
 RankDirection = Literal["catalog", "higher", "lower"]
+DEFAULT_FACTOR_TABLE = "fact_daily_factors"
+DEFAULT_FACTOR_SNAPSHOT_TABLE = "fact_daily_factor_snapshot"
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
 _FACTOR_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
@@ -40,7 +42,9 @@ def build_factor_snapshot_query(
     style_profile: str | None = DEFAULT_SCREEN_STYLE_PROFILE,
     sector_codes: list[str] | None = None,
     industry_group_codes: list[str] | None = None,
-    factor_table: str = "fact_daily_factors",
+    factor_table: str = DEFAULT_FACTOR_TABLE,
+    factor_table_is_snapshot: bool = False,
+    raw_lookback_days: int | None = None,
     style_score_table: str = "arcana.fact_daily_style_score",
     catalog_table: str = "factor_catalog",
     security_table: str = "security_master",
@@ -84,8 +88,30 @@ def build_factor_snapshot_query(
     if financial_basis:
         params["financial_basis"] = financial_basis
         basis_filter = "\n        AND f.financial_basis = {financial_basis:String}"
+    raw_lookback_filter = ""
+    if not factor_table_is_snapshot and raw_lookback_days is not None and int(raw_lookback_days) > 0:
+        params["raw_start_date"] = (
+            date.fromisoformat(params["signal_date"]) - timedelta(days=int(raw_lookback_days))
+        ).isoformat()
+        raw_lookback_filter = "\n        AND f.trade_date >= {raw_start_date:Date}"
 
     ctes = []
+    if factor_table_is_snapshot and regular_factor_ids:
+        snapshot_date_filter = (
+            f"\n        AND has({{{regular_factor_param}:Array(String)}}, factor_id)"
+            if regular_factor_ids
+            else ""
+        )
+        ctes.append(
+            f"""
+latest_snapshot_date AS (
+    SELECT
+        max(trade_date) AS snapshot_date
+    FROM {_validate_table_name(factor_table)}
+    WHERE trade_date <= {{signal_date:Date}}{snapshot_date_filter}{basis_filter.replace("f.", "")}
+)
+""".strip()
+        )
     needs_security_universe = bool(
         normalized_sector_codes or normalized_industry_group_codes or normalized_market
     )
@@ -140,6 +166,18 @@ selected_catalog AS (
 
     latest_factor_sources = []
     if regular_factor_ids:
+        factor_date_predicate = (
+            "f.trade_date = (SELECT snapshot_date FROM latest_snapshot_date)"
+            if factor_table_is_snapshot
+            else "f.trade_date <= {signal_date:Date}"
+        )
+        if raw_lookback_filter and not factor_table_is_snapshot:
+            factor_date_predicate += raw_lookback_filter
+        source_trade_date_expr = (
+            "argMax(f.source_trade_date, tuple(f.trade_date, f.updated_at))"
+            if factor_table_is_snapshot
+            else "max(f.trade_date)"
+        )
         latest_factor_sources.append(
             f"""
     SELECT
@@ -148,11 +186,11 @@ selected_catalog AS (
         any(c.factor_name) AS factor_name,
         any(c.value_direction) AS value_direction,
         argMax(f.factor_value, tuple(f.trade_date, f.updated_at)) AS factor_value,
-        max(f.trade_date) AS trade_date
+        {source_trade_date_expr} AS trade_date
     FROM {_validate_table_name(factor_table)} AS f
     INNER JOIN selected_catalog AS c
         ON c.factor_id = f.factor_id{regular_security_universe_join}
-    WHERE f.trade_date <= {{signal_date:Date}}
+    WHERE {factor_date_predicate}
         AND has({{{regular_factor_param}:Array(String)}}, f.factor_id)
         AND isFinite(f.factor_value){basis_filter}
     GROUP BY
@@ -227,6 +265,212 @@ GROUP BY
     rf.security_id,
     rf.factor_id
 ORDER BY
+    rf.security_id ASC,
+    rf.factor_id ASC
+""".strip()
+    return query, params
+
+
+def build_factor_snapshot_batch_query(
+    conditions: list[FactorCondition | dict[str, Any]],
+    *,
+    signal_dates: list[str | date],
+    market: str | None = None,
+    financial_basis: str | None = "annual",
+    factor_table: str = DEFAULT_FACTOR_SNAPSHOT_TABLE,
+    catalog_table: str = "factor_catalog",
+    security_table: str = "security_master",
+    issuer_table: str = "issuers",
+    identifier_table: str = "identifiers",
+    sector_codes: list[str] | None = None,
+    industry_group_codes: list[str] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    normalized_conditions = [_coerce_condition(condition) for condition in conditions]
+    if not normalized_conditions:
+        raise ValueError("at least one factor condition is required")
+    normalized_signal_dates = sorted({_resolve_date(value) for value in signal_dates})
+    if not normalized_signal_dates:
+        raise ValueError("signal_dates must not be empty")
+
+    factor_ids = _validate_factor_ids(
+        sorted({condition.factor_id for condition in normalized_conditions})
+    )
+    if any(is_style_score_factor(factor_id) for factor_id in factor_ids):
+        raise ValueError("batch factor snapshots only support regular factor ids")
+
+    normalized_sector_codes = (
+        _validate_classification_codes(sector_codes, "sector_codes") if sector_codes else None
+    )
+    normalized_industry_group_codes = (
+        _validate_classification_codes(industry_group_codes, "industry_group_codes")
+        if industry_group_codes
+        else None
+    )
+    normalized_market = _normalize_market(market)
+    params: dict[str, Any] = {
+        "signal_dates": normalized_signal_dates,
+        "factor_ids": factor_ids,
+    }
+    basis_filter = ""
+    if financial_basis:
+        params["financial_basis"] = financial_basis
+        basis_filter = "\n        AND f.financial_basis = {financial_basis:String}"
+    if normalized_sector_codes:
+        params["sector_codes"] = normalized_sector_codes
+    if normalized_industry_group_codes:
+        params["industry_group_codes"] = normalized_industry_group_codes
+    if normalized_market:
+        params["market_country"] = normalized_market.upper()
+
+    ctes = [
+        """
+signal_dates AS (
+    SELECT arrayJoin({signal_dates:Array(Date)}) AS signal_date
+)
+""".strip(),
+        f"""
+latest_snapshot_dates AS (
+    SELECT
+        sd.signal_date AS signal_date,
+        max(f.trade_date) AS snapshot_date
+    FROM {_validate_table_name(factor_table)} AS f
+    CROSS JOIN signal_dates AS sd
+    WHERE f.trade_date <= sd.signal_date
+        AND has({{factor_ids:Array(String)}}, f.factor_id){basis_filter}
+    GROUP BY sd.signal_date
+)
+""".strip(),
+        f"""
+selected_catalog AS (
+    SELECT
+        factor_id,
+        any(factor_name) AS factor_name,
+        any(value_direction) AS value_direction
+    FROM {_validate_table_name(catalog_table)}
+    WHERE is_active
+        AND has({{factor_ids:Array(String)}}, factor_id)
+    GROUP BY factor_id
+)
+""".strip(),
+    ]
+
+    needs_security_universe = bool(
+        normalized_sector_codes or normalized_industry_group_codes or normalized_market
+    )
+    regular_security_universe_join = ""
+    if needs_security_universe:
+        sector_filter = ""
+        if normalized_sector_codes:
+            sector_filter = "\n        AND has({sector_codes:Array(String)}, iss.sector_code)"
+        industry_group_filter = ""
+        if normalized_industry_group_codes:
+            industry_group_filter = (
+                "\n        AND has({industry_group_codes:Array(String)}, iss.industry_group_code)"
+            )
+        market_filter = ""
+        if normalized_market:
+            market_filter = "\n        AND sm.country = {market_country:String}"
+        ctes.append(
+            f"""
+security_universe AS (
+    SELECT
+        sm.security_id AS security_id
+    FROM {_validate_table_name(security_table)} AS sm
+    LEFT JOIN {_validate_table_name(issuer_table)} AS iss
+        ON iss.issuer_id = sm.issuer_id
+    WHERE 1 = 1{market_filter}{sector_filter}{industry_group_filter}
+    GROUP BY sm.security_id
+)
+""".strip()
+        )
+        regular_security_universe_join = (
+            "\n    INNER JOIN security_universe AS u\n        ON u.security_id = f.security_id"
+        )
+
+    ctes.append(
+        f"""
+latest_factor_values AS (
+    SELECT
+        lsd.signal_date AS signal_date,
+        f.security_id AS security_id,
+        f.factor_id AS factor_id,
+        any(c.factor_name) AS factor_name,
+        any(c.value_direction) AS value_direction,
+        argMax(f.factor_value, tuple(f.trade_date, f.updated_at)) AS factor_value,
+        argMax(f.source_trade_date, tuple(f.trade_date, f.updated_at)) AS trade_date
+    FROM latest_snapshot_dates AS lsd
+    INNER JOIN {_validate_table_name(factor_table)} AS f
+        ON f.trade_date = lsd.snapshot_date
+    INNER JOIN selected_catalog AS c
+        ON c.factor_id = f.factor_id{regular_security_universe_join}
+    WHERE has({{factor_ids:Array(String)}}, f.factor_id)
+        AND isFinite(f.factor_value){basis_filter}
+    GROUP BY
+        lsd.signal_date,
+        f.security_id,
+        f.factor_id
+)
+""".strip()
+    )
+    ctes.append(
+        """
+ranked_factor_values AS (
+    SELECT
+        signal_date,
+        security_id,
+        factor_id,
+        factor_name,
+        value_direction,
+        factor_value,
+        trade_date,
+        row_number() OVER (PARTITION BY signal_date, factor_id ORDER BY factor_value DESC, security_id ASC) AS rank_high,
+        row_number() OVER (PARTITION BY signal_date, factor_id ORDER BY factor_value ASC, security_id ASC) AS rank_low,
+        count() OVER (PARTITION BY signal_date, factor_id) AS factor_count
+    FROM latest_factor_values
+)
+""".strip()
+    )
+    with_sql = "WITH\n" + ",\n".join(ctes)
+
+    query = f"""
+{with_sql}
+SELECT
+    rf.signal_date AS signal_date,
+    rf.security_id AS security_id,
+    any(id.id_value) AS ticker,
+    any(iss.legal_name_ko) AS stock_name,
+    rf.factor_id AS factor_id,
+    any(rf.factor_name) AS factor_name,
+    any(rf.value_direction) AS value_direction,
+    any(rf.factor_value) AS factor_value,
+    max(rf.trade_date) AS factor_trade_date,
+    any(rf.rank_high) AS rank_high,
+    any(rf.rank_low) AS rank_low,
+    any(rf.factor_count) AS factor_count,
+    if(
+        any(rf.factor_count) <= 1,
+        100.0,
+        if(
+            any(rf.value_direction) = 'LOWER_BETTER',
+            (any(rf.factor_count) - any(rf.rank_low)) / (any(rf.factor_count) - 1) * 100.0,
+            (any(rf.factor_count) - any(rf.rank_high)) / (any(rf.factor_count) - 1) * 100.0
+        )
+    ) AS percentile_score
+FROM ranked_factor_values AS rf
+LEFT JOIN {_validate_table_name(security_table)} AS sm
+    ON sm.security_id = rf.security_id
+LEFT JOIN {_validate_table_name(issuer_table)} AS iss
+    ON iss.issuer_id = sm.issuer_id
+LEFT JOIN {_validate_table_name(identifier_table)} AS id
+    ON id.security_id = rf.security_id
+    AND id.id_type = 'TICKER'
+    AND id.is_primary
+GROUP BY
+    rf.signal_date,
+    rf.security_id,
+    rf.factor_id
+ORDER BY
+    rf.signal_date ASC,
     rf.security_id ASC,
     rf.factor_id ASC
 """.strip()

@@ -23,6 +23,8 @@ PercentileSide = Literal["top", "bottom"]
 
 
 DEFAULT_FINANCIAL_BASIS = "annual"
+DEFAULT_FACTOR_TABLE = "fact_daily_factors"
+DEFAULT_FACTOR_SNAPSHOT_TABLE = "fact_daily_factor_snapshot"
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
 _FACTOR_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
@@ -233,7 +235,9 @@ def build_factor_screen_query(
     industry_group_codes: list[str] | None = None,
     match_mode: MatchMode = "all",
     limit: int | None = None,
-    factor_table: str = "fact_daily_factors",
+    factor_table: str = DEFAULT_FACTOR_TABLE,
+    factor_table_is_snapshot: bool = False,
+    raw_lookback_days: int | None = None,
     style_score_table: str = "arcana.fact_daily_style_score",
     catalog_table: str = "factor_catalog",
     security_table: str = "security_master",
@@ -286,6 +290,12 @@ def build_factor_screen_query(
         params["market_country"] = normalized_market.upper()
     if limit is not None:
         params["limit"] = int(limit)
+    raw_lookback_filter = ""
+    if not factor_table_is_snapshot and raw_lookback_days is not None and int(raw_lookback_days) > 0:
+        params["raw_start_date"] = (
+            date.fromisoformat(params["as_of_date"]) - timedelta(days=int(raw_lookback_days))
+        ).isoformat()
+        raw_lookback_filter = "\n        AND trade_date >= {raw_start_date:Date}"
 
     basis_filter = ""
     basis_date_filter = ""
@@ -322,6 +332,13 @@ def build_factor_screen_query(
         market_filter = ""
         if normalized_market:
             market_filter = "\n        AND sm.country = {market_country:String}"
+        mcap_trade_date_predicate = (
+            "trade_date = (SELECT latest_date FROM latest_trade_date)"
+            if factor_table_is_snapshot
+            else "trade_date <= (SELECT latest_date FROM latest_trade_date)"
+        )
+        if raw_lookback_filter and not factor_table_is_snapshot:
+            mcap_trade_date_predicate += "\n            AND trade_date >= {raw_start_date:Date}"
         security_universe_cte = f""",
 security_universe AS (
     SELECT
@@ -353,7 +370,7 @@ security_universe AS (
             argMax(factor_value, tuple(trade_date, updated_at)) AS market_cap
         FROM {_validate_table_name(factor_table)}
         WHERE factor_id = 'mcap_mil'
-            AND trade_date <= (SELECT latest_date FROM latest_trade_date)
+            AND {mcap_trade_date_predicate}
             AND isFinite(factor_value)
             {mcap_basis_filter.strip()}
         GROUP BY security_id
@@ -418,7 +435,7 @@ latest_trade_date AS (
     SELECT
         max(trade_date) AS latest_date
     FROM {_validate_table_name(factor_table)}
-    WHERE trade_date <= {{as_of_date:Date}}{latest_date_factor_filter}{basis_date_filter}
+    WHERE trade_date <= {{as_of_date:Date}}{latest_date_factor_filter}{basis_date_filter}{raw_lookback_filter}
 )""".strip()
     ]
     if regular_factor_ids:
@@ -453,6 +470,18 @@ latest_style_trade_date AS (
 
     latest_factor_sources = []
     if regular_factor_ids:
+        factor_date_predicate = (
+            "f.trade_date = (SELECT latest_date FROM latest_trade_date)"
+            if factor_table_is_snapshot
+            else "f.trade_date <= (SELECT latest_date FROM latest_trade_date)"
+        )
+        if raw_lookback_filter and not factor_table_is_snapshot:
+            factor_date_predicate += "\n        AND f.trade_date >= {raw_start_date:Date}"
+        source_trade_date_expr = (
+            "argMax(f.source_trade_date, tuple(f.trade_date, f.updated_at))"
+            if factor_table_is_snapshot
+            else "max(f.trade_date)"
+        )
         latest_factor_sources.append(
             f"""
     SELECT
@@ -461,11 +490,11 @@ latest_style_trade_date AS (
         c.factor_name AS factor_name,
         c.value_direction AS value_direction,
         argMax({_factor_value_expr("f")}, tuple(f.trade_date, f.updated_at)) AS factor_value,
-        max(f.trade_date) AS trade_date
+        {source_trade_date_expr} AS trade_date
     FROM {_validate_table_name(factor_table)} AS f
     INNER JOIN selected_catalog AS c
         ON c.factor_id = f.factor_id{regular_security_universe_join}
-    WHERE f.trade_date <= (SELECT latest_date FROM latest_trade_date)
+    WHERE {factor_date_predicate}
         AND has({{{regular_factor_param}:Array(String)}}, f.factor_id)
         AND isFinite(f.factor_value){basis_filter}
     GROUP BY
@@ -512,6 +541,7 @@ SELECT
     sf.security_id AS security_id,
 {metadata_select_sql}    {match_count_sql} AS matched_condition_count,
     {matched_conditions_sql} AS matched_conditions,
+    count() OVER () AS total_count,
     max(trade_date) AS latest_trade_date,
 {value_select_sql}
 FROM scored_factors AS sf
@@ -536,7 +566,9 @@ def screen_stocks_by_factors(
     industry_group_codes: list[str] | None = None,
     match_mode: MatchMode = "all",
     limit: int | None = None,
-    factor_table: str = "fact_daily_factors",
+    factor_table: str = DEFAULT_FACTOR_TABLE,
+    factor_table_is_snapshot: bool = False,
+    raw_lookback_days: int | None = None,
     style_score_table: str = "arcana.fact_daily_style_score",
     catalog_table: str = "factor_catalog",
     security_table: str = "security_master",
@@ -557,6 +589,8 @@ def screen_stocks_by_factors(
         match_mode=match_mode,
         limit=limit,
         factor_table=factor_table,
+        factor_table_is_snapshot=factor_table_is_snapshot,
+        raw_lookback_days=raw_lookback_days,
         style_score_table=style_score_table,
         catalog_table=catalog_table,
         security_table=security_table,

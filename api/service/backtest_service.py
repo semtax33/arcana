@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 import math
+import os
 from typing import Any, Callable
 
 import pandas as pd
@@ -17,7 +18,10 @@ from api.model.backtest import (
     FactorBacktestResult,
 )
 from api.repository.backtest_query import (
+    DEFAULT_FACTOR_SNAPSHOT_TABLE,
+    DEFAULT_FACTOR_TABLE,
     build_benchmark_history_query,
+    build_factor_snapshot_batch_query,
     build_factor_snapshot_query,
     build_price_history_query,
     build_trading_days_query,
@@ -55,6 +59,13 @@ class BacktestService:
 
         client = self._client_factory()
         try:
+            factor_table, factor_table_is_snapshot = _resolve_factor_table(
+                client,
+                requested_table=request.factor_table,
+                conditions=conditions,
+                financial_basis=request.financial_basis or "annual",
+                end_date=request.end_date,
+            )
             trading_days = self._load_trading_days(client, request.start_date, request.end_date)
             visible_days = [
                 day for day in trading_days if request.start_date <= day <= request.end_date
@@ -79,7 +90,9 @@ class BacktestService:
                 end_date=request.end_date,
                 market=request.market,
                 financial_basis=request.financial_basis or "annual",
-                factor_table=request.factor_table or "fact_daily_factors",
+                factor_table=factor_table,
+                factor_table_is_snapshot=factor_table_is_snapshot,
+                raw_lookback_days=None if factor_table_is_snapshot else _raw_lookback_days(),
                 style_profile=style_profile,
                 sector_codes=request.sector_codes,
                 industry_group_codes=request.industry_group_codes,
@@ -151,6 +164,8 @@ class BacktestService:
         market: str | None,
         financial_basis: str,
         factor_table: str,
+        factor_table_is_snapshot: bool,
+        raw_lookback_days: int | None,
         style_profile: str,
         sector_codes: list[str] | None,
         industry_group_codes: list[str] | None,
@@ -165,23 +180,56 @@ class BacktestService:
         planned_segments: list[dict[str, Any]] = []
         selected_security_ids: set[str] = set()
         previous_positions_by_id: dict[str, BacktestPosition] = {}
+        signal_dates_by_rebalance = {
+            rebalance_date: _previous_trading_day(trading_days, rebalance_date)
+            for rebalance_date in rebalance_dates
+        }
+        batched_snapshot_rows: dict[date, list[dict[str, Any]]] | None = None
+        batch_signal_dates = sorted(
+            {
+                signal_date
+                for signal_date in signal_dates_by_rebalance.values()
+                if signal_date is not None
+            }
+        )
+        if (
+            factor_table_is_snapshot
+            and len(batch_signal_dates) > 1
+            and not any(is_style_score_factor(condition.factor_id) for condition in conditions)
+        ):
+            batched_snapshot_rows = self._load_factor_snapshot_batch(
+                client,
+                conditions=conditions,
+                signal_dates=batch_signal_dates,
+                market=market,
+                financial_basis=financial_basis,
+                factor_table=factor_table,
+                sector_codes=sector_codes,
+                industry_group_codes=industry_group_codes,
+            )
 
         for index, rebalance_date in enumerate(rebalance_dates):
-            signal_date = _previous_trading_day(trading_days, rebalance_date)
+            signal_date = signal_dates_by_rebalance[rebalance_date]
             if signal_date is None:
                 warnings.append(f"Skipped rebalance {rebalance_date.isoformat()}: no prior signal date.")
                 continue
 
-            snapshot_rows = self._load_factor_snapshot(
-                client,
-                conditions=conditions,
-                signal_date=signal_date,
-                market=market,
-                financial_basis=financial_basis,
-                factor_table=factor_table,
-                style_profile=style_profile,
-                sector_codes=sector_codes,
-                industry_group_codes=industry_group_codes,
+            snapshot_rows = (
+                batched_snapshot_rows.get(signal_date, [])
+                if batched_snapshot_rows is not None
+                else self._load_factor_snapshot(
+                    client,
+                    conditions=conditions,
+                    signal_date=signal_date,
+                    market=market,
+                    financial_basis=financial_basis,
+                    factor_table=factor_table,
+                    factor_table_is_snapshot=factor_table_is_snapshot,
+                    raw_lookback_days=raw_lookback_days,
+                    style_profile=style_profile,
+                    sector_codes=sector_codes,
+                    industry_group_codes=industry_group_codes,
+                )
             )
             candidates = _select_candidates(
                 snapshot_rows,
@@ -290,7 +338,9 @@ class BacktestService:
         signal_date: date,
         market: str | None,
         financial_basis: str,
-        factor_table: str = "fact_daily_factors",
+        factor_table: str,
+        factor_table_is_snapshot: bool,
+        raw_lookback_days: int | None,
         style_profile: str,
         sector_codes: list[str] | None,
         industry_group_codes: list[str] | None,
@@ -301,11 +351,40 @@ class BacktestService:
             market=market,
             financial_basis=financial_basis,
             factor_table=factor_table,
+            factor_table_is_snapshot=factor_table_is_snapshot,
+            raw_lookback_days=raw_lookback_days,
             style_profile=style_profile,
             sector_codes=sector_codes,
             industry_group_codes=industry_group_codes,
         )
         return _records(client.query_df(query, parameters=params))
+
+    def _load_factor_snapshot_batch(
+        self,
+        client: Any,
+        *,
+        conditions: list[FactorCondition],
+        signal_dates: list[date],
+        market: str | None,
+        financial_basis: str,
+        factor_table: str,
+        sector_codes: list[str] | None,
+        industry_group_codes: list[str] | None,
+    ) -> dict[date, list[dict[str, Any]]]:
+        query, params = build_factor_snapshot_batch_query(
+            conditions,
+            signal_dates=signal_dates,
+            market=market,
+            financial_basis=financial_basis,
+            factor_table=factor_table,
+            sector_codes=sector_codes,
+            industry_group_codes=industry_group_codes,
+        )
+        rows_by_date: dict[date, list[dict[str, Any]]] = defaultdict(list)
+        for row in _records(client.query_df(query, parameters=params)):
+            signal_date = _as_date(row["signal_date"])
+            rows_by_date[signal_date].append(row)
+        return rows_by_date
 
     def _load_price_return_matrix(
         self,
@@ -395,6 +474,89 @@ def _to_repository_condition(condition: FactorConditionDto) -> FactorCondition:
     data = condition.model_dump() if hasattr(condition, "model_dump") else condition.dict()
     data["factor_id"] = canonical_factor_id(str(data["factor_id"]))
     return FactorCondition(**data)
+
+
+def _resolve_factor_table(
+    client: Any,
+    *,
+    requested_table: str | None,
+    conditions: list[FactorCondition],
+    financial_basis: str,
+    end_date: date,
+) -> tuple[str, bool]:
+    if requested_table:
+        return requested_table, False
+    factor_ids = sorted(
+        {
+            condition.factor_id
+            for condition in conditions
+            if not is_style_score_factor(condition.factor_id)
+        }
+    )
+    if factor_ids and _snapshot_table_has_rows(
+        client,
+        DEFAULT_FACTOR_SNAPSHOT_TABLE,
+        factor_ids=factor_ids,
+        financial_basis=financial_basis,
+        end_date=end_date,
+    ):
+        return DEFAULT_FACTOR_SNAPSHOT_TABLE, True
+    return DEFAULT_FACTOR_TABLE, False
+
+
+def _snapshot_table_has_rows(
+    client: Any,
+    table_name: str,
+    *,
+    factor_ids: list[str],
+    financial_basis: str,
+    end_date: date,
+) -> bool:
+    query = getattr(client, "query", None)
+    if not callable(query):
+        return False
+    if not _table_exists(client, table_name):
+        return False
+    try:
+        rows = query(
+            f"""
+SELECT countDistinct(factor_id) AS factor_count
+FROM {table_name}
+WHERE has({{factor_ids:Array(String)}}, factor_id)
+    AND financial_basis = {{financial_basis:String}}
+    AND trade_date <= {{end_date:Date}}
+""".strip(),
+            parameters={
+                "factor_ids": factor_ids,
+                "financial_basis": financial_basis,
+                "end_date": end_date.isoformat(),
+            },
+        ).result_rows
+    except Exception:
+        return False
+    return bool(rows and int(rows[0][0]) >= len(factor_ids))
+
+
+def _table_exists(client: Any, table_name: str) -> bool:
+    query = getattr(client, "query", None)
+    if not callable(query):
+        return False
+    try:
+        rows = query(f"EXISTS TABLE {table_name}").result_rows
+    except Exception:
+        return False
+    return bool(rows and rows[0][0])
+
+
+def _raw_lookback_days() -> int | None:
+    value = os.getenv("ARCANA_FACTOR_RAW_LOOKBACK_DAYS", "540").strip()
+    if not value:
+        return None
+    try:
+        days = int(value)
+    except ValueError:
+        return 540
+    return days if days > 0 else None
 
 
 def _resolve_style_profile(
