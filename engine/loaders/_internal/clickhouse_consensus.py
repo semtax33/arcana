@@ -145,7 +145,7 @@ def load_hankyung_consensus(
             close()
 
     print(
-        "[DONE] hankyung consensus load "
+        "[DONE] kr consensus load "
         f"reports={counts.get('real_consensus_reports', 0):,}, "
         f"estimates={counts.get('real_consensus_estimates', 0):,}, "
         f"daily={counts.get('real_consensus_daily', 0):,}",
@@ -238,7 +238,7 @@ def _float_value(value: Any) -> float | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Load normalized Hankyung consensus CSVs into ClickHouse.")
+    parser = argparse.ArgumentParser(description="Load normalized KR consensus CSVs into ClickHouse.")
     parser.add_argument("--market", default="kr", choices=["kr", "us"])
     parser.add_argument("--silver-dir", default=str(SILVER_HANKYUNG_CONSENSUS_DIR))
     parser.add_argument("--dry-run", action="store_true")

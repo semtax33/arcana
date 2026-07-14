@@ -124,6 +124,38 @@ class FinancialRatiosServiceTest(unittest.TestCase):
         self.assertEqual(ratio_query_params["stock_code"], "005930")
         self.assertEqual(ratio_query_params["financial_basis"], ["quarterly", "quarter"])
 
+    def test_get_ratios_supports_us_market_security_id_and_currency(self):
+        client = FakeClickHouseClient(
+            [
+                {
+                    "factor_id": "gpm",
+                    "financial_basis": "annual",
+                    "fiscal_year": 2025,
+                    "fiscal_month": 12,
+                    "period_end_date": "2025-12-31",
+                    "value": 42,
+                    "currency": "USD",
+                }
+            ],
+            [_catalog("gpm", "Gross Margin", "percent")],
+            [{"ticker": "AAPL", "stock_name_en": "Apple Inc.", "security_country": "US", "security_currency": "USD"}],
+        )
+
+        result = FinancialRatiosService(
+            client_factory=lambda: client,
+            today_factory=lambda: date(2026, 5, 22),
+        ).get_ratios("aapl", period="annual", market="us")
+
+        ratio_query_params = next(params for query, params in client.queries if "FROM fact_daily_factor" in query)
+        self.assertEqual(ratio_query_params["stock_code"], "AAPL")
+        self.assertEqual(ratio_query_params["security_id"], "SEC_US_AAPL")
+        self.assertEqual(ratio_query_params["default_currency"], "USD")
+        self.assertEqual(result.stock.stock_code, "AAPL")
+        self.assertEqual(result.stock.security_id, "SEC_US_AAPL")
+        self.assertEqual(result.stock.stock_name, "Apple Inc.")
+        self.assertEqual(result.stock.country, "US")
+        self.assertEqual(result.stock.currency, "USD")
+
 
 def _row(factor_id, financial_basis, fiscal_year, financial_period, value):
     return {

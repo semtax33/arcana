@@ -45,9 +45,10 @@ router = APIRouter(prefix="/api/financials", tags=["financials"])
 def get_financial_ratios(
     stock_code: str,
     period: str = Query(default="annual"),
+    market: str = Query(default="kr"),
 ) -> FinancialRatiosResponseDto:
     try:
-        result = FinancialRatiosService().get_ratios(stock_code, period=period)
+        result = FinancialRatiosService().get_ratios(stock_code, period=period, market=market)
     except FinancialRatiosNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -71,12 +72,14 @@ def get_financial_statements(
     stock_code: str,
     period: FinancialStatementPeriod = Query(default="annual"),
     statement: FinancialStatementFilter = Query(default="all"),
+    market: str = Query(default="kr"),
 ) -> FinancialStatementsResponseDto:
     try:
         result = FinancialStatementsService().get_statements(
             stock_code,
             period=period,
             statement=statement,
+            market=market,
         )
     except FinancialStatementsNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -100,12 +103,14 @@ def get_financial_account_detail(
     stock_code: str,
     canonical_id: str,
     period: FinancialStatementPeriod = Query(default="annual"),
+    market: str = Query(default="kr"),
 ) -> FinancialAccountDetailResponseDto:
     try:
         result = FinancialStatementsService().get_account_detail(
             stock_code,
             canonical_id=canonical_id,
             period=period,
+            market=market,
         )
     except FinancialStatementsNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

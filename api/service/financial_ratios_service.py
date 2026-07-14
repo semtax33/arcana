@@ -21,6 +21,9 @@ from api.model.financials import (
     FinancialStatementCell,
     FinancialStatementMetadata,
 )
+from engine.core.identifiers import security_id_of
+from engine.core.markets import MarketConfig
+from engine.markets.registry import market_config
 
 
 FACTOR_TABLES = ("fact_daily_factor", "fact_daily_factors")
@@ -175,7 +178,7 @@ RATIO_GROUP_DEFINITIONS = {
     ],
 }
 
-_STOCK_CODE_RE = re.compile(r"^[0-9A-Za-z]{1,12}$")
+_STOCK_CODE_RE = re.compile(r"^[0-9A-Za-z.\-_]{1,32}$")
 _IDENTIFIER_RE = re.compile(r"^[0-9A-Za-z_]+$")
 
 
@@ -211,10 +214,16 @@ class FinancialRatiosService:
         self._client_factory = client_factory
         self._today_factory = today_factory or _today_kst
 
-    def get_ratios(self, stock_code: str, period: str = "annual") -> FinancialRatiosResponse:
+    def get_ratios(
+        self,
+        stock_code: str,
+        period: str = "annual",
+        market: str = "kr",
+    ) -> FinancialRatiosResponse:
         normalized_period = _normalize_period(period)
-        normalized_stock_code = _normalize_stock_code(stock_code)
-        security_id = f"SEC_KR_{normalized_stock_code}"
+        config = _market_config(market)
+        normalized_stock_code = _normalize_stock_code(stock_code, config)
+        security_id = security_id_of(normalized_stock_code, config)
         as_of_date = self._today_factory()
         start_year = as_of_date.year - (12 if normalized_period == "annual" else 7)
         factor_ids = _all_ratio_factor_ids()
@@ -229,9 +238,10 @@ class FinancialRatiosService:
                 start_year=start_year,
                 period=normalized_period,
                 factor_ids=factor_ids,
+                config=config,
             )
-            metadata = _load_metadata(client, normalized_stock_code, security_id)
-            catalog = _load_factor_catalog(client, factor_ids)
+            metadata = _load_metadata(client, normalized_stock_code, security_id, rows, config)
+            catalog = _load_factor_catalog(client, factor_ids, default_currency=config.currency)
         finally:
             close = getattr(client, "close", None)
             if callable(close):
@@ -270,13 +280,18 @@ class FinancialRatiosService:
         start_year: int,
         period: str,
         factor_ids: list[str],
+        config: MarketConfig,
     ) -> tuple[list[RawRatioRow], str]:
         last_source = FACTOR_TABLES[0]
         for table_name in FACTOR_TABLES:
             last_source = table_name
             try:
                 columns = _load_table_columns(client, table_name)
-                query = _build_ratio_query(columns, table_name=table_name)
+                query = _build_ratio_query(
+                    columns,
+                    table_name=table_name,
+                    pad_stock_code=config.country == "KR",
+                )
                 rows = _records(
                     client.query_df(
                         query,
@@ -287,6 +302,7 @@ class FinancialRatiosService:
                             "start_year": start_year,
                             "factor_ids": factor_ids,
                             "financial_basis": FINANCIAL_BASIS_BY_PERIOD[period],
+                            "default_currency": config.currency,
                         },
                     )
                 )
@@ -301,7 +317,12 @@ class FinancialRatiosService:
         return [], last_source
 
 
-def _build_ratio_query(columns: set[str], *, table_name: str) -> str:
+def _build_ratio_query(
+    columns: set[str],
+    *,
+    table_name: str,
+    pad_stock_code: bool = True,
+) -> str:
     if table_name not in FACTOR_TABLES:
         raise ValueError(f"unsupported factor table: {table_name}")
 
@@ -328,7 +349,7 @@ def _build_ratio_query(columns: set[str], *, table_name: str) -> str:
     currency_expr = (
         f"argMax({_q(column_map['currency'])}, {trade_date_column})"
         if column_map["currency"] is not None
-        else "'KRW'"
+        else "{default_currency:String}"
     )
     order_expr = (
         f"tuple({trade_date_column}, {_q(column_map['updated_at'])})"
@@ -342,7 +363,7 @@ def _build_ratio_query(columns: set[str], *, table_name: str) -> str:
         f"{year_expr} >= {{start_year:Int32}}",
         f"isFinite(toFloat64({value_column}))",
     ]
-    stock_filter = _stock_filter(column_map)
+    stock_filter = _stock_filter(column_map, pad_stock_code=pad_stock_code)
     if stock_filter:
         filters.append(stock_filter)
     if column_map["financial_basis"] is not None:
@@ -382,15 +403,23 @@ def _ratio_column_map(columns: set[str]) -> dict[str, str | None]:
     }
 
 
-def _stock_filter(column_map: dict[str, str | None]) -> str:
+def _stock_filter(column_map: dict[str, str | None], *, pad_stock_code: bool) -> str:
     if column_map["security_id"] is not None:
         return f"{_q(column_map['security_id'])} = {{security_id:String}}"
     if column_map["stock_code"] is not None:
-        return f"leftPad(toString({_q(column_map['stock_code'])}), 6, '0') = {{stock_code:String}}"
+        stock_expr = f"toString({_q(column_map['stock_code'])})"
+        if pad_stock_code:
+            stock_expr = f"leftPad({stock_expr}, 6, '0')"
+        return f"{stock_expr} = {{stock_code:String}}"
     return ""
 
 
-def _load_factor_catalog(client: Any, factor_ids: list[str]) -> dict[str, FactorCatalogItem]:
+def _load_factor_catalog(
+    client: Any,
+    factor_ids: list[str],
+    *,
+    default_currency: str = "KRW",
+) -> dict[str, FactorCatalogItem]:
     try:
         rows = _records(
             client.query_df(
@@ -415,7 +444,7 @@ GROUP BY factor_id
         str(row["factor_id"]): FactorCatalogItem(
             factor_id=str(row["factor_id"]),
             factor_name=_optional_str(row.get("factor_name")) or _humanize_factor_id(str(row["factor_id"])),
-            unit=_optional_str(row.get("unit")),
+            unit=_market_unit(_optional_str(row.get("unit")), default_currency),
             value_direction=_optional_str(row.get("value_direction")),
             description=_optional_str(row.get("description")),
         )
@@ -428,7 +457,7 @@ GROUP BY factor_id
             FactorCatalogItem(
                 factor_id=factor_id,
                 factor_name=_humanize_factor_id(factor_id),
-                unit=_infer_unit(factor_id),
+                unit=_infer_unit(factor_id, default_currency=default_currency),
                 value_direction=None,
                 description=None,
             ),
@@ -436,7 +465,14 @@ GROUP BY factor_id
     return catalog
 
 
-def _load_metadata(client: Any, stock_code: str, security_id: str) -> FinancialStatementMetadata:
+def _load_metadata(
+    client: Any,
+    stock_code: str,
+    security_id: str,
+    ratio_rows: list[RawRatioRow],
+    config: MarketConfig,
+) -> FinancialStatementMetadata:
+    currency = _first_present_currency(ratio_rows) or config.currency
     try:
         rows = _records(
             client.query_df(
@@ -444,8 +480,11 @@ def _load_metadata(client: Any, stock_code: str, security_id: str) -> FinancialS
 SELECT
     sm.security_id AS security_id,
     any(id.id_value) AS ticker,
-    any(iss.legal_name_ko) AS stock_name,
-    any(iss.domicile_country) AS country
+    any(iss.legal_name_ko) AS stock_name_ko,
+    any(iss.legal_name_en) AS stock_name_en,
+    any(iss.domicile_country) AS issuer_country,
+    any(sm.country) AS security_country,
+    any(sm.currency) AS security_currency
 FROM security_master AS sm
 LEFT JOIN identifiers AS id
     ON id.security_id = sm.security_id
@@ -463,12 +502,26 @@ GROUP BY sm.security_id
         rows = []
 
     row = rows[0] if rows else {}
+    metadata_currency = (
+        _optional_str(row.get("security_currency"))
+        or _optional_str(row.get("currency"))
+        or currency
+    )
     return FinancialStatementMetadata(
         stock_code=_optional_str(row.get("ticker")) or stock_code,
         security_id=security_id,
-        stock_name=_optional_str(row.get("stock_name")),
-        country=_optional_str(row.get("country")) or "KR",
-        currency="KRW",
+        stock_name=(
+            _optional_str(row.get("stock_name"))
+            or _optional_str(row.get("stock_name_ko"))
+            or _optional_str(row.get("stock_name_en"))
+        ),
+        country=(
+            _optional_str(row.get("country"))
+            or _optional_str(row.get("issuer_country"))
+            or _optional_str(row.get("security_country"))
+            or config.country
+        ),
+        currency=metadata_currency,
     )
 
 
@@ -660,11 +713,19 @@ def _normalize_period(period: str) -> str:
     return normalized
 
 
-def _normalize_stock_code(stock_code: str) -> str:
+def _normalize_stock_code(stock_code: str, config: MarketConfig) -> str:
     normalized = str(stock_code).strip().upper()
     if not _STOCK_CODE_RE.match(normalized):
-        raise ValueError("stock_code must contain only letters and digits")
-    return normalized.zfill(6)
+        raise ValueError("stock_code must contain only letters, digits, dots, dashes, or underscores")
+    return config.normalize_symbol(normalized)
+
+
+def _normalize_market_key(market: str) -> str:
+    return str(market or "kr").strip().lower() or "kr"
+
+
+def _market_config(market: str) -> MarketConfig:
+    return market_config(_normalize_market_key(market))
 
 
 def _pick_column(columns: set[str], candidates: list[str]) -> str | None:
@@ -732,6 +793,13 @@ def _optional_str(value: Any) -> str | None:
     return str(value)
 
 
+def _first_present_currency(rows: list[RawRatioRow]) -> str | None:
+    for row in reversed(rows):
+        if row.currency:
+            return row.currency
+    return None
+
+
 def _period_key(value: date) -> str:
     return value.isoformat()
 
@@ -772,7 +840,7 @@ def _format_factor_value(value: float | None, unit: str | None) -> str:
         return f"{number:.1f}d"
     if normalized_unit == "score":
         return f"{number:.2f}"
-    if normalized_unit in {"krw", "shares"}:
+    if normalized_unit in {"krw", "usd", "shares"}:
         return _format_value(number)
     if abs(number) >= 100:
         return f"{number:,.2f}"
@@ -809,7 +877,16 @@ def _humanize_factor_id(factor_id: str) -> str:
     return factor_id.replace("_", " ").upper()
 
 
-def _infer_unit(factor_id: str) -> str | None:
+def _market_unit(unit: str | None, default_currency: str) -> str | None:
+    if unit is None:
+        return None
+    normalized = unit.strip().lower()
+    if normalized in {"krw", "usd"}:
+        return default_currency.strip().lower()
+    return unit
+
+
+def _infer_unit(factor_id: str, *, default_currency: str = "KRW") -> str | None:
     if factor_id.endswith("_pct") or factor_id in {
         "gpm",
         "opm",
@@ -866,5 +943,5 @@ def _infer_unit(factor_id: str) -> str | None:
         "sales_change_mil",
         "op_change_mil",
     }:
-        return "krw"
+        return default_currency.strip().lower()
     return "ratio"

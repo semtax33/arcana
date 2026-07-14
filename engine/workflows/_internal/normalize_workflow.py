@@ -280,9 +280,9 @@ def normalize_business_infos(
 def normalize_consensus(args: argparse.Namespace) -> dict[str, Path | int]:
     if args.market != "kr":
         raise ValueError("consensus normalization is only supported for --market kr")
-    from engine.transformers.consensus import normalize_hankyung_consensus
+    from engine.transformers.consensus import normalize_kr_consensus
 
-    return normalize_hankyung_consensus(stale_days=args.consensus_stale_days)
+    return normalize_kr_consensus(stale_days=args.consensus_stale_days)
 
 
 def normalize_all_statements() -> None:

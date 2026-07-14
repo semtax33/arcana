@@ -199,22 +199,56 @@ def download_wacc_inputs(args: argparse.Namespace) -> None:
 
 
 def download_kr_consensus(args: argparse.Namespace) -> None:
-    from engine.extractors.consensus import download_hankyung_consensus_reports
+    from engine.extractors.consensus import (
+        download_equity_consensus_reports,
+        download_hankyung_consensus_reports,
+        download_valuefinder_consensus_reports,
+    )
 
-    counts = download_hankyung_consensus_reports(
-        start_date=args.start_date,
-        end_date=args.end_date,
-        token=args.hankyung_token,
-        force=args.force,
-        sleep_seconds=args.sleep_seconds if args.sleep_seconds > 0 else None,
-    )
-    print(
-        "[DONE] hankyung consensus download "
-        f"years={counts.get('years', 0):,}, pages={counts.get('pages', 0):,}, "
-        f"rows={counts.get('rows', 0):,}, written={counts.get('written', 0):,}, "
-        f"skipped={counts.get('skipped', 0):,}, invalid={counts.get('invalid', 0):,}",
-        flush=True,
-    )
+    sources = _parse_consensus_sources(args.consensus_sources)
+    if "hankyung" in sources:
+        counts = download_hankyung_consensus_reports(
+            start_date=args.start_date,
+            end_date=args.end_date,
+            token=args.hankyung_token,
+            force=args.force,
+            sleep_seconds=args.sleep_seconds if args.sleep_seconds > 0 else None,
+        )
+        print(
+            "[DONE] hankyung consensus download "
+            f"years={counts.get('years', 0):,}, pages={counts.get('pages', 0):,}, "
+            f"rows={counts.get('rows', 0):,}, written={counts.get('written', 0):,}, "
+            f"skipped={counts.get('skipped', 0):,}, invalid={counts.get('invalid', 0):,}",
+            flush=True,
+        )
+    if "valuefinder" in sources:
+        counts = download_valuefinder_consensus_reports(
+            pages=args.consensus_html_pages,
+            cookie=args.valuefinder_cookie,
+            force=args.force,
+            sleep_seconds=args.sleep_seconds if args.sleep_seconds > 0 else None,
+        )
+        print(
+            "[DONE] valuefinder consensus download "
+            f"pages={counts.get('pages', 0):,}, rows={counts.get('rows', 0):,}, "
+            f"written={counts.get('written', 0):,}, skipped={counts.get('skipped', 0):,}, "
+            f"invalid={counts.get('invalid', 0):,}",
+            flush=True,
+        )
+    if "equity" in sources:
+        counts = download_equity_consensus_reports(
+            pages=args.consensus_html_pages,
+            cookie=args.equity_cookie,
+            force=args.force,
+            sleep_seconds=args.sleep_seconds if args.sleep_seconds > 0 else None,
+        )
+        print(
+            "[DONE] equity consensus download "
+            f"pages={counts.get('pages', 0):,}, rows={counts.get('rows', 0):,}, "
+            f"written={counts.get('written', 0):,}, skipped={counts.get('skipped', 0):,}, "
+            f"invalid={counts.get('invalid', 0):,}",
+            flush=True,
+        )
 
 
 def download_us_consensus(args: argparse.Namespace) -> None:
@@ -267,6 +301,25 @@ def main() -> None:
     parser.add_argument("--stock-retry-backoff", type=float, default=30.0, help="Base seconds for per-symbol retry backoff.")
     parser.add_argument("--hankyung-token", help="JWT bearer token for Hankyung consensus downloads.")
     parser.add_argument(
+        "--consensus-sources",
+        default="hankyung,valuefinder,equity",
+        help="Comma-separated KR consensus sources: hankyung,valuefinder,equity,html,all.",
+    )
+    parser.add_argument(
+        "--consensus-html-pages",
+        type=int,
+        default=1,
+        help="Number of ValueFinder/EQUITY list pages to download. Defaults to the first page.",
+    )
+    parser.add_argument(
+        "--valuefinder-cookie",
+        help="Cookie header for ValueFinder consensus downloads. Defaults to VALUEFINDER_CONSENSUS_COOKIE.",
+    )
+    parser.add_argument(
+        "--equity-cookie",
+        help="Cookie header for EQUITY consensus downloads. Defaults to EQUITY_CONSENSUS_COOKIE.",
+    )
+    parser.add_argument(
         "--start-date",
         type=_parse_date_arg,
         help="Inclusive start date for downloads. Accepts YYYYMMDD or YYYY-MM-DD.",
@@ -300,6 +353,28 @@ def _parse_benchmark_ids(value: str | None) -> list[str] | None:
     if value is None or not value.strip():
         return None
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _parse_consensus_sources(value: str | None) -> set[str]:
+    aliases = {
+        "all": {"hankyung", "valuefinder", "equity"},
+        "html": {"valuefinder", "equity"},
+    }
+    if value is None or not str(value).strip():
+        return set(aliases["all"])
+    sources: set[str] = set()
+    for item in str(value).split(","):
+        source = item.strip().lower()
+        if not source:
+            continue
+        if source in aliases:
+            sources.update(aliases[source])
+            continue
+        if source not in aliases["all"]:
+            choices = ", ".join(sorted([*aliases["all"], *aliases]))
+            raise SystemExit(f"unknown consensus source: {source}; choices: {choices}")
+        sources.add(source)
+    return sources
 
 
 def _print_benchmark_download_result(frame) -> None:

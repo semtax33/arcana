@@ -340,6 +340,7 @@ Example:
 | path | `stock_code` | string | 예 | - | 조회할 종목 코드 |
 | query | `period` | `FinancialStatementPeriod` | 아니오 | `annual` | 기간 유형 |
 | query | `statement` | `FinancialStatementFilter` | 아니오 | `all` | 재무제표 종류 |
+| query | `market` | string | 아니오 | `kr` | 시장(`kr`, `us`) |
 
 응답 `FinancialStatementsResponseDto`:
 
@@ -358,6 +359,7 @@ Example:
 | path | `stock_code` | string | 예 | - | 조회할 종목 코드 |
 | path | `canonical_id` | string | 예 | - | 표준 계정 ID |
 | query | `period` | `FinancialStatementPeriod` | 아니오 | `annual` | 기간 유형 |
+| query | `market` | string | 아니오 | `kr` | 시장(`kr`, `us`) |
 
 #### `GET /api/financials/{stock_code}/ratios`
 
@@ -367,6 +369,7 @@ Example:
 | --- | --- | --- | --- | --- | --- |
 | path | `stock_code` | string | 예 | - | 조회할 종목 코드 |
 | query | `period` | string | 아니오 | `annual` | `annual` 또는 `quarter` 용도 |
+| query | `market` | string | 아니오 | `kr` | 시장(`kr`, `us`) |
 
 응답 `FinancialRatiosResponseDto`:
 
@@ -521,9 +524,9 @@ MCP tool 이름은 FastAPI endpoint 함수명을 소문자/스네이크 케이�
 | `screen_stocks` | `POST /api/factor-screen/screen` | `conditions` | `as_of_date`, `market`, `financial_basis`, `style_profile`, `sector_codes`, `industry_group_codes`, `match_mode`, `limit` |
 | `run_factor_backtest` | `POST /api/backtests/factor` | `conditions`, `start_date`, `end_date`, `rebalance_frequency` | `market`, `financial_basis`, `style_profile`, `sector_codes`, `industry_group_codes`, `match_mode`, `benchmarks`, `max_positions`, `transaction_cost_bps` |
 | `get_stock_introduction` | `GET /api/introduction/{stock_code}` | `stock_code` | - |
-| `get_financial_statements` | `GET /api/financials/{stock_code}` | `stock_code` | `period`, `statement` |
-| `get_financial_account_detail` | `GET /api/financials/{stock_code}/accounts/{canonical_id}` | `stock_code`, `canonical_id` | `period` |
-| `get_financial_ratios` | `GET /api/financials/{stock_code}/ratios` | `stock_code` | `period` |
+| `get_financial_statements` | `GET /api/financials/{stock_code}` | `stock_code` | `period`, `statement`, `market` |
+| `get_financial_account_detail` | `GET /api/financials/{stock_code}/accounts/{canonical_id}` | `stock_code`, `canonical_id` | `period`, `market` |
+| `get_financial_ratios` | `GET /api/financials/{stock_code}/ratios` | `stock_code` | `period`, `market` |
 | `get_operating_metrics` | `GET /api/operating-metrics/{stock_code}` | `stock_code` | - |
 | `get_unit_economics` | `GET /api/operating-metrics/{stock_code}/unit-economics` | `stock_code` | - |
 | `get_operating_metric_drivers` | `GET /api/operating-metrics/{stock_code}/drivers` | `stock_code` | - |

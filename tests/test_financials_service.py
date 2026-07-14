@@ -237,6 +237,70 @@ class FinancialStatementsServiceTest(unittest.TestCase):
         self.assertEqual(result.columns[0].key, "2025-12-31")
         self.assertEqual(result.sections[0].accounts[0].values[0].value, 1200)
 
+    def test_get_statements_supports_us_market_security_id_and_currency(self):
+        client = FakeClickHouseClient(
+            [
+                {
+                    "statement_type": "IS",
+                    "canonical_id": "REVENUE",
+                    "account_name": "Revenue",
+                    "fiscal_year": 2025,
+                    "fiscal_month": 12,
+                    "period_end_date": None,
+                    "value": 383_285_000_000,
+                    "currency": "USD",
+                }
+            ],
+            [{"ticker": "AAPL", "stock_name_en": "Apple Inc.", "security_country": "US", "security_currency": "USD"}],
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = FinancialStatementsService(
+                client_factory=lambda: client,
+                today_factory=lambda: date(2026, 5, 21),
+                canonical_accounts_path=_catalog_path(temp_dir),
+            ).get_statements("aapl", period="annual", statement="IS", market="us")
+
+        fact_query_params = next(params for query, params in client.queries if "FROM fact_canonical_statements" in query)
+        self.assertEqual(fact_query_params["stock_code"], "AAPL")
+        self.assertEqual(fact_query_params["security_id"], "SEC_US_AAPL")
+        self.assertEqual(fact_query_params["default_currency"], "USD")
+        self.assertEqual(result.stock.stock_code, "AAPL")
+        self.assertEqual(result.stock.security_id, "SEC_US_AAPL")
+        self.assertEqual(result.stock.stock_name, "Apple Inc.")
+        self.assertEqual(result.stock.country, "US")
+        self.assertEqual(result.stock.currency, "USD")
+        self.assertEqual(result.sections[0].accounts[0].unit, "USD_MILLION")
+
+    def test_us_local_csv_fallback_reads_sec_normalized_statement_file(self):
+        client = FakeClickHouseClient([])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            normalized_dir = root / "normalized"
+            normalized_dir.mkdir()
+            (normalized_dir / "us_normalized_AAPL.csv").write_text(
+                "\n".join(
+                    [
+                        "canonical_account_id,canonical_account_name,original_account_name,statement_type,period,normalized_amount,fiscal_year,fiscal_month,fiscal_quarter",
+                        "REVENUE,Revenue,Revenue,IS,2025.12,383285000000,2025,12,4",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = FinancialStatementsService(
+                client_factory=lambda: client,
+                today_factory=lambda: date(2026, 5, 21),
+                canonical_accounts_path=_catalog_path(temp_dir),
+                normalized_statement_dir=normalized_dir,
+            ).get_statements("AAPL", period="annual", statement="IS", market="us")
+
+        self.assertEqual(result.stock.security_id, "SEC_US_AAPL")
+        self.assertEqual(result.stock.currency, "USD")
+        self.assertEqual(result.sections[0].accounts[0].currency, "USD")
+        self.assertEqual(result.sections[0].accounts[0].values[0].value, 383_285_000_000)
+
 
 def _row(statement_type, canonical_id, fiscal_year, fiscal_month, value):
     return {

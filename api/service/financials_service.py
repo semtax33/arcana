@@ -23,12 +23,19 @@ from api.model.financials import (
     FinancialStatementSection,
     FinancialStatementsResponse,
 )
+from engine.core.identifiers import security_id_of
+from engine.core.markets import MarketConfig
 from engine.core.paths import DATA_LAKE
+from engine.markets.registry import market_config
 from engine.transformers._internal.statement_files import read_statement_period_frames
 
 
 DEFAULT_CANONICAL_ACCOUNTS_PATH = DATA_LAKE.canonical_accounts()
 DEFAULT_NORMALIZED_STATEMENT_DIR = DATA_LAKE.silver("dart", "normalized")
+DEFAULT_NORMALIZED_STATEMENT_DIRS = {
+    "kr": DEFAULT_NORMALIZED_STATEMENT_DIR,
+    "us": DATA_LAKE.silver("sec", "normalized"),
+}
 FACT_TABLE = "fact_canonical_statements"
 STATEMENT_TYPES = ("IS", "BS", "CF")
 STATEMENT_LABELS = {
@@ -101,7 +108,7 @@ PREFERRED_ACCOUNT_ORDER = {
     ],
 }
 
-_STOCK_CODE_RE = re.compile(r"^[0-9A-Za-z]{1,12}$")
+_STOCK_CODE_RE = re.compile(r"^[0-9A-Za-z.\-_]{1,32}$")
 _IDENTIFIER_RE = re.compile(r"^[0-9A-Za-z_]+$")
 
 
@@ -149,32 +156,42 @@ class FinancialStatementsService:
         client_factory: Callable[[], Any] = get_clickhouse_client,
         today_factory: Callable[[], date] | None = None,
         canonical_accounts_path: Path = DEFAULT_CANONICAL_ACCOUNTS_PATH,
-        normalized_statement_dir: Path = DEFAULT_NORMALIZED_STATEMENT_DIR,
+        normalized_statement_dir: Path | None = None,
+        normalized_statement_dirs: dict[str, Path] | None = None,
     ) -> None:
         self._client_factory = client_factory
         self._today_factory = today_factory or _today_kst
         self._canonical_accounts_path = canonical_accounts_path
         self._normalized_statement_dir = normalized_statement_dir
+        self._normalized_statement_dirs = {
+            **DEFAULT_NORMALIZED_STATEMENT_DIRS,
+            **(normalized_statement_dirs or {}),
+        }
 
     def get_statements(
         self,
         stock_code: str,
         period: str = "annual",
         statement: str = "all",
+        market: str = "kr",
     ) -> FinancialStatementsResponse:
         normalized_period = _normalize_period(period)
         statement_filter = _normalize_statement_filter(statement)
-        normalized_stock_code = _normalize_stock_code(stock_code)
-        security_id = f"SEC_KR_{normalized_stock_code}"
+        config = _market_config(market)
+        normalized_market = _normalize_market_key(market)
+        normalized_stock_code = _normalize_stock_code(stock_code, config)
+        security_id = security_id_of(normalized_stock_code, config)
         as_of_date = self._today_factory()
         start_year = as_of_date.year - 12
         catalog = _load_canonical_accounts(self._canonical_accounts_path)
+        normalized_statement_dir = self._normalized_dir(normalized_market)
 
         rows: list[RawStatementRow] = []
         metadata = FinancialStatementMetadata(
             stock_code=normalized_stock_code,
             security_id=security_id,
-            currency="KRW",
+            country=config.country,
+            currency=config.currency,
         )
         client = None
         try:
@@ -188,6 +205,7 @@ class FinancialStatementsService:
                     security_id=security_id,
                     start_year=start_year,
                     statement_filter=statement_filter,
+                    config=config,
                 )
             except Exception:
                 rows = []
@@ -195,23 +213,28 @@ class FinancialStatementsService:
             if not rows:
                 rows = _load_normalized_statement_rows(
                     stock_code=normalized_stock_code,
+                    market=normalized_market,
                     start_year=start_year,
                     statement_filter=statement_filter,
-                    normalized_statement_dir=self._normalized_statement_dir,
+                    normalized_statement_dir=normalized_statement_dir,
+                    default_currency=config.currency,
                 )
-            metadata = _load_metadata(client, normalized_stock_code, security_id, rows)
+            metadata = _load_metadata(client, normalized_stock_code, security_id, rows, config)
         except Exception:
             if not rows:
                 rows = _load_normalized_statement_rows(
                     stock_code=normalized_stock_code,
+                    market=normalized_market,
                     start_year=start_year,
                     statement_filter=statement_filter,
-                    normalized_statement_dir=self._normalized_statement_dir,
+                    normalized_statement_dir=normalized_statement_dir,
+                    default_currency=config.currency,
                 )
             metadata = FinancialStatementMetadata(
                 stock_code=normalized_stock_code,
                 security_id=security_id,
-                currency=_first_present_currency(rows) or "KRW",
+                country=config.country,
+                currency=_first_present_currency(rows) or config.currency,
             )
         finally:
             close = getattr(client, "close", None) if client is not None else None
@@ -236,8 +259,9 @@ class FinancialStatementsService:
         stock_code: str,
         canonical_id: str,
         period: str = "annual",
+        market: str = "kr",
     ) -> FinancialAccountDetailResponse:
-        response = self.get_statements(stock_code, period=period, statement="all")
+        response = self.get_statements(stock_code, period=period, statement="all", market=market)
         target_id = canonical_id.strip().upper()
         for section in response.sections:
             for account in section.accounts:
@@ -254,6 +278,11 @@ class FinancialStatementsService:
         raise FinancialStatementsNotFoundError(
             f"financial account data not found for stock_code={stock_code}, canonical_id={canonical_id}"
         )
+
+    def _normalized_dir(self, market: str) -> Path:
+        if self._normalized_statement_dir is not None:
+            return self._normalized_statement_dir
+        return self._normalized_statement_dirs.get(market, DEFAULT_NORMALIZED_STATEMENT_DIR)
 
     def _build_response(
         self,
@@ -300,14 +329,20 @@ def _load_statement_rows(
     security_id: str,
     start_year: int,
     statement_filter: str,
+    config: MarketConfig,
 ) -> list[RawStatementRow]:
     column_map = _statement_column_map(columns)
-    query = _build_statement_query(column_map, statement_filter=statement_filter)
+    query = _build_statement_query(
+        column_map,
+        statement_filter=statement_filter,
+        pad_stock_code=config.country == "KR",
+    )
     params = {
         "stock_code": stock_code,
         "security_id": security_id,
         "start_year": start_year,
         "statement_types": list(STATEMENT_TYPES) + ["CIS"],
+        "default_currency": config.currency,
     }
     if statement_filter != "all":
         params["statement_filter_types"] = ["IS", "CIS"] if statement_filter == "IS" else [statement_filter]
@@ -318,9 +353,11 @@ def _load_statement_rows(
 def _load_normalized_statement_rows(
     *,
     stock_code: str,
+    market: str,
     start_year: int,
     statement_filter: str,
     normalized_statement_dir: Path,
+    default_currency: str,
 ) -> list[RawStatementRow]:
     rows: list[RawStatementRow] = []
     if not normalized_statement_dir.exists():
@@ -329,7 +366,7 @@ def _load_normalized_statement_rows(
     for fiscal_year, fiscal_month, frame in read_statement_period_frames(
         stock_code,
         normalized_statement_dir,
-        market="kr",
+        market=market,
     ):
         if fiscal_year < start_year or fiscal_month not in {3, 6, 9, 12}:
             continue
@@ -339,6 +376,7 @@ def _load_normalized_statement_rows(
                 fiscal_year=fiscal_year,
                 fiscal_month=fiscal_month,
                 statement_filter=statement_filter,
+                default_currency=default_currency,
             )
         )
 
@@ -351,6 +389,7 @@ def _load_normalized_file_rows(
     fiscal_year: int,
     fiscal_month: int,
     statement_filter: str,
+    default_currency: str = "KRW",
 ) -> list[RawStatementRow]:
     try:
         return _load_normalized_frame_rows(
@@ -358,6 +397,7 @@ def _load_normalized_file_rows(
             fiscal_year=fiscal_year,
             fiscal_month=fiscal_month,
             statement_filter=statement_filter,
+            default_currency=default_currency,
         )
     except FileNotFoundError:
         return []
@@ -369,6 +409,7 @@ def _load_normalized_frame_rows(
     fiscal_year: int,
     fiscal_month: int,
     statement_filter: str,
+    default_currency: str,
 ) -> list[RawStatementRow]:
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     records = frame.to_dict("records") if hasattr(frame, "to_dict") else list(frame)
@@ -405,7 +446,7 @@ def _load_normalized_frame_rows(
             fiscal_month=fiscal_month,
             period_end_date=period_end_date,
             value=item["value"],
-            currency="KRW",
+            currency=default_currency,
         )
         for item in grouped.values()
     ]
@@ -440,7 +481,12 @@ def _statement_column_map(columns: set[str]) -> dict[str, str | None]:
     }
 
 
-def _build_statement_query(column_map: dict[str, str | None], *, statement_filter: str) -> str:
+def _build_statement_query(
+    column_map: dict[str, str | None],
+    *,
+    statement_filter: str,
+    pad_stock_code: bool,
+) -> str:
     required_keys = ["statement_type", "canonical_id", "value"]
     missing = [key for key in required_keys if column_map[key] is None]
     if missing:
@@ -485,7 +531,7 @@ def _build_statement_query(column_map: dict[str, str | None], *, statement_filte
     currency_expr = (
         f"any({_q(column_map['currency'])})"
         if column_map["currency"] is not None
-        else "'KRW'"
+        else "{default_currency:String}"
     )
     value_expr = (
         f"argMax({value_column}, {_q(column_map['updated_at'])})"
@@ -501,7 +547,7 @@ def _build_statement_query(column_map: dict[str, str | None], *, statement_filte
     ]
     if statement_filter != "all":
         filters.append(f"{statement_column} IN {{statement_filter_types:Array(String)}}")
-    stock_filter = _stock_filter(column_map)
+    stock_filter = _stock_filter(column_map, pad_stock_code=pad_stock_code)
     if stock_filter:
         filters.append(stock_filter)
 
@@ -532,11 +578,14 @@ ORDER BY fiscal_year ASC, fiscal_month ASC, statement_type ASC, canonical_id ASC
 """.strip()
 
 
-def _stock_filter(column_map: dict[str, str | None]) -> str:
+def _stock_filter(column_map: dict[str, str | None], *, pad_stock_code: bool) -> str:
     if column_map["security_id"] is not None:
         return f"{_q(column_map['security_id'])} = {{security_id:String}}"
     if column_map["stock_code"] is not None:
-        return f"leftPad(toString({_q(column_map['stock_code'])}), 6, '0') = {{stock_code:String}}"
+        stock_expr = f"toString({_q(column_map['stock_code'])})"
+        if pad_stock_code:
+            stock_expr = f"leftPad({stock_expr}, 6, '0')"
+        return f"{stock_expr} = {{stock_code:String}}"
     return ""
 
 
@@ -560,8 +609,9 @@ def _load_metadata(
     stock_code: str,
     security_id: str,
     statement_rows: list[RawStatementRow],
+    config: MarketConfig,
 ) -> FinancialStatementMetadata:
-    currency = _first_present_currency(statement_rows) or "KRW"
+    currency = _first_present_currency(statement_rows) or config.currency
     try:
         rows = _records(
             client.query_df(
@@ -569,8 +619,11 @@ def _load_metadata(
 SELECT
     sm.security_id AS security_id,
     any(id.id_value) AS ticker,
-    any(iss.legal_name_ko) AS stock_name,
-    any(iss.domicile_country) AS country
+    any(iss.legal_name_ko) AS stock_name_ko,
+    any(iss.legal_name_en) AS stock_name_en,
+    any(iss.domicile_country) AS issuer_country,
+    any(sm.country) AS security_country,
+    any(sm.currency) AS security_currency
 FROM security_master AS sm
 LEFT JOIN identifiers AS id
     ON id.security_id = sm.security_id
@@ -588,12 +641,26 @@ GROUP BY sm.security_id
         rows = []
 
     row = rows[0] if rows else {}
+    metadata_currency = (
+        _optional_str(row.get("security_currency"))
+        or _optional_str(row.get("currency"))
+        or currency
+    )
     return FinancialStatementMetadata(
         stock_code=_optional_str(row.get("ticker")) or stock_code,
         security_id=security_id,
-        stock_name=_optional_str(row.get("stock_name")),
-        country=_optional_str(row.get("country")) or "KR",
-        currency=currency,
+        stock_name=(
+            _optional_str(row.get("stock_name"))
+            or _optional_str(row.get("stock_name_ko"))
+            or _optional_str(row.get("stock_name_en"))
+        ),
+        country=(
+            _optional_str(row.get("country"))
+            or _optional_str(row.get("issuer_country"))
+            or _optional_str(row.get("security_country"))
+            or config.country
+        ),
+        currency=metadata_currency,
     )
 
 
@@ -950,7 +1017,7 @@ def _build_account_row(
         is_derived=catalog_item.is_derived,
         formula=catalog_item.formula,
         description=catalog_item.description,
-        unit=_statement_unit(canonical_id),
+        unit=_statement_unit(canonical_id, currency),
         currency=currency,
         values=cells,
         trend=trend,
@@ -1075,11 +1142,19 @@ def _normalize_statement_filter(statement: str) -> str:
     return normalized
 
 
-def _normalize_stock_code(stock_code: str) -> str:
+def _normalize_stock_code(stock_code: str, config: MarketConfig) -> str:
     normalized = str(stock_code).strip().upper()
     if not _STOCK_CODE_RE.match(normalized):
-        raise ValueError("stock_code must contain only letters and digits")
-    return normalized.zfill(6)
+        raise ValueError("stock_code must contain only letters, digits, dots, dashes, or underscores")
+    return config.normalize_symbol(normalized)
+
+
+def _normalize_market_key(market: str) -> str:
+    return str(market or "kr").strip().lower() or "kr"
+
+
+def _market_config(market: str) -> MarketConfig:
+    return market_config(_normalize_market_key(market))
 
 
 def _visible_statement_type(value: str) -> str:
@@ -1285,10 +1360,11 @@ def _monetary_display_value(value: float) -> float:
     return value / MONETARY_DISPLAY_SCALE
 
 
-def _statement_unit(canonical_id: str) -> str:
+def _statement_unit(canonical_id: str, currency: str | None) -> str:
+    normalized_currency = (currency or "KRW").strip().upper() or "KRW"
     if _is_per_share_account(canonical_id):
-        return "KRW_PER_SHARE"
-    return "KRW_MILLION"
+        return f"{normalized_currency}_PER_SHARE"
+    return f"{normalized_currency}_MILLION"
 
 
 def _is_per_share_account(canonical_id: str) -> bool:

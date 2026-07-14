@@ -14,7 +14,10 @@ from engine.core.paths import DATA_LAKE
 
 
 BRONZE_HANKYUNG_CONSENSUS_DIR = DATA_LAKE.bronze("consensus", "hankyung")
+BRONZE_VALUEFINDER_CONSENSUS_DIR = DATA_LAKE.bronze("consensus", "valuefinder")
+BRONZE_EQUITY_CONSENSUS_DIR = DATA_LAKE.bronze("consensus", "equity")
 SILVER_HANKYUNG_CONSENSUS_DIR = DATA_LAKE.silver("consensus", "hankyung")
+SILVER_KR_CONSENSUS_DIR = SILVER_HANKYUNG_CONSENSUS_DIR
 SILVER_REPORTS_NAME = "kr_hankyung_consensus_reports.csv"
 SILVER_ESTIMATES_NAME = "kr_hankyung_consensus_estimates.csv"
 SILVER_DAILY_NAME = "kr_hankyung_consensus_daily.csv"
@@ -156,6 +159,83 @@ def normalize_hankyung_consensus(
     }
 
 
+def normalize_kr_consensus(
+    *,
+    hankyung_bronze_dir: str | Path = BRONZE_HANKYUNG_CONSENSUS_DIR,
+    valuefinder_bronze_dir: str | Path | None = BRONZE_VALUEFINDER_CONSENSUS_DIR,
+    equity_bronze_dir: str | Path | None = BRONZE_EQUITY_CONSENSUS_DIR,
+    output_dir: str | Path = SILVER_KR_CONSENSUS_DIR,
+    stale_days: int = DEFAULT_STALE_DAYS,
+    stock_name_lookup: dict[str, str] | None = None,
+) -> dict[str, Path | int]:
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    reports_df, estimates_df = build_kr_consensus_frames(
+        hankyung_bronze_dir=hankyung_bronze_dir,
+        valuefinder_bronze_dir=valuefinder_bronze_dir,
+        equity_bronze_dir=equity_bronze_dir,
+        stock_name_lookup=stock_name_lookup,
+    )
+    daily_df = build_hankyung_daily_consensus(estimates_df, stale_days=stale_days)
+
+    reports_path = output_path / SILVER_REPORTS_NAME
+    estimates_path = output_path / SILVER_ESTIMATES_NAME
+    daily_path = output_path / SILVER_DAILY_NAME
+    _write_csv(reports_path, reports_df, REPORT_COLUMNS)
+    _write_csv(estimates_path, estimates_df, ESTIMATE_COLUMNS)
+    _write_csv(daily_path, daily_df, DAILY_COLUMNS)
+
+    print(
+        "[DONE] kr consensus normalize "
+        f"reports={len(reports_df):,}, estimates={len(estimates_df):,}, daily={len(daily_df):,}",
+        flush=True,
+    )
+    return {
+        "reports_path": reports_path,
+        "estimates_path": estimates_path,
+        "daily_path": daily_path,
+        "reports": len(reports_df),
+        "estimates": len(estimates_df),
+        "daily": len(daily_df),
+    }
+
+
+def build_kr_consensus_frames(
+    *,
+    hankyung_bronze_dir: str | Path = BRONZE_HANKYUNG_CONSENSUS_DIR,
+    valuefinder_bronze_dir: str | Path | None = BRONZE_VALUEFINDER_CONSENSUS_DIR,
+    equity_bronze_dir: str | Path | None = BRONZE_EQUITY_CONSENSUS_DIR,
+    stock_name_lookup: dict[str, str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    hankyung_reports, hankyung_estimates = build_hankyung_consensus_frames(hankyung_bronze_dir)
+    report_frames = []
+    if not hankyung_reports.empty:
+        report_frames.append(hankyung_reports)
+
+    for bronze_dir in (valuefinder_bronze_dir, equity_bronze_dir):
+        if bronze_dir is None:
+            continue
+        frame = build_html_consensus_report_frame(bronze_dir, stock_name_lookup=stock_name_lookup)
+        if not frame.empty:
+            report_frames.append(frame)
+
+    reports_df = (
+        pd.concat([frame.dropna(axis=1, how="all") for frame in report_frames], ignore_index=True, sort=False)
+        if report_frames
+        else pd.DataFrame(columns=REPORT_COLUMNS)
+    )
+    if reports_df.empty:
+        reports_df = pd.DataFrame(columns=REPORT_COLUMNS)
+    else:
+        for column in REPORT_COLUMNS:
+            if column not in reports_df.columns:
+                reports_df[column] = pd.NA
+        reports_df = reports_df[REPORT_COLUMNS]
+
+    return reports_df, hankyung_estimates
+
+
 def build_hankyung_consensus_frames(bronze_dir: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     reports: list[dict[str, Any]] = []
     estimates: list[dict[str, Any]] = []
@@ -178,6 +258,35 @@ def build_hankyung_consensus_frames(bronze_dir: str | Path) -> tuple[pd.DataFram
     return reports_df, estimates_df
 
 
+def build_html_consensus_report_frame(
+    bronze_dir: str | Path,
+    *,
+    stock_name_lookup: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    reports: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    for path in sorted(Path(bronze_dir).glob("*.json")):
+        try:
+            row = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+
+    lookup = stock_name_lookup
+    if lookup is None and any(
+        not _stock_code(row.get("BUSINESS_CODE")) and _text(row.get("BUSINESS_NAME")) for row in rows
+    ):
+        lookup = _load_kr_stock_name_lookup()
+
+    for row in rows:
+        resolved_row = _resolve_html_stock_code(row, stock_name_lookup=lookup or {})
+        file_meta = file_meta_from_report_row(resolved_row)
+        reports.append(report_record_from_row(resolved_row, file_meta))
+
+    return pd.DataFrame(reports, columns=REPORT_COLUMNS)
+
+
 def parse_hankyung_bronze_filename(path: str | Path) -> dict[str, Any] | None:
     match = _BRONZE_FILE_RE.match(Path(path).name)
     if not match:
@@ -192,13 +301,25 @@ def parse_hankyung_bronze_filename(path: str | Path) -> dict[str, Any] | None:
     }
 
 
+def file_meta_from_report_row(row: dict[str, Any]) -> dict[str, Any]:
+    register_date = _text(row.get("REGISTER_DATE"))
+    file_date = _date_from_register_date(register_date) or _date_text(row.get("REPORT_DATE"))
+    file_year = file_date[:4] if file_date else register_date[:4]
+    return {
+        "stock_code": _stock_code(row.get("BUSINESS_CODE")),
+        "register_date": register_date,
+        "file_register_date": file_date,
+        "file_year": file_year,
+    }
+
+
 def report_record_from_row(row: dict[str, Any], file_meta: dict[str, Any]) -> dict[str, Any]:
     stock_code = str(file_meta["stock_code"])
     register_date = str(file_meta.get("register_date") or "")
     quality_flags = _quality_flags(row, stock_code=stock_code, register_date=register_date)
     updated_at = _updated_at()
     return {
-        "security_id": f"SEC_KR_{stock_code}",
+        "security_id": f"SEC_KR_{stock_code}" if stock_code else "",
         "stock_code": stock_code,
         "file_register_date": file_meta.get("file_register_date") or "",
         "file_year": file_meta.get("file_year") or "",
@@ -374,14 +495,72 @@ def _write_csv(path: Path, frame: pd.DataFrame, columns: list[str]) -> None:
 
 
 def _quality_flags(row: dict[str, Any], *, stock_code: str, register_date: str) -> str:
-    flags = []
+    flags = _split_quality_flags(row.get("QUALITY_FLAGS"))
     row_stock_code = _stock_code(row.get("BUSINESS_CODE"))
     row_register_date = str(row.get("REGISTER_DATE") or "").strip()
-    if row_stock_code and row_stock_code != stock_code:
+    if not stock_code:
+        flags.append("missing_stock_code")
+    if row_stock_code and stock_code and row_stock_code != stock_code:
         flags.append("filename_business_code_mismatch")
-    if row_register_date and row_register_date != register_date:
+    if row_register_date and register_date and row_register_date != register_date:
         flags.append("filename_register_date_mismatch")
-    return "|".join(flags)
+    return "|".join(dict.fromkeys(flag for flag in flags if flag))
+
+
+def _resolve_html_stock_code(row: dict[str, Any], *, stock_name_lookup: dict[str, str]) -> dict[str, Any]:
+    result = dict(row)
+    if _stock_code(result.get("BUSINESS_CODE")):
+        return result
+
+    stock_name = _text(result.get("BUSINESS_NAME"))
+    resolved_code = _stock_code(stock_name_lookup.get(_stock_name_key(stock_name)))
+    flags = [flag for flag in _split_quality_flags(result.get("QUALITY_FLAGS")) if flag != "missing_stock_code"]
+    if resolved_code:
+        result["BUSINESS_CODE"] = resolved_code
+        flags.append("stock_code_resolved_by_name")
+    else:
+        flags.append("missing_stock_code")
+    result["QUALITY_FLAGS"] = "|".join(dict.fromkeys(flag for flag in flags if flag))
+    return result
+
+
+def _load_kr_stock_name_lookup() -> dict[str, str]:
+    try:
+        from engine.extractors.market_universe import kospi_kosdaq_corp_list
+
+        frame = kospi_kosdaq_corp_list()
+    except Exception:
+        return {}
+    if frame is None or frame.empty:
+        return {}
+
+    lookup: dict[str, str] = {}
+    name_columns = [
+        column
+        for column in ["corp_name", "company_name", "stock_name", "security_name", "name", "title"]
+        if column in frame.columns
+    ]
+    if "stock_code" not in frame.columns or not name_columns:
+        return {}
+    for row in frame.to_dict("records"):
+        stock_code = _stock_code(row.get("stock_code"))
+        if not stock_code:
+            continue
+        for column in name_columns:
+            key = _stock_name_key(row.get(column))
+            if key and key not in lookup:
+                lookup[key] = stock_code
+    return lookup
+
+
+def _split_quality_flags(value: Any) -> list[str]:
+    return [flag for flag in str(value or "").split("|") if flag]
+
+
+def _stock_name_key(value: Any) -> str:
+    text = _text(value).lower()
+    text = text.replace("(주)", "").replace("㈜", "").replace("주식회사", "")
+    return re.sub(r"\s+", "", text)
 
 
 def _target_period(value: Any, fallback_year: Any = None) -> str | None:
