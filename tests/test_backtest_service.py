@@ -126,6 +126,8 @@ class SnapshotAvailableFakeClickHouseClient(FakeClickHouseClient):
         self.queries.append((query, parameters or {}))
         if query.startswith("EXISTS TABLE fact_daily_factor_snapshot"):
             return FakeQueryResult([(1,)])
+        if "covered_signal_dates AS" in query:
+            return FakeQueryResult([(len((parameters or {}).get("signal_dates", [])),)])
         if "FROM fact_daily_factor_snapshot" in query:
             return FakeQueryResult([(len((parameters or {}).get("factor_ids", [])),)])
         return FakeQueryResult([])
@@ -201,6 +203,8 @@ class SnapshotAvailableMultiRebalanceFakeClickHouseClient(MultiRebalanceFakeClic
         self.queries.append((query, parameters or {}))
         if query.startswith("EXISTS TABLE fact_daily_factor_snapshot"):
             return FakeQueryResult([(1,)])
+        if "covered_signal_dates AS" in query:
+            return FakeQueryResult([(len((parameters or {}).get("signal_dates", [])),)])
         if "FROM fact_daily_factor_snapshot" in query:
             return FakeQueryResult([(len((parameters or {}).get("factor_ids", [])),)])
         return FakeQueryResult([])
@@ -269,6 +273,16 @@ class SnapshotAvailableMultiRebalanceFakeClickHouseClient(MultiRebalanceFakeClic
                 )
             return pd.DataFrame(rows)
         return super().query_df(query, parameters)
+
+
+class IncompleteSnapshotCoverageFakeClickHouseClient(MultiRebalanceFakeClickHouseClient):
+    def query(self, query, parameters=None):
+        self.queries.append((query, parameters or {}))
+        if query.startswith("EXISTS TABLE fact_daily_factor_snapshot"):
+            return FakeQueryResult([(1,)])
+        if "covered_signal_dates AS" in query:
+            return FakeQueryResult([(1,)])
+        return FakeQueryResult([])
 
 
 
@@ -709,6 +723,32 @@ class BacktestServiceTest(unittest.TestCase):
         query, params = snapshot_queries[0]
         self.assertIn("arrayJoin({signal_dates:Array(Date)}) AS signal_date", query)
         self.assertEqual(params["signal_dates"], ["2026-01-01", "2026-03-31"])
+
+    def test_factor_backtest_falls_back_to_raw_when_snapshot_dates_are_incomplete(self):
+        client = IncompleteSnapshotCoverageFakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(factor_id="roe", mode="top_percent", top_percent=100),
+                FactorConditionDto(factor_id="per", mode="top_percent", top_percent=100),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 4, 3),
+            rebalance_frequency="quarterly",
+            max_positions=1,
+        )
+
+        BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        factor_queries = [
+            query
+            for query, params in client.queries
+            if "latest_factor_values AS" in query
+        ]
+        self.assertGreaterEqual(len(factor_queries), 2)
+        self.assertTrue(all("FROM fact_daily_factors AS f" in query for query in factor_queries))
+        self.assertTrue(
+            all("FROM fact_daily_factor_snapshot AS f" not in query for query in factor_queries)
+        )
 
     def test_us_factor_backtest_uses_us_default_benchmarks(self):
         client = FakeClickHouseClient()

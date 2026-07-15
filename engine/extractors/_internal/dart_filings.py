@@ -1425,7 +1425,7 @@ def fetch_dart_dividend_search(
                 data = parse_dividend_decision_html(dividend_page_resp.content, report_date)
                 json_data = json.dumps(data, ensure_ascii=False)
                 _write_text(json_data, save_dir, out_name)
-                time.sleep(0.3)
+                time.sleep(1.0)
             except ValueError as e:
                 print("[WARN] 배당 내역이 존재하지 않는 문서입니다.", e)
 

@@ -59,13 +59,6 @@ class BacktestService:
 
         client = self._client_factory()
         try:
-            factor_table, factor_table_is_snapshot = _resolve_factor_table(
-                client,
-                requested_table=request.factor_table,
-                conditions=conditions,
-                financial_basis=request.financial_basis or "annual",
-                end_date=request.end_date,
-            )
             trading_days = self._load_trading_days(client, request.start_date, request.end_date)
             visible_days = [
                 day for day in trading_days if request.start_date <= day <= request.end_date
@@ -81,6 +74,22 @@ class BacktestService:
             )
             if not rebalance_dates:
                 raise ValueError("rebalance dates were not found in the requested period")
+
+            signal_dates = sorted(
+                {
+                    signal_date
+                    for rebalance_date in rebalance_dates
+                    if (signal_date := _previous_trading_day(trading_days, rebalance_date))
+                    is not None
+                }
+            )
+            factor_table, factor_table_is_snapshot = _resolve_factor_table(
+                client,
+                requested_table=request.factor_table,
+                conditions=conditions,
+                financial_basis=request.financial_basis or "annual",
+                signal_dates=signal_dates,
+            )
 
             equity_points, rebalance_history = self._run_strategy(
                 client,
@@ -482,7 +491,7 @@ def _resolve_factor_table(
     requested_table: str | None,
     conditions: list[FactorCondition],
     financial_basis: str,
-    end_date: date,
+    signal_dates: list[date],
 ) -> tuple[str, bool]:
     if requested_table:
         return requested_table, False
@@ -493,48 +502,64 @@ def _resolve_factor_table(
             if not is_style_score_factor(condition.factor_id)
         }
     )
-    if factor_ids and _snapshot_table_has_rows(
+    if factor_ids and signal_dates and _snapshot_table_covers_signal_dates(
         client,
         DEFAULT_FACTOR_SNAPSHOT_TABLE,
         factor_ids=factor_ids,
         financial_basis=financial_basis,
-        end_date=end_date,
+        signal_dates=signal_dates,
     ):
         return DEFAULT_FACTOR_SNAPSHOT_TABLE, True
     return DEFAULT_FACTOR_TABLE, False
 
 
-def _snapshot_table_has_rows(
+def _snapshot_table_covers_signal_dates(
     client: Any,
     table_name: str,
     *,
     factor_ids: list[str],
     financial_basis: str,
-    end_date: date,
+    signal_dates: list[date],
 ) -> bool:
     query = getattr(client, "query", None)
     if not callable(query):
         return False
     if not _table_exists(client, table_name):
         return False
+    normalized_signal_dates = sorted({_as_date(value) for value in signal_dates})
+    if not normalized_signal_dates:
+        return False
     try:
         rows = query(
             f"""
-SELECT countDistinct(factor_id) AS factor_count
-FROM {table_name}
-WHERE has({{factor_ids:Array(String)}}, factor_id)
-    AND financial_basis = {{financial_basis:String}}
-    AND trade_date <= {{end_date:Date}}
+WITH
+signal_dates AS (
+    SELECT arrayJoin({{signal_dates:Array(Date)}}) AS signal_date
+),
+covered_signal_dates AS (
+    SELECT
+        sd.signal_date AS signal_date
+    FROM signal_dates AS sd
+    INNER JOIN {table_name} AS f
+        ON f.trade_date = sd.signal_date
+    WHERE has({{factor_ids:Array(String)}}, f.factor_id)
+        AND f.financial_basis = {{financial_basis:String}}
+    GROUP BY sd.signal_date
+    HAVING countDistinct(f.factor_id) >= {{factor_count:UInt64}}
+)
+SELECT count() AS covered_date_count
+FROM covered_signal_dates
 """.strip(),
             parameters={
                 "factor_ids": factor_ids,
+                "factor_count": len(factor_ids),
                 "financial_basis": financial_basis,
-                "end_date": end_date.isoformat(),
+                "signal_dates": [value.isoformat() for value in normalized_signal_dates],
             },
         ).result_rows
     except Exception:
         return False
-    return bool(rows and int(rows[0][0]) >= len(factor_ids))
+    return bool(rows and int(rows[0][0]) >= len(normalized_signal_dates))
 
 
 def _table_exists(client: Any, table_name: str) -> bool:
