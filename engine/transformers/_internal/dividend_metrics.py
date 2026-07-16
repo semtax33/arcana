@@ -2102,6 +2102,32 @@ def report_date_from_dividend_rcept_no(rcept_no):
         return None
 
 
+def report_date_from_dividend_source_file(source_file):
+    text = str(source_file or "").strip()
+    if not text or text.lower() == "nan":
+        return None
+    match = re.search(r"finance_statement_dividend_(\d{4}-\d{2}-\d{2})", text)
+    if not match:
+        return None
+    try:
+        return pd.Timestamp(match.group(1))
+    except ValueError:
+        return None
+
+
+def _dividend_report_date(row):
+    return (
+        report_date_from_dividend_rcept_no(row.get("rcept_no"))
+        or report_date_from_dividend_source_file(row.get("source_file"))
+    )
+
+
+def _clean_dividend_text(value):
+    if value is None or pd.isna(value):
+        return ""
+    return str(value)
+
+
 def silver_dividend_asof_events(stock_code, share_type="common"):
     stock_code = normalize_stock_code(stock_code)
     stock_kind_rows = _silver_stock_kind_rows(stock_code, share_type)
@@ -2120,7 +2146,7 @@ def silver_dividend_asof_events(stock_code, share_type="common"):
 
     if not stock_kind_rows.empty:
         for row in stock_kind_rows.to_dict("records"):
-            report_date = report_date_from_dividend_rcept_no(row.get("rcept_no"))
+            report_date = _dividend_report_date(row)
             if report_date is None:
                 continue
             event_rows.append(
@@ -2128,8 +2154,8 @@ def silver_dividend_asof_events(stock_code, share_type="common"):
                     "stock_code": stock_code,
                     "bsns_year": int(row["bsns_year"]) if not pd.isna(row.get("bsns_year")) else None,
                     "report_date": report_date,
-                    "rcept_no": str(row.get("rcept_no") or ""),
-                    "report_name": str(row.get("report_name") or ""),
+                    "rcept_no": _clean_dividend_text(row.get("rcept_no")),
+                    "report_name": _clean_dividend_text(row.get("report_name")),
                     "annual_dividend_per_share": normalize_decimal_amount(
                         row.get("per_share_cash_dividend_krw")
                     ),
@@ -2140,7 +2166,7 @@ def silver_dividend_asof_events(stock_code, share_type="common"):
 
     if not company_rows.empty:
         for row in company_rows.to_dict("records"):
-            report_date = report_date_from_dividend_rcept_no(row.get("rcept_no"))
+            report_date = _dividend_report_date(row)
             if report_date is None:
                 continue
             payout_ratio_pct = normalize_decimal_amount(row.get("dividend_payout_ratio_pct"))
@@ -2149,8 +2175,8 @@ def silver_dividend_asof_events(stock_code, share_type="common"):
                     "stock_code": stock_code,
                     "bsns_year": int(row["bsns_year"]) if not pd.isna(row.get("bsns_year")) else None,
                     "report_date": report_date,
-                    "rcept_no": str(row.get("rcept_no") or ""),
-                    "report_name": str(row.get("report_name") or ""),
+                    "rcept_no": _clean_dividend_text(row.get("rcept_no")),
+                    "report_name": _clean_dividend_text(row.get("report_name")),
                     "annual_dividend_per_share": None,
                     "payout_ratio": None if payout_ratio_pct is None else payout_ratio_pct / 100,
                     "total_dividend_amount": normalize_decimal_amount(

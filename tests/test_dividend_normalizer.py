@@ -189,6 +189,55 @@ class DividendNormalizerTest(unittest.TestCase):
                 dividend_normalizer.silver_dividend_company_summary_path = original_summary_path
                 dividend_normalizer.clear_silver_dividend_cache()
 
+    def test_silver_dividend_events_use_source_file_date_when_rcept_no_missing(self):
+        original_by_kind_path = dividend_normalizer.silver_dividend_by_stock_kind_path
+        original_summary_path = dividend_normalizer.silver_dividend_company_summary_path
+
+        with TemporaryDirectory() as temp_dir:
+            temp_dir = Path(temp_dir)
+            by_kind_path = temp_dir / "dividend_by_stock_kind.csv"
+            summary_path = temp_dir / "dividend_company_summary.csv"
+            source_file = (
+                "data-lake/bronze/dart/dividend/005930/"
+                "finance_statement_dividend_2025-03-15.json"
+            )
+
+            by_kind_path.write_text(
+                "\n".join(
+                    [
+                        "stock_code,bsns_year,reprt_code,report_name,rcept_no,stlm_dt,stock_knd,per_share_cash_dividend_krw,source_file",
+                        f"005930,2024,decision,decision_annual_sum,,2024-12-31,common,1000,{source_file}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            summary_path.write_text(
+                "\n".join(
+                    [
+                        "stock_code,bsns_year,reprt_code,report_name,rcept_no,stlm_dt,dividend_payment_amount_krw,dividend_payout_ratio_pct,source_file",
+                        f"005930,2024,decision,decision_annual_sum,,2024-12-31,3000000,25,{source_file}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            try:
+                dividend_normalizer.silver_dividend_by_stock_kind_path = by_kind_path
+                dividend_normalizer.silver_dividend_company_summary_path = summary_path
+                dividend_normalizer.clear_silver_dividend_cache()
+
+                result = dividend_normalizer.silver_dividend_asof_events("005930")
+            finally:
+                dividend_normalizer.silver_dividend_by_stock_kind_path = original_by_kind_path
+                dividend_normalizer.silver_dividend_company_summary_path = original_summary_path
+                dividend_normalizer.clear_silver_dividend_cache()
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result["report_date"].dt.strftime("%Y-%m-%d").iat[0], "2025-03-15")
+        self.assertEqual(result["annual_dividend_per_share"].iat[0], 1000)
+        self.assertEqual(result["payout_ratio"].iat[0], 0.25)
+        self.assertEqual(result["total_dividend_amount"].iat[0], 3_000_000)
+
     def test_build_silver_dividend_summary_from_bronze_json(self):
         with TemporaryDirectory() as temp_dir:
             bronze_root = Path(temp_dir) / "bronze"
