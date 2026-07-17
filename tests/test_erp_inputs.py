@@ -120,7 +120,7 @@ class ErpInputsTest(unittest.TestCase):
         download.assert_called_once()
 
         with (
-            patch.object(sys, "argv", ["prog", "--market", "us", "wacc-inputs"]),
+            patch.object(sys, "argv", ["prog", "--market", "us", "--force", "wacc-inputs"]),
             patch.object(download_workflow, "download_damodaran_country_erp", return_value=Path("ctryprem.xlsx")) as damodaran,
             patch.object(download_workflow, "download_fred_series", return_value=Path("rate.csv")) as fred,
             patch.object(download_workflow, "download_us_sp500_benchmark", return_value=Path("us_sp500.csv")) as sp500,
@@ -130,6 +130,20 @@ class ErpInputsTest(unittest.TestCase):
         damodaran.assert_called_once()
         self.assertEqual(fred.call_count, 2)
         sp500.assert_called_once()
+
+    def test_download_workflow_reuses_cached_wacc_inputs_unless_forced(self):
+        with (
+            patch.object(sys, "argv", ["prog", "--market", "us", "wacc-inputs"]),
+            patch.object(download_workflow, "_is_nonempty_file", return_value=True),
+            patch.object(download_workflow, "download_damodaran_country_erp") as damodaran,
+            patch.object(download_workflow, "download_fred_series") as fred,
+            patch.object(download_workflow, "download_us_sp500_benchmark") as sp500,
+        ):
+            download_workflow.main()
+
+        damodaran.assert_not_called()
+        fred.assert_not_called()
+        sp500.assert_not_called()
 
 
 if __name__ == "__main__":

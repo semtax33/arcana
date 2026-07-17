@@ -155,6 +155,21 @@ class WaccInputsTest(unittest.TestCase):
         self.assertEqual(result["benchmark_id"].tolist(), ["US_SP500", "US_SP500"])
         self.assertAlmostEqual(result["weekly_return"].iat[1], 0.05)
 
+    def test_benchmark_weekly_returns_normalizer_accepts_raw_yfinance_columns(self):
+        raw = pd.DataFrame(
+            {
+                "Date": ["2026-01-02", "2026-01-09"],
+                "Adj Close": [100.0, 110.0],
+                "Close": [99.0, 100.0],
+            }
+        )
+
+        result = normalize_benchmark_weekly_returns(raw, market="us", benchmark_id="US_SP500")
+
+        self.assertEqual(result["week_end_date"].astype(str).tolist(), ["2026-01-02", "2026-01-09"])
+        self.assertEqual(result["weekly_close"].tolist(), [100.0, 110.0])
+        self.assertAlmostEqual(result["weekly_return"].iat[1], 0.10)
+
 
 class _WaccCache:
     def __init__(self, *, risk_free, erp, assumptions, benchmark=None):

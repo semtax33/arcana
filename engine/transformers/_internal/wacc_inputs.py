@@ -72,8 +72,11 @@ def normalize_weekly_returns_from_prices(
         return pd.DataFrame(columns=WEEKLY_RETURN_COLUMNS)
 
     df = frame.copy()
-    if "trade_date" not in df.columns:
+    trade_date_col = _matching_column(df, "trade_date", "date")
+    if trade_date_col is None:
         raise ValueError("price frame is missing trade_date")
+    if trade_date_col != "trade_date":
+        df["trade_date"] = df[trade_date_col]
     price_col = _price_column(df)
     if price_col is None:
         raise ValueError("price frame is missing close or adj_close")
@@ -119,8 +122,11 @@ def normalize_benchmark_weekly_returns(
         return pd.DataFrame(columns=BENCHMARK_WEEKLY_RETURN_COLUMNS)
 
     df = frame.copy()
-    if "trade_date" not in df.columns:
+    trade_date_col = _matching_column(df, "trade_date", "date")
+    if trade_date_col is None:
         raise ValueError("benchmark frame is missing trade_date")
+    if trade_date_col != "trade_date":
+        df["trade_date"] = df[trade_date_col]
     price_col = _price_column(df)
     if price_col is None:
         raise ValueError("benchmark frame is missing close or adj_close")
@@ -309,10 +315,24 @@ def risk_free_series_for_market(
 
 
 def _price_column(df: pd.DataFrame) -> str | None:
-    if "adj_close" in df.columns and pd.to_numeric(df["adj_close"], errors="coerce").notna().any():
-        return "adj_close"
-    if "close" in df.columns:
-        return "close"
+    adj_close = _matching_column(df, "adj_close", "adjusted_close")
+    if adj_close is not None and pd.to_numeric(df[adj_close], errors="coerce").notna().any():
+        return adj_close
+    close = _matching_column(df, "close")
+    if close is not None:
+        return close
+    return None
+
+
+def _matching_column(df: pd.DataFrame, *candidates: str) -> str | None:
+    normalized = {
+        str(column).strip().lower().replace(" ", "_"): column
+        for column in df.columns
+    }
+    for candidate in candidates:
+        column = normalized.get(candidate.strip().lower().replace(" ", "_"))
+        if column is not None:
+            return column
     return None
 
 

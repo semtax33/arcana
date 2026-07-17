@@ -5,6 +5,10 @@ from datetime import date, datetime
 
 from engine.extractors.benchmarks import fetch_benchmark_prices, fetch_yfinance_benchmark_prices
 from engine.extractors.erp import (
+    BRONZE_DAMODARAN_COUNTRY_ERP_PATH,
+    BRONZE_FRED_RATE_DIR,
+    BRONZE_US_SP500_BENCHMARK_PATH,
+    FRED_OUTPUT_NAMES,
     FRED_SERIES_IDS,
     download_damodaran_country_erp,
     download_fred_series,
@@ -166,12 +170,17 @@ def download_erp_inputs(args: argparse.Namespace) -> None:
 def download_wacc_inputs(args: argparse.Namespace) -> None:
     market = str(args.market or "kr").strip().lower()
     downloads = [
-        ("damodaran_country_erp", download_damodaran_country_erp),
+        (
+            "damodaran_country_erp",
+            download_damodaran_country_erp,
+            BRONZE_DAMODARAN_COUNTRY_ERP_PATH,
+        ),
     ]
     downloads.extend(
         (
             f"fred_{series_id.lower()}",
             lambda series_id=series_id: download_fred_series(series_id),
+            BRONZE_FRED_RATE_DIR / FRED_OUTPUT_NAMES.get(series_id, f"{series_id.lower()}.csv"),
         )
         for series_id in FRED_SERIES_IDS.values()
     )
@@ -180,11 +189,15 @@ def download_wacc_inputs(args: argparse.Namespace) -> None:
             (
                 "yfinance_us_sp500_benchmark",
                 lambda: download_us_sp500_benchmark(start_date=args.start_date, end_date=args.end_date),
+                BRONZE_US_SP500_BENCHMARK_PATH,
             )
         )
 
     failures = []
-    for label, download in downloads:
+    for label, download, cached_path in downloads:
+        if not args.force and _is_nonempty_file(cached_path):
+            print(f"using cached WACC input [{label}]: {cached_path}")
+            continue
         try:
             path = download()
         except Exception as exc:  # pragma: no cover - exact network errors vary by environment.
@@ -196,6 +209,13 @@ def download_wacc_inputs(args: argparse.Namespace) -> None:
     if failures:
         labels = ", ".join(label for label, _ in failures)
         raise RuntimeError(f"failed to download required WACC inputs: {labels}")
+
+
+def _is_nonempty_file(path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
 
 
 def download_kr_consensus(args: argparse.Namespace) -> None:
