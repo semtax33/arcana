@@ -47,6 +47,7 @@ class FakeFactorLabClient:
         self.run_exists = True
         self.run_status = "completed"
         self.run_value_count = 12
+        self.snapshot_available = True
 
     def command(self, query, parameters=None):
         self.commands.append((query, parameters or {}))
@@ -56,6 +57,19 @@ class FakeFactorLabClient:
         self.queries.append((query, parameters))
         if "FROM factor_catalog" in query:
             return pd.DataFrame({"factor_id": ["per"]})
+        if "eligible_snapshot_dates AS" in query:
+            if not self.snapshot_available:
+                return pd.DataFrame(
+                    {"effective_trade_date": [None], "snapshot_ready": [False]}
+                )
+            return pd.DataFrame(
+                {
+                    "effective_trade_date": [pd.Timestamp("2026-12-30").date()],
+                    "snapshot_ready": [True],
+                }
+            )
+        if "factor_pair_count" in query and "ORDER BY trade_date DESC" in query:
+            return pd.DataFrame({"trade_date": [pd.Timestamp("2026-12-29").date()]})
         if "SELECT 1 AS found" in query and "FROM factor_lab_experiment" in query:
             return pd.DataFrame({"found": [1]}) if self.experiment_exists else pd.DataFrame()
         if "SELECT run_id" in query and "FROM factor_lab_run" in query:
@@ -73,7 +87,7 @@ class FakeFactorLabClient:
                     "security_id": ["SEC_KR_A", "SEC_KR_B"],
                     "ticker": ["000001", "000002"],
                     "stock_name": ["Alpha", "Beta"],
-                    "trade_date": [pd.Timestamp("2026-01-10").date(), pd.Timestamp("2026-01-10").date()],
+                    "trade_date": [pd.Timestamp("2026-12-30").date(), pd.Timestamp("2026-12-30").date()],
                     "factor_id": ["lab_mock", "lab_mock"],
                     "factor_value": [98.5, 91.25],
                     "score": [98.5, 91.25],
@@ -89,7 +103,7 @@ class FakeFactorLabClient:
                     "valid_rows": [8],
                     "invalid_rows": [2],
                     "min_trade_date": [pd.Timestamp("2026-01-01").date()],
-                    "max_trade_date": [pd.Timestamp("2026-01-10").date()],
+                    "max_trade_date": [pd.Timestamp("2026-12-30").date()],
                     "security_count": [5],
                 }
             )
@@ -138,18 +152,78 @@ class FactorLabServiceTest(unittest.TestCase):
         )
 
         command_sql = "\n".join(query for query, _ in client.commands)
+        factor_insert_query, factor_insert_params = next(
+            (query, params)
+            for query, params in client.commands
+            if "INSERT INTO factor_lab_values" in query
+        )
         self.assertEqual(response.status, "completed")
         self.assertTrue(response.factor_id.startswith("lab_"))
         self.assertEqual(response.quality.valid_rows, 8)
         self.assertEqual(response.quality.invalid_reason_counts["zscore_zero_std"], 2)
+        quality_queries = [
+            (query, params)
+            for query, params in client.queries
+            if "FROM factor_lab_values" in query
+            and ("count() AS input_rows" in query or "GROUP BY invalid_reason" in query)
+        ]
+        self.assertEqual(len(quality_queries), 2)
+        for query, params in quality_queries:
+            self.assertEqual(params["factor_id"], response.factor_id)
+            self.assertIn("AND factor_id = {factor_id:String}", query)
         self.assertEqual([row.security_id for row in response.rows], ["SEC_KR_A", "SEC_KR_B"])
         self.assertEqual(response.results, response.rows)
         self.assertEqual(response.rankings, response.rows)
         self.assertEqual(response.positions, response.rows)
+        ranking_query, ranking_params = next(
+            (query, params) for query, params in client.queries if "ranked_values AS" in query
+        )
+        self.assertEqual(ranking_params["effective_trade_date"], "2026-12-30")
+        self.assertEqual(ranking_params["factor_id"], response.factor_id)
+        self.assertIn("SELECT {effective_trade_date:Date} AS trade_date", ranking_query)
+        self.assertIn("AND factor_id = {factor_id:String}", ranking_query)
+        self.assertEqual(factor_insert_params["start_date"], "2026-12-30")
+        self.assertEqual(factor_insert_params["end_date"], "2026-12-30")
+        self.assertIn("FROM fact_daily_factor_snapshot AS f", factor_insert_query)
         self.assertIn("CREATE TABLE IF NOT EXISTS factor_lab_experiment", command_sql)
         self.assertIn("INSERT INTO factor_lab_values", command_sql)
         self.assertIn("INSERT INTO factor_catalog", command_sql)
         self.assertIn("completed", {params.get("status") for _, params in client.commands})
+
+    def test_run_graph_falls_back_to_latest_common_raw_factor_date(self):
+        client = FakeFactorLabClient()
+        client.snapshot_available = False
+        graph = FactorLabGraphDto(**service_graph())
+
+        FactorLabService(client_factory=lambda: client).run_graph(
+            FactorLabRunRequestDto(graph=graph)
+        )
+
+        factor_insert_query, factor_insert_params = next(
+            (query, params)
+            for query, params in client.commands
+            if "INSERT INTO factor_lab_values" in query
+        )
+        self.assertEqual(factor_insert_params["start_date"], "2026-12-29")
+        self.assertEqual(factor_insert_params["end_date"], "2026-12-29")
+        self.assertIn("FROM fact_daily_factors AS f", factor_insert_query)
+
+    def test_run_graph_history_mode_keeps_requested_date_range(self):
+        client = FakeFactorLabClient()
+        graph = FactorLabGraphDto(**service_graph())
+
+        FactorLabService(client_factory=lambda: client).run_graph(
+            FactorLabRunRequestDto(graph=graph, mode="history")
+        )
+
+        factor_insert_query, factor_insert_params = next(
+            (query, params)
+            for query, params in client.commands
+            if "INSERT INTO factor_lab_values" in query
+        )
+        self.assertEqual(factor_insert_params["start_date"], "2026-01-01")
+        self.assertEqual(factor_insert_params["end_date"], "2026-12-31")
+        self.assertIn("FROM fact_daily_factors AS f", factor_insert_query)
 
     def test_update_experiment_writes_new_version_with_same_id(self):
         client = FakeFactorLabClient()

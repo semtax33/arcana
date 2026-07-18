@@ -237,6 +237,7 @@ def build_factor_screen_query(
     limit: int | None = None,
     factor_table: str = DEFAULT_FACTOR_TABLE,
     factor_table_is_snapshot: bool = False,
+    effective_snapshot_date: str | date | None = None,
     raw_lookback_days: int | None = None,
     style_score_table: str = "arcana.fact_daily_style_score",
     catalog_table: str = "factor_catalog",
@@ -291,6 +292,15 @@ def build_factor_screen_query(
         params["market_security_prefix"] = f"SEC_{normalized_market.upper()}_"
     if limit is not None:
         params["limit"] = int(limit)
+    if effective_snapshot_date is not None:
+        if not factor_table_is_snapshot:
+            raise ValueError("effective_snapshot_date requires a snapshot factor table")
+        resolved_snapshot_date = _resolve_as_of_date(effective_snapshot_date)
+        if date.fromisoformat(resolved_snapshot_date) > date.fromisoformat(
+            params["as_of_date"]
+        ):
+            raise ValueError("effective_snapshot_date must not be after as_of_date")
+        params["effective_snapshot_date"] = resolved_snapshot_date
     raw_lookback_filter = ""
     if not factor_table_is_snapshot and raw_lookback_days is not None and int(raw_lookback_days) > 0:
         params["raw_start_date"] = (
@@ -446,15 +456,20 @@ security_universe AS (
     matched_conditions_sql = "arrayConcat(" + ", ".join(matched_condition_parts) + ")"
     value_select_sql = ",\n".join(value_selects)
 
-    ctes = [
-        f"""
+    if factor_table_is_snapshot and effective_snapshot_date is not None:
+        latest_trade_date_cte = """
+latest_trade_date AS (
+    SELECT {effective_snapshot_date:Date} AS latest_date
+)""".strip()
+    else:
+        latest_trade_date_cte = f"""
 latest_trade_date AS (
     SELECT
         max(trade_date) AS latest_date
     FROM {_validate_table_name(factor_table)}
     WHERE trade_date <= {{as_of_date:Date}}{latest_date_factor_filter}{basis_date_filter}{latest_date_market_filter}{latest_date_source_filter}{raw_lookback_filter}
 )""".strip()
-    ]
+    ctes = [latest_trade_date_cte]
     if regular_factor_ids:
         ctes.append(
             f"""
@@ -590,6 +605,7 @@ def screen_stocks_by_factors(
     limit: int | None = None,
     factor_table: str = DEFAULT_FACTOR_TABLE,
     factor_table_is_snapshot: bool = False,
+    effective_snapshot_date: str | date | None = None,
     raw_lookback_days: int | None = None,
     style_score_table: str = "arcana.fact_daily_style_score",
     catalog_table: str = "factor_catalog",
@@ -612,6 +628,7 @@ def screen_stocks_by_factors(
         limit=limit,
         factor_table=factor_table,
         factor_table_is_snapshot=factor_table_is_snapshot,
+        effective_snapshot_date=effective_snapshot_date,
         raw_lookback_days=raw_lookback_days,
         style_score_table=style_score_table,
         catalog_table=catalog_table,

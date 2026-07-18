@@ -101,7 +101,13 @@ class SnapshotAvailableFakeClickHouseClient(FakeClickHouseClient):
         if query.startswith("EXISTS TABLE fact_daily_factor_snapshot"):
             return FakeQueryResult([(1,)])
         if "FROM fact_daily_factor_snapshot" in query:
-            return FakeQueryResult([(len((parameters or {}).get("factor_ids", [])),)])
+            requested_date = date.fromisoformat((parameters or {})["candidate_dates"][0])
+            snapshot_date = (
+                date(2026, 7, 17)
+                if requested_date == date(2026, 7, 18)
+                else requested_date
+            )
+            return FakeQueryResult([(snapshot_date, snapshot_date)])
         return FakeQueryResult([])
 
 
@@ -112,7 +118,7 @@ class OtherMarketOnlySnapshotFakeClickHouseClient(SnapshotAvailableFakeClickHous
             return FakeQueryResult([(1,)])
         if "FROM fact_daily_factor_snapshot" in query:
             self.assert_market_prefix = (parameters or {}).get("market_security_prefix")
-            return FakeQueryResult([(0,)])
+            return FakeQueryResult([(None, None)])
         return FakeQueryResult([])
 
 
@@ -232,8 +238,10 @@ class FactorScreenServiceTest(unittest.TestCase):
         self.assertEqual(len(screen_queries), 1)
         query, params = screen_queries[0]
         self.assertEqual(params["limit"], 25)
+        self.assertIn("effective_snapshot_date", params)
         self.assertIn("FROM fact_daily_factor_snapshot AS f", query)
         self.assertIn("f.trade_date = (SELECT latest_date FROM latest_trade_date)", query)
+        self.assertIn("SELECT {effective_snapshot_date:Date} AS latest_date", query)
 
         coverage_queries = [
             (query, params)
@@ -242,13 +250,13 @@ class FactorScreenServiceTest(unittest.TestCase):
         ]
         self.assertEqual(len(coverage_queries), 1)
         coverage_query, coverage_params = coverage_queries[0]
-        self.assertIn("latest_snapshot_date AS", coverage_query)
         self.assertIn("latest_raw_date AS", coverage_query)
-        self.assertIn("ORDER BY trade_date DESC", coverage_query)
+        self.assertIn("eligible_snapshots AS", coverage_query)
         self.assertIn(
-            "trade_date >= (SELECT trade_date FROM latest_raw_date)",
+            "PREWHERE trade_date IN {candidate_dates:Array(Date)}",
             coverage_query,
         )
+        self.assertIn("WHERE trade_date >= coalesce", coverage_query)
         self.assertIn(
             "source_trade_date <= {as_of_date:Date}",
             coverage_query,
@@ -276,6 +284,11 @@ class FactorScreenServiceTest(unittest.TestCase):
             query for query, _ in client.queries if "latest_factor_values AS" in query
         )
         self.assertIn("FROM fact_daily_factor_snapshot AS f", screen_query)
+        screen_params = next(
+            params for query, params in client.queries if "latest_factor_values AS" in query
+        )
+        self.assertEqual(screen_params["effective_snapshot_date"], "2026-07-17")
+        self.assertIn("SELECT {effective_snapshot_date:Date} AS latest_date", screen_query)
         coverage_query, coverage_params = next(
             (query, params)
             for query, params in client.queries
@@ -283,8 +296,10 @@ class FactorScreenServiceTest(unittest.TestCase):
         )
         self.assertEqual(coverage_params["as_of_date"], "2026-07-18")
         self.assertEqual(coverage_params["market_security_prefix"], "SEC_KR_")
+        self.assertEqual(coverage_params["candidate_dates"][0], "2026-07-18")
+        self.assertIn("2026-07-17", coverage_params["candidate_dates"])
         self.assertIn(
-            "trade_date >= (SELECT trade_date FROM latest_raw_date)",
+            "WHERE trade_date >= coalesce",
             coverage_query,
         )
         self.assertIn(

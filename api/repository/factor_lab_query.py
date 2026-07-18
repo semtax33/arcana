@@ -289,6 +289,7 @@ def build_quality_summary_query(
     *,
     run_id: str,
     node_id: str | None = None,
+    factor_id: str | None = None,
     cache_table: str = "factor_lab_node_cache",
     values_table: str = "factor_lab_values",
 ) -> tuple[str, dict[str, Any]]:
@@ -299,6 +300,12 @@ def build_quality_summary_query(
     if node_id is not None:
         params["node_id"] = node_id
         node_filter = "\n    AND node_id = {node_id:String}"
+    factor_filter = ""
+    if factor_id is not None:
+        if node_id is not None:
+            raise ValueError("factor_id is only supported for final factor lab values")
+        params["factor_id"] = _validate_factor_id(factor_id)
+        factor_filter = "\n    AND factor_id = {factor_id:String}"
     query = f"""
 SELECT
     count() AS input_rows,
@@ -308,7 +315,7 @@ SELECT
     max(trade_date) AS max_trade_date,
     uniqExact(security_id) AS security_count
 FROM {table}
-WHERE run_id = {{run_id:UUID}}{node_filter}
+WHERE run_id = {{run_id:UUID}}{factor_filter}{node_filter}
 """.strip()
     return query, params
 
@@ -317,6 +324,7 @@ def build_invalid_reason_counts_query(
     *,
     run_id: str,
     node_id: str | None = None,
+    factor_id: str | None = None,
     cache_table: str = "factor_lab_node_cache",
     values_table: str = "factor_lab_values",
 ) -> tuple[str, dict[str, Any]]:
@@ -327,12 +335,18 @@ def build_invalid_reason_counts_query(
     if node_id is not None:
         params["node_id"] = node_id
         node_filter = "\n    AND node_id = {node_id:String}"
+    factor_filter = ""
+    if factor_id is not None:
+        if node_id is not None:
+            raise ValueError("factor_id is only supported for final factor lab values")
+        params["factor_id"] = _validate_factor_id(factor_id)
+        factor_filter = "\n    AND factor_id = {factor_id:String}"
     query = f"""
 SELECT
     invalid_reason,
     count() AS row_count
 FROM {table}
-WHERE run_id = {{run_id:UUID}}{node_filter}
+WHERE run_id = {{run_id:UUID}}{factor_filter}{node_filter}
     AND NOT is_valid
 GROUP BY invalid_reason
 ORDER BY row_count DESC, invalid_reason ASC
@@ -376,6 +390,8 @@ LIMIT {{limit:UInt64}}
 def build_run_ranking_query(
     *,
     run_id: str,
+    factor_id: str | None = None,
+    effective_trade_date: str | date | None = None,
     limit: int = 100,
     values_table: str = "factor_lab_values",
     security_table: str = "security_master",
@@ -387,13 +403,22 @@ def build_run_ranking_query(
     for table in [values_table, security_table, issuer_table, identifier_table]:
         _validate_identifier(table, "table")
     params = {"run_id": run_id, "limit": int(limit)}
+    factor_filter = ""
+    if factor_id is not None:
+        params["factor_id"] = _validate_factor_id(factor_id)
+        factor_filter = "\n        AND factor_id = {factor_id:String}"
+    if effective_trade_date is not None:
+        params["effective_trade_date"] = _resolve_date(effective_trade_date)
+        latest_trade_date_sql = "SELECT {effective_trade_date:Date} AS trade_date"
+    else:
+        latest_trade_date_sql = f"""SELECT max(trade_date) AS trade_date
+    FROM {values_table}
+    WHERE run_id = {{run_id:UUID}}
+        AND is_valid{factor_filter}"""
     query = f"""
 WITH
 latest_trade_date AS (
-    SELECT max(trade_date) AS trade_date
-    FROM {values_table}
-    WHERE run_id = {{run_id:UUID}}
-        AND is_valid
+    {latest_trade_date_sql}
 ),
 ranked_values AS (
     SELECT
@@ -408,6 +433,7 @@ ranked_values AS (
     FROM {values_table}
     WHERE run_id = {{run_id:UUID}}
         AND is_valid
+        {factor_filter.strip()}
         AND trade_date = (SELECT trade_date FROM latest_trade_date)
 ),
 security_metadata AS (
@@ -465,8 +491,13 @@ def _validate_experiment(experiment: dict[str, Any], errors: list[FactorLabIssue
     except Exception:
         errors.append(FactorLabIssue("invalid_date", "experiment.start_date and end_date must be ISO dates"))
         return
-    if start_date >= end_date:
-        errors.append(FactorLabIssue("invalid_date_range", "start_date must be earlier than end_date"))
+    if start_date > end_date:
+        errors.append(
+            FactorLabIssue(
+                "invalid_date_range",
+                "start_date must be earlier than or equal to end_date",
+            )
+        )
 
 
 def _validate_nodes(

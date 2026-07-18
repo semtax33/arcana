@@ -221,6 +221,39 @@ class FactorScreenQueryTest(unittest.TestCase):
         self.assertIn("AND trade_date = (SELECT latest_date FROM latest_trade_date)", query)
         self.assertIn("count() OVER () AS total_count", query)
 
+    def test_build_factor_screen_query_uses_pre_resolved_snapshot_date_directly(self):
+        query, params = build_factor_screen_query(
+            [FactorCondition.top("roe", 30)],
+            as_of_date="2026-05-17",
+            financial_basis="annual",
+            factor_table="fact_daily_factor_snapshot",
+            factor_table_is_snapshot=True,
+            effective_snapshot_date="2026-05-16",
+            include_security_metadata=True,
+        )
+
+        self.assertEqual(params["effective_snapshot_date"], "2026-05-16")
+        self.assertIn("SELECT {effective_snapshot_date:Date} AS latest_date", query)
+        self.assertNotIn("max(trade_date) AS latest_date", query)
+        self.assertIn("f.trade_date = (SELECT latest_date FROM latest_trade_date)", query)
+
+    def test_build_factor_screen_query_rejects_invalid_effective_snapshot_date(self):
+        with self.assertRaises(ValueError):
+            build_factor_screen_query(
+                [FactorCondition.top("roe", 30)],
+                as_of_date="2026-05-17",
+                effective_snapshot_date="2026-05-16",
+            )
+
+        with self.assertRaises(ValueError):
+            build_factor_screen_query(
+                [FactorCondition.top("roe", 30)],
+                as_of_date="2026-05-17",
+                factor_table="fact_daily_factor_snapshot",
+                factor_table_is_snapshot=True,
+                effective_snapshot_date="2026-05-18",
+            )
+
     def test_style_score_aliases_are_canonicalized(self):
         query, params = build_factor_screen_query(
             [FactorCondition.threshold("total_score", ">=", 70)],

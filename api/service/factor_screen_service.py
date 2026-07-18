@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
@@ -51,7 +51,11 @@ class FactorScreenService:
         client = self._client_factory()
         try:
             factor_meta = _load_factor_metadata(client, conditions)
-            factor_table, factor_table_is_snapshot = _resolve_factor_table(
+            (
+                factor_table,
+                factor_table_is_snapshot,
+                effective_snapshot_date,
+            ) = _resolve_factor_table(
                 client,
                 conditions=conditions,
                 financial_basis=request.financial_basis or DEFAULT_FINANCIAL_BASIS,
@@ -71,6 +75,7 @@ class FactorScreenService:
                 limit=request.limit,
                 factor_table=factor_table,
                 factor_table_is_snapshot=factor_table_is_snapshot,
+                effective_snapshot_date=effective_snapshot_date,
                 raw_lookback_days=None if factor_table_is_snapshot else _raw_lookback_days(),
                 include_security_metadata=True,
             )
@@ -153,7 +158,7 @@ def _resolve_factor_table(
     financial_basis: str,
     as_of_date: Any,
     market: str | None,
-) -> tuple[str, bool]:
+) -> tuple[str, bool, str | None]:
     factor_ids = sorted(
         {
             condition.factor_id
@@ -161,19 +166,21 @@ def _resolve_factor_table(
             if not is_style_score_factor(condition.factor_id)
         }
     )
-    if factor_ids and _snapshot_table_has_rows(
-        client,
-        DEFAULT_FACTOR_SNAPSHOT_TABLE,
-        factor_ids=factor_ids,
-        financial_basis=financial_basis,
-        as_of_date=as_of_date,
-        market=market,
-    ):
-        return DEFAULT_FACTOR_SNAPSHOT_TABLE, True
-    return DEFAULT_FACTOR_TABLE, False
+    if factor_ids:
+        snapshot_date = _resolve_snapshot_date(
+            client,
+            DEFAULT_FACTOR_SNAPSHOT_TABLE,
+            factor_ids=factor_ids,
+            financial_basis=financial_basis,
+            as_of_date=as_of_date,
+            market=market,
+        )
+        if snapshot_date is not None:
+            return DEFAULT_FACTOR_SNAPSHOT_TABLE, True, snapshot_date
+    return DEFAULT_FACTOR_TABLE, False, None
 
 
-def _snapshot_table_has_rows(
+def _resolve_snapshot_date(
     client: Any,
     table_name: str,
     *,
@@ -181,16 +188,23 @@ def _snapshot_table_has_rows(
     financial_basis: str,
     as_of_date: Any,
     market: str | None,
-) -> bool:
+) -> str | None:
     query = getattr(client, "query", None)
     if not callable(query):
-        return False
+        return None
     if not _table_exists(client, table_name):
-        return False
+        return None
+    requested_date = date.fromisoformat(_screen_as_of_date(as_of_date))
+    candidate_dates = [
+        (requested_date - timedelta(days=offset)).isoformat()
+        for offset in range(_snapshot_candidate_lookback_days() + 1)
+    ]
     params: dict[str, Any] = {
         "factor_ids": factor_ids,
+        "factor_count": len(factor_ids),
         "financial_basis": financial_basis,
-        "as_of_date": _screen_as_of_date(as_of_date),
+        "as_of_date": requested_date.isoformat(),
+        "candidate_dates": candidate_dates,
     }
     market_filter = ""
     normalized_market = str(market or "").strip().upper()
@@ -201,45 +215,59 @@ def _snapshot_table_has_rows(
         rows = query(
             f"""
 WITH
-latest_snapshot_date AS (
-    SELECT trade_date
-    FROM {table_name}
-    PREWHERE trade_date <= {{as_of_date:Date}}
-    WHERE has({{factor_ids:Array(String)}}, factor_id)
-        AND financial_basis = {{financial_basis:String}}{market_filter}
-    ORDER BY trade_date DESC
-    LIMIT 1
-),
 latest_raw_date AS (
-    SELECT trade_date
+    SELECT nullIf(max(trade_date), toDate(0)) AS latest_date
     FROM {DEFAULT_FACTOR_TABLE}
-    PREWHERE trade_date <= {{as_of_date:Date}}
-    WHERE has({{factor_ids:Array(String)}}, factor_id)
+    PREWHERE trade_date IN {{candidate_dates:Array(Date)}}
+    WHERE factor_id IN {{factor_ids:Array(String)}}
         AND financial_basis = {{financial_basis:String}}{market_filter}
-    ORDER BY trade_date DESC
-    LIMIT 1
+),
+eligible_snapshots AS (
+    SELECT
+        trade_date,
+        countDistinct(factor_id) AS factor_count
+    FROM {table_name}
+    PREWHERE trade_date IN {{candidate_dates:Array(Date)}}
+    WHERE factor_id IN {{factor_ids:Array(String)}}
+        AND financial_basis = {{financial_basis:String}}{market_filter}
+        AND source_trade_date <= {{as_of_date:Date}}
+    GROUP BY trade_date
+    HAVING factor_count >= {{factor_count:UInt64}}
 )
-SELECT countDistinct(factor_id) AS factor_count
-FROM {table_name}
-PREWHERE trade_date = (SELECT trade_date FROM latest_snapshot_date)
-WHERE has({{factor_ids:Array(String)}}, factor_id)
-    AND financial_basis = {{financial_basis:String}}{market_filter}
-    AND trade_date >= (SELECT trade_date FROM latest_raw_date)
-    AND source_trade_date <= {{as_of_date:Date}}
+SELECT
+    nullIf(max(trade_date), toDate(0)) AS resolved_snapshot_date,
+    (SELECT latest_date FROM latest_raw_date) AS raw_latest_date
+FROM eligible_snapshots
+WHERE trade_date >= coalesce((SELECT latest_date FROM latest_raw_date), toDate(0))
 """.strip(),
             parameters=params,
         ).result_rows
     except Exception:
-        return False
-    return bool(rows and int(rows[0][0]) >= len(factor_ids))
+        return None
+    if not rows or rows[0][0] is None:
+        return None
+    return _screen_as_of_date(rows[0][0])
 
 
 def _screen_as_of_date(value: Any) -> str:
     if value is None:
         return datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
     if hasattr(value, "isoformat"):
         return value.isoformat()
-    return str(value)
+    return date.fromisoformat(str(value)).isoformat()
+
+
+def _snapshot_candidate_lookback_days() -> int:
+    value = os.getenv("ARCANA_FACTOR_SNAPSHOT_CANDIDATE_DAYS", "14").strip()
+    try:
+        days = int(value)
+    except ValueError:
+        return 14
+    return max(1, min(days, 366))
 
 
 def _table_exists(client: Any, table_name: str) -> bool:

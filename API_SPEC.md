@@ -271,6 +271,9 @@ GET /api/chart/005930?range=1Y
 Runs a factor backtest against the saved output of a completed Factor Lab run.
 The run must already have rows in `factor_lab_values`; this endpoint does not
 compile or execute a graph by itself.
+Factor Lab runs default to `mode="screen"`, which calculates only the latest
+common non-holiday factor date. Create the source run with `mode="history"`
+when the backtest needs the full requested experiment range.
 
 Path parameters:
 

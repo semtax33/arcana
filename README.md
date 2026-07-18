@@ -574,6 +574,10 @@ previous snapshot and overwrites keys that have raw rows on that date. Use
 `--full-asof` only when you need to rebuild every snapshot date directly from
 raw history, and use `--copy-raw-only` only when you explicitly want a direct
 copy of raw factor rows.
+Factor screens resolve a ready snapshot from the latest 14 calendar days and
+then query that exact date. Override the candidate window with
+`ARCANA_FACTOR_SNAPSHOT_CANDIDATE_DAYS` when a market needs a longer closure or
+data-delay allowance.
 Raw-table fallback queries are limited to the last 540 days by default. Override
 that window with `ARCANA_FACTOR_RAW_LOOKBACK_DAYS`, or set it to `0` to disable
 the fallback date window.

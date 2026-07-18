@@ -1,6 +1,9 @@
 import unittest
 
 from api.repository.factor_lab_query import (
+    build_invalid_reason_counts_query,
+    build_quality_summary_query,
+    build_run_ranking_query,
     compile_factor_lab_graph,
     validate_factor_lab_graph,
 )
@@ -35,6 +38,69 @@ def nested_graph():
 
 
 class FactorLabQueryTest(unittest.TestCase):
+    def test_single_day_experiment_is_valid_for_screening(self):
+        graph = nested_graph()
+        graph["experiment"]["start_date"] = "2026-12-30"
+        graph["experiment"]["end_date"] = "2026-12-30"
+
+        result = validate_factor_lab_graph(
+            graph,
+            known_factor_ids={"per", "pbr", "roe"},
+        )
+
+        self.assertTrue(result.valid)
+
+    def test_final_quality_queries_use_factor_sort_key(self):
+        factor_id = "lab_11111111111111111111111111111111"
+        summary_query, summary_params = build_quality_summary_query(
+            run_id="11111111-1111-1111-1111-111111111111",
+            factor_id=factor_id,
+        )
+        reason_query, reason_params = build_invalid_reason_counts_query(
+            run_id="11111111-1111-1111-1111-111111111111",
+            factor_id=factor_id,
+        )
+
+        for query, params in [
+            (summary_query, summary_params),
+            (reason_query, reason_params),
+        ]:
+            self.assertEqual(params["factor_id"], factor_id)
+            self.assertIn("AND factor_id = {factor_id:String}", query)
+
+    def test_node_quality_rejects_final_factor_filter(self):
+        with self.assertRaises(ValueError):
+            build_quality_summary_query(
+                run_id="11111111-1111-1111-1111-111111111111",
+                node_id="z_per",
+                factor_id="lab_11111111111111111111111111111111",
+            )
+
+    def test_run_ranking_uses_effective_date_and_factor_sort_key(self):
+        query, params = build_run_ranking_query(
+            run_id="11111111-1111-1111-1111-111111111111",
+            factor_id="lab_11111111111111111111111111111111",
+            effective_trade_date="2026-01-10",
+            limit=25,
+        )
+
+        self.assertEqual(params["effective_trade_date"], "2026-01-10")
+        self.assertEqual(params["factor_id"], "lab_11111111111111111111111111111111")
+        self.assertIn("SELECT {effective_trade_date:Date} AS trade_date", query)
+        self.assertNotIn("SELECT max(trade_date) AS trade_date", query)
+        self.assertIn("AND factor_id = {factor_id:String}", query)
+        self.assertEqual(params["limit"], 25)
+
+    def test_run_ranking_falls_back_to_scoped_latest_date(self):
+        query, params = build_run_ranking_query(
+            run_id="11111111-1111-1111-1111-111111111111",
+            factor_id="lab_11111111111111111111111111111111",
+        )
+
+        self.assertNotIn("effective_trade_date", params)
+        self.assertIn("SELECT max(trade_date) AS trade_date", query)
+        self.assertGreaterEqual(query.count("AND factor_id = {factor_id:String}"), 2)
+
     def test_validate_rejects_unknown_factor_and_bad_quantile(self):
         graph = nested_graph()
         graph["nodes"][0]["config"]["factor_id"] = "missing_factor"

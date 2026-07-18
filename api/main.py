@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from api.controller.backtest_controller import router as backtest_router
 from api.controller.chart_controller import router as chart_router
+from api.controller.consensus_controller import router as consensus_router
 from api.controller.factor_controller import router as factor_router
 from api.controller.factor_lab_controller import router as factor_lab_router
 from api.controller.factor_screen_controller import (
@@ -27,6 +28,7 @@ app = FastAPI(title="Arcana API")
 
 app.include_router(backtest_router)
 app.include_router(chart_router)
+app.include_router(consensus_router)
 app.include_router(sector_router)
 app.include_router(sector_leader_router)
 app.include_router(factor_router)

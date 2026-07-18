@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from copy import deepcopy
+from datetime import date, datetime, timedelta
 import json
+import os
 import uuid
 from typing import Any, Callable
 
@@ -17,6 +19,10 @@ from api.repository.factor_lab_query import (
     compile_factor_lab_graph,
     node_type_specs,
     validate_factor_lab_graph,
+)
+from api.repository.factor_screen_query import (
+    DEFAULT_FACTOR_SNAPSHOT_TABLE,
+    DEFAULT_FACTOR_TABLE,
 )
 from api.service.factor_identity import canonical_factor_id
 from api.service.backtest_service import BacktestService
@@ -301,20 +307,42 @@ LIMIT 1
             graph = self.get_experiment(experiment_id).graph
 
         graph_dict = _model_dump(graph)
+        execution_graph = graph_dict
         run_id = str(uuid.uuid4())
         factor_id = _lab_factor_id(run_id)
         client = self._client_factory()
         try:
             _ensure_tables(client)
             known_factor_ids = _load_known_factor_ids(client, graph_dict)
-            compile_result = compile_factor_lab_graph(graph_dict, known_factor_ids=known_factor_ids)
+            validation = validate_factor_lab_graph(
+                graph_dict,
+                known_factor_ids=known_factor_ids,
+            )
+            if not validation.valid:
+                messages = "; ".join(issue.message for issue in validation.errors)
+                raise ValueError(messages)
+            factor_table = DEFAULT_FACTOR_TABLE
+            if request.mode == "screen":
+                factor_table, effective_trade_date = _resolve_screening_factor_date(
+                    client,
+                    graph_dict,
+                )
+                execution_graph = _graph_for_screening_date(
+                    graph_dict,
+                    effective_trade_date,
+                )
+            compile_result = compile_factor_lab_graph(
+                execution_graph,
+                known_factor_ids=known_factor_ids,
+                factor_table=factor_table,
+            )
             _insert_run_status(
                 client,
                 run_id=run_id,
                 experiment_id=experiment_id,
                 graph_hash=compile_result.graph_hash,
                 status="running",
-                graph_dict=graph_dict,
+                graph_dict=execution_graph,
                 error="",
             )
             insert_query, params = build_factor_lab_insert_query(
@@ -330,11 +358,15 @@ LIMIT 1
                 experiment_id=experiment_id,
                 graph_hash=compile_result.graph_hash,
                 status="completed",
-                graph_dict=graph_dict,
+                graph_dict=execution_graph,
                 error="",
             )
             quality = _load_quality(client, run_id=run_id, node_id=None)
-            run_rows = _load_run_rows(client, run_id=run_id)
+            run_rows = _load_run_rows(
+                client,
+                run_id=run_id,
+                effective_trade_date=quality.date_coverage.get("max"),
+            )
         except Exception as exc:
             try:
                 _insert_run_status(
@@ -343,7 +375,7 @@ LIMIT 1
                     experiment_id=experiment_id,
                     graph_hash="",
                     status="failed",
-                    graph_dict=graph_dict,
+                    graph_dict=execution_graph,
                     error=str(exc),
                 )
             except Exception:
@@ -387,7 +419,11 @@ LIMIT 1
                 )
             )
             quality = _load_quality(client, run_id=run_id, node_id=None)
-            run_rows = _load_run_rows(client, run_id=run_id)
+            run_rows = _load_run_rows(
+                client,
+                run_id=run_id,
+                effective_trade_date=quality.date_coverage.get("max"),
+            )
         finally:
             _close(client)
         if not rows:
@@ -474,6 +510,179 @@ LIMIT 1
             factor_table="factor_lab_values",
         )
         return BacktestService(client_factory=self._client_factory).run_factor_backtest(backtest_request)
+
+
+def _resolve_screening_factor_date(
+    client: Any,
+    graph: dict[str, Any],
+) -> tuple[str, date]:
+    experiment = graph.get("experiment") or {}
+    requested_date = _as_date(experiment.get("end_date"))
+    candidate_dates = [
+        (requested_date - timedelta(days=offset)).isoformat()
+        for offset in range(_screening_candidate_days() + 1)
+    ]
+    market = str(experiment.get("market") or "").strip().upper()
+    factor_pairs = sorted(
+        {
+            (
+                canonical_factor_id(str(node.get("config", {}).get("factor_id") or "")),
+                str(node.get("config", {}).get("financial_basis") or "annual"),
+            )
+            for node in graph.get("nodes", [])
+            if node.get("type") == "factor_input"
+            and node.get("config", {}).get("factor_id")
+        }
+    )
+    params: dict[str, Any] = {
+        "as_of_date": requested_date.isoformat(),
+        "candidate_dates": candidate_dates,
+    }
+    market_filter = ""
+    if market and market != "ALL":
+        params["market_security_prefix"] = f"SEC_{market}_"
+        market_filter = "\n        AND startsWith(security_id, {market_security_prefix:String})"
+
+    if not factor_pairs:
+        rows = _records(
+            client.query_df(
+                f"""
+SELECT nullIf(max(trade_date), toDate(0)) AS effective_trade_date
+FROM price_daily
+PREWHERE trade_date IN {{candidate_dates:Array(Date)}}
+WHERE true{market_filter}
+""".strip(),
+                parameters=params,
+            )
+        )
+        effective_date = _row_date(rows, "effective_trade_date")
+        if effective_date is not None:
+            return DEFAULT_FACTOR_TABLE, effective_date
+        raise ValueError(
+            f"no market date found on or before {requested_date.isoformat()} "
+            f"within {_screening_candidate_days()} days"
+        )
+
+    params["factor_pair_count"] = len(factor_pairs)
+    pair_predicate = _factor_pair_predicate(factor_pairs, params)
+    snapshot_query = f"""
+WITH
+eligible_raw_dates AS (
+    SELECT
+        trade_date,
+        uniqExact(tuple(factor_id, financial_basis)) AS factor_pair_count
+    FROM {DEFAULT_FACTOR_TABLE}
+    PREWHERE trade_date IN {{candidate_dates:Array(Date)}}
+    WHERE {pair_predicate}{market_filter}
+    GROUP BY trade_date
+    HAVING factor_pair_count >= {{factor_pair_count:UInt64}}
+),
+latest_raw_date AS (
+    SELECT nullIf(max(trade_date), toDate(0)) AS latest_date
+    FROM eligible_raw_dates
+),
+eligible_snapshot_dates AS (
+    SELECT
+        trade_date,
+        uniqExact(tuple(factor_id, financial_basis)) AS factor_pair_count
+    FROM {DEFAULT_FACTOR_SNAPSHOT_TABLE}
+    PREWHERE trade_date IN {{candidate_dates:Array(Date)}}
+    WHERE {pair_predicate}{market_filter}
+        AND source_trade_date <= {{as_of_date:Date}}
+    GROUP BY trade_date
+    HAVING factor_pair_count >= {{factor_pair_count:UInt64}}
+)
+SELECT
+    (SELECT latest_date FROM latest_raw_date) AS effective_trade_date,
+    countIf(trade_date = (SELECT latest_date FROM latest_raw_date)) > 0 AS snapshot_ready
+FROM eligible_snapshot_dates
+""".strip()
+    try:
+        snapshot_rows = _records(client.query_df(snapshot_query, parameters=params))
+    except Exception:
+        snapshot_rows = []
+    effective_date = _row_date(snapshot_rows, "effective_trade_date")
+    if effective_date is not None and bool(snapshot_rows[0].get("snapshot_ready")):
+        return DEFAULT_FACTOR_SNAPSHOT_TABLE, effective_date
+    if effective_date is not None:
+        return DEFAULT_FACTOR_TABLE, effective_date
+
+    raw_rows = _records(
+        client.query_df(
+            f"""
+SELECT
+    trade_date,
+    uniqExact(tuple(factor_id, financial_basis)) AS factor_pair_count
+FROM {DEFAULT_FACTOR_TABLE}
+PREWHERE trade_date IN {{candidate_dates:Array(Date)}}
+WHERE {pair_predicate}{market_filter}
+GROUP BY trade_date
+HAVING factor_pair_count >= {{factor_pair_count:UInt64}}
+ORDER BY trade_date DESC
+LIMIT 1
+""".strip(),
+            parameters=params,
+        )
+    )
+    effective_date = _row_date(raw_rows, "trade_date")
+    if effective_date is not None:
+        return DEFAULT_FACTOR_TABLE, effective_date
+    raise ValueError(
+        f"no common factor date found on or before {requested_date.isoformat()} "
+        f"within {_screening_candidate_days()} days"
+    )
+
+
+def _factor_pair_predicate(
+    factor_pairs: list[tuple[str, str]],
+    params: dict[str, Any],
+) -> str:
+    predicates = []
+    for index, (factor_id, financial_basis) in enumerate(factor_pairs):
+        params[f"screen_factor_id_{index}"] = factor_id
+        params[f"screen_financial_basis_{index}"] = financial_basis
+        predicates.append(
+            "(factor_id = "
+            f"{{screen_factor_id_{index}:String}} "
+            "AND financial_basis = "
+            f"{{screen_financial_basis_{index}:String}})"
+        )
+    return "(" + " OR ".join(predicates) + ")"
+
+
+def _graph_for_screening_date(
+    graph: dict[str, Any],
+    effective_trade_date: date,
+) -> dict[str, Any]:
+    execution_graph = deepcopy(graph)
+    experiment = execution_graph.setdefault("experiment", {})
+    experiment["start_date"] = effective_trade_date.isoformat()
+    experiment["end_date"] = effective_trade_date.isoformat()
+    return execution_graph
+
+
+def _screening_candidate_days() -> int:
+    value = os.getenv("ARCANA_FACTOR_SNAPSHOT_CANDIDATE_DAYS", "14").strip()
+    try:
+        days = int(value)
+    except ValueError:
+        return 14
+    return max(1, min(days, 366))
+
+
+def _row_date(rows: list[dict[str, Any]], key: str) -> date | None:
+    if not rows:
+        return None
+    value = rows[0].get(key)
+    return _as_date(value) if value is not None else None
+
+
+def _as_date(value: Any) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
 
 
 def _load_known_factor_ids(client: Any, graph: dict[str, Any]) -> set[str]:
@@ -660,8 +869,17 @@ VALUES
 
 
 def _load_quality(client: Any, *, run_id: str, node_id: str | None) -> FactorLabQualitySummaryDto:
-    summary_query, summary_params = build_quality_summary_query(run_id=run_id, node_id=node_id)
-    reason_query, reason_params = build_invalid_reason_counts_query(run_id=run_id, node_id=node_id)
+    factor_id = _lab_factor_id(run_id) if node_id is None else None
+    summary_query, summary_params = build_quality_summary_query(
+        run_id=run_id,
+        node_id=node_id,
+        factor_id=factor_id,
+    )
+    reason_query, reason_params = build_invalid_reason_counts_query(
+        run_id=run_id,
+        node_id=node_id,
+        factor_id=factor_id,
+    )
     summary_rows = _records(client.query_df(summary_query, parameters=summary_params))
     reason_rows = _records(client.query_df(reason_query, parameters=reason_params))
     if not summary_rows:
@@ -684,8 +902,19 @@ def _load_quality(client: Any, *, run_id: str, node_id: str | None) -> FactorLab
     )
 
 
-def _load_run_rows(client: Any, *, run_id: str, limit: int = 100) -> list[FactorLabRunRowDto]:
-    query, params = build_run_ranking_query(run_id=run_id, limit=limit)
+def _load_run_rows(
+    client: Any,
+    *,
+    run_id: str,
+    effective_trade_date: date | str | None,
+    limit: int = 100,
+) -> list[FactorLabRunRowDto]:
+    query, params = build_run_ranking_query(
+        run_id=run_id,
+        factor_id=_lab_factor_id(run_id),
+        effective_trade_date=effective_trade_date,
+        limit=limit,
+    )
     rows = _records(client.query_df(query, parameters=params))
     return [
         FactorLabRunRowDto(

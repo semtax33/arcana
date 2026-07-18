@@ -480,6 +480,7 @@ class FactorLabExperimentDeleteResponseDto(BaseModel):
 class FactorLabRunRequestDto(BaseModel):
     graph: FactorLabGraphDto | None = None
     experiment_id: str | None = None
+    mode: Literal["screen", "history"] = "screen"
 
 
 class FactorLabQualitySummaryDto(BaseModel):
@@ -889,6 +890,29 @@ class EstimateConsensusResponseDto(BaseModel):
     rows: list[EstimateConsensusRowDto] = Field(default_factory=list)
     source: str = "gold_csv"
     warnings: list[str] = Field(default_factory=list)
+
+
+class RealConsensusReportDto(BaseModel):
+    report_date: date | str
+    broker_name: str
+    analyst_name: str = ""
+    report_title: str = ""
+    grade_value: str = ""
+    old_grade_value: str = ""
+    target_price: float | None = None
+    old_target_price: float | None = None
+    change_price: float | None = None
+    currency: str = "KRW"
+
+
+class RealConsensusReportsResponseDto(BaseModel):
+    stock_code: str
+    as_of_date: date | str
+    average_target_price: float | None = None
+    target_price_analyst_count: int = 0
+    currency: str = "KRW"
+    reports: list[RealConsensusReportDto] = Field(default_factory=list)
+    source: str = "real_consensus_reports"
 
 
 MultipleValuationBandBasis = Literal["blend", "historical", "industry", "market", "listing_market"]
