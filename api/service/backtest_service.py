@@ -75,20 +75,10 @@ class BacktestService:
             if not rebalance_dates:
                 raise ValueError("rebalance dates were not found in the requested period")
 
-            signal_dates = sorted(
-                {
-                    signal_date
-                    for rebalance_date in rebalance_dates
-                    if (signal_date := _previous_trading_day(trading_days, rebalance_date))
-                    is not None
-                }
-            )
             factor_table, factor_table_is_snapshot = _resolve_factor_table(
                 client,
                 requested_table=request.factor_table,
                 conditions=conditions,
-                financial_basis=request.financial_basis or "annual",
-                signal_dates=signal_dates,
             )
 
             equity_points, rebalance_history = self._run_strategy(
@@ -101,7 +91,7 @@ class BacktestService:
                 financial_basis=request.financial_basis or "annual",
                 factor_table=factor_table,
                 factor_table_is_snapshot=factor_table_is_snapshot,
-                raw_lookback_days=None if factor_table_is_snapshot else _raw_lookback_days(),
+                raw_lookback_days=_raw_lookback_days(),
                 style_profile=style_profile,
                 sector_codes=request.sector_codes,
                 industry_group_codes=request.industry_group_codes,
@@ -201,15 +191,44 @@ class BacktestService:
                 if signal_date is not None
             }
         )
+        snapshot_dates_by_signal: dict[date, date] = {}
+        if factor_table_is_snapshot and batch_signal_dates:
+            regular_factor_ids = sorted(
+                {
+                    condition.factor_id
+                    for condition in conditions
+                    if not is_style_score_factor(condition.factor_id)
+                }
+            )
+            if regular_factor_ids:
+                snapshot_dates_by_signal = _snapshot_dates_for_signal_dates(
+                    client,
+                    factor_table,
+                    factor_ids=regular_factor_ids,
+                    financial_basis=financial_basis,
+                    signal_dates=batch_signal_dates,
+                    carry_days=_snapshot_carry_days(),
+                )
+                raw_signal_count = len(batch_signal_dates) - len(snapshot_dates_by_signal)
+                if raw_signal_count:
+                    warnings.append(
+                        f"Used raw factor fallback for {raw_signal_count} of "
+                        f"{len(batch_signal_dates)} signal dates without a usable snapshot."
+                    )
         if (
             factor_table_is_snapshot
-            and len(batch_signal_dates) > 1
+            and len(snapshot_dates_by_signal) > 1
             and not any(is_style_score_factor(condition.factor_id) for condition in conditions)
         ):
+            snapshot_signal_dates = sorted(snapshot_dates_by_signal)
             batched_snapshot_rows = self._load_factor_snapshot_batch(
                 client,
                 conditions=conditions,
-                signal_dates=batch_signal_dates,
+                signal_dates=snapshot_signal_dates,
+                snapshot_dates=[
+                    snapshot_dates_by_signal[signal_date]
+                    for signal_date in snapshot_signal_dates
+                ],
                 market=market,
                 financial_basis=financial_basis,
                 factor_table=factor_table,
@@ -223,23 +242,28 @@ class BacktestService:
                 warnings.append(f"Skipped rebalance {rebalance_date.isoformat()}: no prior signal date.")
                 continue
 
-            snapshot_rows = (
-                batched_snapshot_rows.get(signal_date, [])
-                if batched_snapshot_rows is not None
-                else self._load_factor_snapshot(
+            if batched_snapshot_rows is not None and signal_date in snapshot_dates_by_signal:
+                snapshot_rows = batched_snapshot_rows.get(signal_date, [])
+            else:
+                use_snapshot = (
+                    factor_table_is_snapshot and signal_date in snapshot_dates_by_signal
+                )
+                snapshot_rows = self._load_factor_snapshot(
                     client,
                     conditions=conditions,
                     signal_date=signal_date,
+                    snapshot_date=(
+                        snapshot_dates_by_signal[signal_date] if use_snapshot else None
+                    ),
                     market=market,
                     financial_basis=financial_basis,
-                    factor_table=factor_table,
-                    factor_table_is_snapshot=factor_table_is_snapshot,
-                    raw_lookback_days=raw_lookback_days,
+                    factor_table=factor_table if use_snapshot else DEFAULT_FACTOR_TABLE,
+                    factor_table_is_snapshot=use_snapshot,
+                    raw_lookback_days=None if use_snapshot else raw_lookback_days,
                     style_profile=style_profile,
                     sector_codes=sector_codes,
                     industry_group_codes=industry_group_codes,
                 )
-            )
             candidates = _select_candidates(
                 snapshot_rows,
                 conditions=conditions,
@@ -345,6 +369,7 @@ class BacktestService:
         *,
         conditions: list[FactorCondition],
         signal_date: date,
+        snapshot_date: date | None = None,
         market: str | None,
         financial_basis: str,
         factor_table: str,
@@ -357,6 +382,7 @@ class BacktestService:
         query, params = build_factor_snapshot_query(
             conditions,
             signal_date=signal_date,
+            snapshot_date=snapshot_date,
             market=market,
             financial_basis=financial_basis,
             factor_table=factor_table,
@@ -374,6 +400,7 @@ class BacktestService:
         *,
         conditions: list[FactorCondition],
         signal_dates: list[date],
+        snapshot_dates: list[date],
         market: str | None,
         financial_basis: str,
         factor_table: str,
@@ -383,6 +410,7 @@ class BacktestService:
         query, params = build_factor_snapshot_batch_query(
             conditions,
             signal_dates=signal_dates,
+            snapshot_dates=snapshot_dates,
             market=market,
             financial_basis=financial_basis,
             factor_table=factor_table,
@@ -490,8 +518,6 @@ def _resolve_factor_table(
     *,
     requested_table: str | None,
     conditions: list[FactorCondition],
-    financial_basis: str,
-    signal_dates: list[date],
 ) -> tuple[str, bool]:
     if requested_table:
         return requested_table, False
@@ -502,64 +528,74 @@ def _resolve_factor_table(
             if not is_style_score_factor(condition.factor_id)
         }
     )
-    if factor_ids and signal_dates and _snapshot_table_covers_signal_dates(
-        client,
-        DEFAULT_FACTOR_SNAPSHOT_TABLE,
-        factor_ids=factor_ids,
-        financial_basis=financial_basis,
-        signal_dates=signal_dates,
-    ):
+    if factor_ids and _table_exists(client, DEFAULT_FACTOR_SNAPSHOT_TABLE):
         return DEFAULT_FACTOR_SNAPSHOT_TABLE, True
     return DEFAULT_FACTOR_TABLE, False
 
 
-def _snapshot_table_covers_signal_dates(
+def _snapshot_dates_for_signal_dates(
     client: Any,
     table_name: str,
     *,
     factor_ids: list[str],
     financial_basis: str,
     signal_dates: list[date],
-) -> bool:
+    carry_days: int,
+) -> dict[date, date]:
     query = getattr(client, "query", None)
     if not callable(query):
-        return False
-    if not _table_exists(client, table_name):
-        return False
+        return {}
     normalized_signal_dates = sorted({_as_date(value) for value in signal_dates})
     if not normalized_signal_dates:
-        return False
+        return {}
+    candidate_dates = sorted(
+        {
+            signal_date - timedelta(days=offset)
+            for signal_date in normalized_signal_dates
+            for offset in range(max(0, carry_days) + 1)
+        }
+    )
     try:
         rows = query(
             f"""
-WITH
-signal_dates AS (
-    SELECT arrayJoin({{signal_dates:Array(Date)}}) AS signal_date
-),
-covered_signal_dates AS (
-    SELECT
-        sd.signal_date AS signal_date
-    FROM signal_dates AS sd
-    INNER JOIN {table_name} AS f
-        ON f.trade_date = sd.signal_date
-    WHERE has({{factor_ids:Array(String)}}, f.factor_id)
-        AND f.financial_basis = {{financial_basis:String}}
-    GROUP BY sd.signal_date
-    HAVING countDistinct(f.factor_id) >= {{factor_count:UInt64}}
-)
-SELECT count() AS covered_date_count
-FROM covered_signal_dates
+SELECT
+    trade_date,
+    max(source_trade_date) AS max_source_trade_date
+FROM {table_name}
+PREWHERE trade_date IN {{candidate_dates:Array(Date)}}
+WHERE has({{factor_ids:Array(String)}}, factor_id)
+    AND financial_basis = {{financial_basis:String}}
+GROUP BY trade_date
+HAVING countDistinct(factor_id) >= {{factor_count:UInt64}}
+ORDER BY trade_date
 """.strip(),
             parameters={
                 "factor_ids": factor_ids,
                 "factor_count": len(factor_ids),
                 "financial_basis": financial_basis,
-                "signal_dates": [value.isoformat() for value in normalized_signal_dates],
+                "candidate_dates": [value.isoformat() for value in candidate_dates],
             },
         ).result_rows
     except Exception:
-        return False
-    return bool(rows and int(rows[0][0]) >= len(normalized_signal_dates))
+        return {}
+
+    available_dates = {
+        _as_date(row[0]): _as_date(row[1])
+        for row in rows
+        if row and row[0] is not None and row[1] is not None
+    }
+    resolved: dict[date, date] = {}
+    for signal_date in normalized_signal_dates:
+        earliest = signal_date - timedelta(days=max(0, carry_days))
+        eligible = [
+            snapshot_date
+            for snapshot_date, max_source_trade_date in available_dates.items()
+            if earliest <= snapshot_date <= signal_date
+            and max_source_trade_date <= signal_date
+        ]
+        if eligible:
+            resolved[signal_date] = max(eligible)
+    return resolved
 
 
 def _table_exists(client: Any, table_name: str) -> bool:
@@ -582,6 +618,15 @@ def _raw_lookback_days() -> int | None:
     except ValueError:
         return 540
     return days if days > 0 else None
+
+
+def _snapshot_carry_days() -> int:
+    value = os.getenv("ARCANA_FACTOR_SNAPSHOT_CARRY_DAYS", "14").strip()
+    try:
+        days = int(value)
+    except ValueError:
+        return 14
+    return max(0, days)
 
 
 def _resolve_style_profile(

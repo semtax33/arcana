@@ -1109,6 +1109,14 @@ def growth_pct(series, periods=1):
     return (series - previous) / previous.abs() * 100
 
 
+def profit_growth_pct(series, periods=1):
+    current = pd.to_numeric(series, errors="coerce")
+    previous = current.shift(periods)
+    result = (current - previous) / previous.abs() * 100
+    same_sign = ((current > 0) & (previous > 0)) | ((current < 0) & (previous < 0))
+    return result.where(same_sign)
+
+
 def cagr_pct(series, years, periods_per_year=1):
     periods = max(int(round(years * periods_per_year)), 1)
     previous = series.shift(periods)
@@ -1326,9 +1334,9 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
             "sales_growth_3y": growth_pct(df["sale"], periods=lag * 3),
             "sales_growth_5y": growth_pct(df["sale"], periods=lag * 5),
             "sales_cagr_3y": cagr_pct(df["sale"], years=3, periods_per_year=lag),
-            "net_income_growth_1y": growth_pct(df["ni"], periods=lag),
-            "net_income_growth_3y": growth_pct(df["ni"], periods=lag * 3),
-            "net_income_growth_5y": growth_pct(df["ni"], periods=lag * 5),
+            "net_income_growth_1y": profit_growth_pct(df["ni_parent"], periods=lag),
+            "net_income_growth_3y": profit_growth_pct(df["ni_parent"], periods=lag * 3),
+            "net_income_growth_5y": profit_growth_pct(df["ni_parent"], periods=lag * 5),
             "operating_income_growth_1y": growth_pct(df["oiadp"], periods=lag),
             "operating_income_growth_3y": growth_pct(df["oiadp"], periods=lag * 3),
             "operating_income_growth_5y": growth_pct(df["oiadp"], periods=lag * 5),
@@ -1595,8 +1603,6 @@ def add_kr_dividend_factors(daily_df, stock_code):
             df["dvpsx"] = pd.to_numeric(df["annual_dividend_per_share"], errors="coerce")
             df["dvpsp"] = math.nan
             df["sharehold_div_yield"] = df["dvpsx"] / df["close"] * 100
-            df["tdpr"] = pd.to_numeric(df["payout_ratio"], errors="coerce") * 100
-            df.loc[df["tdpr"] < 0, "tdpr"] = math.nan
             df.loc[
                 (df["sharehold_div_yield"] < 0) | (df["sharehold_div_yield"] > 100),
                 "sharehold_div_yield",
@@ -1605,6 +1611,15 @@ def add_kr_dividend_factors(daily_df, stock_code):
                 df["total_dividend_amount"],
                 errors="coerce",
             )
+            reported_payout_pct = pd.to_numeric(df["payout_ratio"], errors="coerce") * 100
+            point_in_time_net_income = first_value_frame(df, "ni_parent", "ni")
+            calculated_payout_pct = (
+                df["total_dividend_amount"]
+                / positive_denominator(point_in_time_net_income)
+                * 100
+            )
+            df["tdpr"] = reported_payout_pct.combine_first(calculated_payout_pct)
+            df.loc[df["tdpr"] < 0, "tdpr"] = math.nan
             df["forward_dividend_yield"] = df["dvpsp"] / df["close"] * 100
             df["earnings_payout_ratio"] = df["tdpr"]
             df["eps_dividend_coverage"] = numeric_column(df, "eps") / positive_denominator(df["dvpsx"])

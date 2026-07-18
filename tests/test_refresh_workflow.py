@@ -457,6 +457,7 @@ class RefreshWorkflowTest(unittest.TestCase):
         download_dividends.assert_called_once()
         self.assertEqual(download_dividends.call_args.args[0], ["005930"])
         self.assertEqual(download_dividends.call_args.kwargs["display_offset_base"], 1)
+        self.assertFalse(download_dividends.call_args.kwargs["force"])
         refresh_silver.assert_not_called()
         self.assertTrue(state.is_symbol_completed("dividends", "005930"))
 
@@ -482,6 +483,7 @@ class RefreshWorkflowTest(unittest.TestCase):
             with (
                 patch.object(refresh_workflow, "load_factor_catalog") as load_catalog,
                 patch.object(refresh_workflow.factor_loader, "insert_daily_factors") as insert_factors,
+                patch.object(refresh_workflow, "ensure_krx_silver_market_data_current") as ensure_silver,
             ):
                 refresh_workflow.run_factor_refresh(args, window, client, state)
 
@@ -489,7 +491,52 @@ class RefreshWorkflowTest(unittest.TestCase):
         self.assertEqual(client.commands, ["TRUNCATE TABLE fact_daily_factors"])
         self.assertIsNone(insert_factors.call_args.kwargs["start_date"])
         self.assertEqual(insert_factors.call_args.kwargs["parallel_workers"], 2)
+        ensure_silver.assert_called_once_with()
         self.assertTrue(state.is_step_completed("factors-insert"))
+
+    def test_factor_refresh_renormalizes_stale_krx_silver_market_data(self):
+        with (
+            patch.object(
+                refresh_workflow,
+                "latest_krx_bronze_date",
+                return_value=date(2026, 7, 15),
+            ),
+            patch.object(
+                refresh_workflow,
+                "latest_date_in_csv",
+                return_value=date(2026, 7, 10),
+            ),
+            patch.object(refresh_workflow, "normalize_price") as normalize_price,
+            patch.object(refresh_workflow, "normalize_shares") as normalize_shares,
+        ):
+            refreshed = refresh_workflow.ensure_krx_silver_market_data_current()
+
+        self.assertTrue(refreshed)
+        normalize_price.assert_called_once()
+        normalize_shares.assert_called_once()
+
+    def test_latest_dividend_date_supports_receipt_number_filenames(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dividend_dir = root / "bronze" / "dart" / "dividend" / "005930"
+            dividend_dir.mkdir(parents=True)
+            (dividend_dir / "finance_statement_dividend_2026-07-15_20260715000001.json").write_text(
+                "{}",
+                encoding="utf-8",
+            )
+            fake_data_lake = type(refresh_workflow.DATA_LAKE)(root)
+            missing_silver = root / "missing_dividend_normalized.csv"
+            with (
+                patch.object(refresh_workflow, "DATA_LAKE", fake_data_lake),
+                patch.object(
+                    refresh_workflow.dividend_loader,
+                    "dividend_output_path",
+                    return_value=missing_silver,
+                ),
+            ):
+                latest = refresh_workflow.latest_dividend_date()
+
+        self.assertEqual(latest, date(2026, 7, 15))
     def test_factor_refresh_skips_completed_insert_before_overlap_truncate(self):
         with TemporaryDirectory() as temp_dir:
             state = refresh_workflow.RefreshState.open(

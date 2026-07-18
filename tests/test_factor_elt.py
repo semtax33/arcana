@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
@@ -6,6 +7,7 @@ import pandas as pd
 
 from engine.loaders.factors import (
     FACT_DAILY_FACTOR_COLUMNS,
+    _resolve_stock_codes,
     create_daily_factor_rows,
     create_factor_catalog_dataframe,
     insert_daily_factors,
@@ -14,6 +16,34 @@ from engine.loaders.factors import (
 
 
 class FactorEltTest(unittest.TestCase):
+    def test_resolve_kr_stock_codes_uses_local_price_universe(self):
+        with TemporaryDirectory() as temp_dir:
+            price_path = f"{temp_dir}/kr_normalized_price.csv"
+            pd.DataFrame(
+                {
+                    "security_id": [
+                        "SEC_KR_005930",
+                        "SEC_KR_000660",
+                        "SEC_KR_005930",
+                        "SEC_US_AAPL",
+                    ]
+                }
+            ).to_csv(price_path, index=False)
+
+            with patch("engine.loaders.factors.resolve_price_path", return_value=Path(price_path)):
+                result = _resolve_stock_codes(None, market="kr")
+
+        self.assertEqual(result, ["000660", "005930"])
+
+    def test_earnings_payout_factors_are_lower_better(self):
+        catalog_df = create_factor_catalog_dataframe(
+            ["payout_ratio", "earnings_payout_ratio", "tdpr"]
+        ).set_index("factor_id")
+
+        self.assertTrue(
+            (catalog_df["value_direction"] == "LOWER_BETTER").all()
+        )
+
     def test_prepare_daily_factor_rows_melts_only_factor_columns(self):
         wide_df = pd.DataFrame(
             [

@@ -288,6 +288,7 @@ def build_factor_screen_query(
         params["industry_group_codes"] = normalized_industry_group_codes
     if normalized_market:
         params["market_country"] = normalized_market.upper()
+        params["market_security_prefix"] = f"SEC_{normalized_market.upper()}_"
     if limit is not None:
         params["limit"] = int(limit)
     raw_lookback_filter = ""
@@ -308,6 +309,16 @@ def build_factor_screen_query(
         f"\n        AND has({{{regular_factor_param}:Array(String)}}, factor_id)"
         if regular_factor_ids
         else "\n        AND factor_id = 'mcap_mil'"
+    )
+    latest_date_market_filter = (
+        "\n        AND startsWith(security_id, {market_security_prefix:String})"
+        if normalized_market
+        else ""
+    )
+    latest_date_source_filter = (
+        "\n        AND source_trade_date <= {as_of_date:Date}"
+        if factor_table_is_snapshot
+        else ""
     )
 
     needs_security_universe = bool(
@@ -339,6 +350,11 @@ def build_factor_screen_query(
         )
         if raw_lookback_filter and not factor_table_is_snapshot:
             mcap_trade_date_predicate += "\n            AND trade_date >= {raw_start_date:Date}"
+        mcap_source_date_filter = (
+            "\n            AND source_trade_date <= {as_of_date:Date}"
+            if factor_table_is_snapshot
+            else ""
+        )
         security_universe_cte = f""",
 security_universe AS (
     SELECT
@@ -371,6 +387,7 @@ security_universe AS (
         FROM {_validate_table_name(factor_table)}
         WHERE factor_id = 'mcap_mil'
             AND {mcap_trade_date_predicate}
+            {mcap_source_date_filter.strip()}
             AND isFinite(factor_value)
             {mcap_basis_filter.strip()}
         GROUP BY security_id
@@ -435,7 +452,7 @@ latest_trade_date AS (
     SELECT
         max(trade_date) AS latest_date
     FROM {_validate_table_name(factor_table)}
-    WHERE trade_date <= {{as_of_date:Date}}{latest_date_factor_filter}{basis_date_filter}{raw_lookback_filter}
+    WHERE trade_date <= {{as_of_date:Date}}{latest_date_factor_filter}{basis_date_filter}{latest_date_market_filter}{latest_date_source_filter}{raw_lookback_filter}
 )""".strip()
     ]
     if regular_factor_ids:
@@ -477,6 +494,11 @@ latest_style_trade_date AS (
         )
         if raw_lookback_filter and not factor_table_is_snapshot:
             factor_date_predicate += "\n        AND f.trade_date >= {raw_start_date:Date}"
+        factor_source_date_filter = (
+            "\n        AND f.source_trade_date <= {as_of_date:Date}"
+            if factor_table_is_snapshot
+            else ""
+        )
         source_trade_date_expr = (
             "argMax(f.source_trade_date, tuple(f.trade_date, f.updated_at))"
             if factor_table_is_snapshot
@@ -496,7 +518,7 @@ latest_style_trade_date AS (
         ON c.factor_id = f.factor_id{regular_security_universe_join}
     WHERE {factor_date_predicate}
         AND has({{{regular_factor_param}:Array(String)}}, f.factor_id)
-        AND isFinite(f.factor_value){basis_filter}
+        AND isFinite(f.factor_value){basis_filter}{factor_source_date_filter}
     GROUP BY
         f.security_id,
         f.factor_id,

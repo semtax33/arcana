@@ -216,6 +216,8 @@ class FactorScreenQueryTest(unittest.TestCase):
         self.assertIn("FROM fact_daily_factor_snapshot AS f", query)
         self.assertIn("f.trade_date = (SELECT latest_date FROM latest_trade_date)", query)
         self.assertIn("argMax(f.source_trade_date, tuple(f.trade_date, f.updated_at)) AS trade_date", query)
+        self.assertIn("f.source_trade_date <= {as_of_date:Date}", query)
+        self.assertIn("source_trade_date <= {as_of_date:Date}", query)
         self.assertIn("AND trade_date = (SELECT latest_date FROM latest_trade_date)", query)
         self.assertIn("count() OVER () AS total_count", query)
 

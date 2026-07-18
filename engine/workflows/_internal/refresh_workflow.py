@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -653,6 +654,7 @@ def run_dividend_refresh(
                     0,
                     start_date=window.start_date,
                     end_date=window.end_date,
+                    force=bool(getattr(args, "force_full", False)),
                     display_offset_base=original_offset,
                 ),
             )
@@ -709,6 +711,9 @@ def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: 
         print("[RESUME] skipping completed substep: factors-insert", flush=True)
         return
 
+    if not args.dry_run:
+        ensure_krx_silver_market_data_current()
+
     reload_pending = state.is_step_completed("factors-reload-required")
     should_reload = reload_pending or should_truncate_table(
         args,
@@ -738,6 +743,30 @@ def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: 
         parallel_workers=args.workers,
     )
     state.complete_step("factors-insert", factor_window)
+
+
+def ensure_krx_silver_market_data_current() -> bool:
+    bronze_latest = latest_krx_bronze_date("price")
+    silver_price_path = DATA_LAKE.silver(
+        "krx",
+        "price",
+        market_csv_name("normalized_price"),
+    )
+    silver_latest = latest_date_in_csv(silver_price_path)
+    if bronze_latest is None or (
+        silver_latest is not None and silver_latest >= bronze_latest
+    ):
+        return False
+
+    print(
+        "[INFO] KRX Silver market data is stale; "
+        f"bronze_latest={bronze_latest.isoformat()}, "
+        f"silver_latest={silver_latest.isoformat() if silver_latest else '-'}",
+        flush=True,
+    )
+    normalize_price(str(DATA_LAKE.bronze("krx", "price", "*")))
+    normalize_shares(str(DATA_LAKE.bronze("krx", "shares", "*")))
+    return True
 
 def load_securities(args: argparse.Namespace, client: Any) -> None:
     for table_name, target in SECURITY_TABLES.items():
@@ -1189,9 +1218,11 @@ def latest_dividend_date() -> date | None:
         return None
     dates = []
     for path in root.rglob("finance_statement_dividend_*.json"):
-        text = path.stem.rsplit("_", 1)[-1]
+        match = re.search(r"finance_statement_dividend_(\d{4}-\d{2}-\d{2})", path.stem)
+        if not match:
+            continue
         try:
-            dates.append(datetime.strptime(text, "%Y-%m-%d").date())
+            dates.append(datetime.strptime(match.group(1), "%Y-%m-%d").date())
         except ValueError:
             continue
     return max(dates) if dates else None

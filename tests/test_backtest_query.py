@@ -106,23 +106,37 @@ class BacktestQueryTest(unittest.TestCase):
         self.assertIn("FROM fact_daily_factor_snapshot", query)
         self.assertIn("f.trade_date = (SELECT snapshot_date FROM latest_snapshot_date)", query)
         self.assertIn("argMax(f.source_trade_date, tuple(f.trade_date, f.updated_at)) AS trade_date", query)
+        self.assertIn("f.source_trade_date <= {signal_date:Date}", query)
         self.assertNotIn("WHERE f.trade_date <= {signal_date:Date}", query)
 
     def test_factor_snapshot_batch_query_uses_snapshot_dates_for_multiple_signals(self):
         query, params = build_factor_snapshot_batch_query(
             [FactorCondition.top("roe", 20), FactorCondition.top("per", 20)],
             signal_dates=["2026-03-31", "2026-06-30"],
+            snapshot_dates=["2026-03-30", "2026-06-30"],
             market="KR",
             financial_basis="annual",
         )
 
         self.assertEqual(params["signal_dates"], ["2026-03-31", "2026-06-30"])
+        self.assertEqual(params["snapshot_dates"], ["2026-03-30", "2026-06-30"])
         self.assertEqual(params["factor_ids"], ["per", "roe"])
         self.assertEqual(params["market_country"], "KR")
-        self.assertIn("arrayJoin({signal_dates:Array(Date)}) AS signal_date", query)
-        self.assertIn("latest_snapshot_dates AS", query)
+        self.assertIn("snapshot_date_map AS", query)
+        self.assertIn("arrayZip(", query)
+        self.assertNotIn("CROSS JOIN", query)
+        self.assertIn("f.trade_date IN {snapshot_dates:Array(Date)}", query)
+        self.assertIn("f.source_trade_date <= lsd.signal_date", query)
         self.assertIn("PARTITION BY signal_date, factor_id", query)
         self.assertIn("rf.signal_date AS signal_date", query)
+
+    def test_factor_snapshot_batch_query_rejects_future_snapshot_dates(self):
+        with self.assertRaisesRegex(ValueError, "must not be later"):
+            build_factor_snapshot_batch_query(
+                [FactorCondition.top("roe", 20)],
+                signal_dates=["2026-03-31"],
+                snapshot_dates=["2026-04-01"],
+            )
 
 
 if __name__ == "__main__":

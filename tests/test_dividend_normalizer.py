@@ -105,6 +105,43 @@ class DividendNormalizerTest(unittest.TestCase):
             dividend_normalizer.calculate_silver_total_dividend_amount = original_total
             dividend_normalizer.calculate_net_income = original_income
 
+    def test_create_all_stock_dividend_uses_local_price_universe(self):
+        with TemporaryDirectory() as temp_dir:
+            price_path = Path(temp_dir) / "kr_normalized_price.csv"
+            pd.DataFrame(
+                {
+                    "security_id": ["SEC_KR_005930", "SEC_KR_000660", "SEC_US_AAPL"],
+                    "trade_date": ["2025-01-02", "2025-01-02", "2025-01-02"],
+                    "close": [50000, 200000, 200],
+                    "currency": ["KRW", "KRW", "USD"],
+                }
+            ).to_csv(price_path, index=False)
+
+            with (
+                patch.object(dividend_normalizer, "resolve_price_file_path", return_value=price_path),
+                patch.object(
+                    dividend_normalizer,
+                    "calculate_total_dividend_per_share_with_fallback",
+                    side_effect=lambda stock_code, year, share_type: {
+                        "005930": 1000,
+                        "000660": 1200,
+                    }[stock_code],
+                ),
+                patch.object(
+                    dividend_normalizer,
+                    "calculate_payout_ratio_with_fallback",
+                    return_value=0.25,
+                ),
+            ):
+                result = dividend_normalizer.create_all_stock_dividend_dataframe()
+
+        self.assertEqual(
+            result["security_id"].tolist(),
+            ["SEC_KR_000660", "SEC_KR_005930"],
+        )
+        self.assertEqual(result["dividend"].tolist(), [1200, 1000])
+        self.assertEqual(result["payout_ratio"].tolist(), [0.25, 0.25])
+
     def test_calculate_net_income_reads_consolidated_statement_file(self):
         original_base_dir = dividend_normalizer.base_dir
         with TemporaryDirectory() as temp_dir:
@@ -238,6 +275,23 @@ class DividendNormalizerTest(unittest.TestCase):
         self.assertEqual(result["payout_ratio"].iat[0], 0.25)
         self.assertEqual(result["total_dividend_amount"].iat[0], 3_000_000)
 
+    def test_common_share_alias_excludes_preferred_shares(self):
+        rows = pd.DataFrame(
+            {
+                "stock_knd": ["보통주", "우선주"],
+                "per_share_cash_dividend_krw": [1000, 5000],
+            }
+        )
+
+        result = dividend_normalizer._filter_share_type(rows, "common")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result["stock_knd"].iat[0], "보통주")
+        self.assertEqual(result["per_share_cash_dividend_krw"].iat[0], 1000)
+
+        preferred_only = dividend_normalizer._filter_share_type(rows.iloc[[1]], "common")
+        self.assertTrue(preferred_only.empty)
+
     def test_build_silver_dividend_summary_from_bronze_json(self):
         with TemporaryDirectory() as temp_dir:
             bronze_root = Path(temp_dir) / "bronze"
@@ -246,9 +300,13 @@ class DividendNormalizerTest(unittest.TestCase):
             old_dir.mkdir(parents=True)
             api_dir.mkdir(parents=True)
 
-            (old_dir / "finance_statement_dividend_2025-01-31.json").write_text(
+            (old_dir / "finance_statement_dividend_2025-01-31_20250131000001.json").write_text(
                 json.dumps(
                     {
+                        "stock_code": "005930",
+                        "corp_code": "00126380",
+                        "corp_name": "삼성전자",
+                        "rcept_no": "20250131000001",
                         "배당구분": "결산배당",
                         "1주당배당금": {"보통주식": "1,000 원", "종류주식": "1,001 원"},
                         "배당금총액": "10,000,000 원",
@@ -348,6 +406,125 @@ class DividendNormalizerTest(unittest.TestCase):
             company_df.loc[company_df["stock_code"] == "000020", "dividend_payout_ratio_pct"].iat[0],
             33.3,
         )
+
+    def test_default_silver_builder_includes_legacy_identity_bearing_api_data(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            legacy_root = root / "dividend_old"
+            current_root = root / "dividend"
+            api_dir = legacy_root / "072710" / "2025"
+            api_dir.mkdir(parents=True)
+            current_root.mkdir(parents=True)
+            (api_dir / "11011_annual.json").write_text(
+                json.dumps(
+                    {
+                        "list": [
+                            {
+                                "stock_code": "072710",
+                                "corp_code": "00459871",
+                                "corp_name": "농심홀딩스",
+                                "bsns_year": "2025",
+                                "reprt_code": "11011",
+                                "rcept_no": "20260318001210",
+                                "stlm_dt": "2025-12-31",
+                                "stock_knd": "보통주",
+                                "se": "주당 현금배당금(원)",
+                                "thstrm": "3000",
+                            },
+                            {
+                                "stock_code": "072710",
+                                "corp_code": "00459871",
+                                "corp_name": "농심홀딩스",
+                                "bsns_year": "2025",
+                                "reprt_code": "11011",
+                                "rcept_no": "20260318001210",
+                                "stlm_dt": "2025-12-31",
+                                "stock_knd": "",
+                                "se": "현금배당성향(%)",
+                                "thstrm": "12.14",
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(dividend_normalizer, "legacy_dividend_api_base_dir", legacy_root),
+                patch.object(dividend_normalizer, "dividend_base_dir", current_root),
+            ):
+                by_kind_df, company_df, failed_df = (
+                    dividend_normalizer.build_silver_dividend_summary_dataframes()
+                )
+
+        self.assertTrue(failed_df.empty)
+        self.assertEqual(by_kind_df["per_share_cash_dividend_krw"].iat[0], 3000)
+        self.assertEqual(company_df["dividend_payout_ratio_pct"].iat[0], 12.14)
+
+    def test_silver_builder_rejects_identityless_legacy_decision_json(self):
+        with TemporaryDirectory() as temp_dir:
+            bronze_root = Path(temp_dir) / "bronze"
+            stock_dir = bronze_root / "005930"
+            stock_dir.mkdir(parents=True)
+            (stock_dir / "finance_statement_dividend_2025-01-31.json").write_text(
+                json.dumps(
+                    {
+                        "배당기준일": "2024-12-31",
+                        "1주당배당금": {"보통주식": "45000"},
+                        "배당금총액": "10000000",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            by_kind_df, company_df, failed_df = (
+                dividend_normalizer.build_silver_dividend_summary_dataframes(bronze_root)
+            )
+
+        self.assertTrue(by_kind_df.empty)
+        self.assertTrue(company_df.empty)
+        self.assertEqual(len(failed_df), 1)
+        self.assertIn("embedded stock_code and rcept_no", failed_df["reason"].iat[0])
+
+    def test_decision_annual_sum_keeps_latest_correction_per_base_date(self):
+        with TemporaryDirectory() as temp_dir:
+            bronze_root = Path(temp_dir) / "bronze"
+            stock_dir = bronze_root / "005930"
+            stock_dir.mkdir(parents=True)
+            events = [
+                ("20250715000001", "2025-06-30", 50, 500),
+                ("20260201000001", "2025-12-31", 100, 1000),
+                ("20260203000001", "2025-12-31", 120, 1200),
+            ]
+            for rcept_no, base_date, dps, total in events:
+                report_date = f"{rcept_no[:4]}-{rcept_no[4:6]}-{rcept_no[6:8]}"
+                path = stock_dir / f"finance_statement_dividend_{report_date}_{rcept_no}.json"
+                path.write_text(
+                    json.dumps(
+                        {
+                            "stock_code": "005930",
+                            "corp_code": "00126380",
+                            "corp_name": "삼성전자",
+                            "rcept_no": rcept_no,
+                            "배당기준일": base_date,
+                            "1주당배당금": {"보통주식": str(dps)},
+                            "배당금총액": str(total),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+
+            by_kind_df, company_df, failed_df = (
+                dividend_normalizer.build_silver_dividend_summary_dataframes(bronze_root)
+            )
+
+        self.assertTrue(failed_df.empty)
+        self.assertEqual(by_kind_df["per_share_cash_dividend_krw"].iat[0], 170)
+        self.assertEqual(company_df["dividend_payment_amount_krw"].iat[0], 1700)
+        self.assertEqual(by_kind_df["rcept_no"].iat[0], "20260203000001")
 
     def test_deduplicate_dividend_records_keeps_latest_disclosure_per_event(self):
         records = [

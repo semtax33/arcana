@@ -9,6 +9,7 @@ from api.service.backtest_service import (
     _condition_matches,
     _rebalance_dates,
     _resolve_benchmark_ids,
+    _snapshot_dates_for_signal_dates,
     _to_repository_condition,
 )
 from api.service.dto import FactorBacktestRequestDto, FactorConditionDto
@@ -17,6 +18,16 @@ from api.service.dto import FactorBacktestRequestDto, FactorConditionDto
 class FakeQueryResult:
     def __init__(self, rows):
         self.result_rows = rows
+
+
+class SnapshotDateMappingFakeClickHouseClient:
+    def query(self, query, parameters=None):
+        return FakeQueryResult(
+            [
+                (date(2026, 3, 28), date(2026, 3, 28)),
+                (date(2026, 3, 31), date(2026, 4, 1)),
+            ]
+        )
 
 
 class FakeClickHouseClient:
@@ -126,8 +137,8 @@ class SnapshotAvailableFakeClickHouseClient(FakeClickHouseClient):
         self.queries.append((query, parameters or {}))
         if query.startswith("EXISTS TABLE fact_daily_factor_snapshot"):
             return FakeQueryResult([(1,)])
-        if "covered_signal_dates AS" in query:
-            return FakeQueryResult([(len((parameters or {}).get("signal_dates", [])),)])
+        if "max(source_trade_date) AS max_source_trade_date" in query:
+            return FakeQueryResult([(date(2026, 1, 1), date(2026, 1, 1))])
         if "FROM fact_daily_factor_snapshot" in query:
             return FakeQueryResult([(len((parameters or {}).get("factor_ids", [])),)])
         return FakeQueryResult([])
@@ -203,15 +214,20 @@ class SnapshotAvailableMultiRebalanceFakeClickHouseClient(MultiRebalanceFakeClic
         self.queries.append((query, parameters or {}))
         if query.startswith("EXISTS TABLE fact_daily_factor_snapshot"):
             return FakeQueryResult([(1,)])
-        if "covered_signal_dates AS" in query:
-            return FakeQueryResult([(len((parameters or {}).get("signal_dates", [])),)])
+        if "max(source_trade_date) AS max_source_trade_date" in query:
+            return FakeQueryResult(
+                [
+                    (date(2026, 1, 1), date(2026, 1, 1)),
+                    (date(2026, 3, 31), date(2026, 3, 31)),
+                ]
+            )
         if "FROM fact_daily_factor_snapshot" in query:
             return FakeQueryResult([(len((parameters or {}).get("factor_ids", [])),)])
         return FakeQueryResult([])
 
     def query_df(self, query, parameters=None):
         parameters = parameters or {}
-        if "latest_snapshot_dates AS" in query:
+        if "snapshot_date_map AS" in query:
             self.queries.append((query, parameters))
             rows = []
             for signal_date in parameters.get("signal_dates", []):
@@ -275,14 +291,21 @@ class SnapshotAvailableMultiRebalanceFakeClickHouseClient(MultiRebalanceFakeClic
         return super().query_df(query, parameters)
 
 
-class IncompleteSnapshotCoverageFakeClickHouseClient(MultiRebalanceFakeClickHouseClient):
+class IncompleteSnapshotCoverageFakeClickHouseClient(
+    SnapshotAvailableMultiRebalanceFakeClickHouseClient
+):
     def query(self, query, parameters=None):
         self.queries.append((query, parameters or {}))
         if query.startswith("EXISTS TABLE fact_daily_factor_snapshot"):
             return FakeQueryResult([(1,)])
-        if "covered_signal_dates AS" in query:
-            return FakeQueryResult([(1,)])
+        if "max(source_trade_date) AS max_source_trade_date" in query:
+            return FakeQueryResult([(date(2026, 3, 31), date(2026, 3, 31))])
         return FakeQueryResult([])
+
+    def query_df(self, query, parameters=None):
+        if "latest_factor_values AS" in query and "snapshot_date_map AS" not in query:
+            return FakeClickHouseClient.query_df(self, query, parameters)
+        return super().query_df(query, parameters)
 
 
 
@@ -362,6 +385,18 @@ class ChangingRebalanceFakeClickHouseClient(MultiRebalanceFakeClickHouseClient):
             )
         return super().query_df(query, parameters)
 class BacktestServiceTest(unittest.TestCase):
+    def test_snapshot_date_mapping_carries_forward_without_future_source_data(self):
+        mapping = _snapshot_dates_for_signal_dates(
+            SnapshotDateMappingFakeClickHouseClient(),
+            "fact_daily_factor_snapshot",
+            factor_ids=["roe"],
+            financial_basis="annual",
+            signal_dates=[date(2026, 3, 31)],
+            carry_days=14,
+        )
+
+        self.assertEqual(mapping, {date(2026, 3, 31): date(2026, 3, 28)})
+
     def test_repository_condition_canonicalizes_general_factor_aliases(self):
         ev_condition = _to_repository_condition(
             FactorConditionDto(factor_id="EV/NOPAT", mode="top_percent", top_percent=20)
@@ -721,10 +756,12 @@ class BacktestServiceTest(unittest.TestCase):
         self.assertEqual(len(result.rebalance_history), 2)
         self.assertEqual(len(snapshot_queries), 1)
         query, params = snapshot_queries[0]
-        self.assertIn("arrayJoin({signal_dates:Array(Date)}) AS signal_date", query)
+        self.assertIn("snapshot_date_map AS", query)
+        self.assertNotIn("CROSS JOIN", query)
         self.assertEqual(params["signal_dates"], ["2026-01-01", "2026-03-31"])
+        self.assertEqual(params["snapshot_dates"], ["2026-01-01", "2026-03-31"])
 
-    def test_factor_backtest_falls_back_to_raw_when_snapshot_dates_are_incomplete(self):
+    def test_factor_backtest_uses_raw_only_for_signal_dates_without_snapshot(self):
         client = IncompleteSnapshotCoverageFakeClickHouseClient()
         request = FactorBacktestRequestDto(
             conditions=[
@@ -744,10 +781,14 @@ class BacktestServiceTest(unittest.TestCase):
             for query, params in client.queries
             if "latest_factor_values AS" in query
         ]
-        self.assertGreaterEqual(len(factor_queries), 2)
-        self.assertTrue(all("FROM fact_daily_factors AS f" in query for query in factor_queries))
-        self.assertTrue(
-            all("FROM fact_daily_factor_snapshot AS f" not in query for query in factor_queries)
+        self.assertEqual(len(factor_queries), 2)
+        self.assertEqual(
+            sum("FROM fact_daily_factors AS f" in query for query in factor_queries),
+            1,
+        )
+        self.assertEqual(
+            sum("FROM fact_daily_factor_snapshot AS f" in query for query in factor_queries),
+            1,
         )
 
     def test_us_factor_backtest_uses_us_default_benchmarks(self):

@@ -24,6 +24,7 @@ from engine.transformers._internal.statement_files import read_statement_period_
 
 base_dir = DATA_LAKE.silver("dart", "normalized")
 dividend_base_dir = DATA_LAKE.bronze("dart", "dividend")
+legacy_dividend_api_base_dir = DATA_LAKE.bronze("dart", "dividend_old")
 silver_dividend_dir = DATA_LAKE.silver("dart", "dividend")
 legacy_silver_dividend_by_stock_kind_path = silver_dividend_dir / "kr_dividend_by_stock_kind.csv"
 silver_dividend_by_stock_kind_path = silver_dividend_dir / market_csv_name("dividend_by_stock_kind")
@@ -346,6 +347,16 @@ def _parse_alot_matter_dividend_json(file_path, data):
 
 
 def _parse_decision_dividend_json(file_path, data):
+    embedded_stock_code = str(data.get("stock_code") or "").strip()
+    rcept_no = str(data.get("rcept_no") or "").strip()
+    if not embedded_stock_code or not rcept_no:
+        raise ValueError(
+            "untrusted dividend decision JSON: embedded stock_code and rcept_no are required"
+        )
+    source_report_name = str(data.get("source_report_name") or "").replace(" ", "")
+    if "자회사의주요경영사항" in source_report_name:
+        raise ValueError("subsidiary dividend decision JSON is not an issuer dividend")
+
     base_date = str(data.get("배당기준일") or "").strip()
     if not base_date:
         return [], []
@@ -354,7 +365,7 @@ def _parse_decision_dividend_json(file_path, data):
     base["bsns_year"] = int(base_date[:4]) if base_date[:4].isdigit() else base["bsns_year"]
     base["report_name"] = base["report_name"] or "dividend_decision"
     base["stlm_dt"] = base_date
-    base["rcept_no"] = str(data.get("rcept_no") or "")
+    base["rcept_no"] = rcept_no
 
     by_kind_rows = []
     dps_data = data.get("1주당배당금")
@@ -411,6 +422,31 @@ def _latest_text(series):
     return values[-1] if values else ""
 
 
+def _deduplicate_decision_events(rows, event_columns):
+    if rows.empty:
+        return rows
+
+    result = rows.copy()
+    result["_rcept_no_numeric"] = pd.to_numeric(result["rcept_no"], errors="coerce")
+    result = result.sort_values(
+        ["_rcept_no_numeric", "rcept_no", "source_file"],
+        na_position="first",
+    )
+    return result.drop_duplicates(subset=event_columns, keep="last").drop(
+        columns=["_rcept_no_numeric"],
+        errors="ignore",
+    )
+
+
+def _latest_decision_disclosure(rows):
+    ordered = rows.copy()
+    ordered["_rcept_no_numeric"] = pd.to_numeric(ordered["rcept_no"], errors="coerce")
+    return ordered.sort_values(
+        ["_rcept_no_numeric", "rcept_no", "source_file"],
+        na_position="first",
+    ).iloc[-1]
+
+
 def _aggregate_decision_rows(by_kind_df, company_df):
     if not by_kind_df.empty:
         decision_mask = by_kind_df["stock_knd_infer_method"] == "decision_json"
@@ -418,22 +454,27 @@ def _aggregate_decision_rows(by_kind_df, company_df):
         other_df = by_kind_df.loc[~decision_mask].copy()
 
         if not decision_df.empty:
+            decision_df = _deduplicate_decision_events(
+                decision_df,
+                ["stock_code", "corp_code", "bsns_year", "stock_knd", "stlm_dt"],
+            )
             grouped_rows = []
             for key, rows in decision_df.groupby(
-                ["stock_code", "corp_code", "corp_name", "bsns_year", "stock_knd"],
+                ["stock_code", "corp_code", "bsns_year", "stock_knd"],
                 dropna=False,
                 sort=False,
             ):
-                stock_code, corp_code, corp_name, bsns_year, stock_kind = key
+                stock_code, corp_code, bsns_year, stock_kind = key
+                latest_disclosure = _latest_decision_disclosure(rows)
                 grouped_rows.append(
                     {
                         "stock_code": stock_code,
                         "corp_code": corp_code,
-                        "corp_name": corp_name,
+                        "corp_name": str(latest_disclosure.get("corp_name") or ""),
                         "bsns_year": bsns_year,
                         "reprt_code": "decision",
                         "report_name": "decision_annual_sum",
-                        "rcept_no": "",
+                        "rcept_no": str(latest_disclosure.get("rcept_no") or ""),
                         "stlm_dt": _latest_text(rows.sort_values("stlm_dt")["stlm_dt"]),
                         "stock_knd": stock_kind,
                         "market_dividend_yield_pct": None,
@@ -442,7 +483,7 @@ def _aggregate_decision_rows(by_kind_df, company_df):
                             errors="coerce",
                         ).sum(),
                         "stock_knd_infer_method": "decision_json_annual_sum",
-                        "source_file": _latest_text(rows.sort_values("source_file")["source_file"]),
+                        "source_file": str(latest_disclosure.get("source_file") or ""),
                     }
                 )
 
@@ -457,13 +498,18 @@ def _aggregate_decision_rows(by_kind_df, company_df):
         other_df = company_df.loc[~decision_mask].copy()
 
         if not decision_df.empty:
+            decision_df = _deduplicate_decision_events(
+                decision_df,
+                ["stock_code", "corp_code", "bsns_year", "stlm_dt"],
+            )
             grouped_rows = []
             for key, rows in decision_df.groupby(
-                ["stock_code", "corp_code", "corp_name", "bsns_year"],
+                ["stock_code", "corp_code", "bsns_year"],
                 dropna=False,
                 sort=False,
             ):
-                stock_code, corp_code, corp_name, bsns_year = key
+                stock_code, corp_code, bsns_year = key
+                latest_disclosure = _latest_decision_disclosure(rows)
                 total_krw = pd.to_numeric(
                     rows["dividend_payment_amount_krw"],
                     errors="coerce",
@@ -472,16 +518,16 @@ def _aggregate_decision_rows(by_kind_df, company_df):
                     {
                         "stock_code": stock_code,
                         "corp_code": corp_code,
-                        "corp_name": corp_name,
+                        "corp_name": str(latest_disclosure.get("corp_name") or ""),
                         "bsns_year": bsns_year,
                         "reprt_code": "decision",
                         "report_name": "decision_annual_sum",
-                        "rcept_no": "",
+                        "rcept_no": str(latest_disclosure.get("rcept_no") or ""),
                         "stlm_dt": _latest_text(rows.sort_values("stlm_dt")["stlm_dt"]),
                         "dividend_payment_amount_million_krw": total_krw / 1_000_000,
                         "dividend_payment_amount_krw": total_krw,
                         "dividend_payout_ratio_pct": None,
-                        "source_file": _latest_text(rows.sort_values("source_file")["source_file"]),
+                        "source_file": str(latest_disclosure.get("source_file") or ""),
                     }
                 )
 
@@ -496,33 +542,40 @@ def _aggregate_decision_rows(by_kind_df, company_df):
 def build_silver_dividend_summary_dataframes(
     bronze_root=None,
 ):
-    bronze_root = Path(bronze_root) if bronze_root is not None else dividend_base_dir
+    if bronze_root is not None:
+        bronze_roots = [Path(bronze_root)]
+    else:
+        bronze_roots = [legacy_dividend_api_base_dir, dividend_base_dir]
+    bronze_roots = list(dict.fromkeys(Path(root) for root in bronze_roots))
     by_kind_rows = []
     company_rows = []
     failed_rows = []
 
-    if not bronze_root.exists():
+    existing_roots = [root for root in bronze_roots if root.exists()]
+    if not existing_roots:
+        missing_root = bronze_roots[-1]
         return (
             pd.DataFrame(columns=DIVIDEND_BY_STOCK_KIND_COLUMNS),
             pd.DataFrame(columns=DIVIDEND_COMPANY_SUMMARY_COLUMNS),
             pd.DataFrame(
-                [{"source_file": str(bronze_root), "reason": "bronze_root_not_found"}],
+                [{"source_file": str(missing_root), "reason": "bronze_root_not_found"}],
                 columns=DIVIDEND_SUMMARY_FAILED_COLUMNS,
             ),
         )
 
-    for file_path in sorted(bronze_root.rglob("*.json")):
-        try:
-            parsed_by_kind, parsed_company = _parse_bronze_dividend_json(file_path)
-            by_kind_rows.extend(parsed_by_kind)
-            company_rows.extend(parsed_company)
-        except Exception as exc:
-            failed_rows.append(
-                {
-                    "source_file": _relative_source_path(file_path),
-                    "reason": repr(exc),
-                }
-            )
+    for root in existing_roots:
+        for file_path in sorted(root.rglob("*.json")):
+            try:
+                parsed_by_kind, parsed_company = _parse_bronze_dividend_json(file_path)
+                by_kind_rows.extend(parsed_by_kind)
+                company_rows.extend(parsed_company)
+            except Exception as exc:
+                failed_rows.append(
+                    {
+                        "source_file": _relative_source_path(file_path),
+                        "reason": repr(exc),
+                    }
+                )
 
     by_kind_df = pd.DataFrame(by_kind_rows, columns=DIVIDEND_BY_STOCK_KIND_COLUMNS)
     company_df = pd.DataFrame(company_rows, columns=DIVIDEND_COMPANY_SUMMARY_COLUMNS)
@@ -639,9 +692,10 @@ def clear_silver_dividend_cache():
 
 
 def _share_type_labels(share_type):
-    labels = {str(share_type or "").strip()}
-    if labels & {"보통주", "보통주식"}:
-        labels.update({"보통주", "보통주식"})
+    normalized = str(share_type or "").strip().lower()
+    labels = {normalized}
+    if normalized in COMMON_STOCK_KIND_LABELS:
+        labels.update(COMMON_STOCK_KIND_LABELS)
     return {label for label in labels if label}
 
 
@@ -650,18 +704,18 @@ def _filter_share_type(df, share_type):
         return df
 
     stock_kind = df["stock_knd"].fillna("").astype(str).str.strip()
+    normalized_stock_kind = stock_kind.str.lower()
     labels = _share_type_labels(share_type)
-    matched = df.loc[stock_kind.isin(labels)]
+    matched = df.loc[normalized_stock_kind.isin(labels)]
     if not matched.empty:
         return matched
 
-    if labels & {"보통주", "보통주식"}:
+    if labels & COMMON_STOCK_KIND_LABELS:
         common = df.loc[
-            stock_kind.str.lower().isin(COMMON_STOCK_KIND_LABELS)
+            normalized_stock_kind.isin(COMMON_STOCK_KIND_LABELS)
             | stock_kind.str.contains("보통", regex=False)
         ]
-        if not common.empty:
-            return common
+        return common
 
     return df
 
@@ -2012,14 +2066,7 @@ def create_all_stock_dividend_dataframe(
     if market != "kr":
         raise ValueError(f"unsupported market: {market}")
 
-    from engine.extractors.market_universe import kospi_kosdaq_corp_list
-
     schema_columns = _dividend_schema_columns()
-    corps_list = kospi_kosdaq_corp_list()
-    stock_codes = sorted(
-        normalize_stock_code(stock_code)
-        for stock_code in corps_list["stock_code"].dropna().tolist()
-    )
     resolved_path = resolve_price_file_path(path)
 
     if not resolved_path.exists():
@@ -2040,12 +2087,16 @@ def create_all_stock_dividend_dataframe(
     updated_at = datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
     result_dfs = []
 
-    for stock_code in stock_codes:
-        security_id = f"SEC_KR_{stock_code}"
-        stock_price_df = price_df.loc[price_df["security_id"] == security_id].copy()
-
-        if stock_price_df.empty:
+    # The normalized price file is the authoritative local universe for this
+    # transformation.  Avoid an unrelated online KRX universe lookup so a
+    # Silver rebuild remains reproducible when KRX credentials are unavailable.
+    # Group once instead of scanning the full price frame for every stock.
+    for security_id, stock_price_df in price_df.groupby("security_id", sort=True):
+        security_id = str(security_id).strip()
+        if not security_id.startswith("SEC_KR_"):
             continue
+        stock_code = normalize_stock_code(security_id.removeprefix("SEC_KR_"))
+        stock_price_df = stock_price_df.copy()
 
         for year in range(2015, today.year + 1):
             yearly_price_df = stock_price_df.loc[
@@ -2128,7 +2179,7 @@ def _clean_dividend_text(value):
     return str(value)
 
 
-def silver_dividend_asof_events(stock_code, share_type="common"):
+def silver_dividend_asof_events(stock_code, share_type="보통주식"):
     stock_code = normalize_stock_code(stock_code)
     stock_kind_rows = _silver_stock_kind_rows(stock_code, share_type)
     company_rows = _silver_company_summary_rows(stock_code)

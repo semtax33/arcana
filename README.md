@@ -551,6 +551,20 @@ python -m engine.loaders.factor_snapshots --financial-basis ttm --start-date 202
 python -m engine.loaders.factor_snapshots --financial-basis annual --start-date 2026-03-01 --end-date 2026-03-31 --factor-ids roe,per,pbr --factor-chunk-size 16 --max-threads 2 --max-lookback-days 540
 ```
 
+배당 Silver, 가격, `dividend_yield`, `payout_ratio`, 스크리닝 snapshot을 한 번에
+갱신하려면 Windows PowerShell 워크플로를 사용합니다. KRX 최신 가격 다운로드를
+생략하고 기존 Bronze부터 다시 만들려면 `-SkipPriceDownload`를 지정합니다.
+
+```powershell
+.\scripts\refresh_dividend_factors.ps1
+.\scripts\refresh_dividend_factors.ps1 -AsOfDate 2026-07-15 -SkipPriceDownload
+.\scripts\refresh_dividend_factors.ps1 -PriceWorkers 16 -SkipTests
+```
+
+`-AsOfDate`를 생략하면 최근 가격 단면 중 활성 종목 수가 최대 단면의 99% 이상인
+가장 최신 거래일을 자동 선택합니다. 이 기준으로 일부 종목만 수집된 당일 가격이
+스크리닝 팩터 기준일로 사용되는 것을 방지합니다.
+
 The APIs automatically use `fact_daily_factor_snapshot` when it has rows for
 the requested factor ids and financial basis. If the snapshot table is absent
 or empty for the request, they fall back to `fact_daily_factors`.
@@ -603,6 +617,136 @@ python -m engine.workflows.score_cli build-style-scores --start-date 2026-05-01 
 python -m engine.workflows.score_cli validate-style-scores --trade-date 2026-06-23
 python -m engine.workflows.score_cli debug-single-security-score --trade-date 2026-06-23 --security-id SEC_KR_005930
 ```
+
+### 9. Debug KR Mapping and Factor Coverage
+
+KR statement normalization writes sibling `*.debug.csv` files by default. Do not
+pass `--no-debug` when the output will be used by the normalization validator.
+KR statement workers are configured through `NORMALIZE_MAX_WORKERS`.
+
+```powershell
+$env:NORMALIZE_MAX_WORKERS = "4"
+python -m engine.workflows.normalize --market kr --target statements
+```
+
+The normalized statement and debug outputs are written to both the per-period
+snapshot directory and the consolidated per-stock directory:
+
+```text
+data-lake\silver\dart\normalized-snapshots\kr_normalized_005930_2025.12.csv
+data-lake\silver\dart\normalized-snapshots\kr_normalized_005930_2025.12.debug.csv
+data-lake\silver\dart\normalized\kr_normalized_005930.csv
+data-lake\silver\dart\normalized\kr_normalized_005930.debug.csv
+```
+
+The current KR `statements` workflow normalizes the full KOSPI/KOSDAQ universe
+over its built-in recent-year window. `--symbols`, `--start-year`, `--end-year`,
+and `--workers` are not applied to this KR statements path; use
+`NORMALIZE_MAX_WORKERS` for its process count. The validator commands below can
+still be restricted to selected stocks and years.
+
+Validate one stock-period pair and write detailed JSON and Markdown reports:
+
+```powershell
+python -m engine.normalization_validator one `
+  --normalized data-lake\silver\dart\normalized-snapshots\kr_normalized_005930_2025.12.csv `
+  --debug data-lake\silver\dart\normalized-snapshots\kr_normalized_005930_2025.12.debug.csv `
+  --rules data-lake\meta\rules\common_validation.yaml `
+  --out-dir data-lake\silver\dart\validation\005930_2025 `
+  --zai-mode none
+```
+
+Validate a stock across multiple years. This writes year-level validation
+reports, a stock-level report, and a `*.stock.factor_trend.csv` file containing
+yearly mapping and factor-coverage diagnostics.
+
+```powershell
+python -m engine.normalization_validator stock `
+  --market kr `
+  --stock-code 005930 `
+  --input-dir data-lake\silver\dart\normalized-snapshots `
+  --rules data-lake\meta\rules\common_validation.yaml `
+  --out-dir data-lake\silver\dart\validation_by_stock `
+  --start-year 2020 `
+  --end-year 2025 `
+  --zai-mode none
+```
+
+Validate selected stocks in parallel. Values passed to `--stock-codes` are
+space-separated. Omit `--stock-codes` for the full KR universe, and add
+`--resume` to skip completed stock reports when restarting a run.
+
+```powershell
+python -m engine.normalization_validator stock-batch `
+  --market kr `
+  --input-dir data-lake\silver\dart\normalized-snapshots `
+  --rules data-lake\meta\rules\common_validation.yaml `
+  --out-dir data-lake\silver\dart\validation_by_stock `
+  --start-year 2020 `
+  --end-year 2025 `
+  --stock-codes 005930 000660 035420 `
+  --workers 4 `
+  --summary-every 3 `
+  --report-mode full `
+  --zai-mode none
+```
+
+Cluster repeated validation failures and UNMAPPED candidates after a batch run:
+
+```powershell
+python -m engine.normalization_validator cluster-failures `
+  --input-dir data-lake\silver\dart\validation_by_stock `
+  --out-dir data-lake\silver\dart\validation_clusters
+```
+
+This writes `all_validation_failure_cases.csv` and
+`all_validation_failure_clusters.csv`.
+
+Calculate full-universe KR factor coverage. Set `FACTOR_COVERAGE_TODAY` to keep
+the cutoff reproducible; omit it to use the current date in Asia/Seoul.
+
+```powershell
+$env:FACTOR_COVERAGE_TODAY = "2026-07-18"
+node scripts\calculate_factor_coverage.js 2>&1 |
+  Tee-Object -FilePath data-lake\gold\factor_coverage\kr_factor_coverage_run.log
+```
+
+The command writes `kr_factor_coverage_all_stocks.csv`,
+`factor_coverage_summary.json`, and the optional run log shown above. Coverage
+counts only finite numeric values; zero is a covered value.
+
+For focused EBITDA and EV/EBITDA debugging, start with a small symbol set and
+optionally compare it with an earlier factor coverage CSV:
+
+```powershell
+python scripts\ebitda_ev_coverage.py `
+  --market kr `
+  --symbols 005930,000660,035420 `
+  --financial-basis annual `
+  --start-date 2020-01-01 `
+  --end-date 2026-07-18 `
+  --baseline-csv data-lake\gold\kr_coverage\kr_factor_coverage.csv `
+  --out-dir data-lake\gold\factor_coverage\ebitda_debug
+```
+
+Remove `--symbols` to process the full supported KR universe. The focused run
+writes `kr_ebitda_ev_coverage.csv` and
+`kr_ebitda_ev_coverage_summary.json`.
+
+Recommended debugging order:
+
+```text
+normalize statements
+  -> normalization_validator stock or stock-batch
+  -> normalization_validator cluster-failures
+  -> calculate_factor_coverage.js
+  -> ebitda_ev_coverage.py
+```
+
+The historical `data-lake/gold/kr_coverage/kr_canonical_account_coverage.*`
+artifacts do not have a committed dedicated KR generator. Use the stock-batch
+summary, stock-level validation reports, factor trend CSVs, and clustered
+failures as the supported reproducible mapping-coverage diagnostics.
 
 ## Tests
 

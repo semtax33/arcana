@@ -37,6 +37,7 @@ def build_factor_snapshot_query(
     conditions: list[FactorCondition | dict[str, Any]],
     *,
     signal_date: str | date,
+    snapshot_date: str | date | None = None,
     market: str | None = None,
     financial_basis: str | None = "annual",
     style_profile: str | None = DEFAULT_SCREEN_STYLE_PROFILE,
@@ -74,6 +75,10 @@ def build_factor_snapshot_query(
         "signal_date": _resolve_date(signal_date),
         "factor_ids": factor_ids,
     }
+    if snapshot_date is not None:
+        params["snapshot_date"] = _resolve_date(snapshot_date)
+        if params["snapshot_date"] > params["signal_date"]:
+            raise ValueError("snapshot_date must not be later than signal_date")
     if regular_factor_ids:
         params[regular_factor_param] = regular_factor_ids
     if style_factor_ids:
@@ -97,13 +102,22 @@ def build_factor_snapshot_query(
 
     ctes = []
     if factor_table_is_snapshot and regular_factor_ids:
-        snapshot_date_filter = (
-            f"\n        AND has({{{regular_factor_param}:Array(String)}}, factor_id)"
-            if regular_factor_ids
-            else ""
-        )
-        ctes.append(
-            f"""
+        if snapshot_date is not None:
+            ctes.append(
+                """
+latest_snapshot_date AS (
+    SELECT {snapshot_date:Date} AS snapshot_date
+)
+""".strip()
+            )
+        else:
+            snapshot_date_filter = (
+                f"\n        AND has({{{regular_factor_param}:Array(String)}}, factor_id)"
+                if regular_factor_ids
+                else ""
+            )
+            ctes.append(
+                f"""
 latest_snapshot_date AS (
     SELECT
         max(trade_date) AS snapshot_date
@@ -111,7 +125,7 @@ latest_snapshot_date AS (
     WHERE trade_date <= {{signal_date:Date}}{snapshot_date_filter}{basis_filter.replace("f.", "")}
 )
 """.strip()
-        )
+            )
     needs_security_universe = bool(
         normalized_sector_codes or normalized_industry_group_codes or normalized_market
     )
@@ -173,6 +187,8 @@ selected_catalog AS (
         )
         if raw_lookback_filter and not factor_table_is_snapshot:
             factor_date_predicate += raw_lookback_filter
+        if factor_table_is_snapshot:
+            factor_date_predicate += "\n        AND f.source_trade_date <= {signal_date:Date}"
         source_trade_date_expr = (
             "argMax(f.source_trade_date, tuple(f.trade_date, f.updated_at))"
             if factor_table_is_snapshot
@@ -275,6 +291,7 @@ def build_factor_snapshot_batch_query(
     conditions: list[FactorCondition | dict[str, Any]],
     *,
     signal_dates: list[str | date],
+    snapshot_dates: list[str | date] | None = None,
     market: str | None = None,
     financial_basis: str | None = "annual",
     factor_table: str = DEFAULT_FACTOR_SNAPSHOT_TABLE,
@@ -288,9 +305,39 @@ def build_factor_snapshot_batch_query(
     normalized_conditions = [_coerce_condition(condition) for condition in conditions]
     if not normalized_conditions:
         raise ValueError("at least one factor condition is required")
-    normalized_signal_dates = sorted({_resolve_date(value) for value in signal_dates})
-    if not normalized_signal_dates:
+    resolved_signal_dates = [_resolve_date(value) for value in signal_dates]
+    if not resolved_signal_dates:
         raise ValueError("signal_dates must not be empty")
+    resolved_snapshot_dates = (
+        [_resolve_date(value) for value in snapshot_dates]
+        if snapshot_dates is not None
+        else list(resolved_signal_dates)
+    )
+    if len(resolved_snapshot_dates) != len(resolved_signal_dates):
+        raise ValueError("snapshot_dates must have the same length as signal_dates")
+    snapshot_by_signal: dict[str, str] = {}
+    for signal_date, snapshot_date in zip(
+        resolved_signal_dates,
+        resolved_snapshot_dates,
+        strict=True,
+    ):
+        existing = snapshot_by_signal.get(signal_date)
+        if existing is not None and existing != snapshot_date:
+            raise ValueError("duplicate signal_dates must map to the same snapshot_date")
+        snapshot_by_signal[signal_date] = snapshot_date
+    normalized_signal_dates = sorted(snapshot_by_signal)
+    normalized_snapshot_dates = [
+        snapshot_by_signal[signal_date] for signal_date in normalized_signal_dates
+    ]
+    if any(
+        snapshot_date > signal_date
+        for signal_date, snapshot_date in zip(
+            normalized_signal_dates,
+            normalized_snapshot_dates,
+            strict=True,
+        )
+    ):
+        raise ValueError("snapshot_dates must not be later than their signal_dates")
 
     factor_ids = _validate_factor_ids(
         sorted({condition.factor_id for condition in normalized_conditions})
@@ -309,6 +356,7 @@ def build_factor_snapshot_batch_query(
     normalized_market = _normalize_market(market)
     params: dict[str, Any] = {
         "signal_dates": normalized_signal_dates,
+        "snapshot_dates": normalized_snapshot_dates,
         "factor_ids": factor_ids,
     }
     basis_filter = ""
@@ -324,20 +372,18 @@ def build_factor_snapshot_batch_query(
 
     ctes = [
         """
-signal_dates AS (
-    SELECT arrayJoin({signal_dates:Array(Date)}) AS signal_date
-)
-""".strip(),
-        f"""
-latest_snapshot_dates AS (
+snapshot_date_map AS (
     SELECT
-        sd.signal_date AS signal_date,
-        max(f.trade_date) AS snapshot_date
-    FROM {_validate_table_name(factor_table)} AS f
-    CROSS JOIN signal_dates AS sd
-    WHERE f.trade_date <= sd.signal_date
-        AND has({{factor_ids:Array(String)}}, f.factor_id){basis_filter}
-    GROUP BY sd.signal_date
+        tupleElement(pair, 1) AS signal_date,
+        tupleElement(pair, 2) AS snapshot_date
+    FROM (
+        SELECT arrayJoin(
+            arrayZip(
+                {signal_dates:Array(Date)},
+                {snapshot_dates:Array(Date)}
+            )
+        ) AS pair
+    )
 )
 """.strip(),
         f"""
@@ -398,12 +444,14 @@ latest_factor_values AS (
         any(c.value_direction) AS value_direction,
         argMax(f.factor_value, tuple(f.trade_date, f.updated_at)) AS factor_value,
         argMax(f.source_trade_date, tuple(f.trade_date, f.updated_at)) AS trade_date
-    FROM latest_snapshot_dates AS lsd
-    INNER JOIN {_validate_table_name(factor_table)} AS f
-        ON f.trade_date = lsd.snapshot_date
+    FROM {_validate_table_name(factor_table)} AS f
+    INNER JOIN snapshot_date_map AS lsd
+        ON lsd.snapshot_date = f.trade_date
     INNER JOIN selected_catalog AS c
         ON c.factor_id = f.factor_id{regular_security_universe_join}
-    WHERE has({{factor_ids:Array(String)}}, f.factor_id)
+    WHERE f.trade_date IN {{snapshot_dates:Array(Date)}}
+        AND f.source_trade_date <= lsd.signal_date
+        AND has({{factor_ids:Array(String)}}, f.factor_id)
         AND isFinite(f.factor_value){basis_filter}
     GROUP BY
         lsd.signal_date,

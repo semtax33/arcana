@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 import random
 import threading
 import time
@@ -1324,6 +1325,8 @@ def fetch_dart_dividend_search(
     save_dir: str,
     save_filename: str | None = None,
     *,
+    corp_code: str | None = None,
+    corp_name: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     force: bool = False,
@@ -1340,11 +1343,12 @@ def fetch_dart_dividend_search(
         ("series", "desc"),
         ("pageGubun", "corp"),
         ("attachDocNmPopYn", ""),
-        ("textCrpNm", ticker),
+        ("textCrpNm", corp_name or ticker),
+        ("textCrpCik", str(corp_code or "").strip()),
         ("startDate", start_date or _default_dart_start_date()),
         ("endDate", end_date or _default_dart_end_date()),
         ("autoSearch", "N"),
-        ("autoSearchCorp", "Y"),
+        ("autoSearchCorp", "N" if corp_code else "Y"),
         ("option", "corp"),
         ("decadeType", ""),
         ("businessCode", "all"),
@@ -1393,6 +1397,8 @@ def fetch_dart_dividend_search(
             seen_hrefs.add(href)
 
             title = _safe_title_from_anchor(a)
+            if "자회사의주요경영사항" in title.replace(" ", ""):
+                continue
             page_url = f"https://dart.fss.or.kr{href}"
 
             # 2) 공시 페이지 GET
@@ -1405,7 +1411,7 @@ def fetch_dart_dividend_search(
             rcept_no = m.group("rcept_no")
             doc_no = m.group("doc_no")
             report_date = f"{rcept_no[0:4]}-{rcept_no[4:6]}-{rcept_no[6:8]}"
-            safe_title = f"dividend_{report_date}".strip()
+            safe_title = f"dividend_{report_date}_{rcept_no}".strip()
             out_name = f"finance_statement_{safe_title}.json"
             out_path = Path(save_dir) / _safe_filename(out_name)
             if out_path.exists() and not force:
@@ -1418,11 +1424,20 @@ def fetch_dart_dividend_search(
             dividend_page_resp.encoding = dividend_page_resp.apparent_encoding
 
             report_date = f"{rcept_no[0:4]}-{rcept_no[4:6]}-{rcept_no[6:8]}"
-            safe_title = f"dividend_{report_date}".strip()
+            safe_title = f"dividend_{report_date}_{rcept_no}".strip()
             out_name = f"finance_statement_{safe_title}.json"
 
             try:
                 data = parse_dividend_decision_html(dividend_page_resp.content, report_date)
+                data.update(
+                    {
+                        "stock_code": str(ticker).strip().zfill(6),
+                        "corp_code": str(corp_code or "").strip(),
+                        "corp_name": str(corp_name or "").strip(),
+                        "rcept_no": rcept_no,
+                        "source_report_name": title,
+                    }
+                )
                 json_data = json.dumps(data, ensure_ascii=False)
                 _write_text(json_data, save_dir, out_name)
                 time.sleep(1.0)
@@ -1557,6 +1572,24 @@ def download_recent_statement_comments(
         fetch_dart_recent_comment_search(ticker, dir, start_date=start_date, end_date=end_date)
 
 
+@lru_cache(maxsize=1)
+def _dart_corp_identity_by_stock_code() -> dict[str, tuple[str, str]]:
+    from engine.extractors._internal.krx_market_universe import fetch_corp_list
+
+    frame = fetch_corp_list()
+    result: dict[str, tuple[str, str]] = {}
+    for row in frame.to_dict("records"):
+        raw_stock_code = str(row.get("stock_code") or "").strip()
+        if not raw_stock_code or not raw_stock_code.isdigit():
+            continue
+        stock_code = raw_stock_code.zfill(6)
+        result[stock_code] = (
+            str(row.get("corp_code") or "").strip(),
+            str(row.get("corp_name") or "").strip(),
+        )
+    return result
+
+
 def download_dividend_histories(
     stock_codes,
     download_offset,
@@ -1572,5 +1605,17 @@ def download_dividend_histories(
     for offset, stock_code in enumerate(download_stock_codes):
         print(f"downloading {stock_code} (download_offset : {offset+offset_base})....")
         ticker = stock_code
+        corp_code, corp_name = _dart_corp_identity_by_stock_code().get(
+            str(stock_code).strip().zfill(6),
+            ("", ""),
+        )
         dir = str(DATA_LAKE.bronze("dart", "dividend", ticker))
-        fetch_dart_dividend_search(ticker, dir, start_date=start_date, end_date=end_date, force=force)
+        fetch_dart_dividend_search(
+            ticker,
+            dir,
+            corp_code=corp_code or None,
+            corp_name=corp_name or None,
+            start_date=start_date,
+            end_date=end_date,
+            force=force,
+        )

@@ -415,6 +415,9 @@ LOWER_IS_BETTER = {
     "capex_to_cfo_pct",
     "fcf_payout_ratio",
     "fcfe_payout_ratio",
+    "payout_ratio",
+    "earnings_payout_ratio",
+    "tdpr",
     "dps_volatility_5y",
     "dps_volatility_10y",
     "dividend_cut",
@@ -726,10 +729,37 @@ def _resolve_stock_codes(stock_codes: list[str] | None, market: str = "kr") -> l
                     symbols.add(str(snapshot_meta["stock_code"]))
         return sorted(symbols)
 
+    local_stock_codes = _kr_stock_codes_from_normalized_price()
+    if local_stock_codes:
+        return local_stock_codes
+
     from engine.extractors.market_universe import kospi_kosdaq_corp_list
 
     corps_list = kospi_kosdaq_corp_list()
     return sorted(corps_list["stock_code"].dropna().map(normalize_stock_code).unique())
+
+
+def _kr_stock_codes_from_normalized_price() -> list[str]:
+    price_path = resolve_price_path(market="kr")
+    if not price_path.exists():
+        return []
+
+    stock_codes: set[str] = set()
+    try:
+        chunks = pd.read_csv(
+            price_path,
+            usecols=["security_id"],
+            dtype={"security_id": "string"},
+            chunksize=250_000,
+        )
+        for chunk in chunks:
+            security_ids = chunk["security_id"].dropna().astype(str).str.strip()
+            for security_id in security_ids.unique():
+                if security_id.startswith("SEC_KR_"):
+                    stock_codes.add(normalize_stock_code(security_id.removeprefix("SEC_KR_")))
+    except (OSError, ValueError, pd.errors.EmptyDataError):
+        return []
+    return sorted(stock_codes)
 
 
 def _insert_daily_factor_rows_by_partition(client, factor_df: pd.DataFrame) -> int:

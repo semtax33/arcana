@@ -474,10 +474,59 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["sales_cagr_3y"], 20.0)
         self.assertAlmostEqual(latest["net_income_growth_1y"], 25.0)
         self.assertAlmostEqual(latest["net_income_growth_3y"], 150.0)
-        self.assertAlmostEqual(latest["net_income_growth_5y"], 600.0)
+        self.assertTrue(pd.isna(latest["net_income_growth_5y"]))
         self.assertAlmostEqual(latest["operating_income_growth_1y"], 20.0)
         self.assertAlmostEqual(latest["operating_income_growth_3y"], 100.0)
         self.assertAlmostEqual(latest["operating_income_growth_5y"], 500.0)
+
+    def test_net_income_growth_uses_parent_income_instead_of_total_income(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2020 + index,
+                    "financial_period": f"{2020 + index}-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "EAOP": 500,
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": 100,
+                    "NET_INCOME": total_income,
+                    "NET_INCOME_PARENT": parent_income,
+                }
+                for index, (total_income, parent_income) in enumerate(
+                    zip([10, 20, 30, 40, 50, 60], [100, 120, 140, 160, 180, 200])
+                )
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+        latest = result.iloc[-1]
+
+        self.assertAlmostEqual(latest["net_income_growth_1y"], (200 - 180) / 180 * 100)
+        self.assertAlmostEqual(latest["net_income_growth_3y"], (200 - 140) / 140 * 100)
+        self.assertAlmostEqual(latest["net_income_growth_5y"], 100.0)
+
+    def test_net_income_growth_is_not_meaningful_when_profit_sign_changes(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2024 + index,
+                    "financial_period": f"{2024 + index}-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "EAOP": 500,
+                    "REVENUE": 1_000,
+                    "OPERATING_INCOME": 100,
+                    "NET_INCOME": total_income,
+                    "NET_INCOME_PARENT": parent_income,
+                }
+                for index, (total_income, parent_income) in enumerate([(1, -100), (1_000, 200)])
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+
+        self.assertTrue(pd.isna(result["net_income_growth_1y"].iat[-1]))
 
     def test_margin_and_roic_growth_factors_are_calculated(self):
         financial_df = pd.DataFrame(
@@ -806,6 +855,30 @@ class FactorNormalizerTest(unittest.TestCase):
 
         self.assertEqual(result["tdpr"].iat[0], 25.0)
         self.assertEqual(valued["payout_ratio"].iat[0], 25.0)
+
+    def test_kr_dividend_payout_uses_point_in_time_net_income_when_not_reported(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2025-03-14", "2025-03-15"]),
+                "close": [50_000, 50_000],
+                "ni_parent": [400_000, 400_000],
+            }
+        )
+        events = pd.DataFrame(
+            {
+                "report_date": pd.to_datetime(["2025-03-15"]),
+                "annual_dividend_per_share": [1_000],
+                "payout_ratio": [None],
+                "total_dividend_amount": [100_000],
+            }
+        )
+
+        with patch("engine.transformers.factors.silver_dividend_asof_events", return_value=events):
+            result = add_dividend_factors(daily_df, "005930")
+
+        self.assertTrue(pd.isna(result["tdpr"].iat[0]))
+        self.assertEqual(result["tdpr"].iat[1], 25.0)
+        self.assertEqual(result["earnings_payout_ratio"].iat[1], 25.0)
 
     def test_us_dividend_factors_are_built_from_silver_dividend_events(self):
         daily_df = pd.DataFrame(

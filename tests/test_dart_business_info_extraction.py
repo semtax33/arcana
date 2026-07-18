@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,6 +28,7 @@ def _node_script(text: str, *, name: str = "node1", ele_id: str = "9", toc_no: s
 class FakeResponse:
     def __init__(self, text: str):
         self.text = text
+        self.content = text.encode("utf-8")
         self.apparent_encoding = "utf-8"
         self.encoding = "utf-8"
 
@@ -245,7 +247,10 @@ class DartBusinessInfoExtractionTest(unittest.TestCase):
             raise AssertionError(f"unexpected URL: {url}")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            output_path = Path(tmp_dir) / "finance_statement_dividend_2026-06-24.json"
+            output_path = (
+                Path(tmp_dir)
+                / "finance_statement_dividend_2026-06-24_20260624000001.json"
+            )
             output_path.write_text("{}", encoding="utf-8")
             with (
                 patch.object(dart_filings, "request_with_retry", side_effect=fake_request),
@@ -260,6 +265,64 @@ class DartBusinessInfoExtractionTest(unittest.TestCase):
 
         self.assertFalse(any("report/viewer.do" in url for _, url, _ in calls))
         sleep_mock.assert_not_called()
+
+    def test_fetch_dividends_excludes_subsidiary_reports_and_persists_identity(self):
+        search_html = """
+        <html><body>
+          <a href="/dsaf001/main.do?rcpNo=20260624000001">현금ㆍ현물배당결정 (자회사의 주요경영사항)</a>
+          <a href="/dsaf001/main.do?rcpNo=20260625000002">현금ㆍ현물배당결정</a>
+        </body></html>
+        """
+        main_html = """
+        <html><script>viewDoc('20260625000002', '12345');</script></html>
+        """
+        calls = []
+
+        def fake_request(session, method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            if method == "POST":
+                return FakeResponse(search_html)
+            if "dsaf001/main.do" in url:
+                self.assertIn("20260625000002", url)
+                return FakeResponse(main_html)
+            if "report/viewer.do" in url:
+                return FakeResponse("<html>dividend</html>")
+            raise AssertionError(f"unexpected URL: {url}")
+
+        parsed = {
+            "배당기준일": "2025-12-31",
+            "1주당배당금": {"보통주식": "1000"},
+            "배당금총액": "10000000",
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with (
+                patch.object(dart_filings, "request_with_retry", side_effect=fake_request),
+                patch.object(dart_filings, "parse_dividend_decision_html", return_value=parsed),
+                patch.object(dart_filings.time, "sleep"),
+            ):
+                dart_filings.fetch_dart_dividend_search(
+                    "5930",
+                    tmp_dir,
+                    corp_code="00126380",
+                    corp_name="삼성전자",
+                    start_date="20260624",
+                    end_date="20260625",
+                )
+
+            output_path = (
+                Path(tmp_dir)
+                / "finance_statement_dividend_2026-06-25_20260625000002.json"
+            )
+            stored = json.loads(output_path.read_text(encoding="utf-8"))
+
+        main_calls = [url for method, url, _ in calls if method == "GET" and "dsaf001" in url]
+        self.assertEqual(len(main_calls), 1)
+        self.assertEqual(stored["stock_code"], "005930")
+        self.assertEqual(stored["corp_code"], "00126380")
+        self.assertEqual(stored["corp_name"], "삼성전자")
+        self.assertEqual(stored["rcept_no"], "20260625000002")
+        post_data = next(kwargs["data"] for method, _, kwargs in calls if method == "POST")
+        self.assertIn(("textCrpCik", "00126380"), post_data)
     def test_download_business_infos_uses_thread_pool_when_workers_requested(self):
         calls = []
 

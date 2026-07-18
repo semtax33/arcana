@@ -105,6 +105,17 @@ class SnapshotAvailableFakeClickHouseClient(FakeClickHouseClient):
         return FakeQueryResult([])
 
 
+class OtherMarketOnlySnapshotFakeClickHouseClient(SnapshotAvailableFakeClickHouseClient):
+    def query(self, query, parameters=None):
+        self.queries.append((query, parameters or {}))
+        if query.startswith("EXISTS TABLE fact_daily_factor_snapshot"):
+            return FakeQueryResult([(1,)])
+        if "FROM fact_daily_factor_snapshot" in query:
+            self.assert_market_prefix = (parameters or {}).get("market_security_prefix")
+            return FakeQueryResult([(0,)])
+        return FakeQueryResult([])
+
+
 @unittest.skipIf(
     API_SERVICE_DEPS_ERROR is not None,
     f"API service dependencies are not available: {API_SERVICE_DEPS_ERROR}",
@@ -223,6 +234,88 @@ class FactorScreenServiceTest(unittest.TestCase):
         self.assertEqual(params["limit"], 25)
         self.assertIn("FROM fact_daily_factor_snapshot AS f", query)
         self.assertIn("f.trade_date = (SELECT latest_date FROM latest_trade_date)", query)
+
+        coverage_queries = [
+            (query, params)
+            for query, params in client.queries
+            if "countDistinct(factor_id) AS factor_count" in query
+        ]
+        self.assertEqual(len(coverage_queries), 1)
+        coverage_query, coverage_params = coverage_queries[0]
+        self.assertIn("latest_snapshot_date AS", coverage_query)
+        self.assertIn("latest_raw_date AS", coverage_query)
+        self.assertIn("ORDER BY trade_date DESC", coverage_query)
+        self.assertIn(
+            "trade_date >= (SELECT trade_date FROM latest_raw_date)",
+            coverage_query,
+        )
+        self.assertIn(
+            "source_trade_date <= {as_of_date:Date}",
+            coverage_query,
+        )
+        self.assertIn("FROM fact_daily_factors", coverage_query)
+        self.assertIn("as_of_date", coverage_params)
+
+    def test_screen_accepts_carry_forward_snapshot_on_market_holiday(self):
+        client = SnapshotAvailableFakeClickHouseClient()
+        request = FactorScreenRequestDto(
+            conditions=[
+                FactorConditionDto(
+                    factor_id="roe",
+                    mode="top_percent",
+                    top_percent=30,
+                )
+            ],
+            as_of_date=date(2026, 7, 18),
+            market="kr",
+        )
+
+        FactorScreenService(client_factory=lambda: client).screen_stocks(request)
+
+        screen_query = next(
+            query for query, _ in client.queries if "latest_factor_values AS" in query
+        )
+        self.assertIn("FROM fact_daily_factor_snapshot AS f", screen_query)
+        coverage_query, coverage_params = next(
+            (query, params)
+            for query, params in client.queries
+            if "countDistinct(factor_id) AS factor_count" in query
+        )
+        self.assertEqual(coverage_params["as_of_date"], "2026-07-18")
+        self.assertEqual(coverage_params["market_security_prefix"], "SEC_KR_")
+        self.assertIn(
+            "trade_date >= (SELECT trade_date FROM latest_raw_date)",
+            coverage_query,
+        )
+        self.assertIn(
+            "source_trade_date <= {as_of_date:Date}",
+            coverage_query,
+        )
+
+    def test_screen_ignores_snapshot_rows_that_exist_only_for_another_market(self):
+        client = OtherMarketOnlySnapshotFakeClickHouseClient()
+        request = FactorScreenRequestDto(
+            conditions=[
+                FactorConditionDto(
+                    factor_id="roe",
+                    mode="top_percent",
+                    top_percent=30,
+                )
+            ],
+            market="kr",
+        )
+
+        FactorScreenService(client_factory=lambda: client).screen_stocks(request)
+
+        screen_query = next(
+            query for query, _ in client.queries if "latest_factor_values AS" in query
+        )
+        self.assertIn("FROM fact_daily_factors AS f", screen_query)
+        self.assertEqual(client.assert_market_prefix, "SEC_KR_")
+        self.assertIn(
+            "startsWith(security_id, {market_security_prefix:String})",
+            screen_query,
+        )
 
 
 if __name__ == "__main__":

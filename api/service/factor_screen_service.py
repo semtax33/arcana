@@ -3,7 +3,9 @@ from __future__ import annotations
 import math
 import os
 import re
+from datetime import datetime
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from api.config.clickhouse import get_clickhouse_client
 from api.model.screening import (
@@ -54,6 +56,7 @@ class FactorScreenService:
                 conditions=conditions,
                 financial_basis=request.financial_basis or DEFAULT_FINANCIAL_BASIS,
                 as_of_date=request.as_of_date,
+                market=request.market,
             )
             result_df = screen_stocks_by_factors(
                 client,
@@ -149,6 +152,7 @@ def _resolve_factor_table(
     conditions: list[FactorCondition],
     financial_basis: str,
     as_of_date: Any,
+    market: str | None,
 ) -> tuple[str, bool]:
     factor_ids = sorted(
         {
@@ -163,6 +167,7 @@ def _resolve_factor_table(
         factor_ids=factor_ids,
         financial_basis=financial_basis,
         as_of_date=as_of_date,
+        market=market,
     ):
         return DEFAULT_FACTOR_SNAPSHOT_TABLE, True
     return DEFAULT_FACTOR_TABLE, False
@@ -175,6 +180,7 @@ def _snapshot_table_has_rows(
     factor_ids: list[str],
     financial_basis: str,
     as_of_date: Any,
+    market: str | None,
 ) -> bool:
     query = getattr(client, "query", None)
     if not callable(query):
@@ -184,24 +190,56 @@ def _snapshot_table_has_rows(
     params: dict[str, Any] = {
         "factor_ids": factor_ids,
         "financial_basis": financial_basis,
+        "as_of_date": _screen_as_of_date(as_of_date),
     }
-    date_filter = ""
-    if as_of_date is not None:
-        params["as_of_date"] = as_of_date.isoformat() if hasattr(as_of_date, "isoformat") else str(as_of_date)
-        date_filter = "\n    AND trade_date <= {as_of_date:Date}"
+    market_filter = ""
+    normalized_market = str(market or "").strip().upper()
+    if normalized_market and normalized_market != "ALL":
+        params["market_security_prefix"] = f"SEC_{normalized_market}_"
+        market_filter = "\n    AND startsWith(security_id, {market_security_prefix:String})"
     try:
         rows = query(
             f"""
+WITH
+latest_snapshot_date AS (
+    SELECT trade_date
+    FROM {table_name}
+    PREWHERE trade_date <= {{as_of_date:Date}}
+    WHERE has({{factor_ids:Array(String)}}, factor_id)
+        AND financial_basis = {{financial_basis:String}}{market_filter}
+    ORDER BY trade_date DESC
+    LIMIT 1
+),
+latest_raw_date AS (
+    SELECT trade_date
+    FROM {DEFAULT_FACTOR_TABLE}
+    PREWHERE trade_date <= {{as_of_date:Date}}
+    WHERE has({{factor_ids:Array(String)}}, factor_id)
+        AND financial_basis = {{financial_basis:String}}{market_filter}
+    ORDER BY trade_date DESC
+    LIMIT 1
+)
 SELECT countDistinct(factor_id) AS factor_count
 FROM {table_name}
+PREWHERE trade_date = (SELECT trade_date FROM latest_snapshot_date)
 WHERE has({{factor_ids:Array(String)}}, factor_id)
-    AND financial_basis = {{financial_basis:String}}{date_filter}
+    AND financial_basis = {{financial_basis:String}}{market_filter}
+    AND trade_date >= (SELECT trade_date FROM latest_raw_date)
+    AND source_trade_date <= {{as_of_date:Date}}
 """.strip(),
             parameters=params,
         ).result_rows
     except Exception:
         return False
     return bool(rows and int(rows[0][0]) >= len(factor_ids))
+
+
+def _screen_as_of_date(value: Any) -> str:
+    if value is None:
+        return datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 def _table_exists(client: Any, table_name: str) -> bool:
