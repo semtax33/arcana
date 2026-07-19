@@ -162,6 +162,30 @@ class FactorLabService:
         self._write_experiment(experiment_id, request.graph, require_existing=False)
         return FactorLabExperimentResponseDto(experiment_id=experiment_id, graph=request.graph)
 
+    def save_experiment_by_name(
+        self,
+        request: FactorLabExperimentSaveRequestDto,
+    ) -> FactorLabExperimentResponseDto:
+        graph_dict = _model_dump(request.graph)
+        name = _normalize_experiment_name(graph_dict["experiment"].get("name"))
+        graph_dict["experiment"]["name"] = name
+        graph = FactorLabGraphDto(**graph_dict)
+
+        client = self._client_factory()
+        try:
+            _ensure_tables(client)
+            experiment_id = _find_latest_experiment_id_by_name(client, name)
+        finally:
+            _close(client)
+
+        if experiment_id is None:
+            experiment_id = str(uuid.uuid4())
+            require_existing = False
+        else:
+            require_existing = True
+        self._write_experiment(experiment_id, graph, require_existing=require_existing)
+        return FactorLabExperimentResponseDto(experiment_id=experiment_id, graph=graph)
+
     def update_experiment(
         self,
         experiment_id: str,
@@ -225,6 +249,17 @@ DELETE WHERE has({factor_ids:Array(String)}, factor_id)
         finally:
             _close(client)
         return FactorLabExperimentDeleteResponseDto(deleted=True)
+
+    def delete_experiment_by_name(self, name: str) -> FactorLabExperimentDeleteResponseDto:
+        normalized_name = _normalize_experiment_name(name)
+        client = self._client_factory()
+        try:
+            experiment_id = _find_latest_experiment_id_by_name(client, normalized_name)
+        finally:
+            _close(client)
+        if experiment_id is None:
+            raise KeyError(normalized_name)
+        return self.delete_experiment(experiment_id)
 
     def _write_experiment(
         self,
@@ -295,6 +330,31 @@ LIMIT 1
             _close(client)
         if not rows:
             raise KeyError(experiment_id)
+        graph = FactorLabGraphDto(**json.loads(str(rows[0]["graph_json"])))
+        return FactorLabExperimentResponseDto(experiment_id=str(rows[0]["experiment_id"]), graph=graph)
+
+    def get_experiment_by_name(self, name: str) -> FactorLabExperimentResponseDto:
+        normalized_name = _normalize_experiment_name(name)
+        client = self._client_factory()
+        try:
+            rows = _records(
+                client.query_df(
+                    """
+SELECT
+    experiment_id,
+    graph_json
+FROM factor_lab_experiment FINAL
+WHERE name = {name:String}
+ORDER BY updated_at DESC, experiment_id DESC
+LIMIT 1
+""".strip(),
+                    parameters={"name": normalized_name},
+                )
+            )
+        finally:
+            _close(client)
+        if not rows:
+            raise KeyError(normalized_name)
         graph = FactorLabGraphDto(**json.loads(str(rows[0]["graph_json"])))
         return FactorLabExperimentResponseDto(experiment_id=str(rows[0]["experiment_id"]), graph=graph)
 
@@ -723,6 +783,31 @@ LIMIT 1
         )
     )
     return bool(rows)
+
+
+def _find_latest_experiment_id_by_name(client: Any, name: str) -> str | None:
+    rows = _records(
+        client.query_df(
+            """
+SELECT experiment_id
+FROM factor_lab_experiment FINAL
+WHERE name = {name:String}
+ORDER BY updated_at DESC, experiment_id DESC
+LIMIT 1
+""".strip(),
+            parameters={"name": name},
+        )
+    )
+    if not rows:
+        return None
+    return str(rows[0]["experiment_id"])
+
+
+def _normalize_experiment_name(value: Any) -> str:
+    name = str(value or "").strip()
+    if not name:
+        raise ValueError("experiment name is required")
+    return name
 
 
 def _load_experiment_run_ids(client: Any, experiment_id: str) -> list[str]:

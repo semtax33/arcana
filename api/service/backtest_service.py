@@ -248,6 +248,11 @@ class BacktestService:
                 use_snapshot = (
                     factor_table_is_snapshot and signal_date in snapshot_dates_by_signal
                 )
+                query_factor_table = (
+                    factor_table
+                    if use_snapshot or not factor_table_is_snapshot
+                    else DEFAULT_FACTOR_TABLE
+                )
                 snapshot_rows = self._load_factor_snapshot(
                     client,
                     conditions=conditions,
@@ -257,7 +262,7 @@ class BacktestService:
                     ),
                     market=market,
                     financial_basis=financial_basis,
-                    factor_table=factor_table if use_snapshot else DEFAULT_FACTOR_TABLE,
+                    factor_table=query_factor_table,
                     factor_table_is_snapshot=use_snapshot,
                     raw_lookback_days=None if use_snapshot else raw_lookback_days,
                     style_profile=style_profile,

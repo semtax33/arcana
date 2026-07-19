@@ -537,6 +537,32 @@ class BacktestServiceTest(unittest.TestCase):
         self.assertEqual(result.rebalance_history[0].positions[0].score, 100.0)
         self.assertTrue(any("Survivor bias" in warning for warning in result.warnings))
 
+    def test_factor_backtest_keeps_requested_non_snapshot_factor_table(self):
+        client = FakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(factor_id="roe", mode="top_percent", top_percent=100),
+                FactorConditionDto(factor_id="per", mode="top_percent", top_percent=100),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 1, 3),
+            rebalance_frequency="quarterly",
+            max_positions=1,
+            factor_table="factor_lab_values",
+        )
+
+        result = BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        factor_queries = [
+            query
+            for query, _ in client.queries
+            if "latest_factor_values AS" in query
+        ]
+        self.assertEqual(len(factor_queries), 1)
+        self.assertIn("FROM factor_lab_values AS f", factor_queries[0])
+        self.assertNotIn("FROM fact_daily_factors AS f", factor_queries[0])
+        self.assertEqual(len(result.rebalance_history[0].positions), 1)
+
     def test_factor_backtest_accepts_monthly_rebalance_frequency(self):
         client = FakeClickHouseClient()
         request = FactorBacktestRequestDto(

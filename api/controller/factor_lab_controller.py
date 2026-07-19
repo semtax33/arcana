@@ -62,6 +62,44 @@ def save_factor_lab_experiment(
         raise HTTPException(status_code=500, detail=_error("factor_lab_save_failed", str(exc))) from exc
 
 
+@router.get("/experiments/by-name", response_model=FactorLabExperimentResponseDto)
+def get_factor_lab_experiment_by_name(
+    name: str = Query(..., min_length=1),
+) -> FactorLabExperimentResponseDto:
+    try:
+        return FactorLabService().get_experiment_by_name(name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=_error("factor_lab_experiment_not_found", "experiment not found")) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=_error("factor_lab_get_failed", str(exc))) from exc
+
+
+@router.put("/experiments/by-name", response_model=FactorLabExperimentResponseDto)
+def save_factor_lab_experiment_by_name(
+    request: FactorLabExperimentSaveRequestDto,
+) -> FactorLabExperimentResponseDto:
+    try:
+        return FactorLabService().save_experiment_by_name(request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=_error("factor_lab_experiment_not_found", "experiment not found")) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=_error("factor_lab_invalid_graph", str(exc))) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=_error("factor_lab_save_failed", str(exc))) from exc
+
+
+@router.delete("/experiments/by-name", response_model=FactorLabExperimentDeleteResponseDto)
+def delete_factor_lab_experiment_by_name(
+    name: str = Query(..., min_length=1),
+) -> FactorLabExperimentDeleteResponseDto:
+    try:
+        return FactorLabService().delete_experiment_by_name(name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=_error("factor_lab_experiment_not_found", "experiment not found")) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=_error("factor_lab_delete_failed", str(exc))) from exc
+
+
 @router.get("/experiments/{experiment_id}", response_model=FactorLabExperimentResponseDto)
 def get_factor_lab_experiment(experiment_id: str) -> FactorLabExperimentResponseDto:
     try:
