@@ -185,6 +185,31 @@ class FactorLabQueryTest(unittest.TestCase):
         self.assertIn("greatest(least(((-1) * ((value - mu) / sigma))", result.query)
         self.assertEqual(result.parameters["node_z_per_clip"], 3.0)
 
+    def test_weighted_score_preserves_output_columns_and_validity_filter(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {"id": "factor_per", "type": "factor_input", "config": {"factor_id": "per"}},
+            {"id": "factor_pbr", "type": "factor_input", "config": {"factor_id": "pbr"}},
+            {
+                "id": "composite",
+                "type": "weighted_score",
+                "config": {"weights": {"value": 0.6, "quality": 0.4}},
+            },
+        ]
+        graph["edges"] = [
+            {"source": "factor_per", "target": "composite", "target_handle": "value"},
+            {"source": "factor_pbr", "target": "composite", "target_handle": "quality"},
+        ]
+        graph["outputs"] = {"final_node_id": "composite"}
+
+        result = compile_factor_lab_graph(graph, known_factor_ids={"per", "pbr"})
+
+        self.assertIn("value.trade_date AS trade_date", result.query)
+        self.assertIn("value.security_id AS security_id", result.query)
+        self.assertTrue(result.query.endswith("WHERE toUInt8(is_valid) = 1"))
+        self.assertEqual(result.parameters["node_composite_value_weight"], 0.6)
+        self.assertEqual(result.parameters["node_composite_quality_weight"], 0.4)
+
     def test_cycle_is_a_hard_error(self):
         graph = nested_graph()
         graph["edges"].append({"source": "div_final", "target": "add_ab", "target_handle": "left"})

@@ -234,7 +234,11 @@ def compile_factor_lab_graph(
             raise ValueError(f"unsupported node type: {node_type}")
 
     final_cte = _cte_name(validation.final_node_id or "")
-    query = "WITH\n" + ",\n".join(ctes) + f"\nSELECT *\nFROM {final_cte}\nWHERE is_valid"
+    # ClickHouse 26.5 can drop a computed Bool alias from a joined CTE block when
+    # that alias is used directly as the final filter (notably for weighted_score).
+    # The explicit UInt8 predicate preserves the column through optimization while
+    # retaining the same valid-row semantics.
+    query = "WITH\n" + ",\n".join(ctes) + f"\nSELECT *\nFROM {final_cte}\nWHERE toUInt8(is_valid) = 1"
     return FactorLabCompileResult(
         query=query,
         parameters=params,
@@ -1044,8 +1048,8 @@ def _compile_weighted_score(
     return f"""
 {_cte_name(node_id)} AS (
     SELECT
-        {base_handle}.trade_date,
-        {base_handle}.security_id,
+        {base_handle}.trade_date AS trade_date,
+        {base_handle}.security_id AS security_id,
         if(NOT ({valid_expr}), NULL, {value_expr}) AS value,
         ({valid_expr}) AND isFinite({value_expr}) AS is_valid,
         multiIf(
