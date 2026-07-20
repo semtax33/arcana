@@ -481,6 +481,9 @@ class FactorLabRunRequestDto(BaseModel):
     graph: FactorLabGraphDto | None = None
     experiment_id: str | None = None
     mode: Literal["screen", "history"] = "screen"
+    history_start_date: date | None = None
+    history_end_date: date | None = None
+    history_rebalance_frequency: RebalanceFrequency | None = None
 
 
 class FactorLabQualitySummaryDto(BaseModel):

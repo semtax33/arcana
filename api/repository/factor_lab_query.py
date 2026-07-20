@@ -162,6 +162,7 @@ def compile_factor_lab_graph(
     graph: dict[str, Any],
     *,
     known_factor_ids: set[str] | None = None,
+    trade_dates: list[str | date] | None = None,
     factor_table: str = "fact_daily_factors",
     factor_lab_table: str = "factor_lab_values",
     price_table: str = "price_daily",
@@ -183,12 +184,22 @@ def compile_factor_lab_graph(
         "start_date": _resolve_date(experiment.get("start_date")),
         "end_date": _resolve_date(experiment.get("end_date")),
     }
+    if trade_dates is not None:
+        normalized_trade_dates = sorted({_resolve_date(value) for value in trade_dates})
+        if not normalized_trade_dates:
+            raise ValueError("trade_dates must not be empty")
+        params["trade_dates"] = normalized_trade_dates
 
     ctes: list[str] = []
     if _needs_security_universe(nodes, validation.execution_order, experiment):
         ctes.append(_compile_security_universe_cte(experiment, security_table, issuer_table, params))
     if any(nodes[node_id]["type"] == "constant" for node_id in validation.execution_order):
-        ctes.append(_compile_base_universe_cte(price_table))
+        ctes.append(
+            _compile_base_universe_cte(
+                price_table,
+                use_trade_dates="trade_dates" in params,
+            )
+        )
 
     for node_id in validation.execution_order:
         node = nodes[node_id]
@@ -717,15 +728,19 @@ security_universe AS (
 )""".strip()
 
 
-def _compile_base_universe_cte(price_table: str) -> str:
+def _compile_base_universe_cte(price_table: str, *, use_trade_dates: bool = False) -> str:
+    date_filter = (
+        "trade_date IN {trade_dates:Array(Date)}"
+        if use_trade_dates
+        else "trade_date >= {start_date:Date}\n        AND trade_date <= {end_date:Date}"
+    )
     return f"""
 lab_base_universe AS (
     SELECT DISTINCT
         trade_date,
         security_id
     FROM {price_table}
-    WHERE trade_date >= {{start_date:Date}}
-        AND trade_date <= {{end_date:Date}}
+    WHERE {date_filter}
 )""".strip()
 
 
@@ -740,6 +755,11 @@ def _compile_factor_input(
     param_prefix = _param_prefix(node_id)
     params[f"{param_prefix}_factor_id"] = factor_id
     params[f"{param_prefix}_financial_basis"] = str(config.get("financial_basis") or "annual")
+    date_filter = (
+        "f.trade_date IN {trade_dates:Array(Date)}"
+        if "trade_dates" in params
+        else "f.trade_date >= {start_date:Date}\n        AND f.trade_date <= {end_date:Date}"
+    )
     return f"""
 {_cte_name(node_id)} AS (
     SELECT
@@ -757,8 +777,7 @@ def _compile_factor_input(
         ON u.security_id = f.security_id
     WHERE f.factor_id = {{{param_prefix}_factor_id:String}}
         AND f.financial_basis = {{{param_prefix}_financial_basis:String}}
-        AND f.trade_date >= {{start_date:Date}}
-        AND f.trade_date <= {{end_date:Date}}
+        AND {date_filter}
 )""".strip()
 
 

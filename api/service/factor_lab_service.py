@@ -25,7 +25,7 @@ from api.repository.factor_screen_query import (
     DEFAULT_FACTOR_TABLE,
 )
 from api.service.factor_identity import canonical_factor_id
-from api.service.backtest_service import BacktestService
+from api.service.backtest_service import BacktestService, _previous_trading_day, _rebalance_dates
 from api.service.dto import (
     FactorBacktestRequestDto,
     FactorConditionDto,
@@ -391,9 +391,53 @@ LIMIT 1
                     graph_dict,
                     effective_trade_date,
                 )
+            history_trade_dates: list[date] | None = None
+            history_schedule = (
+                request.history_start_date,
+                request.history_end_date,
+                request.history_rebalance_frequency,
+            )
+            if request.mode == "history" and any(value is not None for value in history_schedule):
+                if any(value is None for value in history_schedule):
+                    raise ValueError(
+                        "history_start_date, history_end_date, and "
+                        "history_rebalance_frequency must be provided together"
+                    )
+                history_start_date = request.history_start_date
+                history_end_date = request.history_end_date
+                history_frequency = request.history_rebalance_frequency
+                if history_start_date is None or history_end_date is None or history_frequency is None:
+                    raise ValueError("history schedule is incomplete")
+                if history_start_date > history_end_date:
+                    raise ValueError("history_start_date must not be later than history_end_date")
+                trading_days = BacktestService()._load_trading_days(
+                    client,
+                    history_start_date,
+                    history_end_date,
+                    market=str(graph_dict.get("experiment", {}).get("market") or "") or None,
+                )
+                rebalance_dates = _rebalance_dates(
+                    trading_days,
+                    start_date=history_start_date,
+                    end_date=history_end_date,
+                    frequency=history_frequency,
+                )
+                history_trade_dates = sorted(
+                    {
+                        signal_date
+                        for signal_date in (
+                            _previous_trading_day(trading_days, rebalance_date)
+                            for rebalance_date in rebalance_dates
+                        )
+                        if signal_date is not None
+                    }
+                )
+                if not history_trade_dates:
+                    raise ValueError("history signal dates were not found")
             compile_result = compile_factor_lab_graph(
                 execution_graph,
                 known_factor_ids=known_factor_ids,
+                trade_dates=history_trade_dates,
                 factor_table=factor_table,
             )
             _insert_run_status(

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import csv
 from datetime import date, datetime, timedelta
+import io
 import math
 import os
 from typing import Any, Callable
 
 import pandas as pd
+from clickhouse_connect.driver.external import ExternalData
 
 from api.config.clickhouse import get_clickhouse_client
 from api.model.backtest import (
@@ -21,8 +24,10 @@ from api.repository.backtest_query import (
     DEFAULT_FACTOR_SNAPSHOT_TABLE,
     DEFAULT_FACTOR_TABLE,
     build_benchmark_history_query,
+    build_factor_raw_batch_query,
     build_factor_snapshot_batch_query,
     build_factor_snapshot_query,
+    build_portfolio_return_query,
     build_price_history_query,
     build_trading_days_query,
 )
@@ -59,7 +64,12 @@ class BacktestService:
 
         client = self._client_factory()
         try:
-            trading_days = self._load_trading_days(client, request.start_date, request.end_date)
+            trading_days = self._load_trading_days(
+                client,
+                request.start_date,
+                request.end_date,
+                market=request.market,
+            )
             visible_days = [
                 day for day in trading_days if request.start_date <= day <= request.end_date
             ]
@@ -147,8 +157,19 @@ class BacktestService:
             warnings=warnings,
         )
 
-    def _load_trading_days(self, client: Any, start_date: date, end_date: date) -> list[date]:
-        query, params = build_trading_days_query(start_date=start_date, end_date=end_date)
+    def _load_trading_days(
+        self,
+        client: Any,
+        start_date: date,
+        end_date: date,
+        *,
+        market: str | None = None,
+    ) -> list[date]:
+        query, params = build_trading_days_query(
+            start_date=start_date,
+            end_date=end_date,
+            market=market,
+        )
         rows = _records(client.query_df(query, parameters=params))
         return sorted({_as_date(row["trade_date"]) for row in rows})
 
@@ -177,7 +198,6 @@ class BacktestService:
         equity_points: list[BacktestEquityCurvePoint] = []
         rebalance_history: list[BacktestRebalance] = []
         planned_segments: list[dict[str, Any]] = []
-        selected_security_ids: set[str] = set()
         previous_positions_by_id: dict[str, BacktestPosition] = {}
         signal_dates_by_rebalance = {
             rebalance_date: _previous_trading_day(trading_days, rebalance_date)
@@ -192,6 +212,9 @@ class BacktestService:
             }
         )
         snapshot_dates_by_signal: dict[date, date] = {}
+        has_style_factors = any(
+            is_style_score_factor(condition.factor_id) for condition in conditions
+        )
         if factor_table_is_snapshot and batch_signal_dates:
             regular_factor_ids = sorted(
                 {
@@ -218,7 +241,7 @@ class BacktestService:
         if (
             factor_table_is_snapshot
             and len(snapshot_dates_by_signal) > 1
-            and not any(is_style_score_factor(condition.factor_id) for condition in conditions)
+            and not has_style_factors
         ):
             snapshot_signal_dates = sorted(snapshot_dates_by_signal)
             batched_snapshot_rows = self._load_factor_snapshot_batch(
@@ -235,6 +258,28 @@ class BacktestService:
                 sector_codes=sector_codes,
                 industry_group_codes=industry_group_codes,
             )
+        raw_signal_dates = (
+            [
+                signal_date
+                for signal_date in batch_signal_dates
+                if signal_date not in snapshot_dates_by_signal
+            ]
+            if factor_table_is_snapshot
+            else batch_signal_dates
+        )
+        batched_raw_rows: dict[date, list[dict[str, Any]]] | None = None
+        if len(raw_signal_dates) > 1 and not has_style_factors:
+            batched_raw_rows = self._load_factor_raw_batch(
+                client,
+                conditions=conditions,
+                signal_dates=raw_signal_dates,
+                market=market,
+                financial_basis=financial_basis,
+                factor_table=(DEFAULT_FACTOR_TABLE if factor_table_is_snapshot else factor_table),
+                raw_lookback_days=raw_lookback_days,
+                sector_codes=sector_codes,
+                industry_group_codes=industry_group_codes,
+            )
 
         for index, rebalance_date in enumerate(rebalance_dates):
             signal_date = signal_dates_by_rebalance[rebalance_date]
@@ -244,6 +289,8 @@ class BacktestService:
 
             if batched_snapshot_rows is not None and signal_date in snapshot_dates_by_signal:
                 snapshot_rows = batched_snapshot_rows.get(signal_date, [])
+            elif batched_raw_rows is not None and signal_date in raw_signal_dates:
+                snapshot_rows = batched_raw_rows.get(signal_date, [])
             else:
                 use_snapshot = (
                     factor_table_is_snapshot and signal_date in snapshot_dates_by_signal
@@ -313,7 +360,6 @@ class BacktestService:
                 final_end_date=end_date,
             )
             segment_security_ids = [position.security_id for position in positions]
-            selected_security_ids.update(segment_security_ids)
             planned_segments.append(
                 {
                     "security_ids": segment_security_ids,
@@ -335,21 +381,20 @@ class BacktestService:
             )
             return [], rebalance_history
 
-        price_returns = self._load_price_return_matrix(
+        first_segment_date = min(segment["start_date"] for segment in planned_segments)
+        last_segment_date = max(segment["end_date"] for segment in planned_segments)
+        portfolio_returns = self._load_portfolio_returns(
             client,
-            security_ids=sorted(selected_security_ids),
-            start_date=min(segment["start_date"] for segment in planned_segments),
-            end_date=max(segment["end_date"] for segment in planned_segments),
+            segments=planned_segments,
+            trading_days=[
+                trading_day
+                for trading_day in trading_days
+                if first_segment_date <= trading_day <= last_segment_date
+            ],
         )
 
-        for segment in planned_segments:
-            segment_returns = _segment_returns_from_matrix(
-                price_returns,
-                security_ids=segment["security_ids"],
-                start_date=segment["start_date"],
-                end_date=segment["end_date"],
-                transaction_cost_bps=segment["transaction_cost_bps"],
-            )
+        for segment_id, _segment in enumerate(planned_segments):
+            segment_returns = portfolio_returns.get(segment_id, [])
             for trade_date, daily_return in segment_returns:
                 nav *= 1 + daily_return
                 equity_points.append(
@@ -427,6 +472,75 @@ class BacktestService:
             signal_date = _as_date(row["signal_date"])
             rows_by_date[signal_date].append(row)
         return rows_by_date
+
+    def _load_factor_raw_batch(
+        self,
+        client: Any,
+        *,
+        conditions: list[FactorCondition],
+        signal_dates: list[date],
+        market: str | None,
+        financial_basis: str,
+        factor_table: str,
+        raw_lookback_days: int | None,
+        sector_codes: list[str] | None,
+        industry_group_codes: list[str] | None,
+    ) -> dict[date, list[dict[str, Any]]]:
+        query, params = build_factor_raw_batch_query(
+            conditions,
+            signal_dates=signal_dates,
+            market=market,
+            financial_basis=financial_basis,
+            factor_table=factor_table,
+            raw_lookback_days=raw_lookback_days,
+            sector_codes=sector_codes,
+            industry_group_codes=industry_group_codes,
+        )
+        rows_by_date: dict[date, list[dict[str, Any]]] = defaultdict(list)
+        for row in _records(client.query_df(query, parameters=params)):
+            signal_date = _as_date(row["signal_date"])
+            rows_by_date[signal_date].append(row)
+        return rows_by_date
+
+    def _load_portfolio_returns(
+        self,
+        client: Any,
+        *,
+        segments: list[dict[str, Any]],
+        trading_days: list[date],
+    ) -> dict[int, list[tuple[date, float]]]:
+        query, params, position_rows = build_portfolio_return_query(
+            segments=segments,
+            trading_days=trading_days,
+        )
+        buffer = io.StringIO(newline="")
+        writer = csv.writer(buffer, lineterminator="\n")
+        writer.writerows(position_rows)
+        external_data = ExternalData(
+            file_name="portfolio_positions.csv",
+            data=buffer.getvalue().encode("utf-8"),
+            fmt="CSV",
+            structure=(
+                "segment_id UInt32, security_id String, start_date Date, "
+                "end_date Date, transaction_cost_bps Float64"
+            ),
+        )
+        rows = _records(
+            client.query_df(
+                query,
+                parameters=params,
+                external_data=external_data,
+            )
+        )
+        if not rows:
+            return {}
+        returns_by_segment: dict[int, list[tuple[date, float]]] = defaultdict(list)
+        for row in rows:
+            daily_return = _float_or_none(row.get("daily_return"))
+            returns_by_segment[int(row["segment_id"])].append(
+                (_as_date(row["trade_date"]), daily_return if daily_return is not None else 0.0)
+            )
+        return returns_by_segment
 
     def _load_price_return_matrix(
         self,

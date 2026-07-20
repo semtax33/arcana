@@ -59,6 +59,24 @@ class FakeFactorLabClient:
     def query_df(self, query, parameters=None):
         parameters = parameters or {}
         self.queries.append((query, parameters))
+        if "SELECT DISTINCT trade_date" in query:
+            return pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(
+                        [
+                            "2026-01-01",
+                            "2026-01-02",
+                            "2026-03-31",
+                            "2026-04-01",
+                            "2026-06-30",
+                            "2026-07-01",
+                            "2026-09-30",
+                            "2026-10-01",
+                            "2026-12-31",
+                        ]
+                    )
+                }
+            )
         if "FROM factor_catalog" in query:
             return pd.DataFrame({"factor_id": ["per"]})
         if "eligible_snapshot_dates AS" in query:
@@ -238,6 +256,31 @@ class FactorLabServiceTest(unittest.TestCase):
         self.assertEqual(factor_insert_params["start_date"], "2026-01-01")
         self.assertEqual(factor_insert_params["end_date"], "2026-12-31")
         self.assertIn("FROM fact_daily_factors AS f", factor_insert_query)
+
+    def test_run_graph_history_mode_limits_inputs_to_backtest_signal_dates(self):
+        client = FakeFactorLabClient()
+        graph = FactorLabGraphDto(**service_graph())
+
+        FactorLabService(client_factory=lambda: client).run_graph(
+            FactorLabRunRequestDto(
+                graph=graph,
+                mode="history",
+                history_start_date=date(2026, 1, 2),
+                history_end_date=date(2026, 12, 31),
+                history_rebalance_frequency="quarterly",
+            )
+        )
+
+        factor_insert_query, factor_insert_params = next(
+            (query, params)
+            for query, params in client.commands
+            if "INSERT INTO factor_lab_values" in query
+        )
+        self.assertEqual(
+            factor_insert_params["trade_dates"],
+            ["2026-01-01", "2026-03-31", "2026-06-30", "2026-09-30"],
+        )
+        self.assertIn("f.trade_date IN {trade_dates:Array(Date)}", factor_insert_query)
 
     def test_update_experiment_writes_new_version_with_same_id(self):
         client = FakeFactorLabClient()

@@ -1,3 +1,5 @@
+import csv
+import io
 import unittest
 from datetime import date
 
@@ -20,6 +22,36 @@ class FakeQueryResult:
         self.result_rows = rows
 
 
+def _portfolio_return_frame(
+    parameters,
+    external_data,
+    *,
+    second_day_return=0.1,
+    price_row_count=1,
+):
+    rows = []
+    external_rows = list(
+        csv.reader(io.StringIO(external_data.files[0].data.decode("utf-8")))
+    )
+    segment_ids = sorted({int(row[0]) for row in external_rows})
+    trading_days = [date.fromisoformat(str(value)) for value in parameters.get("trading_days", [])]
+    for segment_id in segment_ids:
+        segment_row = next(row for row in external_rows if int(row[0]) == segment_id)
+        start_date = date.fromisoformat(segment_row[2])
+        end_date = date.fromisoformat(segment_row[3])
+        segment_days = [value for value in trading_days if start_date <= value <= end_date]
+        for offset, trade_date in enumerate(segment_days):
+            rows.append(
+                {
+                    "segment_id": segment_id,
+                    "trade_date": trade_date,
+                    "daily_return": second_day_return if offset == 1 else 0.0,
+                    "price_row_count": price_row_count,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 class SnapshotDateMappingFakeClickHouseClient:
     def query(self, query, parameters=None):
         return FakeQueryResult(
@@ -35,9 +67,11 @@ class FakeClickHouseClient:
         self.closed = False
         self.queries = []
 
-    def query_df(self, query, parameters=None):
+    def query_df(self, query, parameters=None, external_data=None, **kwargs):
         parameters = parameters or {}
         self.queries.append((query, parameters))
+        if "FROM portfolio_positions AS" in query:
+            return _portfolio_return_frame(parameters, external_data)
         if "SELECT DISTINCT trade_date" in query:
             return pd.DataFrame(
                 {
@@ -145,7 +179,7 @@ class SnapshotAvailableFakeClickHouseClient(FakeClickHouseClient):
 
 
 class NoPositionsFakeClickHouseClient(FakeClickHouseClient):
-    def query_df(self, query, parameters=None):
+    def query_df(self, query, parameters=None, external_data=None, **kwargs):
         parameters = parameters or {}
         self.queries.append((query, parameters))
         if "SELECT DISTINCT trade_date" in query:
@@ -164,16 +198,16 @@ class NoPositionsFakeClickHouseClient(FakeClickHouseClient):
 
 
 class NoPriceHistoryFakeClickHouseClient(FakeClickHouseClient):
-    def query_df(self, query, parameters=None):
+    def query_df(self, query, parameters=None, external_data=None, **kwargs):
         parameters = parameters or {}
         if "FROM price_daily" in query and "security_ids" in parameters:
             self.queries.append((query, parameters))
             return pd.DataFrame()
-        return super().query_df(query, parameters)
+        return super().query_df(query, parameters, external_data=external_data, **kwargs)
 
 
 class MultiRebalanceFakeClickHouseClient(FakeClickHouseClient):
-    def query_df(self, query, parameters=None):
+    def query_df(self, query, parameters=None, external_data=None, **kwargs):
         parameters = parameters or {}
         self.queries.append((query, parameters))
         if "SELECT DISTINCT trade_date" in query:
@@ -192,8 +226,21 @@ class MultiRebalanceFakeClickHouseClient(FakeClickHouseClient):
                     )
                 }
             )
+        if "wide_latest_factor_values AS" in query:
+            base = FakeClickHouseClient.query_df(
+                self,
+                "latest_factor_values AS",
+                parameters,
+            )
+            self.queries.pop()
+            return pd.concat(
+                [base.assign(signal_date=signal_date) for signal_date in parameters["signal_dates"]],
+                ignore_index=True,
+            )
         if "latest_factor_values AS" in query:
             return super().query_df(query, parameters)
+        if "FROM portfolio_positions AS" in query:
+            return _portfolio_return_frame(parameters, external_data)
         if "FROM price_daily" in query and "security_ids" in parameters:
             return pd.DataFrame(
                 {
@@ -225,7 +272,7 @@ class SnapshotAvailableMultiRebalanceFakeClickHouseClient(MultiRebalanceFakeClic
             return FakeQueryResult([(len((parameters or {}).get("factor_ids", [])),)])
         return FakeQueryResult([])
 
-    def query_df(self, query, parameters=None):
+    def query_df(self, query, parameters=None, external_data=None, **kwargs):
         parameters = parameters or {}
         if "snapshot_date_map AS" in query:
             self.queries.append((query, parameters))
@@ -288,7 +335,7 @@ class SnapshotAvailableMultiRebalanceFakeClickHouseClient(MultiRebalanceFakeClic
                     ]
                 )
             return pd.DataFrame(rows)
-        return super().query_df(query, parameters)
+        return super().query_df(query, parameters, external_data=external_data, **kwargs)
 
 
 class IncompleteSnapshotCoverageFakeClickHouseClient(
@@ -302,16 +349,37 @@ class IncompleteSnapshotCoverageFakeClickHouseClient(
             return FakeQueryResult([(date(2026, 3, 31), date(2026, 3, 31))])
         return FakeQueryResult([])
 
-    def query_df(self, query, parameters=None):
+    def query_df(self, query, parameters=None, external_data=None, **kwargs):
         if "latest_factor_values AS" in query and "snapshot_date_map AS" not in query:
-            return FakeClickHouseClient.query_df(self, query, parameters)
-        return super().query_df(query, parameters)
+            return FakeClickHouseClient.query_df(
+                self,
+                query,
+                parameters,
+                external_data=external_data,
+                **kwargs,
+            )
+        return super().query_df(query, parameters, external_data=external_data, **kwargs)
 
 
 
 class ChangingRebalanceFakeClickHouseClient(MultiRebalanceFakeClickHouseClient):
-    def query_df(self, query, parameters=None):
+    def query_df(self, query, parameters=None, external_data=None, **kwargs):
         parameters = parameters or {}
+        if "wide_latest_factor_values AS" in query:
+            self.queries.append((query, parameters))
+            frames = []
+            for signal_date in parameters["signal_dates"]:
+                before = len(self.queries)
+                frame = self.query_df(
+                    "latest_factor_values AS",
+                    {**parameters, "signal_date": signal_date},
+                )
+                del self.queries[before:]
+                frames.append(frame.assign(signal_date=signal_date))
+            return pd.concat(frames, ignore_index=True)
+        if "FROM portfolio_positions AS" in query:
+            self.queries.append((query, parameters))
+            return _portfolio_return_frame(parameters, external_data)
         if "latest_factor_values AS" in query:
             self.queries.append((query, parameters))
             leading_security = "SEC_KR_B" if parameters.get("signal_date") == "2026-03-31" else "SEC_KR_A"
@@ -582,7 +650,7 @@ class BacktestServiceTest(unittest.TestCase):
         self.assertEqual(result.summary.rebalance_count, 1)
         self.assertAlmostEqual(result.summary.cumulative_return, 0.1)
 
-    def test_factor_backtest_loads_price_history_once_for_multiple_rebalances(self):
+    def test_factor_backtest_loads_portfolio_returns_once_for_multiple_rebalances(self):
         client = MultiRebalanceFakeClickHouseClient()
         request = FactorBacktestRequestDto(
             conditions=[
@@ -597,13 +665,23 @@ class BacktestServiceTest(unittest.TestCase):
 
         result = BacktestService(client_factory=lambda: client).run_factor_backtest(request)
 
-        price_history_queries = [
+        portfolio_return_queries = [
             query
             for query, params in client.queries
-            if "FROM price_daily" in query and "security_ids" in params
+            if "portfolio_positions AS" in query
+        ]
+        raw_batch_queries = [
+            (query, params)
+            for query, params in client.queries
+            if "wide_latest_factor_values AS" in query
         ]
         self.assertEqual(len(result.rebalance_history), 2)
-        self.assertEqual(len(price_history_queries), 1)
+        self.assertEqual(len(portfolio_return_queries), 1)
+        self.assertEqual(len(raw_batch_queries), 1)
+        self.assertEqual(
+            raw_batch_queries[0][1]["signal_dates"],
+            ["2026-01-01", "2026-03-31"],
+        )
         self.assertAlmostEqual(result.summary.cumulative_return, 0.21)
 
     def test_factor_backtest_marks_entered_and_exited_positions(self):

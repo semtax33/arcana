@@ -525,25 +525,286 @@ ORDER BY
     return query, params
 
 
+def build_factor_raw_batch_query(
+    conditions: list[FactorCondition | dict[str, Any]],
+    *,
+    signal_dates: list[str | date],
+    market: str | None = None,
+    financial_basis: str | None = "annual",
+    factor_table: str = DEFAULT_FACTOR_TABLE,
+    raw_lookback_days: int | None = None,
+    catalog_table: str = "factor_catalog",
+    security_table: str = "security_master",
+    issuer_table: str = "issuers",
+    identifier_table: str = "identifiers",
+    sector_codes: list[str] | None = None,
+    industry_group_codes: list[str] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Build one raw-factor query for every requested signal date."""
+
+    normalized_conditions = [_coerce_condition(condition) for condition in conditions]
+    if not normalized_conditions:
+        raise ValueError("at least one factor condition is required")
+    normalized_signal_dates = sorted({_resolve_date(value) for value in signal_dates})
+    if not normalized_signal_dates:
+        raise ValueError("signal_dates must not be empty")
+
+    factor_ids = _validate_factor_ids(
+        sorted({condition.factor_id for condition in normalized_conditions})
+    )
+    if any(is_style_score_factor(factor_id) for factor_id in factor_ids):
+        raise ValueError("batch raw factors only support regular factor ids")
+
+    normalized_sector_codes = (
+        _validate_classification_codes(sector_codes, "sector_codes") if sector_codes else None
+    )
+    normalized_industry_group_codes = (
+        _validate_classification_codes(industry_group_codes, "industry_group_codes")
+        if industry_group_codes
+        else None
+    )
+    normalized_market = _normalize_market(market)
+    earliest_signal_date = date.fromisoformat(normalized_signal_dates[0])
+    latest_signal_date = normalized_signal_dates[-1]
+    params: dict[str, Any] = {
+        "signal_dates": normalized_signal_dates,
+        "factor_ids": factor_ids,
+        "max_signal_date": latest_signal_date,
+    }
+    raw_lookback_filter = ""
+    lookback_days: int | None = None
+    if raw_lookback_days is not None and int(raw_lookback_days) > 0:
+        lookback_days = int(raw_lookback_days)
+        params["raw_start_date"] = (
+            earliest_signal_date - timedelta(days=lookback_days)
+        ).isoformat()
+        raw_lookback_filter = "\n        AND f.trade_date >= {raw_start_date:Date}"
+    basis_filter = ""
+    if financial_basis:
+        params["financial_basis"] = financial_basis
+        basis_filter = "\n        AND f.financial_basis = {financial_basis:String}"
+    if normalized_sector_codes:
+        params["sector_codes"] = normalized_sector_codes
+    if normalized_industry_group_codes:
+        params["industry_group_codes"] = normalized_industry_group_codes
+    if normalized_market:
+        params["market_country"] = normalized_market.upper()
+
+    aggregate_columns: list[str] = []
+    expanded_points: list[str] = []
+    for index, signal_date in enumerate(normalized_signal_dates):
+        signal_param = f"signal_date_{index}"
+        params[signal_param] = signal_date
+        condition = f"f.trade_date <= {{{signal_param}:Date}}"
+        if lookback_days is not None:
+            raw_start_param = f"signal_raw_start_date_{index}"
+            params[raw_start_param] = (
+                date.fromisoformat(signal_date) - timedelta(days=lookback_days)
+            ).isoformat()
+            condition += f" AND f.trade_date >= {{{raw_start_param}:Date}}"
+        aggregate_columns.extend(
+            [
+                (
+                    "argMaxIf(f.factor_value, tuple(f.trade_date, f.updated_at), "
+                    f"{condition}) AS factor_value_{index}"
+                ),
+                f"maxIf(f.trade_date, {condition}) AS factor_trade_date_{index}",
+            ]
+        )
+        expanded_points.append(
+            f"tuple({{{signal_param}:Date}}, factor_value_{index}, factor_trade_date_{index})"
+        )
+
+    ctes = [
+        f"""
+selected_catalog AS (
+    SELECT
+        factor_id,
+        any(factor_name) AS factor_name,
+        any(value_direction) AS value_direction
+    FROM {_validate_table_name(catalog_table)}
+    WHERE is_active
+        AND has({{factor_ids:Array(String)}}, factor_id)
+    GROUP BY factor_id
+)
+""".strip(),
+    ]
+
+    needs_security_universe = bool(
+        normalized_sector_codes or normalized_industry_group_codes or normalized_market
+    )
+    regular_security_universe_join = ""
+    if needs_security_universe:
+        sector_filter = ""
+        if normalized_sector_codes:
+            sector_filter = "\n        AND has({sector_codes:Array(String)}, iss.sector_code)"
+        industry_group_filter = ""
+        if normalized_industry_group_codes:
+            industry_group_filter = (
+                "\n        AND has({industry_group_codes:Array(String)}, iss.industry_group_code)"
+            )
+        market_filter = ""
+        if normalized_market:
+            market_filter = "\n        AND sm.country = {market_country:String}"
+        ctes.append(
+            f"""
+security_universe AS (
+    SELECT
+        sm.security_id AS security_id
+    FROM {_validate_table_name(security_table)} AS sm
+    LEFT JOIN {_validate_table_name(issuer_table)} AS iss
+        ON iss.issuer_id = sm.issuer_id
+    WHERE 1 = 1{market_filter}{sector_filter}{industry_group_filter}
+    GROUP BY sm.security_id
+)
+""".strip()
+        )
+        regular_security_universe_join = (
+            "\n    INNER JOIN security_universe AS u\n        ON u.security_id = f.security_id"
+        )
+
+    aggregate_sql = ",\n        ".join(aggregate_columns)
+    expanded_points_sql = ",\n                ".join(expanded_points)
+    ctes.append(
+        f"""
+wide_latest_factor_values AS (
+    SELECT
+        f.security_id AS security_id,
+        f.factor_id AS factor_id,
+        any(c.factor_name) AS factor_name,
+        any(c.value_direction) AS value_direction,
+        {aggregate_sql}
+    FROM {_validate_table_name(factor_table)} AS f
+    INNER JOIN selected_catalog AS c
+        ON c.factor_id = f.factor_id{regular_security_universe_join}
+    WHERE f.trade_date <= {{max_signal_date:Date}}
+        {raw_lookback_filter.strip()}
+        AND has({{factor_ids:Array(String)}}, f.factor_id)
+        AND isFinite(f.factor_value){basis_filter}
+    GROUP BY
+        f.security_id,
+        f.factor_id
+),
+latest_factor_values AS (
+    SELECT
+        tupleElement(point, 1) AS signal_date,
+        security_id,
+        factor_id,
+        factor_name,
+        value_direction,
+        tupleElement(point, 2) AS factor_value,
+        tupleElement(point, 3) AS trade_date
+    FROM (
+        SELECT
+            security_id,
+            factor_id,
+            factor_name,
+            value_direction,
+            arrayJoin([
+                {expanded_points_sql}
+            ]) AS point
+        FROM wide_latest_factor_values
+    )
+    WHERE tupleElement(point, 3) > toDate(0)
+)
+""".strip()
+    )
+    ctes.append(
+        """
+ranked_factor_values AS (
+    SELECT
+        signal_date,
+        security_id,
+        factor_id,
+        factor_name,
+        value_direction,
+        factor_value,
+        trade_date,
+        row_number() OVER (PARTITION BY signal_date, factor_id ORDER BY factor_value DESC, security_id ASC) AS rank_high,
+        row_number() OVER (PARTITION BY signal_date, factor_id ORDER BY factor_value ASC, security_id ASC) AS rank_low,
+        count() OVER (PARTITION BY signal_date, factor_id) AS factor_count
+    FROM latest_factor_values
+)
+""".strip()
+    )
+    with_sql = "WITH\n" + ",\n".join(ctes)
+    query = f"""
+{with_sql}
+SELECT
+    rf.signal_date AS signal_date,
+    rf.security_id AS security_id,
+    any(id.id_value) AS ticker,
+    any(iss.legal_name_ko) AS stock_name,
+    rf.factor_id AS factor_id,
+    any(rf.factor_name) AS factor_name,
+    any(rf.value_direction) AS value_direction,
+    any(rf.factor_value) AS factor_value,
+    max(rf.trade_date) AS factor_trade_date,
+    any(rf.rank_high) AS rank_high,
+    any(rf.rank_low) AS rank_low,
+    any(rf.factor_count) AS factor_count,
+    if(
+        any(rf.factor_count) <= 1,
+        100.0,
+        if(
+            any(rf.value_direction) = 'LOWER_BETTER',
+            (any(rf.factor_count) - any(rf.rank_low)) / (any(rf.factor_count) - 1) * 100.0,
+            (any(rf.factor_count) - any(rf.rank_high)) / (any(rf.factor_count) - 1) * 100.0
+        )
+    ) AS percentile_score
+FROM ranked_factor_values AS rf
+LEFT JOIN {_validate_table_name(security_table)} AS sm
+    ON sm.security_id = rf.security_id
+LEFT JOIN {_validate_table_name(issuer_table)} AS iss
+    ON iss.issuer_id = sm.issuer_id
+LEFT JOIN {_validate_table_name(identifier_table)} AS id
+    ON id.security_id = rf.security_id
+    AND id.id_type = 'TICKER'
+    AND id.is_primary
+GROUP BY
+    rf.signal_date,
+    rf.security_id,
+    rf.factor_id
+ORDER BY
+    rf.signal_date ASC,
+    rf.security_id ASC,
+    rf.factor_id ASC
+""".strip()
+    return query, params
+
+
 def build_trading_days_query(
     *,
     start_date: str | date,
     end_date: str | date,
+    market: str | None = None,
     lookback_days: int = 10,
     price_table: str = "price_daily",
+    security_table: str = "security_master",
 ) -> tuple[str, dict[str, Any]]:
     start = date.fromisoformat(_resolve_date(start_date)) - timedelta(days=lookback_days)
-    query = f"""
-SELECT DISTINCT trade_date
-FROM {_validate_table_name(price_table)}
-WHERE trade_date >= {{start_date:Date}}
-    AND trade_date <= {{end_date:Date}}
-ORDER BY trade_date ASC
-""".strip()
-    return query, {
+    normalized_market = _normalize_market(market)
+    market_join = ""
+    market_filter = ""
+    params: dict[str, Any] = {
         "start_date": start.isoformat(),
         "end_date": _resolve_date(end_date),
     }
+    if normalized_market:
+        params["market_country"] = normalized_market.upper()
+        market_join = (
+            f"\nINNER JOIN {_validate_table_name(security_table)} AS sm"
+            "\n    ON sm.security_id = p.security_id"
+        )
+        market_filter = "\n    AND sm.country = {market_country:String}"
+    query = f"""
+SELECT DISTINCT trade_date
+FROM {_validate_table_name(price_table)} AS p{market_join}
+WHERE p.trade_date >= {{start_date:Date}}
+    AND p.trade_date <= {{end_date:Date}}{market_filter}
+ORDER BY trade_date ASC
+""".strip()
+    return query, params
 
 
 def build_price_history_query(
@@ -572,6 +833,157 @@ ORDER BY trade_date ASC, security_id ASC
         "start_date": _resolve_date(start_date),
         "end_date": _resolve_date(end_date),
     }
+
+
+def build_portfolio_return_query(
+    *,
+    segments: list[dict[str, Any]],
+    trading_days: list[str | date],
+    price_table: str = "price_daily",
+) -> tuple[str, dict[str, Any], list[tuple[int, str, str, str, float]]]:
+    """Calculate equal-weight segment returns in ClickHouse."""
+
+    if not segments:
+        raise ValueError("segments must not be empty")
+    normalized_trading_days = sorted({_resolve_date(value) for value in trading_days})
+    if not normalized_trading_days:
+        raise ValueError("trading_days must not be empty")
+
+    segment_ids: list[int] = []
+    position_security_ids: list[str] = []
+    segment_start_dates: list[str] = []
+    segment_end_dates: list[str] = []
+    transaction_cost_bps: list[float] = []
+    all_security_ids: set[str] = set()
+    all_segment_start_dates: list[str] = []
+    all_segment_end_dates: list[str] = []
+    for segment_id, segment in enumerate(segments):
+        start_date = _resolve_date(segment["start_date"])
+        end_date = _resolve_date(segment["end_date"])
+        if start_date > end_date:
+            raise ValueError("segment start_date must not be later than end_date")
+        security_ids = sorted({str(value) for value in segment.get("security_ids") or []})
+        if not security_ids:
+            continue
+        all_segment_start_dates.append(start_date)
+        all_segment_end_dates.append(end_date)
+        cost_bps = float(segment.get("transaction_cost_bps") or 0.0)
+        for security_id in security_ids:
+            segment_ids.append(segment_id)
+            position_security_ids.append(security_id)
+            segment_start_dates.append(start_date)
+            segment_end_dates.append(end_date)
+            transaction_cost_bps.append(cost_bps)
+            all_security_ids.add(security_id)
+    if not position_security_ids:
+        raise ValueError("segments must contain at least one security_id")
+
+    position_rows = list(
+        zip(
+            segment_ids,
+            position_security_ids,
+            segment_start_dates,
+            segment_end_dates,
+            transaction_cost_bps,
+            strict=True,
+        )
+    )
+    params = {
+        "security_ids": sorted(all_security_ids),
+        "trading_days": normalized_trading_days,
+        "start_date": min(all_segment_start_dates),
+        "end_date": max(all_segment_end_dates),
+    }
+    query = f"""
+WITH
+raw_prices AS (
+    SELECT
+        prices_source.security_id AS security_id,
+        prices_source.trade_date AS trade_date,
+        toFloat64(argMax(prices_source.close, prices_source.updated_at)) AS close
+    FROM {_validate_table_name(price_table)} AS prices_source
+    WHERE has({{security_ids:Array(String)}}, prices_source.security_id)
+        AND prices_source.trade_date >= {{start_date:Date}}
+        AND prices_source.trade_date <= {{end_date:Date}}
+        AND prices_source.trade_date IN {{trading_days:Array(Date)}}
+        AND prices_source.close IS NOT NULL
+    GROUP BY prices_source.security_id, prices_source.trade_date
+),
+prices_with_lag AS (
+    SELECT
+        security_id,
+        trade_date,
+        close,
+        lagInFrame(close, 1, NULL) OVER (
+            PARTITION BY security_id
+            ORDER BY trade_date
+            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        ) AS previous_close
+    FROM raw_prices
+),
+security_returns AS (
+    SELECT
+        security_id,
+        trade_date,
+        if(
+            close IS NULL OR previous_close IS NULL OR previous_close = 0,
+            NULL,
+            close / previous_close - 1
+        ) AS daily_return
+    FROM prices_with_lag
+),
+position_day_returns AS (
+    SELECT
+        positions.segment_id AS segment_id,
+        positions.transaction_cost_bps AS transaction_cost_bps,
+        returns.trade_date AS trade_date,
+        returns.daily_return AS daily_return
+    FROM portfolio_positions AS positions
+    INNER JOIN security_returns AS returns
+        ON returns.security_id = positions.security_id
+        AND returns.trade_date >= positions.start_date
+        AND returns.trade_date <= positions.end_date
+),
+segment_daily_returns AS (
+    SELECT
+        segment_id,
+        trade_date,
+        any(transaction_cost_bps) AS transaction_cost_bps,
+        if(
+            countIf(daily_return IS NOT NULL AND isFinite(daily_return)) = 0,
+            0.0,
+            avgIf(
+                daily_return,
+                daily_return IS NOT NULL AND isFinite(daily_return)
+            )
+        ) AS daily_return
+    FROM position_day_returns
+    GROUP BY segment_id, trade_date
+),
+ranked_segment_returns AS (
+    SELECT
+        segment_id,
+        trade_date,
+        transaction_cost_bps,
+        daily_return,
+        row_number() OVER (
+            PARTITION BY segment_id
+            ORDER BY trade_date
+        ) AS segment_day_number
+    FROM segment_daily_returns
+)
+SELECT
+    segment_id,
+    trade_date,
+    daily_return - if(
+        segment_day_number = 1,
+        transaction_cost_bps / 10000.0,
+        0.0
+    ) AS daily_return
+FROM ranked_segment_returns
+ORDER BY segment_id ASC, trade_date ASC
+""".strip()
+    return query, params, position_rows
 
 
 def build_benchmark_history_query(

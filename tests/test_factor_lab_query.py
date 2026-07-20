@@ -137,6 +137,16 @@ class FactorLabQueryTest(unittest.TestCase):
         self.assertIn("INNER JOIN node_factor_c AS r", result.query)
         self.assertIn("division_by_zero", result.query)
 
+    def test_history_compile_can_limit_factor_inputs_to_signal_dates(self):
+        result = compile_factor_lab_graph(
+            nested_graph(),
+            known_factor_ids={"per", "pbr", "roe"},
+            trade_dates=["2026-06-30", "2026-03-31"],
+        )
+
+        self.assertEqual(result.parameters["trade_dates"], ["2026-03-31", "2026-06-30"])
+        self.assertEqual(result.query.count("f.trade_date IN {trade_dates:Array(Date)}"), 3)
+
     def test_zscore_and_winsorize_compile_invalid_value_policy(self):
         graph = nested_graph()
         graph["nodes"] = [

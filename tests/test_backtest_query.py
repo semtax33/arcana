@@ -1,6 +1,12 @@
 import unittest
 
-from api.repository.backtest_query import build_factor_snapshot_batch_query, build_factor_snapshot_query
+from api.repository.backtest_query import (
+    build_factor_raw_batch_query,
+    build_factor_snapshot_batch_query,
+    build_factor_snapshot_query,
+    build_portfolio_return_query,
+    build_trading_days_query,
+)
 from api.repository.factor_screen_query import FactorCondition
 
 
@@ -137,6 +143,59 @@ class BacktestQueryTest(unittest.TestCase):
                 signal_dates=["2026-03-31"],
                 snapshot_dates=["2026-04-01"],
             )
+
+    def test_factor_raw_batch_query_scans_all_signal_dates_in_one_query(self):
+        query, params = build_factor_raw_batch_query(
+            [FactorCondition(factor_id="roe", mode="top_percent", top_percent=20)],
+            signal_dates=["2026-06-30", "2026-03-31"],
+            market="KR",
+            raw_lookback_days=540,
+        )
+
+        self.assertIn("wide_latest_factor_values AS", query)
+        self.assertEqual(query.count("FROM fact_daily_factors AS f"), 1)
+        self.assertIn("argMaxIf", query)
+        self.assertNotIn("CROSS JOIN signal_date_list", query)
+        self.assertIn("f.trade_date >= {raw_start_date:Date}", query)
+        self.assertEqual(params["signal_dates"], ["2026-03-31", "2026-06-30"])
+        self.assertEqual(params["raw_start_date"], "2024-10-07")
+
+    def test_portfolio_return_query_returns_only_daily_segment_results(self):
+        query, params, position_rows = build_portfolio_return_query(
+            segments=[
+                {
+                    "security_ids": ["SEC_B", "SEC_A"],
+                    "start_date": "2026-01-02",
+                    "end_date": "2026-01-03",
+                    "transaction_cost_bps": 5,
+                }
+            ],
+            trading_days=["2026-01-02", "2026-01-03"],
+        )
+
+        self.assertIn("portfolio_positions AS", query)
+        self.assertIn("lagInFrame", query)
+        self.assertIn("avgIf", query)
+        self.assertIn("ranked_segment_returns AS", query)
+        self.assertEqual(params["security_ids"], ["SEC_A", "SEC_B"])
+        self.assertEqual(
+            position_rows,
+            [
+                (0, "SEC_A", "2026-01-02", "2026-01-03", 5.0),
+                (0, "SEC_B", "2026-01-02", "2026-01-03", 5.0),
+            ],
+        )
+
+    def test_trading_days_query_can_scope_dates_to_market(self):
+        query, params = build_trading_days_query(
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+            market="KR",
+        )
+
+        self.assertIn("INNER JOIN security_master AS sm", query)
+        self.assertIn("sm.country = {market_country:String}", query)
+        self.assertEqual(params["market_country"], "KR")
 
 
 if __name__ == "__main__":
