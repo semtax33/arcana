@@ -258,7 +258,8 @@ GET /api/chart/005930?range=1Y
 
 응답 `FactorBacktestResponseDto`:
 
-- `summary`: 누적수익률, CAGR, MDD, 변동성, 샤프, 승률, 리밸런싱 횟수
+- `summary`: 누적수익률, CAGR, MDD, 변동성, 샤프, 일별 수익률 평균의
+  단일표본 t-stat/양측 p-value/관측치 수, 승률, 리밸런싱 횟수
 - `equity_curve`: 날짜별 전략 NAV 및 벤치마크 NAV
 - `rebalance_history`: 리밸런싱별 보유/진입/청산 종목
 - `annual_returns`: 연도별 전략/벤치마크/초과수익률

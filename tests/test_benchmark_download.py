@@ -7,6 +7,7 @@ from unittest.mock import ANY, patch
 import pandas as pd
 
 from engine.extractors.benchmarks import fetch_yfinance_benchmark_prices
+from engine.loaders.benchmarks import download_benchmark_prices
 from engine.workflows._internal import download_workflow
 
 
@@ -61,6 +62,28 @@ class BenchmarkDownloadTest(unittest.TestCase):
             "20100101",
             ANY,
             benchmark_ids=["S&P500"],
+        )
+
+    def test_download_helper_uses_yfinance_for_us_market(self):
+        frame = pd.DataFrame({"benchmark_id": ["US_NASDAQ"]})
+
+        with patch(
+            "engine.loaders.benchmarks.fetch_yfinance_benchmark_prices",
+            return_value=frame,
+        ) as fetch:
+            result = download_benchmark_prices(
+                market="us",
+                benchmark_ids=["NASDAQ"],
+                start_date="2026-01-01",
+                end_date="2026-01-05",
+            )
+
+        self.assertIs(result, frame)
+        fetch.assert_called_once_with(
+            "2026-01-01",
+            "2026-01-05",
+            benchmark_ids=["NASDAQ"],
+            output_dir=None,
         )
 
 

@@ -15,6 +15,9 @@ class BacktestSummary:
     max_drawdown: float | None = None
     volatility: float | None = None
     sharpe: float | None = None
+    t_stat: float | None = None
+    p_value: float | None = None
+    return_observations: int = 0
     win_rate: float | None = None
     rebalance_count: int = 0
 

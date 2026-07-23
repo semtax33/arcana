@@ -1,10 +1,13 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import pandas as pd
 
 from engine.transformers.benchmarks import (
+    BENCHMARK_BRONZE_DIRS,
+    BENCHMARK_SILVER_PATHS,
     BENCHMARK_PRICE_COLUMNS,
     normalize_benchmark_price_frame,
     normalize_benchmark_prices,
@@ -72,6 +75,33 @@ class BenchmarkNormalizerTest(unittest.TestCase):
             self.assertTrue(silver.exists())
             self.assertEqual(result["benchmark_id"].tolist(), ["KOSDAQ"])
             self.assertEqual(result["close"].tolist(), [105])
+
+    def test_normalize_benchmark_prices_uses_us_default_paths(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bronze = root / "bronze"
+            silver = root / "silver" / "us_normalized_benchmark_price.csv"
+            bronze.mkdir()
+            (bronze / "us_sp500.csv").write_text(
+                "\n".join(
+                    [
+                        "trade_date,open,high,low,close,volume",
+                        "2026-01-02,4800,4900,4750,4875,1000000",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.dict(BENCHMARK_BRONZE_DIRS, {"us": bronze}),
+                patch.dict(BENCHMARK_SILVER_PATHS, {"us": silver}),
+            ):
+                result = normalize_benchmark_prices(market="us")
+
+            self.assertTrue(silver.exists())
+            self.assertEqual(result["benchmark_id"].tolist(), ["US_SP500"])
+            self.assertEqual(result["country"].tolist(), ["US"])
+            self.assertEqual(result["currency"].tolist(), ["USD"])
 
 
 if __name__ == "__main__":

@@ -1105,11 +1105,23 @@ def _summary(
     years = max((dates[-1] - dates[0]).days / 365.25, 1 / 365.25) if len(dates) >= 2 else None
     cagr = navs[-1] ** (1 / years) - 1 if years else None
     max_drawdown = _max_drawdown(navs)
-    volatility = _stddev(returns) * math.sqrt(252) if len(returns) >= 2 else None
+    return_observations = len(returns)
     average_return = sum(returns) / len(returns) if returns else None
+    return_stddev = _stddev(returns) if return_observations >= 2 else None
+    volatility = return_stddev * math.sqrt(252) if return_stddev is not None else None
     sharpe = (
-        average_return / _stddev(returns) * math.sqrt(252)
-        if average_return is not None and len(returns) >= 2 and _stddev(returns) > 0
+        average_return / return_stddev * math.sqrt(252)
+        if average_return is not None and return_stddev is not None and return_stddev > 0
+        else None
+    )
+    t_stat = (
+        average_return / (return_stddev / math.sqrt(return_observations))
+        if average_return is not None and return_stddev is not None and return_stddev > 0
+        else None
+    )
+    p_value = (
+        _two_sided_t_p_value(t_stat, degrees_of_freedom=return_observations - 1)
+        if t_stat is not None
         else None
     )
     non_zero_returns = [value for value in returns if value != 0]
@@ -1127,6 +1139,9 @@ def _summary(
         max_drawdown=_clean_number(max_drawdown),
         volatility=_clean_number(volatility),
         sharpe=_clean_number(sharpe),
+        t_stat=_clean_number(t_stat),
+        p_value=_clean_number(p_value),
+        return_observations=return_observations,
         win_rate=_clean_number(win_rate),
         rebalance_count=rebalance_count,
     )
@@ -1206,6 +1221,87 @@ def _stddev(values: list[float]) -> float:
     mean = sum(values) / len(values)
     variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
     return math.sqrt(variance)
+
+
+def _two_sided_t_p_value(t_stat: float, *, degrees_of_freedom: int) -> float | None:
+    """Return the exact two-sided p-value for a Student t statistic."""
+    if degrees_of_freedom <= 0 or not math.isfinite(t_stat):
+        return None
+    x = degrees_of_freedom / (degrees_of_freedom + t_stat * t_stat)
+    return _regularized_incomplete_beta(x, degrees_of_freedom / 2.0, 0.5)
+
+
+def _regularized_incomplete_beta(x: float, a: float, b: float) -> float:
+    if x <= 0:
+        return 0.0
+    if x >= 1:
+        return 1.0
+
+    log_front = (
+        math.lgamma(a + b)
+        - math.lgamma(a)
+        - math.lgamma(b)
+        + a * math.log(x)
+        + b * math.log1p(-x)
+    )
+    front = math.exp(log_front)
+    if x < (a + 1.0) / (a + b + 2.0):
+        result = front * _beta_continued_fraction(a, b, x) / a
+    else:
+        result = 1.0 - front * _beta_continued_fraction(b, a, 1.0 - x) / b
+    return min(1.0, max(0.0, result))
+
+
+def _beta_continued_fraction(a: float, b: float, x: float) -> float:
+    max_iterations = 100
+    epsilon = 3e-14
+    minimum = 1e-300
+    qab = a + b
+    qap = a + 1.0
+    qam = a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    if abs(d) < minimum:
+        d = minimum
+    d = 1.0 / d
+    result = d
+
+    for iteration in range(1, max_iterations + 1):
+        doubled = 2 * iteration
+        coefficient = (
+            iteration
+            * (b - iteration)
+            * x
+            / ((qam + doubled) * (a + doubled))
+        )
+        d = 1.0 + coefficient * d
+        if abs(d) < minimum:
+            d = minimum
+        c = 1.0 + coefficient / c
+        if abs(c) < minimum:
+            c = minimum
+        d = 1.0 / d
+        result *= d * c
+
+        coefficient = (
+            -(a + iteration)
+            * (qab + iteration)
+            * x
+            / ((a + doubled) * (qap + doubled))
+        )
+        d = 1.0 + coefficient * d
+        if abs(d) < minimum:
+            d = minimum
+        c = 1.0 + coefficient / c
+        if abs(c) < minimum:
+            c = minimum
+        d = 1.0 / d
+        delta = d * c
+        result *= delta
+        if abs(delta - 1.0) < epsilon:
+            break
+
+    return result
 
 
 def _first_present_benchmark(rows: list[BacktestEquityCurvePoint], benchmark_id: str) -> float | None:

@@ -5,6 +5,7 @@ from datetime import date
 
 import pandas as pd
 
+from api.model.backtest import BacktestEquityCurvePoint
 from api.repository.factor_screen_query import FactorCondition
 from api.service.backtest_service import (
     BacktestService,
@@ -12,6 +13,7 @@ from api.service.backtest_service import (
     _rebalance_dates,
     _resolve_benchmark_ids,
     _snapshot_dates_for_signal_dates,
+    _summary,
     _to_repository_condition,
 )
 from api.service.dto import FactorBacktestRequestDto, FactorConditionDto
@@ -453,6 +455,49 @@ class ChangingRebalanceFakeClickHouseClient(MultiRebalanceFakeClickHouseClient):
             )
         return super().query_df(query, parameters)
 class BacktestServiceTest(unittest.TestCase):
+    def test_summary_includes_daily_return_significance_test(self):
+        navs = [1.0, 1.01, 1.01 * 1.02, 1.01 * 1.02 * 1.03]
+        points = [
+            BacktestEquityCurvePoint(
+                trade_date=date(2026, 1, index + 1),
+                strategy_nav=nav,
+            )
+            for index, nav in enumerate(navs)
+        ]
+
+        summary = _summary(
+            points,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 4),
+            rebalance_frequency="quarterly",
+            rebalance_count=1,
+        )
+
+        self.assertEqual(summary.return_observations, 3)
+        self.assertAlmostEqual(summary.t_stat, 3.4641016151377544)
+        self.assertAlmostEqual(summary.p_value, 0.07417990022744857)
+
+    def test_summary_omits_significance_when_returns_have_no_variance(self):
+        points = [
+            BacktestEquityCurvePoint(
+                trade_date=date(2026, 1, index + 1),
+                strategy_nav=1.0,
+            )
+            for index in range(3)
+        ]
+
+        summary = _summary(
+            points,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 3),
+            rebalance_frequency="quarterly",
+            rebalance_count=0,
+        )
+
+        self.assertEqual(summary.return_observations, 2)
+        self.assertIsNone(summary.t_stat)
+        self.assertIsNone(summary.p_value)
+
     def test_snapshot_date_mapping_carries_forward_without_future_source_data(self):
         mapping = _snapshot_dates_for_signal_dates(
             SnapshotDateMappingFakeClickHouseClient(),

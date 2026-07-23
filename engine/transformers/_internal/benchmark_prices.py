@@ -14,11 +14,27 @@ ENGINE_DIR = Path(__file__).resolve().parent
 BRONZE_KRX_BENCHMARK_DIR = DATA_LAKE.bronze("krx", "benchmark")
 BRONZE_BENCHMARK_DIR = BRONZE_KRX_BENCHMARK_DIR
 BRONZE_YFINANCE_BENCHMARK_DIR = DATA_LAKE.bronze("yfinance", "benchmark")
-SILVER_BENCHMARK_PATH = DATA_LAKE.silver(
+SILVER_KRX_BENCHMARK_PATH = DATA_LAKE.silver(
     "krx",
     "benchmark",
     market_csv_name("normalized_benchmark_price"),
 )
+SILVER_BENCHMARK_PATH = SILVER_KRX_BENCHMARK_PATH
+SILVER_YFINANCE_BENCHMARK_PATH = DATA_LAKE.silver(
+    "yfinance",
+    "benchmark",
+    market_csv_name("normalized_benchmark_price", market="us"),
+)
+
+BENCHMARK_BRONZE_DIRS = {
+    "kr": BRONZE_KRX_BENCHMARK_DIR,
+    "us": BRONZE_YFINANCE_BENCHMARK_DIR,
+}
+BENCHMARK_SILVER_PATHS = {
+    "kr": SILVER_KRX_BENCHMARK_PATH,
+    "us": SILVER_YFINANCE_BENCHMARK_PATH,
+}
+_DEFAULT_OUTPUT_PATH = object()
 
 DEFAULT_BENCHMARK_INDEX_CODES = {
     "KOSPI200": "1028",
@@ -161,11 +177,13 @@ def normalize_benchmark_price_frame(
 def normalize_benchmark_prices(
     path: str | Path | None = None,
     *,
-    output_path: str | Path | None = SILVER_BENCHMARK_PATH,
+    output_path: str | Path | None | object = _DEFAULT_OUTPUT_PATH,
+    market: str = "kr",
 ) -> pd.DataFrame:
-    files = _glob_files(str(path or (BRONZE_BENCHMARK_DIR / "*.csv")))
+    market = normalize_benchmark_market(market)
+    files = _glob_files(str(path or (BENCHMARK_BRONZE_DIRS[market] / "*.csv")))
     if not files:
-        raise FileNotFoundError("benchmark CSV files were not found")
+        raise FileNotFoundError(f"{market.upper()} benchmark CSV files were not found")
 
     frames = []
     for file in files:
@@ -175,11 +193,24 @@ def normalize_benchmark_prices(
         frames.append(normalize_benchmark_price_frame(frame, benchmark_id=benchmark_id))
 
     result = _concat_benchmark_frames(frames)
-    if output_path is not None:
-        output = Path(output_path)
+    resolved_output_path = (
+        BENCHMARK_SILVER_PATHS[market]
+        if output_path is _DEFAULT_OUTPUT_PATH
+        else output_path
+    )
+    if resolved_output_path is not None:
+        output = Path(resolved_output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
         result.to_csv(output, index=False, encoding="utf-8-sig")
     return result
+
+
+def normalize_benchmark_market(market: str = "kr") -> str:
+    normalized = str(market or "kr").strip().lower()
+    if normalized not in BENCHMARK_BRONZE_DIRS:
+        choices = ", ".join(sorted(BENCHMARK_BRONZE_DIRS))
+        raise ValueError(f"market must be one of: {choices}")
+    return normalized
 
 
 def _resolve_benchmark_ids(

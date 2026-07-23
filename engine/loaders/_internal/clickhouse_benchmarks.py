@@ -11,6 +11,7 @@ from engine.extractors.benchmarks import fetch_benchmark_prices, fetch_yfinance_
 from engine.transformers.benchmarks import (
     DEFAULT_BENCHMARK_INDEX_CODES,
     DEFAULT_YFINANCE_BENCHMARK_TICKERS,
+    normalize_benchmark_market,
     normalize_benchmark_prices,
 )
 from engine.workflows.benchmarks import (
@@ -18,6 +19,7 @@ from engine.workflows.benchmarks import (
     DEFAULT_PROVIDER_SOURCE,
     YFINANCE_PROVIDER_SOURCE,
     create_benchmark_price_dataframe,
+    resolve_benchmark_source,
 )
 
 
@@ -29,16 +31,20 @@ def insert_benchmark_prices(
     benchmark_ids: list[str] | None = None,
     start_date: str | date = "2010-01-01",
     end_date: str | date | None = None,
-    source: str = DEFAULT_PROVIDER_SOURCE,
+    market: str = "kr",
+    source: str | None = None,
     bronze_path: str | None = None,
     dry_run: bool = False,
     client: Any = None,
 ) -> pd.DataFrame:
     end_date = end_date or date.today()
+    market = normalize_benchmark_market(market)
+    source = resolve_benchmark_source(market=market, source=source)
     benchmark_df = create_benchmark_price_dataframe(
         start_date,
         end_date,
         benchmark_ids=benchmark_ids,
+        market=market,
         source=source,
         bronze_path=bronze_path,
     )
@@ -76,9 +82,12 @@ def download_benchmark_prices(
     benchmark_ids: list[str] | None = None,
     start_date: str | date = "2010-01-01",
     end_date: str | date | None = None,
-    source: str = DEFAULT_PROVIDER_SOURCE,
+    market: str = "kr",
+    source: str | None = None,
     output_dir: str | None = None,
 ) -> pd.DataFrame:
+    market = normalize_benchmark_market(market)
+    source = resolve_benchmark_source(market=market, source=source)
     if source == DEFAULT_PROVIDER_SOURCE:
         return fetch_benchmark_prices(
             start_date,
@@ -96,8 +105,12 @@ def download_benchmark_prices(
     raise ValueError(f"source must be '{DEFAULT_PROVIDER_SOURCE}' or '{YFINANCE_PROVIDER_SOURCE}'")
 
 
-def normalize_downloaded_benchmark_prices(path: str | None = None) -> pd.DataFrame:
-    return normalize_benchmark_prices(path)
+def normalize_downloaded_benchmark_prices(
+    path: str | None = None,
+    *,
+    market: str = "kr",
+) -> pd.DataFrame:
+    return normalize_benchmark_prices(path, market=market)
 
 
 def _parse_benchmark_ids(value: str | None) -> list[str] | None:
@@ -108,6 +121,12 @@ def _parse_benchmark_ids(value: str | None) -> list[str] | None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Insert benchmark index prices into ClickHouse.")
+    parser.add_argument(
+        "--market",
+        default="kr",
+        choices=["kr", "us"],
+        help="Market whose default provider and benchmark set should be used.",
+    )
     parser.add_argument(
         "--benchmark-ids",
         help=(
@@ -121,7 +140,7 @@ def main() -> None:
     parser.add_argument(
         "--source",
         choices=[DEFAULT_PROVIDER_SOURCE, YFINANCE_PROVIDER_SOURCE, BRONZE_PROVIDER_SOURCE],
-        default=DEFAULT_PROVIDER_SOURCE,
+        help="Optional provider override. Defaults to pykrx for KR and yfinance for US.",
     )
     parser.add_argument("--bronze-path")
     parser.add_argument("--dry-run", action="store_true")
@@ -131,6 +150,7 @@ def main() -> None:
         benchmark_ids=_parse_benchmark_ids(args.benchmark_ids),
         start_date=args.start_date,
         end_date=args.end_date,
+        market=args.market,
         source=args.source,
         bronze_path=args.bronze_path,
         dry_run=args.dry_run,

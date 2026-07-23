@@ -116,6 +116,9 @@ python -m engine.workflows.download --market us sec-tickers
 python -m engine.workflows.download --market us statements --symbols AAPL,MSFT --limit 2
 python -m engine.workflows.download --market us prices --symbols AAPL,MSFT --limit 2
 python -m engine.workflows.download --market us prices --offset 100 --limit 500 --sleep-seconds 0.2
+python -m engine.workflows.download --market kr benchmarks
+python -m engine.workflows.download --market us benchmarks
+python -m engine.workflows.download --market us --benchmark-ids S&P500,NASDAQ benchmarks
 python -m engine.workflows.download consensus --market kr
 python -m engine.workflows.download consensus --market kr --consensus-sources html --consensus-html-pages 3
 python -m engine.workflows.normalize --target consensus --market kr
@@ -303,6 +306,7 @@ Normalize benchmark silver CSV만 갱신:
 
 ```powershell
 python -c "from engine.loaders.benchmarks import normalize_downloaded_benchmark_prices; normalize_downloaded_benchmark_prices(r'data-lake\bronze\krx\benchmark\*.csv')"
+python -c "from engine.loaders.benchmarks import normalize_downloaded_benchmark_prices; normalize_downloaded_benchmark_prices(market='us')"
 ```
 
 Normalize WACC silver input CSVs:
@@ -604,12 +608,18 @@ rows를 생성합니다. `data-lake/silver/us/shares/us_normalized_shares.csv`�
 ```powershell
 python -m engine.loaders.benchmarks --benchmark-ids KOSPI200,KOSDAQ --start-date 2010-01-01 --dry-run
 python -m engine.loaders.benchmarks --benchmark-ids KOSPI200,KOSDAQ --start-date 2010-01-01
+python -m engine.loaders.benchmarks --market us --benchmark-ids S&P500,NASDAQ --start-date 2010-01-01 --dry-run
+python -m engine.loaders.benchmarks --market us --benchmark-ids S&P500,NASDAQ --start-date 2010-01-01
 ```
+
+For `--market us`, the default provider is yfinance. `S&P500` and `NASDAQ` are
+normalized to `US_SP500` (`^GSPC`) and `US_NASDAQ` (`^IXIC`) respectively.
 
 Bronze CSV에서 읽을 때:
 
 ```powershell
 python -m engine.loaders.benchmarks --source bronze --bronze-path data-lake\bronze\krx\benchmark\*.csv --dry-run
+python -m engine.loaders.benchmarks --market us --source bronze --dry-run
 ```
 
 ### 8. Build Style Scores

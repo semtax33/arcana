@@ -1,3 +1,4 @@
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -5,6 +6,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from engine.loaders import benchmarks as benchmark_loader
 from engine.loaders.benchmarks import BENCHMARK_TABLE, insert_benchmark_prices
 
 
@@ -105,6 +107,55 @@ class BenchmarkEltTest(unittest.TestCase):
         create.assert_called_once()
         self.assertEqual(create.call_args.kwargs["benchmark_ids"], ["US_SP500"])
         self.assertEqual(create.call_args.kwargs["source"], "yfinance")
+
+    def test_insert_benchmark_prices_uses_us_market_default_source(self):
+        benchmark_df = pd.DataFrame(
+            {
+                "benchmark_id": ["US_NASDAQ"],
+                "trade_date": pd.to_datetime(["2026-01-02"]).date,
+                "open": [100],
+                "high": [101],
+                "low": [99],
+                "close": [100.5],
+                "volume": [1_000],
+                "currency": ["USD"],
+            }
+        )
+
+        with patch(
+            "engine.loaders.benchmarks.create_benchmark_price_dataframe",
+            return_value=benchmark_df,
+        ) as create:
+            result = insert_benchmark_prices(market="us", dry_run=True)
+
+        self.assertEqual(result.attrs["inserted_rows"], 1)
+        self.assertEqual(create.call_args.kwargs["market"], "us")
+        self.assertEqual(create.call_args.kwargs["source"], "yfinance")
+
+    def test_loader_cli_accepts_us_market_and_aliases(self):
+        frame = pd.DataFrame({"benchmark_id": ["US_SP500"]})
+        frame.attrs["inserted_rows"] = 1
+
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "prog",
+                    "--market",
+                    "us",
+                    "--benchmark-ids",
+                    "S&P500,NASDAQ",
+                    "--dry-run",
+                ],
+            ),
+            patch.object(benchmark_loader, "insert_benchmark_prices", return_value=frame) as insert,
+        ):
+            benchmark_loader.main()
+
+        self.assertEqual(insert.call_args.kwargs["market"], "us")
+        self.assertEqual(insert.call_args.kwargs["source"], None)
+        self.assertEqual(insert.call_args.kwargs["benchmark_ids"], ["S&P500", "NASDAQ"])
 
 
 if __name__ == "__main__":
