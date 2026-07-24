@@ -47,6 +47,7 @@ class FakeFactorLabClient:
         self.experiment_name_exists = True
         self.experiment_id = str(uuid.UUID("22222222-2222-2222-2222-222222222222"))
         self.experiment_graph_json = json.dumps(service_graph())
+        self.experiment_list_empty = False
         self.run_ids = [str(uuid.UUID("11111111-1111-1111-1111-111111111111"))]
         self.run_exists = True
         self.run_status = "completed"
@@ -110,6 +111,20 @@ class FakeFactorLabClient:
             if "graph_json" in query:
                 result["graph_json"] = [self.experiment_graph_json]
             return pd.DataFrame(result)
+        if (
+            "FROM factor_lab_experiment FINAL" in query
+            and "ORDER BY updated_at DESC, experiment_id DESC" in query
+        ):
+            if self.experiment_list_empty:
+                return pd.DataFrame()
+            return pd.DataFrame(
+                {
+                    "experiment_id": [self.experiment_id],
+                    "name": ["service_lab"],
+                    "market": ["KR"],
+                    "updated_at": [pd.Timestamp("2026-07-25T09:30:00")],
+                }
+            )
         if "SELECT run_id" in query and "FROM factor_lab_run" in query:
             return pd.DataFrame({"run_id": self.run_ids})
         if "SELECT status" in query and "FROM factor_lab_run" in query:
@@ -168,6 +183,7 @@ class FactorLabServiceTest(unittest.TestCase):
         }
         self.assertIn(("/api/factor-lab/experiments/{experiment_id}", "PUT"), route_methods)
         self.assertIn(("/api/factor-lab/experiments/{experiment_id}", "DELETE"), route_methods)
+        self.assertIn(("/api/factor-lab/experiments", "GET"), route_methods)
         self.assertIn(("/api/factor-lab/experiments/by-name", "GET"), route_methods)
         self.assertIn(("/api/factor-lab/experiments/by-name", "PUT"), route_methods)
         self.assertIn(("/api/factor-lab/experiments/by-name", "DELETE"), route_methods)
@@ -332,6 +348,36 @@ class FactorLabServiceTest(unittest.TestCase):
         ]
         self.assertEqual([experiment_id], [params["experiment_id"] for params in experiment_inserts])
         self.assertTrue(any("SELECT 1 AS found" in query for query, _ in client.queries))
+
+    def test_list_experiments_returns_latest_first_summary_rows(self):
+        client = FakeFactorLabClient()
+
+        response = FactorLabService(client_factory=lambda: client).list_experiments()
+
+        self.assertEqual(1, len(response.experiments))
+        summary = response.experiments[0]
+        self.assertEqual(client.experiment_id, summary.experiment_id)
+        self.assertEqual("service_lab", summary.name)
+        self.assertEqual("KR", summary.market)
+        self.assertEqual("2026-07-25T09:30:00", summary.updated_at)
+        list_query = next(
+            query
+            for query, _ in client.queries
+            if "ORDER BY updated_at DESC, experiment_id DESC" in query
+        )
+        self.assertIn("FROM factor_lab_experiment FINAL", list_query)
+        self.assertTrue(
+            any("CREATE TABLE IF NOT EXISTS factor_lab_experiment" in query for query, _ in client.commands)
+        )
+        self.assertTrue(client.closed)
+
+    def test_list_experiments_returns_empty_list(self):
+        client = FakeFactorLabClient()
+        client.experiment_list_empty = True
+
+        response = FactorLabService(client_factory=lambda: client).list_experiments()
+
+        self.assertEqual([], response.experiments)
 
     def test_get_experiment_by_name_returns_latest_matching_experiment(self):
         client = FakeFactorLabClient()

@@ -473,6 +473,17 @@ class FactorLabExperimentSaveRequestDto(BaseModel):
     graph: FactorLabGraphDto
 
 
+class FactorLabExperimentSummaryDto(BaseModel):
+    experiment_id: str
+    name: str
+    market: str
+    updated_at: str
+
+
+class FactorLabExperimentListResponseDto(BaseModel):
+    experiments: list[FactorLabExperimentSummaryDto] = Field(default_factory=list)
+
+
 class FactorLabExperimentResponseDto(BaseModel):
     experiment_id: str
     graph: FactorLabGraphDto

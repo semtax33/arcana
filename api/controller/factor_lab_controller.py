@@ -12,6 +12,7 @@ from api.service.dto import (
     FactorLabBacktestRequestDto,
     FactorLabCompileResponseDto,
     FactorLabExperimentDeleteResponseDto,
+    FactorLabExperimentListResponseDto,
     FactorLabExperimentResponseDto,
     FactorLabExperimentSaveRequestDto,
     FactorLabGraphDto,
@@ -60,6 +61,14 @@ def save_factor_lab_experiment(
         raise HTTPException(status_code=422, detail=_error("factor_lab_invalid_graph", str(exc))) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=_error("factor_lab_save_failed", str(exc))) from exc
+
+
+@router.get("/experiments", response_model=FactorLabExperimentListResponseDto)
+def list_factor_lab_experiments() -> FactorLabExperimentListResponseDto:
+    try:
+        return FactorLabService().list_experiments()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=_error("factor_lab_list_failed", str(exc))) from exc
 
 
 @router.get("/experiments/by-name", response_model=FactorLabExperimentResponseDto)

@@ -265,7 +265,28 @@ GET /api/chart/005930?range=1Y
 - `annual_returns`: 연도별 전략/벤치마크/초과수익률
 - `warnings`
 
-### 3.8 종목 소개
+### 3.8 팩터 랩 저장 전략
+
+#### `GET /api/factor-lab/experiments`
+
+저장된 팩터 랩 실험을 최근 수정 순으로 조회합니다. 저장 내역이 없으면 `experiments`가 빈 배열로 반환됩니다.
+
+응답 `FactorLabExperimentListResponseDto`:
+
+```json
+{
+  "experiments": [
+    {
+      "experiment_id": "22222222-2222-2222-2222-222222222222",
+      "name": "service_lab",
+      "market": "KR",
+      "updated_at": "2026-07-25T09:30:00"
+    }
+  ]
+}
+```
+
+각 항목은 `experiment_id`, `name`, `market`, `updated_at`을 포함합니다.
 
 #### `POST /api/factor-lab/runs/{run_id}/backtest`
 
@@ -317,6 +338,8 @@ Example:
 }
 ```
 
+### 3.9 종목 소개
+
 #### `GET /api/introduction/{stock_code}`
 
 종목 기본 정보, 시가총액/밸류에이션/52주 범위, 회사 설명, 사업 영역 배지를 조회합니다.
@@ -333,7 +356,7 @@ Example:
 - `business_areas`: 섹터/산업그룹 코드 및 이름, 분류 체계
 - `factor_source`
 
-### 3.9 재무제표 및 재무비율
+### 3.10 재무제표 및 재무비율
 
 #### `GET /api/financials/{stock_code}`
 
@@ -383,7 +406,7 @@ Example:
 - ratio별 `factor_id`, `factor_name`, `unit`, `value_direction`, `values`, `trend`, `growth_chart`, `statistics`
 - `source`, `auxiliary_sources`
 
-### 3.10 스타일 스코어
+### 3.11 스타일 스코어
 
 #### `GET /api/style-scores`
 
@@ -419,7 +442,7 @@ Example:
 
 `component_key`는 구현상 문자열로 받으며, 현재 DTO에서 사용하는 대표 키는 `COMPOSITE`, `VALUE`, `QUALITY`, `GROWTH`, `MOMENTUM`, `RISK`, `DIVIDEND`입니다.
 
-### 3.11 멀티플 밸류에이션
+### 3.12 멀티플 밸류에이션
 
 #### `GET /api/valuations/{stock_code}/multiple-bands`
 

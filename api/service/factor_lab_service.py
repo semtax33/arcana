@@ -32,8 +32,10 @@ from api.service.dto import (
     FactorLabBacktestRequestDto,
     FactorLabCompileResponseDto,
     FactorLabExperimentDeleteResponseDto,
+    FactorLabExperimentListResponseDto,
     FactorLabExperimentResponseDto,
     FactorLabExperimentSaveRequestDto,
+    FactorLabExperimentSummaryDto,
     FactorLabGraphDto,
     FactorLabIssueDto,
     FactorLabNodePreviewResponseDto,
@@ -161,6 +163,37 @@ class FactorLabService:
         experiment_id = str(uuid.uuid4())
         self._write_experiment(experiment_id, request.graph, require_existing=False)
         return FactorLabExperimentResponseDto(experiment_id=experiment_id, graph=request.graph)
+
+    def list_experiments(self) -> FactorLabExperimentListResponseDto:
+        client = self._client_factory()
+        try:
+            _ensure_tables(client)
+            rows = _records(
+                client.query_df(
+                    """
+SELECT
+    experiment_id,
+    name,
+    market,
+    updated_at
+FROM factor_lab_experiment FINAL
+ORDER BY updated_at DESC, experiment_id DESC
+""".strip()
+                )
+            )
+        finally:
+            _close(client)
+        return FactorLabExperimentListResponseDto(
+            experiments=[
+                FactorLabExperimentSummaryDto(
+                    experiment_id=str(row["experiment_id"]),
+                    name=str(row["name"]),
+                    market=str(row["market"]),
+                    updated_at=_iso_datetime(row["updated_at"]),
+                )
+                for row in rows
+            ]
+        )
 
     def save_experiment_by_name(
         self,
@@ -1233,3 +1266,10 @@ def _float_or_none(value: Any) -> float | None:
 
 def _format_validation_errors(errors: list[FactorLabIssueDto]) -> str:
     return "; ".join(f"{error.code}: {error.message}" for error in errors)
+
+
+def _iso_datetime(value: Any) -> str:
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        return str(isoformat())
+    return str(value)
