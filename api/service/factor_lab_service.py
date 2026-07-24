@@ -434,6 +434,15 @@ LIMIT 1
                 )
                 if not history_trade_dates:
                     raise ValueError("history signal dates were not found")
+                if (
+                    str(graph_dict.get("experiment", {}).get("factor_data_mode") or "raw")
+                    == "point_in_time_snapshot"
+                ):
+                    factor_table = _require_history_snapshot_coverage(
+                        client,
+                        graph_dict=graph_dict,
+                        trade_dates=history_trade_dates,
+                    )
             compile_result = compile_factor_lab_graph(
                 execution_graph,
                 known_factor_ids=known_factor_ids,
@@ -763,6 +772,71 @@ def _graph_for_screening_date(
     experiment["start_date"] = effective_trade_date.isoformat()
     experiment["end_date"] = effective_trade_date.isoformat()
     return execution_graph
+
+
+def _require_history_snapshot_coverage(
+    client: Any,
+    *,
+    graph_dict: dict[str, Any],
+    trade_dates: list[date],
+) -> str:
+    """Require an as-of snapshot for every requested history signal date.
+
+    Falling back to the mutable raw factor table makes a history run appear
+    point-in-time even when a factor was revised after the signal date.  The
+    strict mode therefore fails closed: users must either refresh snapshots
+    or explicitly choose ``raw`` research mode.
+    """
+    factor_pairs = sorted(
+        {
+            (
+                canonical_factor_id(str(node.get("config", {}).get("factor_id") or "")),
+                str(node.get("config", {}).get("financial_basis") or "annual"),
+            )
+            for node in graph_dict.get("nodes", [])
+            if node.get("type") == "factor_input"
+            and node.get("config", {}).get("factor_id")
+        }
+    )
+    if not factor_pairs:
+        raise ValueError("point_in_time_snapshot mode requires factor_input nodes")
+    requested_dates = sorted(set(trade_dates))
+    params: dict[str, Any] = {
+        "trade_dates": [value.isoformat() for value in requested_dates],
+        "factor_pair_count": len(factor_pairs),
+    }
+    pair_predicate = _factor_pair_predicate(factor_pairs, params)
+    try:
+        rows = _records(
+            client.query_df(
+                f"""
+SELECT
+    trade_date
+FROM {DEFAULT_FACTOR_SNAPSHOT_TABLE}
+PREWHERE trade_date IN {{trade_dates:Array(Date)}}
+WHERE source_trade_date <= trade_date
+    AND {pair_predicate}
+GROUP BY trade_date
+HAVING uniqExact(tuple(factor_id, financial_basis)) >= {{factor_pair_count:UInt64}}
+ORDER BY trade_date
+""".strip(),
+                parameters=params,
+            )
+        )
+    except Exception as exc:
+        raise ValueError(
+            "point-in-time snapshot coverage could not be verified"
+        ) from exc
+    available_dates = {_as_date(row["trade_date"]) for row in rows}
+    missing_dates = [
+        value.isoformat() for value in requested_dates if value not in available_dates
+    ]
+    if missing_dates:
+        raise ValueError(
+            "point-in-time snapshot coverage is incomplete for signal date(s): "
+            + ", ".join(missing_dates)
+        )
+    return DEFAULT_FACTOR_SNAPSHOT_TABLE
 
 
 def _screening_candidate_days() -> int:

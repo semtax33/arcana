@@ -15,7 +15,7 @@ NODE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
 FACTOR_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
-UNARY_NODES = {"log", "abs", "sqrt", "negate", "winsorize", "zscore", "rank", "dense_rank", "percent_rank", "dense_score", "neutralize", "bucket"}
+UNARY_NODES = {"log", "abs", "sqrt", "negate", "winsorize", "zscore", "shrunk_zscore", "rank", "dense_rank", "percent_rank", "dense_score", "neutralize", "bucket"}
 BINARY_NODES = {"add", "sub", "mul", "div"}
 INPUT_NODES = {"factor_input", "constant"}
 EVALUATE_NODES = {"ic", "bucket_return", "long_short", "turnover", "decay_test", "backtest"}
@@ -95,6 +95,7 @@ def node_type_specs() -> list[NodeTypeSpec]:
         NodeTypeSpec("negate", "transform", ["input"], ["out"], {}),
         NodeTypeSpec("winsorize", "transform", ["input"], ["out"], {"group_by": ["trade_date"], "lower_quantile": 0.01, "upper_quantile": 0.99}),
         NodeTypeSpec("zscore", "transform", ["input"], ["out"], {"group_by": ["trade_date"], "stddev_method": "population", "min_count": 20, "zero_std_policy": "invalid", "direction": "as_is", "clip": None}),
+        NodeTypeSpec("shrunk_zscore", "transform", ["input"], ["out"], {"group_key": "sector|industry_group", "min_market_count": 20, "min_group_count": 20, "shrinkage_strength": 20, "direction": "as_is", "clip": None}),
         NodeTypeSpec("neutralize", "transform", ["input"], ["out"], {"group_key": "sector|industry_group|market"}),
         NodeTypeSpec("rank", "score", ["input"], ["out"], {"group_by": ["trade_date"], "order": "desc"}),
         NodeTypeSpec("dense_rank", "score", ["input"], ["out"], {"group_by": ["trade_date"], "order": "desc"}),
@@ -218,6 +219,8 @@ def compile_factor_lab_graph(
             ctes.extend(_compile_winsorize(node_id, config, input_map["input"], params))
         elif node_type == "zscore":
             ctes.append(_compile_zscore(node_id, config, input_map["input"], params))
+        elif node_type == "shrunk_zscore":
+            ctes.append(_compile_shrunk_zscore(node_id, config, input_map["input"], params))
         elif node_type in {"rank", "dense_rank", "percent_rank"}:
             ctes.append(_compile_rank(node_id, node_type, config, input_map["input"]))
         elif node_type == "dense_score":
@@ -577,6 +580,29 @@ def _validate_node_config(
         if clip is not None and (not _is_finite_number(clip) or float(clip) <= 0):
             errors.append(FactorLabIssue("invalid_clip", "zscore.clip must be null or a positive finite number", node_id=node_id))
         _validate_group_by(node_id, config, errors)
+    elif node_type == "shrunk_zscore":
+        if str(config.get("group_key", "sector")) not in {
+            "sector",
+            "sector_code",
+            "industry_group",
+            "industry_group_code",
+        }:
+            errors.append(FactorLabIssue("invalid_group_key", "shrunk_zscore.group_key must be sector or industry_group", node_id=node_id))
+        for field_name, minimum in [
+            ("min_market_count", 2),
+            ("min_group_count", 2),
+        ]:
+            value = config.get(field_name, 20)
+            if not isinstance(value, int) or value < minimum:
+                errors.append(FactorLabIssue("invalid_min_count", f"shrunk_zscore.{field_name} must be an integer >= {minimum}", node_id=node_id, field=f"config.{field_name}"))
+        strength = config.get("shrinkage_strength", 20)
+        if not _is_finite_number(strength) or float(strength) <= 0:
+            errors.append(FactorLabIssue("invalid_shrinkage_strength", "shrunk_zscore.shrinkage_strength must be a positive finite number", node_id=node_id, field="config.shrinkage_strength"))
+        if str(config.get("direction", "as_is")) not in {"as_is", "higher_better", "lower_better"}:
+            errors.append(FactorLabIssue("invalid_direction", "shrunk_zscore.direction must be as_is, higher_better, or lower_better", node_id=node_id))
+        clip = config.get("clip")
+        if clip is not None and (not _is_finite_number(clip) or float(clip) <= 0):
+            errors.append(FactorLabIssue("invalid_clip", "shrunk_zscore.clip must be null or a positive finite number", node_id=node_id))
     elif node_type in {"rank", "dense_rank", "percent_rank", "dense_score"}:
         if str(config.get("order", "desc")) not in {"asc", "desc"}:
             errors.append(FactorLabIssue("invalid_order", "order must be asc or desc", node_id=node_id))
@@ -966,6 +992,95 @@ def _compile_zscore(
 )""".strip()
 
 
+def _compile_shrunk_zscore(
+    node_id: str,
+    config: dict[str, Any],
+    input_node_id: str,
+    params: dict[str, Any],
+) -> str:
+    """Blend a group Z-score with the market Z-score when groups are small."""
+    input_cte = _cte_name(input_node_id)
+    param_prefix = _param_prefix(node_id)
+    group_key = str(config.get("group_key", "sector"))
+    group_column = {
+        "sector": "u.sector_code",
+        "sector_code": "u.sector_code",
+        "industry_group": "u.industry_group_code",
+        "industry_group_code": "u.industry_group_code",
+    }[group_key]
+    min_market_count = int(config.get("min_market_count", 20))
+    min_group_count = int(config.get("min_group_count", 20))
+    params[f"{param_prefix}_min_market_count"] = min_market_count
+    params[f"{param_prefix}_min_group_count"] = min_group_count
+    params[f"{param_prefix}_shrinkage_strength"] = float(
+        config.get("shrinkage_strength", 20)
+    )
+    direction = -1 if str(config.get("direction", "as_is")) == "lower_better" else 1
+    clip = config.get("clip")
+    adjusted_z = f"""(
+        ({direction}) * if(
+            group_n >= {{{param_prefix}_min_group_count:UInt32}}
+                AND group_sigma != 0
+                AND NOT empty(group_code),
+            (group_n / (group_n + {{{param_prefix}_shrinkage_strength:Float64}}))
+                * ((value - group_mu) / group_sigma)
+                + ({{{param_prefix}_shrinkage_strength:Float64}}
+                    / (group_n + {{{param_prefix}_shrinkage_strength:Float64}}))
+                * ((value - market_mu) / market_sigma),
+            ((value - market_mu) / market_sigma)
+        )
+    )"""
+    if clip is not None:
+        params[f"{param_prefix}_clip"] = float(clip)
+        adjusted_z = f"greatest(least({adjusted_z}, {{{param_prefix}_clip:Float64}}), -{{{param_prefix}_clip:Float64}})"
+    return f"""
+{_cte_name(node_id)} AS (
+    SELECT
+        trade_date,
+        security_id,
+        if(
+            NOT is_valid
+                OR market_n < {{{param_prefix}_min_market_count:UInt32}}
+                OR market_sigma = 0,
+            NULL,
+            {adjusted_z}
+        ) AS value,
+        is_valid
+            AND market_n >= {{{param_prefix}_min_market_count:UInt32}}
+            AND market_sigma != 0 AS is_valid,
+        multiIf(
+            NOT is_valid, invalid_reason,
+            market_n < {{{param_prefix}_min_market_count:UInt32}}, 'zscore_min_count',
+            market_sigma = 0, 'zscore_zero_std',
+            ''
+        ) AS invalid_reason
+    FROM (
+        SELECT
+            x.trade_date,
+            x.security_id,
+            x.value,
+            x.is_valid,
+            x.invalid_reason,
+            {group_column} AS group_code,
+            countIf(x.is_valid) OVER (PARTITION BY x.trade_date) AS market_n,
+            avg(if(x.is_valid, x.value, NULL)) OVER (PARTITION BY x.trade_date) AS market_mu,
+            stddevPop(if(x.is_valid, x.value, NULL)) OVER (PARTITION BY x.trade_date) AS market_sigma,
+            countIf(x.is_valid) OVER (
+                PARTITION BY x.trade_date, {group_column}
+            ) AS group_n,
+            avg(if(x.is_valid, x.value, NULL)) OVER (
+                PARTITION BY x.trade_date, {group_column}
+            ) AS group_mu,
+            stddevPop(if(x.is_valid, x.value, NULL)) OVER (
+                PARTITION BY x.trade_date, {group_column}
+            ) AS group_sigma
+        FROM {input_cte} AS x
+        INNER JOIN security_universe AS u
+            ON u.security_id = x.security_id
+    )
+)""".strip()
+
+
 def _compile_rank(node_id: str, node_type: str, config: dict[str, Any], input_node_id: str) -> str:
     input_cte = _cte_name(input_node_id)
     function_name = {
@@ -1132,7 +1247,7 @@ def _needs_security_universe(
         node = nodes[node_id]
         node_type = node["type"]
         config = _dict(node.get("config"))
-        if node_type in {"factor_input", "neutralize"}:
+        if node_type in {"factor_input", "neutralize", "shrunk_zscore"}:
             return True
         if _normalize_group_by(config.get("group_by", ["trade_date"])) in {
             ("trade_date", "sector"),

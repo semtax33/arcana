@@ -13,6 +13,7 @@ MatchMode = Literal["all", "any"]
 RankDirection = Literal["catalog", "higher", "lower"]
 PercentileSide = Literal["top", "bottom"]
 RebalanceFrequency = Literal["monthly", "quarterly", "semiannual", "annual"]
+FactorLabDataMode = Literal["raw", "point_in_time_snapshot"]
 SectorLeaderSortBy = Literal[
     "strong_stock_ratio",
     "eps_expected_growth",
@@ -418,6 +419,7 @@ class FactorLabExperimentConfigDto(BaseModel):
     market: str = "KR"
     start_date: date
     end_date: date
+    factor_data_mode: FactorLabDataMode = "raw"
     universe: FactorLabUniverseDto = Field(default_factory=FactorLabUniverseDto)
     rebalance: FactorLabRebalanceDto = Field(default_factory=FactorLabRebalanceDto)
 

@@ -11,7 +11,7 @@ environment, for example:
 
 import json
 from datetime import date
-from typing import Any
+from typing import Any, Mapping
 
 from api.config.clickhouse import get_clickhouse_client
 from api.repository.factor_lab_query import compile_factor_lab_graph
@@ -200,6 +200,8 @@ def raw_composite_top(
     trade_date: date,
     *,
     limit: int = 10,
+    score_node_id: str = "raw_composite",
+    weights: Mapping[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Return the pre-rank score and weighted factor contributions.
 
@@ -208,6 +210,7 @@ def raw_composite_top(
     that the screen uses, so the diagnostic is directly comparable to screen
     rankings rather than an economic interpretation of the 0--100 rank.
     """
+    weights = weights or WEIGHTS
     graph_dict = graph.model_dump(mode="json")
     graph_dict["experiment"]["start_date"] = trade_date.isoformat()
     graph_dict["experiment"]["end_date"] = trade_date.isoformat()
@@ -222,7 +225,7 @@ def raw_composite_top(
         "raw.value AS raw_composite",
     ]
     joins: list[str] = []
-    for index, (factor_id, weight) in enumerate(WEIGHTS.items()):
+    for index, (factor_id, weight) in enumerate(weights.items()):
         alias = f"zscore_{index}"
         select_columns.extend(
             [
@@ -240,7 +243,7 @@ def raw_composite_top(
     query = f"""{cte_query}
 SELECT
     {selected_sql}
-FROM node_raw_composite AS raw
+FROM node_{score_node_id} AS raw
 {joins_sql}
 WHERE toUInt8(raw.is_valid) = 1
 ORDER BY raw.value DESC, raw.security_id ASC

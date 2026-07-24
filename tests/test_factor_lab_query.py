@@ -185,6 +185,36 @@ class FactorLabQueryTest(unittest.TestCase):
         self.assertIn("greatest(least(((-1) * ((value - mu) / sigma))", result.query)
         self.assertEqual(result.parameters["node_z_per_clip"], 3.0)
 
+    def test_shrunk_zscore_blends_small_groups_with_market_score(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {"id": "factor_per", "type": "factor_input", "config": {"factor_id": "per"}},
+            {
+                "id": "shrunk_per",
+                "type": "shrunk_zscore",
+                "config": {
+                    "group_key": "sector",
+                    "min_market_count": 20,
+                    "min_group_count": 20,
+                    "shrinkage_strength": 20,
+                    "direction": "lower_better",
+                    "clip": 3.0,
+                },
+            },
+        ]
+        graph["edges"] = [
+            {"source": "factor_per", "target": "shrunk_per", "target_handle": "input"},
+        ]
+        graph["outputs"] = {"final_node_id": "shrunk_per"}
+
+        result = compile_factor_lab_graph(graph, known_factor_ids={"per"})
+
+        self.assertTrue(validate_factor_lab_graph(graph, known_factor_ids={"per"}).valid)
+        self.assertIn("node_shrunk_per AS", result.query)
+        self.assertIn("market_n", result.query)
+        self.assertIn("group_n", result.query)
+        self.assertEqual(result.parameters["node_shrunk_per_min_group_count"], 20)
+
     def test_weighted_score_preserves_output_columns_and_validity_filter(self):
         graph = nested_graph()
         graph["nodes"] = [

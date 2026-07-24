@@ -79,6 +79,15 @@ class FakeFactorLabClient:
             )
         if "FROM factor_catalog" in query:
             return pd.DataFrame({"factor_id": ["per"]})
+        if "HAVING uniqExact(tuple(factor_id, financial_basis))" in query:
+            return pd.DataFrame(
+                {
+                    "trade_date": [
+                        pd.Timestamp(value).date()
+                        for value in parameters["trade_dates"]
+                    ]
+                }
+            )
         if "eligible_snapshot_dates AS" in query:
             if not self.snapshot_available:
                 return pd.DataFrame(
@@ -281,6 +290,29 @@ class FactorLabServiceTest(unittest.TestCase):
             ["2026-01-01", "2026-03-31", "2026-06-30", "2026-09-30"],
         )
         self.assertIn("f.trade_date IN {trade_dates:Array(Date)}", factor_insert_query)
+
+    def test_run_graph_history_mode_can_require_point_in_time_snapshots(self):
+        client = FakeFactorLabClient()
+        graph_data = service_graph()
+        graph_data["experiment"]["factor_data_mode"] = "point_in_time_snapshot"
+        graph = FactorLabGraphDto(**graph_data)
+
+        FactorLabService(client_factory=lambda: client).run_graph(
+            FactorLabRunRequestDto(
+                graph=graph,
+                mode="history",
+                history_start_date=date(2026, 1, 2),
+                history_end_date=date(2026, 12, 31),
+                history_rebalance_frequency="quarterly",
+            )
+        )
+
+        factor_insert_query, _ = next(
+            (query, params)
+            for query, params in client.commands
+            if "INSERT INTO factor_lab_values" in query
+        )
+        self.assertIn("FROM fact_daily_factor_snapshot AS f", factor_insert_query)
 
     def test_update_experiment_writes_new_version_with_same_id(self):
         client = FakeFactorLabClient()
