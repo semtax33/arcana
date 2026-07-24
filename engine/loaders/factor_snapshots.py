@@ -51,6 +51,7 @@ def ensure_factor_snapshot_table(
 
 def insert_factor_snapshots(
     *,
+    market: str | None = None,
     start_date: str | date | None = None,
     end_date: str | date | None = None,
     financial_basis: str | None = None,
@@ -72,7 +73,18 @@ def insert_factor_snapshots(
     try:
         ensure_factor_snapshot_table(client, snapshot_table=snapshot_table)
         if truncate:
-            _execute(client, f"TRUNCATE TABLE {_validate_table_name(snapshot_table)}")
+            if market is None:
+                _execute(client, f"TRUNCATE TABLE {_validate_table_name(snapshot_table)}")
+            else:
+                _delete_market_snapshots(
+                    client,
+                    market=market,
+                    start_date=start_date,
+                    end_date=end_date,
+                    financial_basis=financial_basis,
+                    factor_ids=factor_ids,
+                    snapshot_table=snapshot_table,
+                )
         if carry_forward:
             insert_func = (
                 _insert_factor_snapshots_incremental
@@ -81,6 +93,7 @@ def insert_factor_snapshots(
             )
             insert_func(
                 client,
+                market=market,
                 start_date=start_date,
                 end_date=end_date,
                 financial_basis=financial_basis,
@@ -98,6 +111,7 @@ def insert_factor_snapshots(
             query, params = build_factor_snapshot_insert_query(
                 start_date=start_date,
                 end_date=end_date,
+                market=market,
                 financial_basis=financial_basis,
                 factor_ids=factor_ids,
                 source_table=source_table,
@@ -108,6 +122,7 @@ def insert_factor_snapshots(
             _execute(client, query, params, settings=_memory_safe_settings(max_threads))
         return _count_inserted_rows(
             client,
+            market=market,
             start_date=start_date,
             end_date=end_date,
             financial_basis=financial_basis,
@@ -121,6 +136,7 @@ def insert_factor_snapshots(
 
 def build_factor_snapshot_insert_query(
     *,
+    market: str | None = None,
     start_date: str | date | None = None,
     end_date: str | date | None = None,
     financial_basis: str | None = None,
@@ -134,6 +150,7 @@ def build_factor_snapshot_insert_query(
 ) -> tuple[str, dict[str, Any]]:
     if not carry_forward:
         return _build_raw_copy_snapshot_insert_query(
+            market=market,
             start_date=start_date,
             end_date=end_date,
             financial_basis=financial_basis,
@@ -144,6 +161,10 @@ def build_factor_snapshot_insert_query(
 
     params: dict[str, Any] = {}
     source_filters = ["isFinite(factor_value)"]
+    security_prefix = _security_prefix_for_market(market)
+    if security_prefix:
+        params["security_prefix"] = security_prefix
+        source_filters.append("startsWith(security_id, {security_prefix:String})")
     normalized_snapshot_dates = (
         sorted({_date_iso(value) for value in snapshot_dates})
         if snapshot_dates is not None
@@ -239,6 +260,7 @@ GROUP BY
 
 def build_incremental_factor_snapshot_insert_query(
     *,
+    market: str | None = None,
     snapshot_date: str | date,
     previous_snapshot_date: str | date,
     financial_basis: str | None = None,
@@ -257,6 +279,11 @@ def build_incremental_factor_snapshot_insert_query(
     previous_filters = [
         "s.trade_date = {previous_snapshot_date:Date}",
     ]
+    security_prefix = _security_prefix_for_market(market)
+    if security_prefix:
+        params["security_prefix"] = security_prefix
+        current_filters.append("startsWith(f.security_id, {security_prefix:String})")
+        previous_filters.append("startsWith(s.security_id, {security_prefix:String})")
     if financial_basis:
         params["financial_basis"] = str(financial_basis)
         current_filters.append("f.financial_basis = {financial_basis:String}")
@@ -358,6 +385,7 @@ FROM current_raw
 def _insert_factor_snapshots_incremental(
     client: Any,
     *,
+    market: str | None,
     start_date: str | date | None,
     end_date: str | date | None,
     financial_basis: str | None,
@@ -375,6 +403,7 @@ def _insert_factor_snapshots_incremental(
         raise ValueError("carry-forward snapshot builds require --start-date and --end-date")
     snapshot_dates = _load_snapshot_dates(
         client,
+        market=market,
         start_date=start_date,
         end_date=end_date,
         price_table=price_table,
@@ -383,6 +412,7 @@ def _insert_factor_snapshots_incremental(
         return
     resolved_factor_ids = _resolve_factor_ids(
         client,
+        market=market,
         factor_ids=factor_ids,
         financial_basis=financial_basis,
         source_table=source_table,
@@ -407,6 +437,7 @@ def _insert_factor_snapshots_incremental(
             if previous_snapshot_date is None and not truncate:
                 previous_snapshot_date = _latest_snapshot_date_before(
                     client,
+                    market=market,
                     snapshot_date=snapshot_date,
                     financial_basis=financial_basis,
                     factor_ids=factor_chunk,
@@ -416,6 +447,7 @@ def _insert_factor_snapshots_incremental(
                 query, params = build_incremental_factor_snapshot_insert_query(
                     snapshot_date=snapshot_date,
                     previous_snapshot_date=previous_snapshot_date,
+                    market=market,
                     financial_basis=financial_basis,
                     factor_ids=factor_chunk,
                     source_table=source_table,
@@ -424,6 +456,7 @@ def _insert_factor_snapshots_incremental(
                 mode = "incremental"
             else:
                 query, params = build_factor_snapshot_insert_query(
+                    market=market,
                     financial_basis=financial_basis,
                     factor_ids=factor_chunk,
                     source_table=source_table,
@@ -447,6 +480,7 @@ def _insert_factor_snapshots_incremental(
 def _insert_factor_snapshots_chunked(
     client: Any,
     *,
+    market: str | None,
     start_date: str | date | None,
     end_date: str | date | None,
     financial_basis: str | None,
@@ -464,6 +498,7 @@ def _insert_factor_snapshots_chunked(
         raise ValueError("carry-forward snapshot builds require --start-date and --end-date")
     snapshot_dates = _load_snapshot_dates(
         client,
+        market=market,
         start_date=start_date,
         end_date=end_date,
         price_table=price_table,
@@ -472,6 +507,7 @@ def _insert_factor_snapshots_chunked(
         return
     resolved_factor_ids = _resolve_factor_ids(
         client,
+        market=market,
         factor_ids=factor_ids,
         financial_basis=financial_basis,
         source_table=source_table,
@@ -492,6 +528,7 @@ def _insert_factor_snapshots_chunked(
         for factor_chunk in _chunks(resolved_factor_ids, factor_chunk_size):
             batch_index += 1
             query, params = build_factor_snapshot_insert_query(
+                market=market,
                 financial_basis=financial_basis,
                 factor_ids=factor_chunk,
                 source_table=source_table,
@@ -513,6 +550,7 @@ def _insert_factor_snapshots_chunked(
 
 def _build_raw_copy_snapshot_insert_query(
     *,
+    market: str | None = None,
     start_date: str | date | None = None,
     end_date: str | date | None = None,
     financial_basis: str | None = None,
@@ -522,6 +560,10 @@ def _build_raw_copy_snapshot_insert_query(
 ) -> tuple[str, dict[str, Any]]:
     params: dict[str, Any] = {}
     filters = ["isFinite(factor_value)"]
+    security_prefix = _security_prefix_for_market(market)
+    if security_prefix:
+        params["security_prefix"] = security_prefix
+        filters.append("startsWith(security_id, {security_prefix:String})")
     if start_date is not None:
         params["start_date"] = _date_iso(start_date)
         filters.append("trade_date >= {start_date:Date}")
@@ -570,6 +612,7 @@ WHERE {where_sql}
 def _count_inserted_rows(
     client: Any,
     *,
+    market: str | None,
     start_date: str | date | None,
     end_date: str | date | None,
     financial_basis: str | None,
@@ -577,6 +620,7 @@ def _count_inserted_rows(
     snapshot_table: str,
 ) -> int:
     query, params = _build_count_query(
+        market=market,
         start_date=start_date,
         end_date=end_date,
         financial_basis=financial_basis,
@@ -589,6 +633,7 @@ def _count_inserted_rows(
 
 def _build_count_query(
     *,
+    market: str | None,
     start_date: str | date | None,
     end_date: str | date | None,
     financial_basis: str | None,
@@ -597,6 +642,10 @@ def _build_count_query(
 ) -> tuple[str, dict[str, Any]]:
     params: dict[str, Any] = {}
     filters = ["1 = 1"]
+    security_prefix = _security_prefix_for_market(market)
+    if security_prefix:
+        params["security_prefix"] = security_prefix
+        filters.append("startsWith(security_id, {security_prefix:String})")
     if start_date is not None:
         params["start_date"] = _date_iso(start_date)
         filters.append("trade_date >= {start_date:Date}")
@@ -620,10 +669,23 @@ WHERE {" AND ".join(filters)}
 def _load_snapshot_dates(
     client: Any,
     *,
+    market: str | None,
     start_date: str | date,
     end_date: str | date,
     price_table: str,
 ) -> list[str]:
+    security_prefix = _security_prefix_for_market(market)
+    market_filter = (
+        "\n    AND startsWith(security_id, {security_prefix:String})"
+        if security_prefix
+        else ""
+    )
+    parameters = {
+        "start_date": _date_iso(start_date),
+        "end_date": _date_iso(end_date),
+    }
+    if security_prefix:
+        parameters["security_prefix"] = security_prefix
     rows = _query_rows(
         client,
         f"""
@@ -631,12 +693,10 @@ SELECT DISTINCT trade_date
 FROM {_validate_table_name(price_table)}
 WHERE trade_date >= {{start_date:Date}}
     AND trade_date <= {{end_date:Date}}
+    {market_filter}
 ORDER BY trade_date ASC
 """.strip(),
-        {
-            "start_date": _date_iso(start_date),
-            "end_date": _date_iso(end_date),
-        },
+        parameters,
     )
     return [_date_iso(row[0]) for row in rows]
 
@@ -644,6 +704,7 @@ ORDER BY trade_date ASC
 def _resolve_factor_ids(
     client: Any,
     *,
+    market: str | None,
     factor_ids: list[str] | None,
     financial_basis: str | None,
     source_table: str,
@@ -654,6 +715,10 @@ def _resolve_factor_ids(
 
     params: dict[str, Any] = {"end_date": _date_iso(end_date)}
     filters = ["trade_date <= {end_date:Date}", "isFinite(factor_value)"]
+    security_prefix = _security_prefix_for_market(market)
+    if security_prefix:
+        params["security_prefix"] = security_prefix
+        filters.append("startsWith(security_id, {security_prefix:String})")
     if financial_basis:
         params["financial_basis"] = str(financial_basis)
         filters.append("financial_basis = {financial_basis:String}")
@@ -673,6 +738,7 @@ ORDER BY factor_id ASC
 def _latest_snapshot_date_before(
     client: Any,
     *,
+    market: str | None,
     snapshot_date: str | date,
     financial_basis: str | None,
     factor_ids: list[str],
@@ -690,6 +756,10 @@ def _latest_snapshot_date_before(
         "trade_date < {snapshot_date:Date}",
         "has({factor_ids:Array(String)}, factor_id)",
     ]
+    security_prefix = _security_prefix_for_market(market)
+    if security_prefix:
+        params["security_prefix"] = security_prefix
+        filters.append("startsWith(security_id, {security_prefix:String})")
     if financial_basis:
         params["financial_basis"] = str(financial_basis)
         filters.append("financial_basis = {financial_basis:String}")
@@ -804,8 +874,52 @@ def _parse_factor_ids(value: str | None) -> list[str] | None:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _security_prefix_for_market(market: str | None) -> str | None:
+    if market is None:
+        return None
+    normalized = str(market).strip().lower()
+    prefixes = {"kr": "SEC_KR_", "us": "SEC_US_"}
+    if normalized not in prefixes:
+        raise ValueError("market must be 'kr', 'us', or None")
+    return prefixes[normalized]
+
+
+def _delete_market_snapshots(
+    client: Any,
+    *,
+    market: str,
+    start_date: str | date | None,
+    end_date: str | date | None,
+    financial_basis: str | None,
+    factor_ids: list[str] | None,
+    snapshot_table: str,
+) -> None:
+    params: dict[str, Any] = {
+        "security_prefix": _security_prefix_for_market(market),
+    }
+    filters = ["startsWith(security_id, {security_prefix:String})"]
+    if start_date is not None:
+        params["start_date"] = _date_iso(start_date)
+        filters.append("trade_date >= {start_date:Date}")
+    if end_date is not None:
+        params["end_date"] = _date_iso(end_date)
+        filters.append("trade_date <= {end_date:Date}")
+    if financial_basis:
+        params["financial_basis"] = str(financial_basis)
+        filters.append("financial_basis = {financial_basis:String}")
+    if factor_ids:
+        params["factor_ids"] = _normalize_factor_ids(factor_ids)
+        filters.append("has({factor_ids:Array(String)}, factor_id)")
+    query = (
+        f"ALTER TABLE {_validate_table_name(snapshot_table)} DELETE WHERE "
+        f"{' AND '.join(filters)} SETTINGS mutations_sync = 2"
+    )
+    _execute(client, query, params)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build the fast daily factor snapshot table.")
+    parser.add_argument("--market", choices=["kr", "us"])
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--financial-basis", choices=["annual", "ttm", "quarterly"])
@@ -834,6 +948,7 @@ def main() -> None:
             print(f"created snapshot table={args.snapshot_table}")
             return
         row_count = insert_factor_snapshots(
+            market=args.market,
             start_date=args.start_date,
             end_date=args.end_date,
             financial_basis=args.financial_basis,

@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 from engine.core.paths import DATA_LAKE
+from engine.core.source_storage import write_source_dataframe
 
 
 NASDAQ_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt"
@@ -28,7 +29,7 @@ EXCLUDED_INSTRUMENT_PATTERN = (
     r")\b"
 )
 INCLUDED_EQUITY_PATTERN = (
-    r"\b(?:common stock|common shares?|ordinary shares?|ordinary stock|"
+    r"\b(?:common stock|common shares?|capital stock|ordinary shares?|ordinary stock|"
     r"american depositary|adr|ads|preferred|preference|depositary shares?)\b"
 )
 PREFERRED_OR_ADR_PATTERN = r"\b(?:preferred|preference|american depositary|adr|ads|depositary shares?)\b"
@@ -86,22 +87,99 @@ def download_us_price_histories(
 
     for index, ticker in enumerate(selected_symbols, start=max(offset, 0)):
         out_path = output_dir / f"{ticker}.csv"
+        existing = pd.DataFrame()
+        effective_start = start_date
         if out_path.exists() and not force:
-            print(f"skipping {ticker} (download_offset : {index})")
-            continue
+            existing = pd.read_csv(out_path)
+            latest = _latest_yfinance_frame_date(existing)
+            if latest is not None:
+                next_date = latest + timedelta(days=1)
+                requested_start = _to_date(start_date) if start_date else None
+                effective_start = max(
+                    value for value in (next_date, requested_start) if value is not None
+                ).isoformat()
+                requested_end = _to_date(end_date) if end_date else date.today()
+                if next_date > requested_end:
+                    print(f"skipping {ticker} (already fresh through {latest})")
+                    continue
 
         print(f"downloading {ticker} (download_offset : {index})....")
-        frame = fetch_yfinance_price(ticker, start_date=start_date, end_date=end_date)
+        frame = fetch_yfinance_price(
+            ticker,
+            start_date=effective_start,
+            end_date=end_date,
+        )
         if frame.empty:
             print(f"empty yfinance result: {ticker}")
             continue
 
-        frame.to_csv(out_path, index=False, encoding="utf-8-sig")
+        if not existing.empty:
+            frame = _merge_yfinance_price_frames(existing, frame)
+        write_source_dataframe(
+            out_path,
+            frame,
+            source="yfinance-price",
+            encoding="utf-8-sig",
+            metadata={"ticker": ticker},
+        )
         written.append(out_path)
         if sleep_seconds > 0:
             sleep(sleep_seconds)
 
     return written
+
+
+def _latest_yfinance_frame_date(frame: pd.DataFrame) -> date | None:
+    if frame is None or frame.empty:
+        return None
+    column = next(
+        (
+            candidate
+            for candidate in ("Date", "Datetime", "date", "trade_date")
+            if candidate in frame.columns
+        ),
+        None,
+    )
+    if column is None:
+        return None
+    values = pd.to_datetime(frame[column], errors="coerce").dropna()
+    return values.max().date() if not values.empty else None
+
+
+def _merge_yfinance_price_frames(
+    existing: pd.DataFrame,
+    incremental: pd.DataFrame,
+) -> pd.DataFrame:
+    frames = [frame.copy() for frame in (existing, incremental) if not frame.empty]
+    merged = pd.concat(frames, ignore_index=True, sort=False)
+    date_column = next(
+        (
+            candidate
+            for candidate in ("Date", "Datetime", "date", "trade_date")
+            if candidate in merged.columns
+        ),
+        None,
+    )
+    if date_column is None:
+        raise ValueError("yfinance source is missing a date column")
+    merged["_parsed_date"] = pd.to_datetime(merged[date_column], errors="coerce")
+    merged = merged.dropna(subset=["_parsed_date"]).copy()
+    merged[date_column] = merged["_parsed_date"].dt.strftime("%Y-%m-%d")
+    return (
+        merged.sort_values("_parsed_date", kind="stable")
+        .drop_duplicates(date_column, keep="last")
+        .drop(columns=["_parsed_date"])
+        .reset_index(drop=True)
+    )
+
+
+def _to_date(value: str | date) -> date:
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if len(text) == 8 and text.isdigit():
+        return datetime.strptime(text, "%Y%m%d").date()
+    return date.fromisoformat(text)
 
 
 def fetch_yfinance_price(
@@ -158,10 +236,22 @@ def download_us_equity_universe(
         source="otherlisted",
     )
 
-    nasdaq.to_csv(output_dir / "nasdaqlisted.csv", index=False, encoding="utf-8-sig")
-    other.to_csv(output_dir / "otherlisted.csv", index=False, encoding="utf-8-sig")
+    write_source_dataframe(
+        output_dir / "nasdaqlisted.csv",
+        nasdaq,
+        source="nasdaqtrader-universe",
+    )
+    write_source_dataframe(
+        output_dir / "otherlisted.csv",
+        other,
+        source="nasdaqtrader-universe",
+    )
     universe = filter_us_equity_universe(nasdaq, other)
-    universe.to_csv(output_dir / "us_equity_universe.csv", index=False, encoding="utf-8-sig")
+    write_source_dataframe(
+        output_dir / "us_equity_universe.csv",
+        universe,
+        source="nasdaqtrader-universe",
+    )
     return universe
 
 

@@ -9,6 +9,13 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from engine.core.paths import DATA_LAKE
+from engine.core.source_storage import (
+    csv_source_validator,
+    write_source_bytes,
+    write_source_dataframe,
+    write_source_text,
+    xlsx_source_validator,
+)
 
 
 DAMODARAN_COUNTRY_ERP_URL = "https://www.stern.nyu.edu/~adamodar/pc/datasets/ctryprem.xlsx"
@@ -36,7 +43,13 @@ def download_damodaran_country_erp(
 ) -> Path:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(_download_bytes(url, user_agent="Arcana Damodaran ERP loader"))
+    write_source_bytes(
+        output,
+        _download_bytes(url, user_agent="Arcana Damodaran ERP loader"),
+        source="damodaran-country-erp",
+        validator=xlsx_source_validator,
+        metadata={"url": url},
+    )
     return output
 
 
@@ -55,14 +68,24 @@ def download_fred_series(
     output.parent.mkdir(parents=True, exist_ok=True)
     api_key = api_key or os.environ.get("FRED_API_KEY")
     if api_key:
-        output.write_text(
+        write_source_text(
+            output,
             _download_fred_api_csv(series_id, api_key=api_key, timeout=timeout),
+            source="fred-series",
             encoding="utf-8",
+            validator=csv_source_validator(min_columns=2),
+            metadata={"series_id": series_id},
         )
         return output
 
     url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-    output.write_bytes(_download_bytes(url, user_agent="Arcana FRED loader", timeout=timeout))
+    write_source_bytes(
+        output,
+        _download_bytes(url, user_agent="Arcana FRED loader", timeout=timeout),
+        source="fred-series",
+        validator=csv_source_validator(min_columns=2),
+        metadata={"series_id": series_id, "url": url},
+    )
     return output
 
 
@@ -105,7 +128,12 @@ def download_us_sp500_benchmark(
     )
     if frame.empty:
         raise RuntimeError("empty yfinance result for S&P 500 benchmark")
-    frame.to_csv(output, index=False, encoding="utf-8-sig")
+    write_source_dataframe(
+        output,
+        frame,
+        source="yfinance-sp500-wacc",
+        metadata={"ticker": "^GSPC"},
+    )
     return output
 
 

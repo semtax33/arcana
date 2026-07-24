@@ -15,6 +15,76 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 가상환경이 삭제된 Python 설치 경로를 가리키면 테스트나 파이프라인 명령을
 실행하기 전에 venv를 다시 생성해야 합니다.
 
+## 통합 최신 데이터 갱신
+
+아래 명령 하나로 각 시장의 지원되는 원천 데이터부터 정규화 데이터,
+ClickHouse raw factor와 factor snapshot까지 순서대로 갱신합니다.
+
+```powershell
+# 한국 시장 전체 최신 갱신
+python -m engine.workflows.refresh --market kr
+
+# 미국 시장 전체 최신 갱신
+python -m engine.workflows.refresh --market us
+```
+
+`--targets all`이 기본값입니다. KR은 시장 데이터, 공시, 기업개황, 배당,
+컨센서스, 벤치마크/WACC, 최신 운영지표, raw factor, factor snapshot을
+갱신합니다. US는 현재 지원되는 시장 데이터, SEC 공시, 배당,
+벤치마크/WACC, raw factor, factor snapshot을 갱신합니다. factor/style
+score는 이 명령의 대상이 아닙니다.
+
+전체 종목 대신 일부 종목만 갱신하거나 실행 내용을 미리 확인할 수 있습니다.
+
+```powershell
+python -m engine.workflows.refresh --market kr --symbols 005930,000660 --workers 4
+python -m engine.workflows.refresh --market us --symbols AAPL,MSFT --workers 4
+python -m engine.workflows.refresh --market kr --dry-run
+```
+
+갱신은 필수 원천 다운로드, 인증, 정규화 또는 적재 단계가 실패하면 즉시
+실패합니다. 실패 원인을 해결한 뒤 같은 명령을 실행하면
+`data-lake/meta/refresh_state/{market}_refresh_state.json`의 완료 단계부터
+재개합니다. 처음부터 다시 실행하려면 `--no-resume`, 원천 전체 기간을 다시
+받아야 할 때만 `--force-full`을 사용합니다.
+
+### 원천 데이터 보존
+
+통합 갱신 명령은 시장별 잠금을 획득하며, 기존 원천 파일을 바로 덮어쓰지
+않습니다. 새 파일의 형식과 내용을 먼저 검증하고 기존 파일의 SHA-256
+보관본을 아래 경로에 만든 뒤, 보관본 검증이 끝난 경우에만 현재 파일을
+원자적으로 교체합니다.
+
+```text
+data-lake/source-archive/{market}/{run_id}/...
+data-lake/meta/refresh-manifests/{market}/{run_id}.json
+data-lake/meta/refresh_locks/{market}.lock
+```
+
+내용이 동일하면 불필요한 보관본을 만들지 않습니다. 검증이나 다운로드가
+실패하면 기존 파일은 그대로 유지되며, 보관본은 통합 갱신 과정에서 자동
+삭제하지 않습니다. Silver/Gold와 ClickHouse 데이터는 원천이 아니라 재생성
+가능한 파생 데이터이므로 해당 시장과 갱신 기간 범위만 교체합니다.
+
+운영 갱신은 최근 가격 단면에서 최대 종목 수의 99% 이상이 존재하는 가장
+최근 거래일을 완전한 기준일로 선택합니다. raw factor가 비어 있으면 해당
+기준일을 먼저 생성하고, factor snapshot이 비어 있으면 과거 전체를 만들지
+않고 그 기준일 스냅샷만 생성합니다. 이후 실행은 마지막 적재일 다음 날부터
+증분 갱신합니다. 임계값은 `--complete-universe-ratio`로 변경할 수 있습니다.
+
+2010년 이후 전체 raw factor와 snapshot 이력은 운영 갱신과 분리해 필요한
+시장별로 명시적으로 백필합니다.
+
+```powershell
+$EndDate = Get-Date -Format yyyy-MM-dd
+
+python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2010-01-01 --end-date $EndDate
+python -m engine.loaders.factor_snapshots --market kr --financial-basis annual --start-date 2010-01-01 --end-date $EndDate --truncate
+
+python -m engine.loaders.factors --market us --financial-basis annual --start-date 2010-01-01 --end-date $EndDate
+python -m engine.loaders.factor_snapshots --market us --financial-basis annual --start-date 2010-01-01 --end-date $EndDate --truncate
+```
+
 ## Engine Layout
 
 `engine`은 파이프라인 책임별 계층으로 나뉩니다. 리팩토링 이전 호환용 루트

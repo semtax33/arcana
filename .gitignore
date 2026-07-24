@@ -9,4 +9,7 @@ data-lake/gold/**
 data-lake/meta/screener_strategies.sqlite3
 data-lake/meta/screener_strategies.sqlite3-*
 data-lake/meta/refresh_state/**
+data-lake/meta/refresh_locks/**
+data-lake/meta/refresh-manifests/**
+data-lake/source-archive/**
 outputs/

@@ -10,6 +10,7 @@ import pandas as pd
 from pykrx import stock
 
 from engine.core.paths import DATA_LAKE, market_symbol_csv_name
+from engine.core.source_storage import write_source_dataframe
 
 
 DATE_COLUMN = "\ub0a0\uc9dc"
@@ -164,12 +165,12 @@ def _read_csv(path: Path) -> pd.DataFrame:
 
 
 def _atomic_write_csv(frame: pd.DataFrame, path: Path) -> None:
-    temp_merge_path = _temporary_csv_path(path, "merge")
-    try:
-        frame.to_csv(temp_merge_path, index=False, encoding=CSV_ENCODING)
-        temp_merge_path.replace(path)
-    finally:
-        _unlink_if_exists(temp_merge_path)
+    write_source_dataframe(
+        path,
+        frame,
+        source="krx-market-data",
+        encoding=CSV_ENCODING,
+    )
 
 
 def _temporary_csv_path(path: Path, purpose: str) -> Path:

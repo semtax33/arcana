@@ -21,17 +21,22 @@ class FakeClickHouseClient:
         self.overlap_rows = overlap_rows
         self.queries = []
         self.commands = []
+        self.command_parameters = []
         self.inserted = []
 
     def query_df(self, query, parameters=None):
         self.queries.append((query, parameters or {}))
         return pd.DataFrame({"rows": [self.overlap_rows]})
 
-    def command(self, query):
+    def command(self, query, parameters=None):
         self.commands.append(query)
+        self.command_parameters.append(parameters or {})
 
     def insert_df(self, table_name, dataframe, column_names=None):
         self.inserted.append((table_name, dataframe.copy(), list(column_names or [])))
+
+    def close(self):
+        pass
 
 
 class RefreshWorkflowTest(unittest.TestCase):
@@ -202,6 +207,155 @@ class RefreshWorkflowTest(unittest.TestCase):
         args = run_market_data.call_args.args[0]
         self.assertEqual(args.clickhouse_mode, "overlap-truncate")
         self.assertEqual(args.market, "kr")
+
+    def test_cli_resumes_by_default_and_supports_no_resume(self):
+        parser = refresh_workflow.build_arg_parser()
+
+        self.assertTrue(parser.parse_args([]).resume)
+        self.assertFalse(parser.parse_args(["--no-resume"]).resume)
+
+    def test_us_all_targets_exclude_kr_only_steps(self):
+        targets = refresh_workflow.expand_targets("all", market="us")
+
+        self.assertIn("market-data", targets)
+        self.assertIn("filings", targets)
+        self.assertIn("factors", targets)
+        self.assertIn("snapshots", targets)
+        self.assertNotIn("business-info", targets)
+        self.assertNotIn("consensus", targets)
+        self.assertNotIn("operating-metrics", targets)
+
+    def test_latest_complete_trade_date_ignores_partial_latest_session(self):
+        frame = pd.DataFrame(
+            {
+                "security_id": [
+                    "SEC_KR_A",
+                    "SEC_KR_B",
+                    "SEC_KR_C",
+                    "SEC_KR_A",
+                ],
+                "trade_date": [
+                    "2026-07-23",
+                    "2026-07-23",
+                    "2026-07-23",
+                    "2026-07-24",
+                ],
+            }
+        )
+        with patch.object(
+            refresh_workflow.market_loader,
+            "create_price_dataframe",
+            return_value=frame,
+        ):
+            result = refresh_workflow.resolve_latest_complete_trade_date(
+                "kr",
+                ratio=0.99,
+            )
+
+        self.assertEqual(result, date(2026, 7, 23))
+
+    def test_market_scoped_delete_uses_only_selected_market_prefix(self):
+        client = FakeClickHouseClient()
+
+        refresh_workflow.market_scoped_delete(
+            client,
+            "fact_daily_factors",
+            market="us",
+            start_date="2026-07-01",
+            end_date="2026-07-24",
+            financial_basis="annual",
+        )
+
+        self.assertEqual(
+            client.command_parameters[0]["security_prefix"],
+            "SEC_US_",
+        )
+        self.assertNotIn("TRUNCATE TABLE", client.commands[0])
+        self.assertIn("DELETE WHERE", client.commands[0])
+
+    def test_selected_symbols_filter_market_load_rows(self):
+        args = argparse.Namespace(
+            market="us",
+            symbols="AAPL",
+            dry_run=False,
+            clickhouse_mode="overlap-truncate",
+        )
+        client = FakeClickHouseClient()
+        frame = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_AAPL", "SEC_US_MSFT"],
+                "trade_date": pd.to_datetime(["2026-07-24", "2026-07-24"]),
+                "close": [200.0, 400.0],
+            }
+        )
+
+        refresh_workflow.load_market_table(
+            args,
+            client,
+            table_name="price_daily",
+            create_frame=lambda: frame,
+            insert_frame=lambda selected: client.insert_df(
+                "price_daily",
+                selected,
+                column_names=list(selected.columns),
+            ),
+            window=refresh_workflow.RefreshWindow(
+                "20260724",
+                "20260724",
+                date(2026, 7, 23),
+            ),
+        )
+
+        self.assertEqual(
+            client.inserted[0][1]["security_id"].tolist(),
+            ["SEC_US_AAPL"],
+        )
+        self.assertEqual(
+            client.command_parameters[0]["security_ids"],
+            ["SEC_US_AAPL"],
+        )
+
+    def test_missing_us_source_symbol_forces_full_refresh_window(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            price_dir = root / "bronze" / "yfinance" / "price"
+            price_dir.mkdir(parents=True)
+            pd.DataFrame(
+                {"Date": ["2026-07-23"], "Close": [200.0]}
+            ).to_csv(price_dir / "AAPL.csv", index=False)
+            fake_data_lake = type(refresh_workflow.DATA_LAKE)(root)
+            with patch.object(refresh_workflow, "DATA_LAKE", fake_data_lake):
+                latest = refresh_workflow.latest_us_bronze_date(
+                    symbols=["AAPL", "MSFT"],
+                )
+
+        self.assertIsNone(latest)
+
+    def test_us_full_refresh_uses_downloaded_equity_universe(self):
+        state = refresh_workflow.RefreshState(
+            Path("unused.json"),
+            {
+                "signature": {},
+                "completed_steps": [],
+                "completed_symbols": {},
+                "step_windows": {},
+            },
+            enabled=False,
+        )
+        universe = pd.DataFrame({"ticker": ["MSFT", "AAPL", "AAPL"]})
+        with patch(
+            "engine.extractors.market_prices.download_us_equity_universe",
+            return_value=universe,
+        ) as download_universe:
+            symbols = refresh_workflow.resolve_us_refresh_symbols(
+                None,
+                targets={"filings", "market-data"},
+                state=state,
+                dry_run=False,
+            )
+
+        self.assertEqual(symbols, ["AAPL", "MSFT"])
+        download_universe.assert_called_once_with()
 
     def test_progress_tracker_prints_step_status(self):
         stdout = io.StringIO()
@@ -470,26 +624,47 @@ class RefreshWorkflowTest(unittest.TestCase):
                 enabled=True,
             )
             window = refresh_workflow.RefreshWindow("20260611", "20260622", date(2026, 6, 10))
-            state.complete_step("factors-reload-required", window)
             args = argparse.Namespace(
+                market="kr",
                 dry_run=False,
                 skip_clickhouse=False,
                 clickhouse_mode="overlap-truncate",
                 financial_basis="annual",
                 workers=2,
+                force_full=False,
+                symbols=None,
+                complete_universe_ratio=0.99,
             )
             client = FakeClickHouseClient(overlap_rows=0)
+            factor_result = pd.DataFrame()
+            factor_result.attrs["inserted_rows"] = 10
 
             with (
                 patch.object(refresh_workflow, "load_factor_catalog") as load_catalog,
-                patch.object(refresh_workflow.factor_loader, "insert_daily_factors") as insert_factors,
+                patch.object(
+                    refresh_workflow.factor_loader,
+                    "insert_daily_factors",
+                    return_value=factor_result,
+                ) as insert_factors,
                 patch.object(refresh_workflow, "ensure_krx_silver_market_data_current") as ensure_silver,
+                patch.object(
+                    refresh_workflow,
+                    "resolve_latest_complete_trade_date",
+                    return_value=date(2026, 6, 22),
+                ),
+                patch.object(
+                    refresh_workflow,
+                    "latest_market_table_date",
+                    return_value=date(2026, 6, 10),
+                ),
+                patch.object(refresh_workflow, "market_scoped_delete") as scoped_delete,
             ):
                 refresh_workflow.run_factor_refresh(args, window, client, state)
 
         load_catalog.assert_called_once()
-        self.assertEqual(client.commands, ["TRUNCATE TABLE fact_daily_factors"])
-        self.assertIsNone(insert_factors.call_args.kwargs["start_date"])
+        scoped_delete.assert_called_once()
+        self.assertEqual(insert_factors.call_args.kwargs["start_date"], "2026-06-11")
+        self.assertEqual(insert_factors.call_args.kwargs["market"], "kr")
         self.assertEqual(insert_factors.call_args.kwargs["parallel_workers"], 2)
         ensure_silver.assert_called_once_with()
         self.assertTrue(state.is_step_completed("factors-insert"))
@@ -514,6 +689,101 @@ class RefreshWorkflowTest(unittest.TestCase):
         self.assertTrue(refreshed)
         normalize_price.assert_called_once()
         normalize_shares.assert_called_once()
+
+    def test_first_snapshot_refresh_builds_latest_complete_date_only(self):
+        args = argparse.Namespace(
+            market="us",
+            skip_clickhouse=False,
+            dry_run=False,
+            complete_universe_ratio=0.99,
+            financial_basis="annual",
+            workers=4,
+            symbols=None,
+        )
+        client = FakeClickHouseClient()
+        with (
+            patch.object(
+                refresh_workflow,
+                "resolve_latest_complete_trade_date",
+                return_value=date(2026, 7, 24),
+            ),
+            patch.object(
+                refresh_workflow,
+                "latest_market_table_date",
+                return_value=None,
+            ),
+            patch.object(refresh_workflow, "market_scoped_delete") as scoped_delete,
+            patch.object(
+                refresh_workflow.factor_snapshot_loader,
+                "insert_factor_snapshots",
+                return_value=100,
+            ) as insert_snapshots,
+        ):
+            refresh_workflow.run_factor_snapshot_refresh(args, client)
+
+        self.assertEqual(
+            insert_snapshots.call_args.kwargs["start_date"],
+            date(2026, 7, 24),
+        )
+        self.assertEqual(
+            insert_snapshots.call_args.kwargs["end_date"],
+            date(2026, 7, 24),
+        )
+        self.assertEqual(insert_snapshots.call_args.kwargs["market"], "us")
+        scoped_delete.assert_called_once()
+        self.assertNotIn("symbols", scoped_delete.call_args.kwargs)
+
+    def test_us_all_refresh_runs_supported_steps_only(self):
+        with TemporaryDirectory() as temp_dir:
+            args = argparse.Namespace(
+                market="us",
+                targets="all",
+                end_date="20260724",
+                symbols="AAPL,MSFT",
+                resume=False,
+                resume_state_path=str(Path(temp_dir) / "state.json"),
+                dry_run=False,
+                skip_clickhouse=False,
+                force_full=False,
+                clickhouse_mode="overlap-truncate",
+                financial_basis="annual",
+                complete_universe_ratio=0.99,
+                consensus_sources="hankyung",
+                workers=2,
+                sleep_seconds=0.1,
+                progress_interval=100,
+            )
+            client = FakeClickHouseClient()
+            window = refresh_workflow.RefreshWindow(
+                "20260724",
+                "20260724",
+                date(2026, 7, 23),
+            )
+            with (
+                patch.object(
+                    refresh_workflow,
+                    "get_clickhouse_client",
+                    return_value=client,
+                ),
+                patch.object(refresh_workflow, "run_us_filing_refresh") as filings,
+                patch.object(
+                    refresh_workflow,
+                    "run_us_market_data_refresh",
+                    return_value=window,
+                ) as market_data,
+                patch.object(refresh_workflow, "run_us_dividend_refresh") as dividends,
+                patch.object(refresh_workflow, "run_benchmark_wacc_refresh") as benchmark,
+                patch.object(refresh_workflow, "run_factor_refresh") as factors,
+                patch.object(refresh_workflow, "run_factor_snapshot_refresh") as snapshots,
+            ):
+                refresh_workflow.run_us_refresh(args)
+
+        filings.assert_called_once()
+        market_data.assert_called_once()
+        dividends.assert_called_once()
+        benchmark.assert_called_once()
+        factors.assert_called_once()
+        snapshots.assert_called_once()
 
     def test_latest_dividend_date_supports_receipt_number_filenames(self):
         with TemporaryDirectory() as temp_dir:

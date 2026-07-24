@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import tempfile
+import threading
 import time
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -16,6 +17,12 @@ import pandas as pd
 
 from engine.core.clickhouse import get_clickhouse_client
 from engine.core.paths import DATA_LAKE, market_csv_name, market_symbol_csv_name
+from engine.core.source_storage import (
+    SourceArchiveSession,
+    SourceRefreshLock,
+    new_source_run_id,
+    write_source_dataframe,
+)
 from engine.extractors.filings import (
     collect_dart_report_metadata,
     deduplicate_report_metadata,
@@ -29,6 +36,7 @@ from engine.loaders import factors as factor_loader
 from engine.loaders import filings as filing_loader
 from engine.loaders import market_data as market_loader
 from engine.loaders import securities as security_loader
+from engine.loaders import factor_snapshots as factor_snapshot_loader
 from engine.transformers.market_data import normalize_price, normalize_shares
 from engine.workflows._internal import download_workflow
 
@@ -45,6 +53,7 @@ KR_REFRESH_TABLES = {
     "stock_dividend",
     "factor_catalog",
     "fact_daily_factors",
+    "fact_daily_factor_snapshot",
 }
 TABLE_DATE_COLUMNS = {
     "price_daily": "trade_date",
@@ -52,6 +61,7 @@ TABLE_DATE_COLUMNS = {
     "dart_report_metadata": "report_date",
     "stock_dividend": "trade_date",
     "fact_daily_factors": "trade_date",
+    "fact_daily_factor_snapshot": "trade_date",
 }
 SECURITY_TABLES = {
     "issuers": "issuers",
@@ -84,6 +94,7 @@ class RefreshState:
         self.path = path
         self.data = data
         self.enabled = enabled
+        self._lock = threading.RLock()
 
     @classmethod
     def open(
@@ -120,9 +131,20 @@ class RefreshState:
     def save(self) -> None:
         if not self.enabled:
             return
-        self.data["updated_at"] = datetime.now(KST).isoformat(timespec="seconds")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        with self._lock:
+            self.data["updated_at"] = datetime.now(KST).isoformat(timespec="seconds")
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            staged = self.path.with_name(f".{self.path.name}.{time.time_ns()}.tmp")
+            staged.write_text(
+                json.dumps(
+                    self.data,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            staged.replace(self.path)
 
     def is_step_completed(self, step: str) -> bool:
         return step in self.data.get("completed_steps", [])
@@ -144,11 +166,12 @@ class RefreshState:
         return str(symbol) in symbols
 
     def complete_symbol(self, dataset: str, symbol: str) -> None:
-        symbols = self.data.setdefault("completed_symbols", {}).setdefault(dataset, [])
-        symbol = str(symbol)
-        if symbol not in symbols:
-            symbols.append(symbol)
-        self.save()
+        with self._lock:
+            symbols = self.data.setdefault("completed_symbols", {}).setdefault(dataset, [])
+            symbol = str(symbol)
+            if symbol not in symbols:
+                symbols.append(symbol)
+            self.save()
 
     def reset_symbols(self, dataset: str) -> None:
         self.data.setdefault("completed_symbols", {})[dataset] = []
@@ -186,16 +209,37 @@ def get_normalize_workflow():
 
 def main() -> None:
     args = build_arg_parser().parse_args()
-    run_refresh(args)
+    if args.dry_run:
+        run_refresh(args)
+        return
+    run_id = new_source_run_id()
+    with (
+        SourceRefreshLock(args.market),
+        SourceArchiveSession(args.market, run_id=run_id),
+    ):
+        run_refresh(args)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Refresh KR bronze, silver, and ClickHouse layers.")
-    parser.add_argument("--market", default="kr", choices=["kr"])
+    parser = argparse.ArgumentParser(
+        description="Refresh market bronze, silver, gold, factors, and factor snapshots."
+    )
+    parser.add_argument("--market", default="kr", choices=["kr", "us"])
     parser.add_argument(
         "--targets",
         default="all",
-        choices=["all", "market-data", "filings", "business-info", "dividends", "factors"],
+        choices=[
+            "all",
+            "market-data",
+            "filings",
+            "business-info",
+            "dividends",
+            "consensus",
+            "benchmarks-wacc",
+            "operating-metrics",
+            "factors",
+            "snapshots",
+        ],
     )
     parser.add_argument(
         "--end-date",
@@ -204,16 +248,37 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Inclusive end date. Accepts YYYYMMDD or YYYY-MM-DD.",
     )
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument(
+        "--symbols",
+        help="Optional comma-separated market symbols. Defaults to the full market universe.",
+    )
     parser.add_argument("--sleep-seconds", type=float, default=5.0)
     parser.add_argument("--stock-retries", type=int, default=3)
     parser.add_argument("--stock-retry-backoff", type=float, default=30.0)
     parser.add_argument("--financial-basis", default="annual", choices=["annual", "quarterly", "ttm"])
+    parser.add_argument(
+        "--complete-universe-ratio",
+        type=float,
+        default=0.99,
+        help="Minimum recent cross-section ratio used to select the latest complete trade date.",
+    )
+    parser.add_argument(
+        "--consensus-sources",
+        default="hankyung,valuefinder,equity",
+        help="Comma-separated KR consensus sources.",
+    )
+    parser.add_argument("--consensus-html-pages", type=int, default=1)
+    parser.add_argument("--hankyung-token")
+    parser.add_argument("--valuefinder-cookie")
+    parser.add_argument("--equity-cookie")
+    parser.add_argument("--consensus-stale-days", type=int, default=180)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-clickhouse", action="store_true")
     parser.add_argument("--force-full", action="store_true")
     parser.add_argument(
         "--resume",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Continue a previous refresh with the same market, targets, end date, and options.",
     )
     parser.add_argument(
@@ -236,12 +301,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def run_refresh(args: argparse.Namespace) -> None:
+    if args.market == "us":
+        run_us_refresh(args)
+        return
     if args.market != "kr":
-        raise ValueError("refresh currently supports market=kr only")
+        raise ValueError("market must be 'kr' or 'us'")
 
-    targets = expand_targets(args.targets)
+    targets = expand_targets(args.targets, market=args.market)
+    validate_refresh_options(args, targets)
     end_date = parse_date_arg(args.end_date)
-    stock_codes = download_workflow._stock_codes()
+    stock_codes = parse_symbols_arg(getattr(args, "symbols", None))
+    if stock_codes is None:
+        stock_codes = download_workflow._stock_codes()
     state = RefreshState.open(
         resume_state_path(args),
         signature=resume_signature(args, end_date, targets),
@@ -311,6 +382,30 @@ def run_refresh(args: argparse.Namespace) -> None:
                 run_dividend_refresh(args, stock_codes, dividend_window, client, state)
                 state.complete_step("dividends", dividend_window)
                 progress.done("dividends")
+        if "consensus" in targets:
+            if state.is_step_completed("consensus"):
+                print("[RESUME] skipping completed step: consensus", flush=True)
+            else:
+                progress.begin("consensus")
+                run_consensus_refresh(args, end_date, client, state)
+                state.complete_step("consensus")
+                progress.done("consensus")
+        if "benchmarks-wacc" in targets:
+            if state.is_step_completed("benchmarks-wacc"):
+                print("[RESUME] skipping completed step: benchmarks-wacc", flush=True)
+            else:
+                progress.begin("benchmarks-wacc")
+                run_benchmark_wacc_refresh(args, end_date, client, state)
+                state.complete_step("benchmarks-wacc")
+                progress.done("benchmarks-wacc")
+        if "operating-metrics" in targets:
+            if state.is_step_completed("operating-metrics"):
+                print("[RESUME] skipping completed step: operating-metrics", flush=True)
+            else:
+                progress.begin("operating-metrics")
+                run_operating_metrics_refresh(args, stock_codes)
+                state.complete_step("operating-metrics")
+                progress.done("operating-metrics")
         if "factors" in targets:
             if state.is_step_completed("factors"):
                 print("[RESUME] skipping completed step: factors", flush=True)
@@ -319,14 +414,383 @@ def run_refresh(args: argparse.Namespace) -> None:
                 run_factor_refresh(args, market_window, client, state)
                 state.complete_step("factors", market_window)
                 progress.done("factors")
+        if "snapshots" in targets:
+            if state.is_step_completed("snapshots"):
+                print("[RESUME] skipping completed step: snapshots", flush=True)
+            else:
+                progress.begin("snapshots")
+                run_factor_snapshot_refresh(args, client)
+                state.complete_step("snapshots")
+                progress.done("snapshots")
     finally:
         if client is not None:
             client.close()
 
+
+def run_us_refresh(args: argparse.Namespace) -> None:
+    targets = expand_targets(args.targets, market="us")
+    validate_refresh_options(args, targets)
+    end_date = parse_date_arg(args.end_date)
+    symbols = parse_symbols_arg(getattr(args, "symbols", None))
+    state = RefreshState.open(
+        resume_state_path(args),
+        signature=resume_signature(args, end_date, targets),
+        resume=args.resume,
+        enabled=not args.dry_run,
+    )
+    symbols = resolve_us_refresh_symbols(
+        symbols,
+        targets=targets,
+        state=state,
+        dry_run=args.dry_run,
+    )
+    progress = ProgressTracker(refresh_step_names(targets))
+    client = None
+    if not args.skip_clickhouse and not args.dry_run:
+        client = get_clickhouse_client()
+
+    try:
+        if "filings" in targets:
+            if state.is_step_completed("filings"):
+                print("[RESUME] skipping completed step: filings", flush=True)
+            else:
+                progress.begin("filings")
+                run_us_filing_refresh(args, symbols, end_date, client)
+                state.complete_step("filings")
+                progress.done("filings")
+
+        if "market-data" in targets:
+            if state.is_step_completed("market-data"):
+                print("[RESUME] skipping completed step: market-data", flush=True)
+                market_window = build_refresh_window(
+                    latest_us_bronze_date(symbols=symbols),
+                    end_date=end_date,
+                    force_full=args.force_full,
+                )
+            else:
+                progress.begin("market-data")
+                market_window = run_us_market_data_refresh(
+                    args,
+                    symbols,
+                    end_date,
+                    client,
+                )
+                state.complete_step("market-data", market_window)
+                progress.done("market-data")
+        else:
+            market_window = build_refresh_window(
+                latest_us_bronze_date(symbols=symbols),
+                end_date=end_date,
+                force_full=args.force_full,
+            )
+
+        if "dividends" in targets:
+            if state.is_step_completed("dividends"):
+                print("[RESUME] skipping completed step: dividends", flush=True)
+            else:
+                progress.begin("dividends")
+                run_us_dividend_refresh(args, client)
+                state.complete_step("dividends")
+                progress.done("dividends")
+
+        if "benchmarks-wacc" in targets:
+            if state.is_step_completed("benchmarks-wacc"):
+                print("[RESUME] skipping completed step: benchmarks-wacc", flush=True)
+            else:
+                progress.begin("benchmarks-wacc")
+                run_benchmark_wacc_refresh(args, end_date, client, state)
+                state.complete_step("benchmarks-wacc")
+                progress.done("benchmarks-wacc")
+
+        if "factors" in targets:
+            if state.is_step_completed("factors"):
+                print("[RESUME] skipping completed step: factors", flush=True)
+            else:
+                progress.begin("factors")
+                run_factor_refresh(args, market_window, client, state)
+                state.complete_step("factors", market_window)
+                progress.done("factors")
+
+        if "snapshots" in targets:
+            if state.is_step_completed("snapshots"):
+                print("[RESUME] skipping completed step: snapshots", flush=True)
+            else:
+                progress.begin("snapshots")
+                run_factor_snapshot_refresh(args, client)
+                state.complete_step("snapshots")
+                progress.done("snapshots")
+    finally:
+        if client is not None:
+            client.close()
+
+
+def run_us_filing_refresh(
+    args: argparse.Namespace,
+    symbols: list[str] | None,
+    end_date: str,
+    client: Any,
+) -> None:
+    if args.dry_run:
+        print(
+            f"[DRY-RUN] US filings symbols={len(symbols) if symbols else 'ALL'}, "
+            f"end={_to_iso_date(end_date)}"
+        )
+        return
+
+    from engine.extractors.sec_filings import (
+        download_sec_company_tickers,
+        download_us_companyfacts,
+    )
+    from engine.transformers.sec_filings import normalize_us_sec_filings
+
+    download_sec_company_tickers()
+    download_us_companyfacts(
+        symbols=symbols,
+        force=True,
+        sleep_seconds=max(0.1, float(args.sleep_seconds or 0.0)),
+    )
+    end_year = int(end_date[:4])
+    written = normalize_us_sec_filings(
+        symbols=symbols,
+        start_year=end_year - 10,
+        end_year=end_year,
+        workers=args.workers,
+        progress_interval=args.progress_interval,
+    )
+    if not written:
+        raise RuntimeError("US filing normalization produced no statement files")
+    if not args.skip_clickhouse:
+        filing_loader.insert_report_metadata(market="us", client=client)
+
+
+def run_us_market_data_refresh(
+    args: argparse.Namespace,
+    symbols: list[str] | None,
+    end_date: str,
+    client: Any,
+) -> RefreshWindow:
+    latest = latest_us_bronze_date(symbols=symbols)
+    window = build_refresh_window(
+        latest,
+        end_date=end_date,
+        force_full=args.force_full,
+    )
+    if args.dry_run:
+        print(
+            f"[DRY-RUN] US market-data symbols={len(symbols) if symbols else 'ALL'}, "
+            f"start={window.start_date or '-'}, end={window.end_date}"
+        )
+        return window
+
+    from engine.extractors.market_prices import download_us_price_histories
+
+    download_us_price_histories(
+        symbols=symbols,
+        force=args.force_full,
+        sleep_seconds=args.sleep_seconds,
+        start_date=DEFAULT_START_DATE,
+        end_date=end_date,
+    )
+    price_frame = market_loader.create_price_dataframe(
+        market="us",
+        source="bronze",
+        progress_interval=args.progress_interval,
+    )
+    shares_frame = market_loader.create_shares_dataframe(
+        market="us",
+        source="bronze",
+    )
+    if price_frame.empty:
+        raise RuntimeError("US market-data normalization produced no price rows")
+
+    if not args.skip_clickhouse:
+        load_securities(args, client)
+        load_market_table(
+            args,
+            client,
+            table_name=market_loader.PRICE_TABLE,
+            create_frame=lambda: price_frame,
+            insert_frame=lambda frame: market_loader._insert_partitioned(
+                client,
+                market_loader.PRICE_TABLE,
+                frame,
+            ),
+            window=window,
+        )
+        if not shares_frame.empty:
+            load_market_table(
+                args,
+                client,
+                table_name=market_loader.SHARES_TABLE,
+                create_frame=lambda: shares_frame,
+                insert_frame=lambda frame: market_loader._insert_partitioned(
+                    client,
+                    market_loader.SHARES_TABLE,
+                    frame,
+                ),
+                window=window,
+            )
+    return window
+
+
+def run_us_dividend_refresh(args: argparse.Namespace, client: Any) -> None:
+    if args.dry_run:
+        print("[DRY-RUN] US dividends normalize/load")
+        return
+    frame = dividend_loader.refresh_silver_dividend_files(market="us")
+    insert_frame = dividend_loader.prepare_stock_dividend_for_clickhouse(frame)
+    if insert_frame.empty:
+        raise RuntimeError("US dividend normalization produced no rows")
+    if not args.skip_clickhouse:
+        market_scoped_delete(
+            client,
+            dividend_loader.STOCK_DIVIDEND_TABLE,
+            market="us",
+            start_date=min(insert_frame["trade_date"]),
+            end_date=max(insert_frame["trade_date"]),
+        )
+        insert_partitioned_frame(
+            client,
+            dividend_loader.STOCK_DIVIDEND_TABLE,
+            insert_frame,
+            dividend_loader.STOCK_DIVIDEND_COLUMNS,
+        )
+
+
+def run_consensus_refresh(
+    args: argparse.Namespace,
+    end_date: str,
+    client: Any,
+    state: RefreshState,
+) -> None:
+    if args.dry_run:
+        print(f"[DRY-RUN] KR consensus end={_to_iso_date(end_date)}")
+        return
+    end_year = int(end_date[:4])
+    namespace = argparse.Namespace(
+        market="kr",
+        start_date=f"{end_year}0101",
+        end_date=end_date,
+        consensus_sources=getattr(
+            args,
+            "consensus_sources",
+            "hankyung,valuefinder,equity",
+        ),
+        consensus_html_pages=getattr(args, "consensus_html_pages", 1),
+        hankyung_token=getattr(args, "hankyung_token", None),
+        valuefinder_cookie=getattr(args, "valuefinder_cookie", None),
+        equity_cookie=getattr(args, "equity_cookie", None),
+        force=True,
+        sleep_seconds=args.sleep_seconds,
+    )
+    download_workflow.download_kr_consensus(namespace)
+    normalize_namespace = argparse.Namespace(
+        market="kr",
+        consensus_stale_days=getattr(args, "consensus_stale_days", 180),
+    )
+    result = get_normalize_workflow().normalize_consensus(normalize_namespace)
+    if not result:
+        raise RuntimeError("KR consensus normalization produced no outputs")
+    if not args.skip_clickhouse:
+        from engine.loaders.consensus import load_hankyung_consensus
+
+        counts = load_hankyung_consensus(market="kr", client=client)
+        if not any(counts.values()):
+            raise RuntimeError("KR consensus load prepared no rows")
+
+
+def run_benchmark_wacc_refresh(
+    args: argparse.Namespace,
+    end_date: str,
+    client: Any,
+    state: RefreshState,
+) -> None:
+    if args.dry_run:
+        print(
+            f"[DRY-RUN] benchmark/WACC market={args.market}, "
+            f"end={_to_iso_date(end_date)}"
+        )
+        return
+
+    from engine.extractors.erp import (
+        download_damodaran_country_erp,
+        download_fred_series,
+        download_us_sp500_benchmark,
+        FRED_SERIES_IDS,
+    )
+    from engine.loaders import benchmarks as benchmark_loader
+    from engine.transformers.erp import (
+        normalize_country_erp,
+        normalize_fred_risk_free_rates,
+    )
+    from engine.transformers.wacc import (
+        create_default_wacc_assumptions,
+        normalize_market_benchmark_weekly_returns,
+    )
+
+    benchmark_loader.download_benchmark_prices(
+        market=args.market,
+        start_date=_to_iso_date(DEFAULT_START_DATE),
+        end_date=_to_iso_date(end_date),
+    )
+    download_damodaran_country_erp()
+    fred_paths = [
+        download_fred_series(series_id)
+        for series_id in FRED_SERIES_IDS.values()
+    ]
+    if args.market == "us":
+        download_us_sp500_benchmark(
+            start_date=_to_iso_date(DEFAULT_START_DATE),
+            end_date=_to_iso_date(end_date),
+        )
+
+    benchmark_frame = benchmark_loader.normalize_downloaded_benchmark_prices(
+        market=args.market,
+    )
+    normalize_country_erp()
+    normalize_fred_risk_free_rates(fred_paths)
+    create_default_wacc_assumptions()
+    normalize_market_benchmark_weekly_returns(args.market)
+    if benchmark_frame.empty:
+        raise RuntimeError(
+            f"benchmark normalization produced no rows for market={args.market}"
+        )
+    if not args.skip_clickhouse:
+        benchmark_loader.insert_benchmark_prices(
+            market=args.market,
+            source="bronze",
+            start_date=_to_iso_date(DEFAULT_START_DATE),
+            end_date=_to_iso_date(end_date),
+            client=client,
+        )
+
+
+def run_operating_metrics_refresh(
+    args: argparse.Namespace,
+    stock_codes: list[str],
+) -> None:
+    if args.dry_run:
+        print(
+            f"[DRY-RUN] KR operating metrics stocks={len(stock_codes):,}, "
+            f"load={not args.skip_clickhouse}"
+        )
+        return
+    from engine.workflows.operating_metrics import run_operating_metrics_workflow
+
+    output = run_operating_metrics_workflow(
+        stock_codes,
+        load=not args.skip_clickhouse,
+        dry_run=False,
+        progress_interval=args.progress_interval,
+        fail_fast=True,
+    )
+    if not output.get("transform_results"):
+        raise RuntimeError("KR operating metric workflow produced no outputs")
+
 def resume_state_path(args: argparse.Namespace) -> Path:
     if getattr(args, "resume_state_path", None):
         return Path(args.resume_state_path)
-    return DATA_LAKE.meta("refresh_state", "kr_refresh_state.json")
+    return DATA_LAKE.meta("refresh_state", f"{args.market}_refresh_state.json")
 
 
 def resume_signature(args: argparse.Namespace, end_date: str, targets: set[str]) -> dict[str, Any]:
@@ -338,6 +802,11 @@ def resume_signature(args: argparse.Namespace, end_date: str, targets: set[str])
         "skip_clickhouse": bool(args.skip_clickhouse),
         "clickhouse_mode": args.clickhouse_mode,
         "financial_basis": args.financial_basis,
+        "symbols": sorted(parse_symbols_arg(getattr(args, "symbols", None)) or []),
+        "complete_universe_ratio": float(
+            getattr(args, "complete_universe_ratio", 0.99)
+        ),
+        "consensus_sources": getattr(args, "consensus_sources", None),
     }
 
 
@@ -357,14 +826,49 @@ def refresh_window_from_state(raw: dict[str, Any]) -> RefreshWindow:
         date.fromisoformat(latest) if latest else None,
     )
 
-def expand_targets(target: str) -> set[str]:
+def expand_targets(target: str, *, market: str = "kr") -> set[str]:
     if target == "all":
-        return {"market-data", "filings", "business-info", "dividends", "factors"}
+        if market == "kr":
+            return {
+                "market-data",
+                "filings",
+                "business-info",
+                "dividends",
+                "consensus",
+                "benchmarks-wacc",
+                "operating-metrics",
+                "factors",
+                "snapshots",
+            }
+        return {
+            "market-data",
+            "filings",
+            "dividends",
+            "benchmarks-wacc",
+            "factors",
+            "snapshots",
+        }
+    if market == "us" and target in {
+        "business-info",
+        "consensus",
+        "operating-metrics",
+    }:
+        raise ValueError(f"target={target} is not supported for market=us")
     return {target}
 
 
 def refresh_step_names(targets: set[str]) -> list[str]:
-    ordered = ["market-data", "filings", "business-info", "dividends", "factors"]
+    ordered = [
+        "market-data",
+        "filings",
+        "business-info",
+        "dividends",
+        "consensus",
+        "benchmarks-wacc",
+        "operating-metrics",
+        "factors",
+        "snapshots",
+    ]
     return [name for name in ordered if name in targets]
 
 def run_market_data_refresh(
@@ -616,6 +1120,7 @@ def run_business_info_refresh(
             stock_retries=args.stock_retries,
             stock_retry_backoff=args.stock_retry_backoff,
             display_offset_base=original_offset,
+            fail_fast=True,
         ),
     )
     run_once_with_state(
@@ -681,68 +1186,146 @@ def run_dividend_refresh(
         "dividends-clickhouse",
         window,
         dry_run=args.dry_run,
-        action=lambda: load_dataframe_with_policy(
+        action=lambda: replace_market_frame(
             args,
             client,
             table_name=dividend_loader.STOCK_DIVIDEND_TABLE,
             full_frame=insert_frame,
             candidate_frame=candidate,
             column_names=dividend_loader.STOCK_DIVIDEND_COLUMNS,
-            window=window,
+            date_column="trade_date",
         ),
     )
 
 
 def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: Any, state: RefreshState) -> None:
     if args.skip_clickhouse:
+        print("[SKIP] factors require ClickHouse")
         return
 
-    if not args.dry_run:
-        run_once_with_state(
-            state,
-            "factors-catalog",
-            window,
-            dry_run=args.dry_run,
-            action=lambda: load_factor_catalog(args, client),
-        )
-
-    factor_window = window if window.has_work else RefreshWindow(None, window.end_date, window.latest_date)
     if state.is_step_completed("factors-insert"):
         print("[RESUME] skipping completed substep: factors-insert", flush=True)
         return
 
-    if not args.dry_run:
+    market = str(getattr(args, "market", "kr")).lower()
+    if market == "kr" and not args.dry_run:
         ensure_krx_silver_market_data_current()
-
-    reload_pending = state.is_step_completed("factors-reload-required")
-    should_reload = reload_pending or should_truncate_table(
-        args,
-        client,
-        "fact_daily_factors",
-        window=factor_window,
+    as_of_date = resolve_latest_complete_trade_date(
+        market,
+        ratio=float(getattr(args, "complete_universe_ratio", 0.99)),
     )
-    if should_reload and not args.dry_run:
-        state.complete_step("factors-reload-required", factor_window)
-        truncate_table(client, "fact_daily_factors")
-
-    start_date = None if should_reload else factor_window.start_iso
     if args.dry_run:
         print(
-            "[DRY-RUN] factors "
-            f"mode={args.clickhouse_mode}, reload={should_reload}, start={start_date}, end={factor_window.end_iso}"
+            f"[DRY-RUN] factors market={market}, "
+            f"latest_complete_date={as_of_date.isoformat()}"
         )
         return
 
-    factor_loader.insert_daily_factors(
+    run_once_with_state(
+        state,
+        "factors-catalog",
+        window,
+        dry_run=False,
+        action=lambda: load_factor_catalog(args, client),
+    )
+    latest_factor_date = latest_market_table_date(
+        client,
+        "fact_daily_factors",
+        market=market,
+        financial_basis=args.financial_basis,
+    )
+    if bool(getattr(args, "force_full", False)):
+        start_date = _to_iso_date(DEFAULT_START_DATE)
+    elif latest_factor_date is None or latest_factor_date >= as_of_date:
+        start_date = as_of_date.isoformat()
+    else:
+        start_date = (latest_factor_date + timedelta(days=1)).isoformat()
+    if window.has_work and window.start_iso and latest_factor_date is not None:
+        start_date = min(start_date, window.start_iso)
+
+    market_scoped_delete(
+        client,
+        "fact_daily_factors",
+        market=market,
+        start_date=start_date,
+        end_date=as_of_date,
+        financial_basis=args.financial_basis,
+        symbols=parse_symbols_arg(getattr(args, "symbols", None)),
+    )
+    factor_result = factor_loader.insert_daily_factors(
+        stock_codes=parse_symbols_arg(getattr(args, "symbols", None)),
         financial_basis=args.financial_basis,
         start_date=start_date,
-        end_date=factor_window.end_iso,
-        market="kr",
+        end_date=as_of_date.isoformat(),
+        market=market,
         insert_catalog=False,
         client=client,
         parallel_workers=args.workers,
     )
-    state.complete_step("factors-insert", factor_window)
+    inserted_rows = int(factor_result.attrs.get("inserted_rows", 0))
+    if inserted_rows <= 0:
+        raise RuntimeError(
+            f"factor refresh produced no rows for market={market}, "
+            f"date={start_date}..{as_of_date.isoformat()}"
+        )
+    state.complete_step(
+        "factors-insert",
+        RefreshWindow(
+            start_date.replace("-", ""),
+            as_of_date.strftime("%Y%m%d"),
+            latest_factor_date,
+        ),
+    )
+
+
+def run_factor_snapshot_refresh(args: argparse.Namespace, client: Any) -> None:
+    if args.skip_clickhouse:
+        print("[SKIP] factor snapshots require ClickHouse")
+        return
+    market = str(args.market).lower()
+    as_of_date = resolve_latest_complete_trade_date(
+        market,
+        ratio=float(getattr(args, "complete_universe_ratio", 0.99)),
+    )
+    if args.dry_run:
+        print(
+            f"[DRY-RUN] factor snapshots market={market}, "
+            f"latest_complete_date={as_of_date.isoformat()}"
+        )
+        return
+
+    latest_snapshot_date = latest_market_table_date(
+        client,
+        factor_snapshot_loader.FACTOR_SNAPSHOT_TABLE,
+        market=market,
+        financial_basis=args.financial_basis,
+    )
+    start_date = (
+        as_of_date
+        if latest_snapshot_date is None or latest_snapshot_date >= as_of_date
+        else latest_snapshot_date + timedelta(days=1)
+    )
+    market_scoped_delete(
+        client,
+        factor_snapshot_loader.FACTOR_SNAPSHOT_TABLE,
+        market=market,
+        start_date=start_date,
+        end_date=as_of_date,
+        financial_basis=args.financial_basis,
+    )
+    row_count = factor_snapshot_loader.insert_factor_snapshots(
+        market=market,
+        start_date=start_date,
+        end_date=as_of_date,
+        financial_basis=args.financial_basis,
+        max_threads=min(max(1, int(args.workers or 1)), 2),
+        client=client,
+    )
+    if row_count <= 0:
+        raise RuntimeError(
+            f"factor snapshot refresh produced no rows for market={market}, "
+            f"date={as_of_date.isoformat()}"
+        )
 
 
 def ensure_krx_silver_market_data_current() -> bool:
@@ -770,13 +1353,14 @@ def ensure_krx_silver_market_data_current() -> bool:
 
 def load_securities(args: argparse.Namespace, client: Any) -> None:
     for table_name, target in SECURITY_TABLES.items():
-        should_reload = should_truncate_table(args, client, table_name)
         if args.dry_run:
-            print(f"[DRY-RUN] securities table={table_name}, reload={should_reload}")
+            print(f"[DRY-RUN] securities table={table_name}, mode=market-upsert")
             continue
-        if should_reload:
-            truncate_table(client, table_name)
-        security_loader.insert_securities(market="kr", target=target, client=client)
+        security_loader.insert_securities(
+            market=args.market,
+            target=target,
+            client=client,
+        )
 
 
 def load_market_table(
@@ -789,49 +1373,370 @@ def load_market_table(
     window: RefreshWindow,
 ) -> None:
     if args.dry_run:
-        should_reload = should_truncate_table(args, client, table_name, window=window)
-        print(f"[DRY-RUN] market table={table_name}, reload={should_reload}, window={window}")
+        print(
+            f"[DRY-RUN] market table={table_name}, "
+            f"mode={args.clickhouse_mode}, window={window}"
+        )
         return
 
-    full_frame = create_frame()
-    candidate = filter_frame_by_window(full_frame, TABLE_DATE_COLUMNS[table_name], window)
-    should_reload = should_truncate_table(
-        args,
-        client,
-        table_name,
-        full_frame=full_frame,
-        candidate_frame=candidate,
-        window=window,
+    full_frame = filter_frame_by_symbols(
+        create_frame(),
+        market=args.market,
+        symbols=parse_symbols_arg(getattr(args, "symbols", None)),
     )
-    if should_reload:
-        truncate_table(client, table_name)
-        insert_frame(full_frame)
-    else:
-        insert_frame(candidate)
+    candidate = filter_frame_by_window(full_frame, TABLE_DATE_COLUMNS[table_name], window)
+    frame = full_frame if args.clickhouse_mode == "always-truncate" else candidate
+    if frame.empty:
+        return
+    if args.clickhouse_mode != "append-only":
+        dates = pd.to_datetime(
+            frame[TABLE_DATE_COLUMNS[table_name]],
+            errors="coerce",
+        ).dropna()
+        if not dates.empty:
+            market_scoped_delete(
+                client,
+                table_name,
+                market=args.market,
+                start_date=dates.min().date(),
+                end_date=dates.max().date(),
+                symbols=parse_symbols_arg(getattr(args, "symbols", None)),
+            )
+    insert_frame(frame)
 
 
 def load_report_metadata(args: argparse.Namespace, client: Any, window: RefreshWindow) -> None:
-    full_frame = filing_loader.read_report_metadata(market="kr")
+    full_frame = filter_frame_by_symbols(
+        filing_loader.read_report_metadata(market=args.market),
+        market=args.market,
+        symbols=parse_symbols_arg(getattr(args, "symbols", None)),
+    )
     candidate = filter_frame_by_window(full_frame, "report_date", window)
-    load_dataframe_with_policy(
-        args,
-        client,
-        table_name="dart_report_metadata",
-        full_frame=full_frame,
-        candidate_frame=candidate,
-        column_names=list(full_frame.columns),
-        window=window,
+    frame = full_frame if args.clickhouse_mode == "always-truncate" else candidate
+    if frame.empty:
+        return
+    if args.clickhouse_mode != "append-only":
+        dates = pd.to_datetime(frame["report_date"], errors="coerce").dropna()
+        if not dates.empty:
+            market_scoped_delete(
+                client,
+                "dart_report_metadata",
+                market=args.market,
+                start_date=dates.min().date(),
+                end_date=dates.max().date(),
+                symbols=parse_symbols_arg(getattr(args, "symbols", None)),
+            )
+    client.insert_df(
+        "dart_report_metadata",
+        frame,
+        column_names=list(frame.columns),
     )
 
 
 def load_factor_catalog(args: argparse.Namespace, client: Any) -> None:
-    should_reload = should_truncate_table(args, client, "factor_catalog")
     if args.dry_run:
-        print(f"[DRY-RUN] factor_catalog reload={should_reload}")
+        print("[DRY-RUN] factor_catalog upsert")
         return
-    if should_reload:
-        truncate_table(client, "factor_catalog")
     factor_loader.insert_factor_catalog(client, factor_ids=factor_loader.preferred_factor_columns())
+
+
+def replace_market_frame(
+    args: argparse.Namespace,
+    client: Any,
+    *,
+    table_name: str,
+    full_frame: pd.DataFrame,
+    candidate_frame: pd.DataFrame,
+    column_names: list[str],
+    date_column: str,
+) -> int:
+    symbols = parse_symbols_arg(getattr(args, "symbols", None))
+    full_frame = filter_frame_by_symbols(
+        full_frame,
+        market=args.market,
+        symbols=symbols,
+    )
+    candidate_frame = filter_frame_by_symbols(
+        candidate_frame,
+        market=args.market,
+        symbols=symbols,
+    )
+    frame = full_frame if args.clickhouse_mode == "always-truncate" else candidate_frame
+    if frame.empty:
+        return 0
+    if args.clickhouse_mode != "append-only":
+        dates = pd.to_datetime(frame[date_column], errors="coerce").dropna()
+        if not dates.empty:
+            market_scoped_delete(
+                client,
+                table_name,
+                market=args.market,
+                start_date=dates.min().date(),
+                end_date=dates.max().date(),
+                symbols=parse_symbols_arg(getattr(args, "symbols", None)),
+            )
+    client.insert_df(table_name, frame, column_names=column_names)
+    return len(frame)
+
+
+def insert_partitioned_frame(
+    client: Any,
+    table_name: str,
+    frame: pd.DataFrame,
+    column_names: list[str],
+) -> int:
+    if frame.empty:
+        return 0
+    working = frame.copy()
+    working["_partition"] = pd.to_datetime(
+        working["trade_date"],
+        errors="coerce",
+    ).dt.strftime("%Y%m")
+    inserted = 0
+    for _, chunk in working.dropna(subset=["_partition"]).groupby(
+        "_partition",
+        sort=True,
+    ):
+        chunk = chunk.drop(columns=["_partition"]).copy()
+        client.insert_df(table_name, chunk, column_names=column_names)
+        inserted += len(chunk)
+    return inserted
+
+
+def market_scoped_delete(
+    client: Any,
+    table_name: str,
+    *,
+    market: str,
+    start_date: str | date,
+    end_date: str | date,
+    financial_basis: str | None = None,
+    symbols: list[str] | None = None,
+) -> None:
+    validate_table_name(table_name)
+    normalized_market = str(market).strip().lower()
+    if normalized_market not in {"kr", "us"}:
+        raise ValueError("market must be 'kr' or 'us'")
+    prefix = "SEC_KR_" if normalized_market == "kr" else "SEC_US_"
+    date_column = TABLE_DATE_COLUMNS.get(table_name, "trade_date")
+    parameters: dict[str, Any] = {
+        "security_prefix": prefix,
+        "start_date": _to_iso_date(start_date),
+        "end_date": _to_iso_date(end_date),
+    }
+    filters = [
+        "startsWith(security_id, {security_prefix:String})",
+        f"{date_column} >= {{start_date:Date}}",
+        f"{date_column} <= {{end_date:Date}}",
+    ]
+    if financial_basis:
+        parameters["financial_basis"] = str(financial_basis)
+        filters.append("financial_basis = {financial_basis:String}")
+    if symbols:
+        security_ids = normalized_security_ids(normalized_market, symbols)
+        parameters["security_ids"] = sorted(set(security_ids))
+        filters.append("has({security_ids:Array(String)}, security_id)")
+    sql = (
+        f"ALTER TABLE {table_name} DELETE WHERE "
+        f"{' AND '.join(filters)} SETTINGS mutations_sync = 2"
+    )
+    command = getattr(client, "command", None)
+    if callable(command):
+        try:
+            command(sql, parameters=parameters)
+        except TypeError:
+            command(sql)
+        return
+    client.query(sql, parameters=parameters)
+
+
+def latest_market_table_date(
+    client: Any,
+    table_name: str,
+    *,
+    market: str,
+    financial_basis: str | None = None,
+) -> date | None:
+    validate_table_name(table_name)
+    prefix = "SEC_KR_" if str(market).lower() == "kr" else "SEC_US_"
+    params: dict[str, Any] = {"security_prefix": prefix}
+    filters = ["startsWith(security_id, {security_prefix:String})"]
+    if financial_basis:
+        params["financial_basis"] = str(financial_basis)
+        filters.append("financial_basis = {financial_basis:String}")
+    query = (
+        f"SELECT max(trade_date) AS latest_date FROM {table_name} "
+        f"WHERE {' AND '.join(filters)}"
+    )
+    if hasattr(client, "query_df"):
+        frame = client.query_df(query, parameters=params)
+        value = None if frame.empty else frame.iloc[0, 0]
+    else:
+        result = client.query(query, parameters=params)
+        rows = getattr(result, "result_rows", None) or []
+        value = rows[0][0] if rows else None
+    if value is None or pd.isna(value):
+        return None
+    return pd.Timestamp(value).date()
+
+
+def resolve_latest_complete_trade_date(
+    market: str,
+    *,
+    ratio: float = 0.99,
+    recent_sessions: int = 20,
+) -> date:
+    if not 0 < float(ratio) <= 1:
+        raise ValueError("complete_universe_ratio must satisfy 0 < ratio <= 1")
+    frame = market_loader.create_price_dataframe(
+        market=market,
+        source="silver",
+    )
+    if frame.empty:
+        raise RuntimeError(f"no normalized price rows for market={market}")
+    working = frame[["security_id", "trade_date"]].copy()
+    working["trade_date"] = pd.to_datetime(
+        working["trade_date"],
+        errors="coerce",
+    )
+    counts = (
+        working.dropna(subset=["trade_date"])
+        .groupby("trade_date")["security_id"]
+        .nunique()
+        .sort_index()
+        .tail(max(1, int(recent_sessions)))
+    )
+    if counts.empty:
+        raise RuntimeError(f"no valid normalized price dates for market={market}")
+    threshold = max(1, int(counts.max() * float(ratio) + 0.999999))
+    candidates = counts.loc[counts >= threshold]
+    if candidates.empty:
+        raise RuntimeError(
+            f"no complete price cross-section for market={market}, ratio={ratio}"
+        )
+    return candidates.index.max().date()
+
+
+def latest_us_bronze_date(symbols: list[str] | None = None) -> date | None:
+    root = DATA_LAKE.bronze("yfinance", "price")
+    if symbols:
+        from engine.extractors._internal.yfinance_market_prices import (
+            normalize_yfinance_ticker,
+        )
+
+        paths = [
+            root / f"{normalize_yfinance_ticker(symbol)}.csv"
+            for symbol in symbols
+        ]
+        if any(not path.exists() for path in paths):
+            return None
+    else:
+        paths = sorted(root.glob("*.csv"))
+    dates = [latest_date_in_csv(path) for path in paths if path.exists()]
+    dates = [value for value in dates if value is not None]
+    return min(dates) if dates else None
+
+
+def resolve_us_refresh_symbols(
+    symbols: list[str] | None,
+    *,
+    targets: set[str],
+    state: RefreshState,
+    dry_run: bool,
+) -> list[str] | None:
+    if symbols is not None or dry_run:
+        return symbols
+    source_targets = {"filings", "market-data"} & targets
+    if not any(not state.is_step_completed(target) for target in source_targets):
+        return None
+
+    from engine.extractors.market_prices import download_us_equity_universe
+
+    universe = download_us_equity_universe()
+    if universe.empty or "ticker" not in universe.columns:
+        raise RuntimeError("US equity universe download produced no symbols")
+    resolved = sorted(
+        {
+            str(symbol).strip().upper()
+            for symbol in universe["ticker"].dropna()
+            if str(symbol).strip()
+        }
+    )
+    if not resolved:
+        raise RuntimeError("US equity universe download produced no symbols")
+    print(f"[INFO] US refresh universe symbols={len(resolved):,}", flush=True)
+    return resolved
+
+
+def parse_symbols_arg(value: str | None) -> list[str] | None:
+    if value is None or not str(value).strip():
+        return None
+    return sorted(
+        {
+            item.strip().upper()
+            for item in str(value).split(",")
+            if item.strip()
+        }
+    )
+
+
+def normalized_security_ids(market: str, symbols: list[str]) -> list[str]:
+    normalized_market = str(market).strip().lower()
+    if normalized_market not in {"kr", "us"}:
+        raise ValueError("market must be 'kr' or 'us'")
+    prefix = "SEC_KR_" if normalized_market == "kr" else "SEC_US_"
+    if normalized_market == "us":
+        from engine.extractors._internal.yfinance_market_prices import (
+            normalize_yfinance_ticker,
+        )
+
+        normalized_symbols = [
+            normalize_yfinance_ticker(symbol)
+            for symbol in symbols
+        ]
+    else:
+        normalized_symbols = [
+            str(symbol).strip().upper().zfill(6)
+            if str(symbol).strip().isdigit()
+            else str(symbol).strip().upper()
+            for symbol in symbols
+        ]
+    return sorted(
+        {
+            f"{prefix}{symbol}"
+            for symbol in normalized_symbols
+            if symbol
+        }
+    )
+
+
+def filter_frame_by_symbols(
+    frame: pd.DataFrame,
+    *,
+    market: str,
+    symbols: list[str] | None,
+) -> pd.DataFrame:
+    if frame.empty or not symbols or "security_id" not in frame.columns:
+        return frame
+    security_ids = set(normalized_security_ids(market, symbols))
+    return frame.loc[frame["security_id"].astype(str).isin(security_ids)].copy()
+
+
+def validate_refresh_options(
+    args: argparse.Namespace,
+    targets: set[str],
+) -> None:
+    ratio = float(getattr(args, "complete_universe_ratio", 0.99))
+    if not 0 < ratio <= 1:
+        raise ValueError("complete_universe_ratio must satisfy 0 < ratio <= 1")
+    if (
+        bool(getattr(args, "skip_clickhouse", False))
+        and not bool(getattr(args, "dry_run", False))
+        and {"factors", "snapshots"} & targets
+    ):
+        raise ValueError(
+            "--skip-clickhouse cannot be combined with factors or snapshots"
+        )
 
 
 def load_dataframe_with_policy(
@@ -1127,8 +2032,12 @@ def merge_krx_symbol_csv(path: str | Path, new_frame: pd.DataFrame) -> pd.DataFr
         .drop(columns=["_parsed_date"])
         .reset_index(drop=True)
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    merged.to_csv(path, index=False, encoding="utf-8-sig")
+    write_source_dataframe(
+        path,
+        merged,
+        source=f"krx-{path.parent.name}",
+        encoding="utf-8-sig",
+    )
     return merged
 
 
@@ -1244,6 +2153,7 @@ def download_and_merge_report_metadata(
             output_csv_path=temp_path,
             start_date=start_date,
             end_date=end_date,
+            fail_fast=True,
         )
 
     frames = []
@@ -1327,6 +2237,10 @@ def normalize_statements_for_years(start_year: int, end_year: int) -> None:
         f"skipped={skipped_count}, missing={missing_count}, failed={failed_count}, "
         f"consolidated={consolidated_count}, removed_legacy={removed_count}"
     )
+    if failed_count:
+        raise RuntimeError(
+            f"KR statement normalization failed for {failed_count} task(s)"
+        )
 
 def build_refresh_window(
     latest: date | None,

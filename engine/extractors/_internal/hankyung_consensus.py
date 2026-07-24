@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from engine.core.paths import DATA_LAKE
+from engine.core.source_storage import json_source_validator, write_source_text
 
 
 HANKYUNG_CONSENSUS_BASE_URL = "https://markets.hankyung.com/api/v2/consensus/search/report"
@@ -153,7 +154,12 @@ def _write_payload_rows(payload: dict[str, Any], output_dir: Path, *, force: boo
         if path.exists() and not force:
             counts["skipped"] += 1
             continue
-        path.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_source_text(
+            path,
+            json.dumps(row, ensure_ascii=False, indent=2),
+            source="hankyung-consensus",
+            validator=json_source_validator,
+        )
         counts["written"] += 1
     return counts
 

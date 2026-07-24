@@ -17,6 +17,7 @@ import json
 import pandas as pd
 
 from engine.core.paths import DATA_LAKE, market_csv_name
+from engine.core.source_storage import write_source_text
 
 RETRY_STATUS = {429, 500, 502, 503, 504}
 REPORT_METADATA_COLUMNS = [
@@ -197,8 +198,12 @@ def _safe_filename(name: str) -> str:
 
 def _write_text(content: str, save_dir: str, filename: str) -> Path:
     out_path = Path(save_dir) / _safe_filename(filename)
-    out_path.parent.mkdir(parents=True, exist_ok=True)  # 폴더 없으면 생성
-    out_path.write_text(content, encoding="utf-8")      # HTML은 보통 utf-8로 저장하면 무난
+    write_source_text(
+        out_path,
+        content,
+        source="dart-filing",
+        encoding="utf-8",
+    )
     return out_path
 
 
@@ -1142,6 +1147,7 @@ def collect_dart_report_metadata(
     output_csv_path: str | Path = DATA_LAKE.silver("dart", market_csv_name("report_metadata")),
     start_date: str | None = None,
     end_date: str | None = None,
+    fail_fast: bool = False,
 ) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
 
@@ -1156,6 +1162,11 @@ def collect_dart_report_metadata(
                     end_date=end_date,
                 )
             except Exception as e:
+                if fail_fast:
+                    raise RuntimeError(
+                        "DART report metadata download failed: "
+                        f"stock_code={stock_code}, source_type={source_type}"
+                    ) from e
                 print(f"[WARN] report metadata failed: stock_code={stock_code}, source_type={source_type}, error={repr(e)}")
                 continue
             if not metadata_df.empty:
@@ -1494,6 +1505,7 @@ def download_business_infos(
     stock_retries: int = 3,
     stock_retry_backoff: float = 30.0,
     display_offset_base: int | None = None,
+    fail_fast: bool = False,
 ):
     download_stock_codes = sorted(stock_codes)[download_offset:]
     max_workers = max(1, int(max_workers or 1))
@@ -1542,7 +1554,12 @@ def download_business_infos(
     tasks = [(offset + offset_base, stock_code) for offset, stock_code in enumerate(download_stock_codes)]
     if max_workers == 1:
         for task in tasks:
-            _download_one(task)
+            succeeded = _download_one(task)
+            if fail_fast and not succeeded:
+                _, stock_code = task
+                raise RuntimeError(
+                    f"DART business info download failed: stock_code={stock_code}"
+                )
         return
 
     print(f"downloading business info with max_workers={max_workers}")
@@ -1551,8 +1568,14 @@ def download_business_infos(
         for future in as_completed(future_to_task):
             offset, stock_code = future_to_task[future]
             try:
-                future.result()
+                succeeded = future.result()
+                if fail_fast and not succeeded:
+                    raise RuntimeError(
+                        f"DART business info download failed: stock_code={stock_code}"
+                    )
             except Exception as e:
+                if fail_fast:
+                    raise
                 print(f"[WARN] business info download failed: stock_code={stock_code}, offset={offset}, error={repr(e)}")
 
 

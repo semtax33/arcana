@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from engine.core.source_storage import write_source_dataframe
 from engine.transformers.benchmarks import (
     BRONZE_BENCHMARK_DIR,
     BRONZE_YFINANCE_BENCHMARK_DIR,
@@ -67,7 +68,12 @@ def fetch_benchmark_prices(
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         for benchmark_id, rows in result.groupby("benchmark_id", sort=True):
-            rows.to_csv(output_path / f"{benchmark_id}.csv", index=False, encoding="utf-8-sig")
+            write_source_dataframe(
+                output_path / f"{benchmark_id}.csv",
+                rows,
+                source="krx-benchmark",
+                metadata={"benchmark_id": benchmark_id},
+            )
 
     return result
 
@@ -122,6 +128,11 @@ def fetch_yfinance_benchmark_prices(
         output_path.mkdir(parents=True, exist_ok=True)
         for benchmark_id, rows in result.groupby("benchmark_id", sort=True):
             output_name = YFINANCE_BENCHMARK_OUTPUT_NAMES.get(benchmark_id, f"{benchmark_id}.csv")
-            rows.to_csv(output_path / output_name, index=False, encoding="utf-8-sig")
+            write_source_dataframe(
+                output_path / output_name,
+                rows,
+                source="yfinance-benchmark",
+                metadata={"benchmark_id": benchmark_id},
+            )
 
     return result

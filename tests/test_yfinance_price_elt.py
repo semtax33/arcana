@@ -53,6 +53,51 @@ class FakeUrlResponse:
 
 
 class YFinancePriceEltTest(unittest.TestCase):
+    def test_us_price_download_appends_new_dates_without_losing_history(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            output_path = output_dir / "AAPL.csv"
+            pd.DataFrame(
+                {
+                    "Date": ["2026-07-22", "2026-07-23"],
+                    "Open": [100, 101],
+                    "High": [101, 102],
+                    "Low": [99, 100],
+                    "Close": [100.5, 101.5],
+                    "Volume": [1000, 1100],
+                }
+            ).to_csv(output_path, index=False)
+            incremental = pd.DataFrame(
+                {
+                    "Date": ["2026-07-24"],
+                    "Open": [102],
+                    "High": [103],
+                    "Low": [101],
+                    "Close": [102.5],
+                    "Volume": [1200],
+                }
+            )
+
+            with patch.object(
+                yfinance_market_prices,
+                "fetch_yfinance_price",
+                return_value=incremental,
+            ) as fetch:
+                written = yfinance_market_prices.download_us_price_histories(
+                    symbols=["AAPL"],
+                    output_dir=output_dir,
+                    end_date="2026-07-24",
+                )
+
+            result = pd.read_csv(output_path)
+
+        self.assertEqual(written, [output_path])
+        self.assertEqual(
+            result["Date"].tolist(),
+            ["2026-07-22", "2026-07-23", "2026-07-24"],
+        )
+        self.assertEqual(fetch.call_args.kwargs["start_date"], "2026-07-24")
+
     def test_download_text_retries_ssl_failures_with_certifi_context(self):
         cert_error = URLError(ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED"))
         with (

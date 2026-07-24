@@ -16,6 +16,12 @@ from typing import Any
 import pandas as pd
 import requests
 
+from engine.core.source_storage import (
+    json_source_validator,
+    write_source_dataframe,
+    write_source_text,
+)
+
 from engine.core.paths import DATA_LAKE
 
 
@@ -345,27 +351,23 @@ def save_json_atomic(data: dict[str, Any], out_path: Path) -> None:
     tmp 파일에 먼저 쓰고 replace.
     """
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
-
-    with tmp_path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-    tmp_path.replace(out_path)
+    write_source_text(
+        out_path,
+        json.dumps(data, ensure_ascii=False, indent=2),
+        source="dart-dividend",
+        validator=json_source_validator,
+    )
 
 
 def _append_summary_csv(df: pd.DataFrame, out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    write_header = not out_path.exists()
-
-    df.to_csv(
+    frames = []
+    if out_path.exists():
+        frames.append(pd.read_csv(out_path))
+    frames.append(df)
+    write_source_dataframe(
         out_path,
-        mode="a",
-        header=write_header,
-        index=False,
-        encoding="utf-8-sig",
+        pd.concat(frames, ignore_index=True),
+        source="dart-dividend-summary",
     )
 
 
@@ -736,7 +738,11 @@ def download_dividends_for_one_stock(
             partial_df["download_offset"] = download_offset
 
             summary_path = out_stock_dir / "_download_summary_partial.csv"
-            partial_df.to_csv(summary_path, index=False, encoding="utf-8-sig")
+            write_source_dataframe(
+                summary_path,
+                partial_df,
+                source="dart-dividend-summary",
+            )
 
         raise
 
@@ -750,7 +756,11 @@ def download_dividends_for_one_stock(
         summary_df["download_offset"] = download_offset
 
     summary_path = out_stock_dir / "_download_summary.csv"
-    summary_df.to_csv(summary_path, index=False, encoding="utf-8-sig")
+    write_source_dataframe(
+        summary_path,
+        summary_df,
+        source="dart-dividend-summary",
+    )
 
     return summary_df
 

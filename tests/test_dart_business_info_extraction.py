@@ -367,6 +367,25 @@ class DartBusinessInfoExtractionTest(unittest.TestCase):
 
         self.assertEqual(len(calls), 2)
 
+    def test_download_business_infos_fail_fast_raises_after_retries(self):
+        with (
+            patch.object(
+                dart_filings,
+                "fetch_dart_business_info_search",
+                side_effect=dart_filings.requests.ConnectionError("remote closed"),
+            ),
+            patch.object(dart_filings.time, "sleep"),
+            self.assertRaisesRegex(RuntimeError, "005930"),
+        ):
+            dart_filings.download_business_infos(
+                ["005930"],
+                0,
+                max_workers=1,
+                stock_retries=1,
+                stock_retry_backoff=0,
+                fail_fast=True,
+            )
+
     def test_dart_request_throttle_serializes_requests(self):
         throttle = dart_filings.DartRequestThrottle(10)
 

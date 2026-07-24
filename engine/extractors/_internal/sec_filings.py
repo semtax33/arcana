@@ -9,6 +9,11 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 from engine.core.paths import DATA_LAKE
+from engine.core.source_storage import (
+    json_source_validator,
+    write_source_bytes,
+    write_source_dataframe,
+)
 from engine.markets.us import US_MARKET_CONFIG
 
 
@@ -47,7 +52,12 @@ def download_sec_company_tickers(
     df = pd.DataFrame(rows).sort_values("ticker").reset_index(drop=True)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(output_path, index=False, encoding="utf-8-sig")
+    write_source_dataframe(
+        output_path,
+        df,
+        source="sec-company-tickers",
+        encoding="utf-8-sig",
+    )
     return df
 
 
@@ -87,7 +97,13 @@ def download_us_companyfacts(
             continue
 
         print(f"downloading {symbol} ({cik_file_key}, download_offset : {index})....")
-        out_path.write_bytes(_download_sec_companyfacts(cik, user_agent=user_agent))
+        write_source_bytes(
+            out_path,
+            _download_sec_companyfacts(cik, user_agent=user_agent),
+            source="sec-companyfacts",
+            validator=json_source_validator,
+            metadata={"ticker": symbol, "cik": cik_file_key},
+        )
         written.append(out_path)
         if sleep_seconds > 0:
             sleep(sleep_seconds)

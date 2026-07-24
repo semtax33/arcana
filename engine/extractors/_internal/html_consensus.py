@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 from bs4 import BeautifulSoup
 
 from engine.core.paths import DATA_LAKE
+from engine.core.source_storage import json_source_validator, write_source_text
 
 
 VALUEFINDER_CONSENSUS_BASE_URL = "https://valuefinder.co.kr/bbs/board.php"
@@ -269,7 +270,12 @@ def _write_report_rows(rows: list[dict[str, Any]], output_dir: Path, *, force: b
         if path.exists() and not force:
             counts["skipped"] += 1
             continue
-        path.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_source_text(
+            path,
+            json.dumps(row, ensure_ascii=False, indent=2),
+            source=f"{row.get('source_provider', 'html')}-consensus",
+            validator=json_source_validator,
+        )
         counts["written"] += 1
     return counts
 

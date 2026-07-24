@@ -7,6 +7,20 @@ from engine.loaders.factor_snapshots import (
 
 
 class FactorSnapshotsLoaderTest(unittest.TestCase):
+    def test_build_factor_snapshot_query_filters_selected_market(self):
+        query, params = build_factor_snapshot_insert_query(
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+            market="us",
+            financial_basis="annual",
+        )
+
+        self.assertEqual(params["security_prefix"], "SEC_US_")
+        self.assertIn(
+            "startsWith(security_id, {security_prefix:String})",
+            query,
+        )
+
     def test_build_factor_snapshot_insert_query_builds_carry_forward_snapshot(self):
         query, params = build_factor_snapshot_insert_query(
             start_date="2026-01-01",
@@ -69,6 +83,24 @@ class FactorSnapshotsLoaderTest(unittest.TestCase):
         self.assertIn("UNION ALL", query)
         self.assertIn("f.trade_date = {snapshot_date:Date}", query)
         self.assertIn("s.trade_date = {previous_snapshot_date:Date}", query)
+
+    def test_incremental_query_filters_current_and_previous_market_rows(self):
+        query, params = build_incremental_factor_snapshot_insert_query(
+            snapshot_date="2026-01-06",
+            previous_snapshot_date="2026-01-05",
+            market="kr",
+            financial_basis="annual",
+        )
+
+        self.assertEqual(params["security_prefix"], "SEC_KR_")
+        self.assertIn(
+            "startsWith(f.security_id, {security_prefix:String})",
+            query,
+        )
+        self.assertIn(
+            "startsWith(s.security_id, {security_prefix:String})",
+            query,
+        )
 
 
 if __name__ == "__main__":
