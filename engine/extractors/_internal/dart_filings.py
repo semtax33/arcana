@@ -1380,6 +1380,8 @@ def fetch_dart_dividend_search(
         \s*\)\s*;?
     """, re.VERBOSE)
 
+    time.sleep(0.1)
+
     with requests.Session() as s:
         # 1) 검색 POST (재시도 적용)
         resp = request_with_retry(s, "POST", url, headers=headers, data=data, timeout=30)
