@@ -6,6 +6,7 @@ import os
 import shutil
 import socket
 import threading
+import time
 from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ from engine.core.paths import DATA_LAKE
 SourceValidator = Callable[[Path], None]
 _ACTIVE_SOURCE_SESSION: "SourceArchiveSession | None" = None
 _ACTIVE_SOURCE_SESSION_LOCK = threading.RLock()
+_WINDOWS_REPLACE_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
 
 
 def new_source_run_id() -> str:
@@ -34,6 +36,18 @@ def sha256_file(path: str | Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def replace_file_with_permission_retry(source: Path, destination: Path) -> None:
+    """Replace a file, tolerating short-lived Windows file locks."""
+    for delay in (*_WINDOWS_REPLACE_RETRY_DELAYS, None):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError:
+            if delay is None:
+                raise
+            time.sleep(delay)
 
 
 def validate_nonempty_file(path: str | Path) -> None:
@@ -251,7 +265,7 @@ class SourceArchiveSession(AbstractContextManager["SourceArchiveSession"]):
                 self._unlink(archive_staged)
                 self._unlink(staged_for_replace)
                 raise RuntimeError(f"source archive hash verification failed: {target}")
-            os.replace(archive_staged, archive)
+            replace_file_with_permission_retry(archive_staged, archive)
             archive_relative = archive.relative_to(self.data_lake_root).as_posix()
 
         entry = {
@@ -270,7 +284,7 @@ class SourceArchiveSession(AbstractContextManager["SourceArchiveSession"]):
         self._save_manifest()
 
         try:
-            os.replace(staged_for_replace, target)
+            replace_file_with_permission_retry(staged_for_replace, target)
         except Exception:
             self._save_manifest()
             raise
@@ -351,7 +365,11 @@ class SourceArchiveSession(AbstractContextManager["SourceArchiveSession"]):
             json.dumps(self.data, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        os.replace(staged, self.manifest_path)
+        try:
+            replace_file_with_permission_retry(staged, self.manifest_path)
+        except Exception:
+            self._unlink(staged)
+            raise
 
     @staticmethod
     def _unlink(path: Path) -> None:
@@ -414,7 +432,7 @@ def write_source_bytes(
         validate_nonempty_file(staged)
         if validator is not None:
             validator(staged)
-        os.replace(staged, target)
+        replace_file_with_permission_retry(staged, target)
     except Exception:
         SourceArchiveSession._unlink(staged)
         raise
@@ -471,7 +489,7 @@ def write_source_dataframe(
         validate_nonempty_file(staged)
         if validator is not None:
             validator(staged)
-        os.replace(staged, target)
+        replace_file_with_permission_retry(staged, target)
     except Exception:
         SourceArchiveSession._unlink(staged)
         raise

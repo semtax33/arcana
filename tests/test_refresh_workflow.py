@@ -418,6 +418,49 @@ class RefreshWorkflowTest(unittest.TestCase):
         self.assertTrue(loaded.is_step_completed("market-data"))
         self.assertEqual(loaded.step_window("market-data").start_date, "20260611")
 
+    def test_refresh_state_retries_transient_permission_error(self):
+        with TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "refresh_state.json"
+            signature = {
+                "market": "kr",
+                "targets": ["market-data"],
+                "end_date": "20260622",
+            }
+            state = refresh_workflow.RefreshState.open(
+                state_path,
+                signature=signature,
+                resume=False,
+                enabled=True,
+            )
+            real_replace = __import__("os").replace
+            attempts = 0
+
+            def transient_state_lock(source, destination):
+                nonlocal attempts
+                if Path(destination) == state_path:
+                    attempts += 1
+                    if attempts <= 2:
+                        raise PermissionError("refresh state is temporarily locked")
+                return real_replace(source, destination)
+
+            with (
+                patch(
+                    "engine.core.source_storage.os.replace",
+                    side_effect=transient_state_lock,
+                ),
+                patch("engine.core.source_storage.time.sleep"),
+            ):
+                state.complete_symbol("price", "005930")
+
+            self.assertEqual(attempts, 3)
+            loaded = refresh_workflow.RefreshState.open(
+                state_path,
+                signature=signature,
+                resume=True,
+                enabled=True,
+            )
+            self.assertTrue(loaded.is_symbol_completed("price", "005930"))
+
     def test_run_refresh_resume_skips_completed_market_data_step(self):
         with TemporaryDirectory() as temp_dir:
             state_path = Path(temp_dir) / "refresh_state.json"

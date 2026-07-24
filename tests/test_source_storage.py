@@ -4,9 +4,10 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from engine.core.source_storage import (
+    _WINDOWS_REPLACE_RETRY_DELAYS,
     SourceArchiveSession,
     SourceRefreshLock,
     json_source_validator,
@@ -114,6 +115,64 @@ class SourceStorageTest(unittest.TestCase):
             self.assertEqual(manifest["files"][0]["status"], "pending")
             archive = root / manifest["files"][0]["archive"]
             self.assertEqual(archive.read_text(encoding="utf-8"), '{"version": 1}')
+
+    def test_manifest_replace_retries_transient_permission_error(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "data-lake"
+            session = SourceArchiveSession("kr", run_id="run-5", data_lake_root=root)
+            real_replace = __import__("os").replace
+            attempts = 0
+
+            def transient_manifest_lock(source, destination):
+                nonlocal attempts
+                if Path(destination) == session.manifest_path:
+                    attempts += 1
+                    if attempts <= 2:
+                        raise PermissionError("manifest is temporarily locked")
+                return real_replace(source, destination)
+
+            with (
+                patch(
+                    "engine.core.source_storage.os.replace",
+                    side_effect=transient_manifest_lock,
+                ),
+                patch("engine.core.source_storage.time.sleep") as sleep,
+            ):
+                session.complete()
+
+            self.assertEqual(attempts, 3)
+            self.assertEqual(
+                sleep.call_args_list,
+                [
+                    call(_WINDOWS_REPLACE_RETRY_DELAYS[0]),
+                    call(_WINDOWS_REPLACE_RETRY_DELAYS[1]),
+                ],
+            )
+            manifest = json.loads(session.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status"], "committed")
+
+    def test_manifest_replace_cleans_staged_file_after_persistent_permission_error(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "data-lake"
+            session = SourceArchiveSession("kr", run_id="run-6", data_lake_root=root)
+
+            with (
+                patch(
+                    "engine.core.source_storage.os.replace",
+                    side_effect=PermissionError("manifest remains locked"),
+                ),
+                patch("engine.core.source_storage.time.sleep") as sleep,
+                self.assertRaises(PermissionError),
+            ):
+                session.complete()
+
+            self.assertEqual(sleep.call_count, len(_WINDOWS_REPLACE_RETRY_DELAYS))
+            staged_files = list(
+                session.manifest_path.parent.glob(
+                    f".{session.manifest_path.name}.*.tmp"
+                )
+            )
+            self.assertEqual(staged_files, [])
 
     def test_market_lock_rejects_concurrent_refresh(self):
         with TemporaryDirectory() as temp_dir:

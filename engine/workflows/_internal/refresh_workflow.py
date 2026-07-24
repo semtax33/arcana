@@ -21,6 +21,7 @@ from engine.core.source_storage import (
     SourceArchiveSession,
     SourceRefreshLock,
     new_source_run_id,
+    replace_file_with_permission_retry,
     write_source_dataframe,
 )
 from engine.extractors.filings import (
@@ -144,7 +145,14 @@ class RefreshState:
                 ),
                 encoding="utf-8",
             )
-            staged.replace(self.path)
+            try:
+                replace_file_with_permission_retry(staged, self.path)
+            except Exception:
+                try:
+                    staged.unlink()
+                except FileNotFoundError:
+                    pass
+                raise
 
     def is_step_completed(self, step: str) -> bool:
         return step in self.data.get("completed_steps", [])
