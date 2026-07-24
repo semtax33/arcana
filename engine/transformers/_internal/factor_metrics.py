@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 
 from engine.core.paths import (
@@ -143,6 +144,18 @@ REAL_CONSENSUS_FACTOR_COLUMNS = [
     "real_operating_income_surprise_pct",
     "real_net_income_surprise_pct",
 ]
+
+REAL_CONSENSUS_INPUT_COLUMNS = [
+    "forward_per",
+    "forward_roe",
+]
+
+DEFAULT_FORWARD_CONSENSUS_STALE_DAYS = 180
+DEFAULT_RIM_DECAY_FACTOR = 0.8
+RIM_HISTORICAL_ROE_YEARS = 3
+K_RATIO_3Y_WINDOW = 252 * 3
+K_RATIO_3Y_MIN_PERIODS = 252 * 2
+EQUITY_DURATION_HORIZON_YEARS = 20
 
 CONSENSUS_METRIC_SPECS = {
     "basic_eps": {
@@ -1893,6 +1906,9 @@ def add_real_consensus_factors(
     for column in REAL_CONSENSUS_FACTOR_COLUMNS:
         if column not in df.columns:
             df[column] = math.nan
+    for column in REAL_CONSENSUS_INPUT_COLUMNS:
+        if column not in df.columns:
+            df[column] = math.nan
 
     market = str(market or "kr").strip().lower()
     if market != "kr" or df.empty:
@@ -1905,6 +1921,11 @@ def add_real_consensus_factors(
     if consensus_df.empty:
         return df
 
+    df = merge_forward_consensus_inputs(
+        df,
+        consensus_df,
+        stale_days=DEFAULT_FORWARD_CONSENSUS_STALE_DAYS,
+    )
     events = build_real_consensus_factor_events(consensus_df, consensus_actual_frame(financial_df))
     if events.empty:
         return df
@@ -1934,6 +1955,87 @@ def _cached_real_consensus_daily_frame(path_text):
     if not path.exists():
         return pd.DataFrame()
     return pd.read_csv(path, dtype={"stock_code": str, "target_period": str, "metric_id": str})
+
+
+def merge_forward_consensus_inputs(
+    daily_df,
+    consensus_df,
+    *,
+    stale_days=DEFAULT_FORWARD_CONSENSUS_STALE_DAYS,
+):
+    """Point-in-time merge the nearest non-expired annual forward estimate."""
+
+    df = daily_df.sort_values("trade_date").copy()
+    if df.empty or consensus_df is None or consensus_df.empty:
+        return df
+
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+    df["_forward_row_id"] = np.arange(len(df))
+    rows = consensus_df.copy()
+    rows["as_of_date"] = pd.to_datetime(rows["as_of_date"], errors="coerce")
+    rows["target_end_date"] = rows["target_period"].map(_target_period_end_date)
+    rows["consensus_mean"] = pd.to_numeric(rows["consensus_mean"], errors="coerce")
+    rows = rows.dropna(
+        subset=["as_of_date", "target_end_date", "metric_id", "consensus_mean"]
+    )
+
+    for metric_id in REAL_CONSENSUS_INPUT_COLUMNS:
+        df[metric_id] = math.nan
+        metric_rows = rows.loc[rows["metric_id"].astype(str) == metric_id].copy()
+        if metric_rows.empty:
+            continue
+
+        candidates = []
+        for target_end_date, target_rows in metric_rows.groupby("target_end_date", sort=True):
+            target_rows = (
+                target_rows.sort_values("as_of_date")
+                .drop_duplicates("as_of_date", keep="last")
+            )
+            merged = pd.merge_asof(
+                df[["_forward_row_id", "trade_date"]].sort_values("trade_date"),
+                target_rows[["as_of_date", "consensus_mean"]].sort_values("as_of_date"),
+                left_on="trade_date",
+                right_on="as_of_date",
+                direction="backward",
+            )
+            age_days = (merged["trade_date"] - merged["as_of_date"]).dt.days
+            valid = (
+                merged["consensus_mean"].notna()
+                & (pd.Timestamp(target_end_date) >= merged["trade_date"])
+                & age_days.between(0, int(stale_days), inclusive="both")
+            )
+            if not valid.any():
+                continue
+            candidate = merged.loc[
+                valid,
+                ["_forward_row_id", "consensus_mean"],
+            ].copy()
+            candidate["target_end_date"] = pd.Timestamp(target_end_date)
+            candidates.append(candidate)
+
+        if not candidates:
+            continue
+        selected = (
+            pd.concat(candidates, ignore_index=True)
+            .sort_values(["_forward_row_id", "target_end_date"])
+            .drop_duplicates("_forward_row_id", keep="first")
+            .set_index("_forward_row_id")["consensus_mean"]
+        )
+        df[metric_id] = df["_forward_row_id"].map(selected)
+
+    return df.drop(columns=["_forward_row_id"])
+
+
+def _target_period_end_date(value):
+    text = str(value or "").strip()
+    match = re.match(r"^(?P<year>\d{4})[.:-]?(?P<month>\d{2})$", text)
+    if not match:
+        return pd.NaT
+    year = int(match.group("year"))
+    month = int(match.group("month"))
+    if month < 1 or month > 12:
+        return pd.NaT
+    return pd.Timestamp(year=year, month=month, day=1) + pd.offsets.MonthEnd(0)
 
 
 def build_real_consensus_factor_events(consensus_df, actual_df):
@@ -2135,9 +2237,50 @@ def max_drawdown(returns):
     return drawdown.min()
 
 
+def calculate_k_ratio(
+    prices,
+    *,
+    window=K_RATIO_3Y_WINDOW,
+    min_periods=K_RATIO_3Y_MIN_PERIODS,
+):
+    """Calculate Kestner's 2003 K-Ratio with an n-scaled slope error."""
+
+    price = pd.to_numeric(prices, errors="coerce")
+    log_vami = np.log(price.where(price > 0))
+    x = pd.Series(np.arange(len(log_vami), dtype="float64"), index=log_vami.index)
+    valid_x = x.where(log_vami.notna())
+
+    rolling = log_vami.rolling(window, min_periods=min_periods)
+    n = rolling.count()
+    sum_y = rolling.sum()
+    sum_y2 = log_vami.pow(2).rolling(window, min_periods=min_periods).sum()
+    sum_x = valid_x.rolling(window, min_periods=min_periods).sum()
+    sum_x2 = valid_x.pow(2).rolling(window, min_periods=min_periods).sum()
+    sum_xy = (valid_x * log_vami).rolling(window, min_periods=min_periods).sum()
+
+    sxx = sum_x2 - sum_x.pow(2) / n
+    syy = sum_y2 - sum_y.pow(2) / n
+    sxy = sum_xy - sum_x * sum_y / n
+    slope = sxy / sxx
+    sse = (syy - sxy.pow(2) / sxx).clip(lower=0)
+    slope_standard_error = np.sqrt((sse / (n - 2)) / sxx)
+    result = slope / (n * slope_standard_error)
+
+    valid = (
+        (n >= int(min_periods))
+        & (n > 2)
+        & (sxx > 0)
+        & (slope_standard_error > 0)
+        & np.isfinite(result)
+    )
+    return result.where(valid)
+
+
 def add_price_momentum_factors(daily_df):
     df = daily_df.sort_values("trade_date").copy()
     close = pd.to_numeric(df["close"], errors="coerce")
+    adjusted_close = numeric_column(df, "adj_close")
+    k_ratio_price = adjusted_close if (adjusted_close > 0).any() else close
     high = numeric_column(df, "high").fillna(close)
     low = numeric_column(df, "low").fillna(close)
     volume = numeric_column(df, "volume")
@@ -2157,6 +2300,7 @@ def add_price_momentum_factors(daily_df):
     df["high52w_gap_pct"] = (close / close.rolling(252, min_periods=20).max() - 1) * 100
     df["vol_12_1_ann"] = ret.shift(21).rolling(231, min_periods=60).std() * math.sqrt(252)
     df["risk_adj_mom"] = df["tr_12_1"] / df["vol_12_1_ann"]
+    df["k_ratio_3y"] = calculate_k_ratio(k_ratio_price)
     df["mdd1yr_12_1_pct"] = (
         ret.shift(21).rolling(231, min_periods=60).apply(max_drawdown, raw=False) * 100
     )
@@ -2468,6 +2612,161 @@ def add_wacc_factors(
     return df
 
 
+def add_equity_valuation_factors(
+    daily_df,
+    *,
+    rim_decay_factor=DEFAULT_RIM_DECAY_FACTOR,
+):
+    decay = float(rim_decay_factor)
+    if not 0 <= decay < 1:
+        raise ValueError("rim_decay_factor must satisfy 0 <= value < 1")
+
+    df = daily_df.copy()
+    forward_per = pd.to_numeric(numeric_column(df, "forward_per"), errors="coerce")
+    forward_roe = (
+        pd.to_numeric(numeric_column(df, "forward_roe"), errors="coerce") / 100
+    )
+    historical_roe = pd.to_numeric(
+        numeric_column(df, "historical_roe_3y_avg"),
+        errors="coerce",
+    ) / 100
+    rim_roe = forward_roe.fillna(historical_roe)
+    required_return = pd.to_numeric(numeric_column(df, "cost_of_equity"), errors="coerce") / 100
+    price = positive_denominator(numeric_column(df, "close"))
+    book_value_per_share = positive_denominator(numeric_column(df, "bps"))
+
+    implied_growth = required_return - 1 / forward_per
+    eps_first_year = 1 / forward_per
+    duration_pv = pd.Series(0.0, index=df.index, dtype="float64")
+    duration_weighted_pv = pd.Series(0.0, index=df.index, dtype="float64")
+    for year in range(1, EQUITY_DURATION_HORIZON_YEARS):
+        cash_flow = eps_first_year * (1 + implied_growth).pow(year - 1)
+        present_value = cash_flow / (1 + required_return).pow(year)
+        duration_pv = duration_pv + present_value
+        duration_weighted_pv = duration_weighted_pv + year * present_value
+
+    terminal_present_value = 1 - duration_pv
+    modified_duration = (
+        duration_weighted_pv
+        + EQUITY_DURATION_HORIZON_YEARS * terminal_present_value
+    ) / (1 + required_return)
+    duration_valid = (
+        (forward_per > 0)
+        & (required_return > 0)
+        & (required_return < 1)
+        & (implied_growth > -1)
+        & (terminal_present_value >= 0)
+        & (modified_duration > 0)
+        & (modified_duration <= EQUITY_DURATION_HORIZON_YEARS)
+        & np.isfinite(modified_duration)
+    )
+    df["equity_duration_20y"] = modified_duration.where(duration_valid)
+
+    rim_denominator = 1 - decay + required_return
+    rim_target_value = book_value_per_share + (
+        book_value_per_share
+        * (rim_roe - required_return)
+        * decay
+        / rim_denominator
+    )
+    rim_upside = rim_target_value / price - 1
+    rim_valid = (
+        book_value_per_share.notna()
+        & price.notna()
+        & rim_roe.notna()
+        & (required_return > 0)
+        & (required_return < 1)
+        & (rim_denominator > 0)
+        & (rim_target_value > 0)
+        & np.isfinite(rim_upside)
+    )
+    df["rim_upside_potential"] = rim_upside.where(rim_valid)
+    return df
+
+
+def add_rim_historical_roe_fallback(
+    daily_df,
+    annual_financial_df,
+    *,
+    required_years=RIM_HISTORICAL_ROE_YEARS,
+):
+    """Merge the latest disclosed average ROE for consecutive annual periods."""
+
+    required_years = int(required_years)
+    if required_years < 1:
+        raise ValueError("required_years must be at least 1")
+
+    df = daily_df.sort_values("trade_date").copy()
+    df["historical_roe_3y_avg"] = math.nan
+    if df.empty or annual_financial_df is None or annual_financial_df.empty:
+        return df
+
+    history = annual_financial_df.copy()
+    if "financial_period" not in history.columns or "roe" not in history.columns:
+        return df
+    history["financial_period"] = pd.to_datetime(
+        history["financial_period"],
+        errors="coerce",
+    )
+    if "report_date" in history.columns:
+        history["report_date"] = pd.to_datetime(history["report_date"], errors="coerce")
+    else:
+        history["report_date"] = history["financial_period"]
+    history["report_date"] = history["report_date"].fillna(history["financial_period"])
+    if "fiscal_year" in history.columns:
+        history["fiscal_year"] = pd.to_numeric(
+            history["fiscal_year"],
+            errors="coerce",
+        ).fillna(history["financial_period"].dt.year)
+    else:
+        history["fiscal_year"] = history["financial_period"].dt.year
+    history["roe"] = pd.to_numeric(history["roe"], errors="coerce")
+    history["roe"] = history["roe"].where(np.isfinite(history["roe"]))
+    history = history.dropna(
+        subset=["financial_period", "report_date", "fiscal_year"]
+    )
+    if history.empty:
+        return df
+
+    history["fiscal_year"] = history["fiscal_year"].astype(int)
+    history = (
+        history.sort_values(["fiscal_year", "report_date"])
+        .drop_duplicates("fiscal_year", keep="last")
+        .reset_index(drop=True)
+    )
+    rolling_mean = history["roe"].rolling(
+        required_years,
+        min_periods=required_years,
+    ).mean()
+    consecutive_years = pd.Series(True, index=history.index)
+    for offset in range(1, required_years):
+        consecutive_years &= history["fiscal_year"].eq(
+            history["fiscal_year"].shift(offset) + offset
+        )
+    history["historical_roe_3y_avg"] = rolling_mean.where(consecutive_years)
+
+    events = history.dropna(subset=["historical_roe_3y_avg"]).copy()
+    if events.empty:
+        return df
+    events = (
+        events.sort_values(["report_date", "financial_period"])
+        .drop_duplicates("report_date", keep="last")
+    )
+
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+    df["_rim_roe_row_id"] = np.arange(len(df))
+    merged = pd.merge_asof(
+        df[["_rim_roe_row_id", "trade_date"]].sort_values("trade_date"),
+        events[["report_date", "historical_roe_3y_avg"]].sort_values("report_date"),
+        left_on="trade_date",
+        right_on="report_date",
+        direction="backward",
+    )
+    values = merged.set_index("_rim_roe_row_id")["historical_roe_3y_avg"]
+    df["historical_roe_3y_avg"] = df["_rim_roe_row_id"].map(values)
+    return df.drop(columns=["_rim_roe_row_id"])
+
+
 def _read_optional_wacc_csv(path):
     path = Path(path)
     if not path.exists():
@@ -2513,7 +2812,7 @@ def _select_benchmark_weekly_returns(frame, market):
     if rows.empty:
         return pd.DataFrame()
     if "benchmark_id" in rows.columns:
-        preference = ["KOSPI", "KOSPI200", "KOSDAQ"] if str(market).lower() == "kr" else ["US_SP500", "SP500", "^GSPC"]
+        preference = ["KOSPI200", "KOSPI", "KOSDAQ"] if str(market).lower() == "kr" else ["US_SP500", "SP500", "^GSPC"]
         ranks = {benchmark_id: index for index, benchmark_id in enumerate(preference)}
         rows["_rank"] = rows["benchmark_id"].astype(str).str.upper().map(ranks).fillna(len(ranks))
         rows = rows.sort_values(["_rank", "week_end_date"])
@@ -2543,6 +2842,7 @@ def create_stock_factor_dataframe(
     wacc_online_backfill=False,
     estimate_gold_root=ESTIMATE_GOLD_ROOT,
     real_consensus_daily_path=HANKYUNG_CONSENSUS_DAILY_PATH,
+    rim_decay_factor=DEFAULT_RIM_DECAY_FACTOR,
 ):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
@@ -2669,6 +2969,8 @@ def create_stock_factor_dataframe(
         real_consensus_daily_path=real_consensus_daily_path,
         market=market,
     )
+    if market == "kr" and financial_basis == "annual":
+        daily_df = add_rim_historical_roe_fallback(daily_df, financial_df)
     daily_df = add_wacc_factors(
         daily_df,
         market=market,
@@ -2678,6 +2980,10 @@ def create_stock_factor_dataframe(
         wacc_erp_path=wacc_erp_path,
         wacc_assumptions_path=wacc_assumptions_path,
         wacc_benchmark_path=wacc_benchmark_path,
+    )
+    daily_df = add_equity_valuation_factors(
+        daily_df,
+        rim_decay_factor=rim_decay_factor,
     )
     daily_df = add_price_momentum_factors(daily_df)
     daily_df["updated_at"] = datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
@@ -2737,6 +3043,7 @@ def preferred_factor_columns():
         "enterprise_value",
         "beta",
         "cost_of_equity",
+        "equity_duration_20y",
         "cost_of_debt_pre_tax",
         "cost_of_debt_after_tax",
         "wacc_equity_weight",
@@ -2881,6 +3188,7 @@ def preferred_factor_columns():
         "ret_1m",
         "high52w_gap_pct",
         "risk_adj_mom",
+        "k_ratio_3y",
         "vol_12_1_ann",
         "mdd1yr_12_1_pct",
         "adturn_pct_12_1",
@@ -2913,6 +3221,7 @@ def preferred_factor_columns():
         "special_dividend",
         "special_dividend_ratio_pct",
         "per",
+        "rim_upside_potential",
         "pbr",
         "pcr",
         "psr",

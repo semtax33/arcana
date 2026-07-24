@@ -117,9 +117,18 @@ def test_normalize_loader_and_real_factors_use_silver_csv(tmp_path: Path):
     assert set(reports["file_year"]) == {2026}
     assert "filename_business_code_mismatch" in reports["quality_flags"].fillna("").iat[1]
     assert "filename_register_date_mismatch" in reports["quality_flags"].fillna("").iat[1]
-    assert {"basic_eps", "revenue", "operating_income", "net_income"}.issubset(set(estimates["metric_id"]))
+    assert {
+        "basic_eps",
+        "revenue",
+        "operating_income",
+        "net_income",
+        "forward_per",
+        "forward_roe",
+    }.issubset(set(estimates["metric_id"]))
     assert not daily.empty
     assert daily.loc[daily["metric_id"] == "basic_eps", "consensus_mean"].iloc[-1] == 120
+    assert daily.loc[daily["metric_id"] == "forward_per", "consensus_mean"].iloc[-1] == 10
+    assert daily.loc[daily["metric_id"] == "forward_roe", "consensus_mean"].iloc[-1] == 15
 
     client = RecordingClient()
     counts = load_hankyung_consensus(silver_dir=silver_dir, client=client)
@@ -318,6 +327,8 @@ def _write_report(
         "STOCK_EXPECTED_SALES": "1000",
         "STOCK_PRE_OPERATING_PROFIT": "200",
         "STOCK_PRE_NET_INCOME": "130",
+        "STOCK_PRE_PER": "10",
+        "STOCK_PRE_ROE": "15",
         "TARGET_STOCK_PRICES": "90000",
     }
     path.write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")

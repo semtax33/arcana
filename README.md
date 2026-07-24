@@ -187,6 +187,34 @@ KR beta uses the existing KRX price and benchmark data already stored under
 `data-lake/bronze/krx/`; US beta uses existing
 `data-lake/bronze/yfinance/price/{TICKER}.csv` prices. Koscom data is not used.
 
+#### K-Ratio / Equity Duration / RIM 원천 데이터
+
+| 팩터 | 필수 원천 데이터 | 주요 입력 |
+| --- | --- | --- |
+| `k_ratio_3y` | KRX 조정주가 | 756거래일 가격 VAMI |
+| `equity_duration_20y` | KRX 가격, KOSPI200, FRED, Damodaran ERP, Hankyung 컨센서스 | beta, 자기자본비용, FY1 forward P/E |
+| `rim_upside_potential` | KRX 가격·주식수, DART 연간 재무제표, FRED, Damodaran ERP, Hankyung 컨센서스 | BPS, 자기자본비용, FY1 forward ROE 또는 최근 3개년 실적 ROE 평균 |
+
+Hankyung 토큰은 명령행에 직접 기록하지 않고 환경 변수로 전달합니다.
+
+```powershell
+$env:HANKYUNG_CONSENSUS_TOKEN = "<YOUR_HANKYUNG_TOKEN>"
+
+python -m engine.workflows.download --market kr prices
+python -m engine.workflows.download --market kr shares
+python -m engine.workflows.download --market kr statements
+python -m engine.workflows.download --market kr benchmarks
+python -m engine.workflows.download --market kr wacc-inputs
+python -m engine.workflows.download --market kr consensus
+```
+
+K-Ratio가 사용하는 KRX OHLCV는 `adjusted=True`로 요청합니다. Equity Duration과
+RIM에 사용되는 `forward_per`, `forward_roe`는 Hankyung의
+`STOCK_PRE_PER`, `STOCK_PRE_ROE`에서 생성됩니다. ValueFinder/EQUITY HTML
+목록은 현재 투자의견 자료이며 이 두 forward metric의 대체 입력으로 사용하지 않습니다.
+단, RIM은 forward ROE가 없거나 180일 만료된 거래일에 한해 공시가 완료된 최근
+3개 연속 연간 실적 ROE의 평균을 fallback으로 사용합니다.
+
 ### 2. Transform / Normalize
 
 ```powershell
@@ -314,8 +342,28 @@ Normalize WACC silver input CSVs:
 ```powershell
 python -c "from pathlib import Path; from engine.transformers.erp import normalize_country_erp, normalize_fred_risk_free_rates; normalize_country_erp(); paths=list(Path(r'data-lake\bronze\fred\rates').glob('*.csv')); normalize_fred_risk_free_rates(paths) if paths else None"
 python -c "from engine.transformers.wacc import create_default_wacc_assumptions; create_default_wacc_assumptions()"
-python -c "import pandas as pd; from engine.transformers.wacc import normalize_benchmark_weekly_returns, SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH; df=pd.read_csv(r'data-lake\bronze\yfinance\benchmark\us_sp500.csv'); normalize_benchmark_weekly_returns(df, market='us', benchmark_id='SP500').to_csv(SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH, index=False, encoding='utf-8-sig')"
+python -c "from engine.transformers.wacc import normalize_market_benchmark_weekly_returns; normalize_market_benchmark_weekly_returns('kr')"
+python -c "from engine.transformers.wacc import normalize_market_benchmark_weekly_returns; normalize_market_benchmark_weekly_returns('us')"
 ```
+
+세 신규 팩터에 필요한 KR silver와 ClickHouse 입력을 순서대로 갱신하는 예시는
+다음과 같습니다.
+
+```powershell
+python -m engine.loaders.market_data --market kr --target all --source bronze --dry-run
+python -m engine.loaders.market_data --market kr --target all --source bronze
+python -m engine.workflows.normalize --market kr --target statements
+python -m engine.workflows.normalize --market kr --target consensus --consensus-stale-days 180
+python -m engine.loaders.consensus --market kr --dry-run
+python -m engine.loaders.consensus --market kr
+python -c "from engine.loaders.benchmarks import normalize_downloaded_benchmark_prices; normalize_downloaded_benchmark_prices(market='kr')"
+python -c "from pathlib import Path; from engine.transformers.erp import normalize_country_erp, normalize_fred_risk_free_rates; normalize_country_erp(); normalize_fred_risk_free_rates(sorted(Path(r'data-lake\bronze\fred\rates').glob('*.csv')))"
+python -c "from engine.transformers.wacc import create_default_wacc_assumptions, normalize_market_benchmark_weekly_returns; create_default_wacc_assumptions(); normalize_market_benchmark_weekly_returns('kr')"
+```
+
+`benchmark_weekly_returns.csv`를 KR용으로 갱신할 때 기존 US 행은 유지됩니다.
+KR beta는 KOSPI200을 우선 사용하고, 52개 이상의 겹치는 주간 수익률이 없을 때만
+`wacc_assumptions.csv`의 기본 beta로 대체됩니다.
 
 WACC silver outputs are written under `data-lake/silver/wacc/`:
 
@@ -506,7 +554,9 @@ python -m engine.loaders.factors --market us --stock-codes AAPL --financial-basi
 
 Without `--wacc-online-backfill`, the loader only reads local bronze/silver
 files. With it, the loader refreshes Damodaran ERP, FRED rates, default WACC
-assumptions, and the US S&P 500 benchmark before preparing rows. Prepared WACC
+assumptions, and the available market benchmark weekly returns before preparing rows.
+KR benchmark bronze files must be downloaded separately with
+`engine.workflows.download --market kr benchmarks`. Prepared WACC
 factor rows are inserted into the existing ClickHouse `fact_daily_factors`
 table together with the other daily factors.
 
@@ -531,6 +581,7 @@ table together with the other daily factors.
 --wacc-erp-path data-lake\silver\wacc\country_equity_risk_premiums.csv
 --wacc-benchmark-path data-lake\silver\wacc\benchmark_weekly_returns.csv
 --wacc-online-backfill
+--rim-decay-factor 0.8
 ```
 
 Load only selected factor ids:
@@ -546,6 +597,39 @@ factor ids and only those ids are prepared for ClickHouse insertion. Unknown
 factor ids fail fast instead of producing an empty load. `wacc_bundle` expands
 to every WACC-related factor id.
 
+#### K-Ratio / Equity Duration / RIM 팩터 적재
+
+```powershell
+$AdvancedFactorIds = "k_ratio_3y,equity_duration_20y,rim_upside_potential"
+
+# 실제 forward P/E·ROE 이력이 시작되는 구간을 먼저 검증합니다.
+python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2021-11-05 --end-date 2026-07-24 --factor-ids $AdvancedFactorIds --rim-decay-factor 0.8 --dry-run
+
+# raw factor와 factor catalog를 ClickHouse에 적재합니다.
+python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2021-11-05 --end-date 2026-07-24 --factor-ids $AdvancedFactorIds --rim-decay-factor 0.8
+
+# K-Ratio만 더 오래된 가격 이력까지 별도로 backfill할 수 있습니다.
+python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2010-01-01 --end-date 2021-11-04 --factor-ids k_ratio_3y
+```
+
+계산 정의와 결측 규칙:
+
+- `k_ratio_3y`: 756거래일 `log(VAMI)` OLS 기울기를
+  `n × SE(slope)`로 나눕니다. 최소 504개 유효 관측치가 필요합니다.
+- `equity_duration_20y`: FY1 forward P/E와 CAPM 자기자본비용으로 계산한
+  20년 modified duration이며 단위는 `years`입니다.
+- `rim_upside_potential`: `RIM Target / Price - 1`인 비율 값입니다.
+  기본 ROE 유지율은 0.8이며 forward ROE를 우선 사용합니다.
+- forward 컨센서스는 거래일 당시 이용 가능했던 가장 가까운 미래 연간 결산기를
+  선택하며 최종 관측 후 180일이 지나면 결측 처리합니다.
+- forward P/E는 현재 PER로 대체하지 않습니다. RIM의 forward ROE만 결측 시
+  거래일 당시 공시된 최근 3개 연속 연간 실적 ROE 평균으로 대체합니다.
+  3개년 중 하나라도 ROE가 없거나 회계연도가 연속되지 않으면 RIM도 결측입니다.
+- `equity_duration_20y`와 `rim_upside_potential`은 현재 KR만 지원합니다.
+  미국 컨센서스 입력은 아직 지원하지 않습니다.
+- `--rim-decay-factor`는 `0 <= value < 1`이어야 합니다. 값을 변경하면 동일
+  factor_id의 전 기간 raw factor와 snapshot을 다시 생성해야 합니다.
+
 Build the fast factor snapshot table used by screening and backtests:
 
 ```powershell
@@ -553,7 +637,13 @@ python -m engine.loaders.factor_snapshots --create-only
 python -m engine.loaders.factor_snapshots --financial-basis annual --start-date 2020-01-01 --end-date 2026-07-10 --factor-ids roe,per,pbr
 python -m engine.loaders.factor_snapshots --financial-basis ttm --start-date 2020-01-01 --end-date 2026-07-10
 python -m engine.loaders.factor_snapshots --financial-basis annual --start-date 2026-03-01 --end-date 2026-03-31 --factor-ids roe,per,pbr --factor-chunk-size 16 --max-threads 2 --max-lookback-days 540
+python -m engine.loaders.factor_snapshots --financial-basis annual --start-date 2021-11-05 --end-date 2026-07-24 --factor-ids k_ratio_3y,equity_duration_20y,rim_upside_potential
+python -m engine.workflows.score_cli build-factor-scores --trade-date 2026-07-24 --factor-asof-mode asof --financial-basis annual --include-financials
 ```
+
+운영 갱신 순서는 `consensus → factor_catalog/raw factors → factor snapshot →
+factor score`입니다. 신규 팩터는 generic screening/backtest API에서 즉시 사용할
+수 있지만 기존 style 종합점수 구성에는 자동으로 추가되지 않습니다.
 
 배당 Silver, 가격, `dividend_yield`, `payout_ratio`, 스크리닝 snapshot을 한 번에
 갱신하려면 Windows PowerShell 워크플로를 사용합니다. KRX 최신 가격 다운로드를

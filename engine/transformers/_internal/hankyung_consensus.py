@@ -119,6 +119,8 @@ PRE_METRIC_FIELDS = {
     "STOCK_EXPECTED_SALES": "revenue",
     "STOCK_PRE_OPERATING_PROFIT": "operating_income",
     "STOCK_PRE_NET_INCOME": "net_income",
+    "STOCK_PRE_PER": "forward_per",
+    "STOCK_PRE_ROE": "forward_roe",
 }
 
 _BRONZE_FILE_RE = re.compile(r"^(?P<business_code>[^_]+)_(?P<register_date>[^.]+)\.json$", re.IGNORECASE)

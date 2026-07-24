@@ -161,6 +161,66 @@ def normalize_benchmark_weekly_returns(
     return _concat_frames(frames, BENCHMARK_WEEKLY_RETURN_COLUMNS)
 
 
+def normalize_market_benchmark_weekly_returns(
+    market: str = "kr",
+    *,
+    benchmark_path: str | Path | None = None,
+    output_path: str | Path | None = SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH,
+) -> pd.DataFrame:
+    """Normalize one market's benchmark prices without dropping other markets."""
+
+    from engine.transformers._internal.benchmark_prices import (
+        BENCHMARK_SILVER_PATHS,
+        normalize_benchmark_market,
+        normalize_benchmark_prices,
+    )
+
+    market = normalize_benchmark_market(market)
+    if benchmark_path is None:
+        silver_path = BENCHMARK_SILVER_PATHS[market]
+        if silver_path.exists():
+            benchmark_prices = pd.read_csv(silver_path)
+        else:
+            benchmark_prices = normalize_benchmark_prices(market=market)
+    else:
+        benchmark_prices = pd.read_csv(benchmark_path)
+
+    default_benchmark_id = "KOSPI200" if market == "kr" else "US_SP500"
+    refreshed = normalize_benchmark_weekly_returns(
+        benchmark_prices,
+        market=market,
+        benchmark_id=default_benchmark_id,
+    )
+
+    existing = pd.DataFrame(columns=BENCHMARK_WEEKLY_RETURN_COLUMNS)
+    if output_path is not None:
+        output = Path(output_path)
+        if output.exists():
+            existing = pd.read_csv(output)
+            for column in BENCHMARK_WEEKLY_RETURN_COLUMNS:
+                if column not in existing.columns:
+                    existing[column] = pd.NA
+            existing = existing[BENCHMARK_WEEKLY_RETURN_COLUMNS]
+            if "market" in existing.columns:
+                existing = existing.loc[
+                    existing["market"].astype(str).str.lower() != market
+                ].copy()
+
+    result = _concat_frames(
+        [existing, refreshed],
+        BENCHMARK_WEEKLY_RETURN_COLUMNS,
+    )
+    if not result.empty:
+        result = result.sort_values(
+            ["market", "benchmark_id", "week_end_date"]
+        ).reset_index(drop=True)
+    if output_path is not None:
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        result.to_csv(output, index=False, encoding="utf-8-sig")
+    return result
+
+
 def calculate_rolling_beta(
     stock_weekly_returns: pd.DataFrame,
     benchmark_weekly_returns: pd.DataFrame,

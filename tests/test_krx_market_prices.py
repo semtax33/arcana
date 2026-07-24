@@ -11,6 +11,23 @@ from engine.extractors._internal import krx_market_prices
 
 
 class KrxMarketPricesTest(unittest.TestCase):
+    def test_fetch_price_explicitly_requests_adjusted_prices(self):
+        expected = pd.DataFrame({"close": [100]})
+        with patch.object(
+            krx_market_prices.stock,
+            "get_market_ohlcv_by_date",
+            return_value=expected,
+        ) as get_prices:
+            result = krx_market_prices.fetch_price("005930", "20260101", "20260131")
+
+        self.assertIs(result, expected)
+        get_prices.assert_called_once_with(
+            "20260101",
+            "20260131",
+            "005930",
+            adjusted=True,
+        )
+
     def test_write_download_then_merge_preserves_existing_rows_and_cleans_temp_files(self):
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 
@@ -6,6 +8,7 @@ from engine.transformers.factors import add_wacc_factors
 from engine.transformers.wacc import (
     calculate_rolling_beta,
     normalize_benchmark_weekly_returns,
+    normalize_market_benchmark_weekly_returns,
     normalize_weekly_returns_from_prices,
 )
 
@@ -169,6 +172,116 @@ class WaccInputsTest(unittest.TestCase):
         self.assertEqual(result["week_end_date"].astype(str).tolist(), ["2026-01-02", "2026-01-09"])
         self.assertEqual(result["weekly_close"].tolist(), [100.0, 110.0])
         self.assertAlmostEqual(result["weekly_return"].iat[1], 0.10)
+
+    def test_market_benchmark_normalization_preserves_other_markets(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            benchmark_path = root / "kr_benchmarks.csv"
+            output_path = root / "benchmark_weekly_returns.csv"
+            pd.DataFrame(
+                {
+                    "benchmark_id": ["KOSPI200"] * 3,
+                    "trade_date": ["2026-01-02", "2026-01-09", "2026-01-16"],
+                    "close": [100.0, 102.0, 101.0],
+                }
+            ).to_csv(benchmark_path, index=False)
+            pd.DataFrame(
+                {
+                    "market": ["us"],
+                    "benchmark_id": ["US_SP500"],
+                    "week_end_date": ["2026-01-02"],
+                    "weekly_close": [200.0],
+                    "weekly_return": [None],
+                }
+            ).to_csv(output_path, index=False)
+
+            result = normalize_market_benchmark_weekly_returns(
+                "kr",
+                benchmark_path=benchmark_path,
+                output_path=output_path,
+            )
+            saved = pd.read_csv(output_path)
+
+        self.assertEqual(set(result["market"]), {"kr", "us"})
+        self.assertEqual(set(saved["market"]), {"kr", "us"})
+        kr_rows = result.loc[result["market"] == "kr"]
+        self.assertEqual(set(kr_rows["benchmark_id"]), {"KOSPI200"})
+        self.assertAlmostEqual(kr_rows["weekly_return"].iloc[1], 0.02)
+
+    def test_kr_wacc_prefers_kospi200_and_uses_rolling_beta(self):
+        weeks = pd.date_range("2024-01-05", periods=60, freq="W-FRI")
+        benchmark_returns = [None] + [
+            0.01 if index % 2 == 0 else -0.005 for index in range(1, 60)
+        ]
+        stock_closes = [100.0]
+        for weekly_return in benchmark_returns[1:]:
+            stock_closes.append(stock_closes[-1] * (1 + 1.5 * weekly_return))
+        daily = pd.DataFrame(
+            {
+                "security_id": ["SEC_KR_005930"] * len(weeks),
+                "trade_date": weeks,
+                "close": stock_closes,
+            }
+        )
+        benchmark = pd.concat(
+            [
+                pd.DataFrame(
+                    {
+                        "market": "kr",
+                        "benchmark_id": "KOSPI200",
+                        "week_end_date": weeks,
+                        "weekly_return": benchmark_returns,
+                    }
+                ),
+                pd.DataFrame(
+                    {
+                        "market": "kr",
+                        "benchmark_id": "KOSPI",
+                        "week_end_date": weeks,
+                        "weekly_return": [None] + [0.004] * 59,
+                    }
+                ),
+            ],
+            ignore_index=True,
+        )
+        risk_free = pd.DataFrame(
+            {
+                "market": ["kr"],
+                "date": [weeks[0]],
+                "risk_free_rate": [3.0],
+            }
+        )
+        erp = pd.DataFrame({"country_code": ["KR"], "equity_risk_premium": [6.0]})
+        assumptions = pd.DataFrame(
+            {
+                "market": ["kr"],
+                "country_code": ["KR"],
+                "risk_free_rate": [3.0],
+                "equity_risk_premium": [6.0],
+                "credit_spread": [2.0],
+                "default_beta": [1.0],
+            }
+        )
+
+        result = add_wacc_factors(
+            daily,
+            market="kr",
+            market_data_cache=_WaccCache(
+                risk_free=risk_free,
+                erp=erp,
+                assumptions=assumptions,
+                benchmark=benchmark,
+            ),
+        )
+
+        expected_beta = 0.67 * 1.5 + 0.33
+        self.assertAlmostEqual(result["beta"].iat[-1], expected_beta, places=8)
+        self.assertNotEqual(result["beta"].iat[-1], 1.0)
+        self.assertAlmostEqual(
+            result["cost_of_equity"].iat[-1],
+            3.0 + expected_beta * 6.0,
+            places=8,
+        )
 
 
 class _WaccCache:

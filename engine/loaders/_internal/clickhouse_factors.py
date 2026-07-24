@@ -76,6 +76,7 @@ TECHNICAL_FACTORS = {
     "ret_1m",
     "high52w_gap_pct",
     "risk_adj_mom",
+    "k_ratio_3y",
     "vol_12_1_ann",
     "mdd1yr_12_1_pct",
     "adturn_pct_12_1",
@@ -120,6 +121,7 @@ VALUATION_FACTORS = {
     "pcr",
     "psr",
     "peg",
+    "rim_upside_potential",
 }
 
 QUALITY_FACTORS = {
@@ -212,6 +214,7 @@ RISK_FACTORS = {
     "wacc_equity_weight",
     "wacc_debt_weight",
     "beta",
+    "equity_duration_20y",
     "net_debt_to_ebitda",
     "net_debt_to_ocf",
     "net_debt_to_fcf",
@@ -366,6 +369,23 @@ FACTOR_NAME_OVERRIDES = {
     "total_asset_turnover": "Total Asset Turnover",
     "rnd_to_market_cap": "R&D / Market Cap",
     "accrual_ratio": "Accrual Ratio",
+    "k_ratio_3y": "K-Ratio 3Y",
+    "equity_duration_20y": "Equity Duration 20Y",
+    "rim_upside_potential": "RIM Upside Potential",
+}
+
+FACTOR_DESCRIPTION_OVERRIDES = {
+    "k_ratio_3y": (
+        "756거래일 log VAMI 회귀선의 기울기를 관측치 수와 기울기 표준오차로 "
+        "나눈 K-Ratio. 최소 504개 관측치가 필요합니다."
+    ),
+    "equity_duration_20y": (
+        "FY1 forward P/E와 CAPM 자기자본비용으로 계산한 20년 주식 modified duration."
+    ),
+    "rim_upside_potential": (
+        "BPS, 애널리스트 forward ROE(결측 시 최근 3개년 실적 ROE 평균), "
+        "CAPM 자기자본비용과 ROE 유지율을 사용한 RIM 목표가의 현재가 대비 상승여력."
+    ),
 }
 
 NEUTRAL_FACTORS = {
@@ -430,6 +450,7 @@ LOWER_IS_BETTER = {
     "cost_of_equity",
     "cost_of_debt_pre_tax",
     "cost_of_debt_after_tax",
+    "equity_duration_20y",
 }
 
 HIGHER_IS_BETTER = (
@@ -804,12 +825,17 @@ def _maybe_backfill_wacc_inputs(market: str, start_date: str | None, end_date: s
     if not kwargs.get("wacc_online_backfill"):
         return
     from engine.extractors.erp import BRONZE_FRED_RATE_DIR, download_default_erp_inputs
-    from engine.transformers.erp import normalize_country_erp, normalize_fred_risk_free_rates
+    from engine.transformers.erp import (
+        SILVER_COUNTRY_ERP_PATH,
+        SILVER_RISK_FREE_RATE_PATH,
+        normalize_country_erp,
+        normalize_fred_risk_free_rates,
+    )
     from engine.transformers.wacc import (
-        BRONZE_US_SP500_BENCHMARK_PATH,
+        SILVER_WACC_ASSUMPTIONS_PATH,
         SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH,
         create_default_wacc_assumptions,
-        normalize_benchmark_weekly_returns,
+        normalize_market_benchmark_weekly_returns,
     )
 
     paths = download_default_erp_inputs(market=market, start_date=start_date, end_date=end_date)
@@ -817,16 +843,30 @@ def _maybe_backfill_wacc_inputs(market: str, start_date: str | None, end_date: s
     if not fred_paths and BRONZE_FRED_RATE_DIR.exists():
         fred_paths = sorted(BRONZE_FRED_RATE_DIR.glob("*.csv"))
     if fred_paths:
-        normalize_fred_risk_free_rates(fred_paths, output_path=kwargs.get("wacc_risk_free_path") or None)
-    normalize_country_erp(output_path=kwargs.get("wacc_erp_path") or None)
-    create_default_wacc_assumptions(output_path=kwargs.get("wacc_assumptions_path") or None)
-    if str(market or "").strip().lower() == "us" and BRONZE_US_SP500_BENCHMARK_PATH.exists():
-        sp500 = pd.read_csv(BRONZE_US_SP500_BENCHMARK_PATH)
-        benchmark = normalize_benchmark_weekly_returns(sp500, market="us", benchmark_id="US_SP500")
-        output = kwargs.get("wacc_benchmark_path") or SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH
-        output = Path(output)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        benchmark.to_csv(output, index=False, encoding="utf-8-sig")
+        normalize_fred_risk_free_rates(
+            fred_paths,
+            output_path=kwargs.get("wacc_risk_free_path") or SILVER_RISK_FREE_RATE_PATH,
+        )
+    normalize_country_erp(
+        output_path=kwargs.get("wacc_erp_path") or SILVER_COUNTRY_ERP_PATH,
+    )
+    create_default_wacc_assumptions(
+        output_path=kwargs.get("wacc_assumptions_path") or SILVER_WACC_ASSUMPTIONS_PATH,
+    )
+    try:
+        normalize_market_benchmark_weekly_returns(
+            market,
+            output_path=(
+                kwargs.get("wacc_benchmark_path")
+                or SILVER_WACC_BENCHMARK_WEEKLY_RETURNS_PATH
+            ),
+        )
+    except FileNotFoundError:
+        print(
+            "[WARN] WACC benchmark prices are unavailable; beta will use the market default. "
+            "Run the benchmark downloader before the factor loader.",
+            flush=True,
+        )
 
 def _validate_required_price_data(
     *,
@@ -910,7 +950,7 @@ def create_factor_catalog_dataframe(factor_ids: list[str] | None = None) -> pd.D
                 "factor_group": infer_factor_group(factor_id),
                 "unit": infer_factor_unit(factor_id),
                 "value_direction": infer_value_direction(factor_id),
-                "description": "",
+                "description": FACTOR_DESCRIPTION_OVERRIDES.get(factor_id, ""),
                 "is_active": True,
                 "created_at": now,
                 "updated_at": now,
@@ -938,6 +978,10 @@ def infer_factor_type(factor_id: str) -> str:
 
 def infer_factor_group(factor_id: str) -> str:
     factor_type = infer_factor_type(factor_id)
+    if factor_id == "equity_duration_20y":
+        return "duration"
+    if factor_id == "k_ratio_3y":
+        return "momentum"
     if factor_id in {"na_5", "na_20", "na_50", "na_150", "na_200", "ma_50", "ma_120", "ma_150", "ma_200"}:
         return "trend"
     if factor_id in {"rsi_14", "macd", "macd_signal", "macd_hist", "williams_r_14", "mfi_14"}:
@@ -1061,6 +1105,8 @@ def infer_factor_unit(factor_id: str) -> str:
         "fcf_interest_coverage",
     }:
         return "times"
+    if factor_id == "equity_duration_20y":
+        return "years"
     if factor_id in {"dividend_consistency_streak", "dividend_growth_streak"}:
         return "years"
     if factor_id in {"dividend_cut", "special_dividend"}:
@@ -1306,6 +1352,13 @@ def _parse_stock_codes(value: str | None, market: str = "kr") -> list[str] | Non
     return [item.strip().upper() for item in value.split(",") if item.strip()]
 
 
+def _parse_rim_decay_factor(value: str) -> float:
+    decay = float(value)
+    if not 0 <= decay < 1:
+        raise argparse.ArgumentTypeError("rim decay factor must satisfy 0 <= value < 1")
+    return decay
+
+
 def _normalize_factor_ids(value) -> list[str] | None:
     if value is None:
         return None
@@ -1359,6 +1412,12 @@ def main() -> None:
     parser.add_argument("--wacc-erp-path")
     parser.add_argument("--wacc-benchmark-path")
     parser.add_argument("--wacc-online-backfill", action="store_true")
+    parser.add_argument(
+        "--rim-decay-factor",
+        type=_parse_rim_decay_factor,
+        default=0.8,
+        help="RIM ROE persistence factor. Must satisfy 0 <= value < 1. Defaults to 0.8.",
+    )
     parser.add_argument("--no-edgartools", action="store_true")
     args = parser.parse_args()
 
@@ -1384,6 +1443,7 @@ def main() -> None:
         wacc_erp_path=args.wacc_erp_path,
         wacc_benchmark_path=args.wacc_benchmark_path,
         wacc_online_backfill=args.wacc_online_backfill,
+        rim_decay_factor=args.rim_decay_factor,
         use_edgartools=not args.no_edgartools,
     )
     print(

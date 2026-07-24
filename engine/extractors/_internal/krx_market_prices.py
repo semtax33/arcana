@@ -17,7 +17,12 @@ CSV_ENCODING = "utf-8-sig"
 
 
 def fetch_price(stock_code: str, start_date: str, end_date: str):
-    df = stock.get_market_ohlcv_by_date(start_date, end_date, stock_code)
+    df = stock.get_market_ohlcv_by_date(
+        start_date,
+        end_date,
+        stock_code,
+        adjusted=True,
+    )
     return df
 
 
