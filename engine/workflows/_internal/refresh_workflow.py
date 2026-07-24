@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -71,6 +72,10 @@ SECURITY_TABLES = {
 }
 
 
+class KRXEmptyResponseError(RuntimeError):
+    """Raised when KRX returns no rows for a requested trading-day window."""
+
+
 @dataclass(frozen=True)
 class RefreshWindow:
     start_date: str | None
@@ -108,14 +113,38 @@ class RefreshState:
     ) -> "RefreshState":
         path = Path(path)
         data = None
+        loaded_existing = False
         if resume and path.exists():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                data = None
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"cannot resume from invalid refresh state: {path}; "
+                    "use --no-resume to start a new run"
+                ) from exc
             if data and data.get("signature") != signature:
-                print(f"[RESUME] ignoring state with different signature: {path}", flush=True)
-                data = None
+                previous_targets = set(data.get("signature", {}).get("targets", []))
+                completed_steps = set(data.get("completed_steps", []))
+                if not enabled:
+                    print(
+                        f"[DRY-RUN] ignoring state with different options: {path}",
+                        flush=True,
+                    )
+                    data = None
+                elif previous_targets and previous_targets <= completed_steps:
+                    print(
+                        f"[RESUME] previous run is complete; starting a new state: {path}",
+                        flush=True,
+                    )
+                    data = None
+                else:
+                    raise RuntimeError(
+                        f"refresh state options differ from an incomplete run: {path}; "
+                        "rerun with the same options, choose another --resume-state-path, "
+                        "or use --no-resume to explicitly start over"
+                    )
+            elif data:
+                loaded_existing = True
         if data is None:
             data = {
                 "signature": signature,
@@ -127,6 +156,22 @@ class RefreshState:
             }
         state = cls(path, data, enabled=enabled)
         state.save()
+        if resume:
+            if loaded_existing:
+                counts = ", ".join(
+                    f"{dataset}:{len(symbols):,}"
+                    for dataset, symbols in sorted(
+                        state.data.get("completed_symbols", {}).items()
+                    )
+                ) or "none"
+                print(
+                    f"[RESUME] loaded state path={path} "
+                    f"completed_steps={len(state.data.get('completed_steps', []))} "
+                    f"completed_symbols={counts}",
+                    flush=True,
+                )
+            else:
+                print(f"[RESUME] starting new state path={path}", flush=True)
         return state
 
     def save(self) -> None:
@@ -169,9 +214,20 @@ class RefreshState:
         raw = self.data.get("step_windows", {}).get(step)
         return refresh_window_from_state(raw) if raw else None
 
+    def record_window(self, step: str, window: RefreshWindow) -> None:
+        with self._lock:
+            self.data.setdefault("step_windows", {})[step] = refresh_window_to_state(
+                window
+            )
+            self.save()
+
     def is_symbol_completed(self, dataset: str, symbol: str) -> bool:
-        symbols = self.data.get("completed_symbols", {}).get(dataset, [])
-        return str(symbol) in symbols
+        return str(symbol) in self.completed_symbols(dataset)
+
+    def completed_symbols(self, dataset: str) -> set[str]:
+        with self._lock:
+            symbols = self.data.get("completed_symbols", {}).get(dataset, [])
+            return {str(symbol) for symbol in symbols}
 
     def complete_symbol(self, dataset: str, symbol: str) -> None:
         with self._lock:
@@ -184,6 +240,15 @@ class RefreshState:
     def reset_symbols(self, dataset: str) -> None:
         self.data.setdefault("completed_symbols", {})[dataset] = []
         self.save()
+
+    def reset_step(self, step: str) -> None:
+        with self._lock:
+            completed_steps = self.data.setdefault("completed_steps", [])
+            self.data["completed_steps"] = [
+                completed for completed in completed_steps if completed != step
+            ]
+            self.data.setdefault("step_windows", {}).pop(step, None)
+            self.save()
 
 class ProgressTracker:
     def __init__(self, steps: list[str]):
@@ -328,28 +393,50 @@ def run_refresh(args: argparse.Namespace) -> None:
         enabled=not args.dry_run,
     )
     progress = ProgressTracker(refresh_step_names(targets))
+    effective_krx_end_date = (
+        resolve_krx_effective_end_date(end_date)
+        if "market-data" in targets
+        else None
+    )
     client = None
     if not args.skip_clickhouse and not args.dry_run:
         client = get_clickhouse_client()
 
     try:
         if "market-data" in targets:
-            if state.is_step_completed("market-data"):
-                market_window = state.step_window("market-data") or build_refresh_window(
-                    latest_krx_bronze_date("price"),
-                    end_date=end_date,
-                    force_full=args.force_full,
-                )
+            completed_market_window = state.step_window("market-data")
+            market_step_is_current = (
+                state.is_step_completed("market-data")
+                and completed_market_window is not None
+                and completed_market_window.end_date == effective_krx_end_date
+            )
+            if market_step_is_current:
+                market_window = completed_market_window
                 print("[RESUME] skipping completed step: market-data", flush=True)
             else:
+                if state.is_step_completed("market-data"):
+                    print(
+                        "[RESUME] reopening completed step: market-data "
+                        f"saved_end={completed_market_window.end_date if completed_market_window else '-'} "
+                        f"effective_end={effective_krx_end_date}",
+                        flush=True,
+                    )
+                    state.reset_step("market-data")
                 progress.begin("market-data")
-                market_window = run_market_data_refresh(args, stock_codes, end_date, client, state)
+                market_window = run_market_data_refresh(
+                    args,
+                    stock_codes,
+                    end_date,
+                    client,
+                    state,
+                    effective_end_date=effective_krx_end_date,
+                )
                 state.complete_step("market-data", market_window)
                 progress.done("market-data")
         else:
             market_window = build_refresh_window(
                 latest_krx_bronze_date("price"),
-                end_date=end_date,
+                end_date=effective_krx_end_date or end_date,
                 force_full=args.force_full,
             )
 
@@ -885,11 +972,23 @@ def run_market_data_refresh(
     end_date: str,
     client: Any,
     state: RefreshState,
+    *,
+    effective_end_date: str | None = None,
 ) -> RefreshWindow:
+    effective_end_date = (
+        parse_date_arg(effective_end_date)
+        if effective_end_date is not None
+        else resolve_krx_effective_end_date(end_date)
+    )
+    print(
+        f"[INFO] KRX trading calendar requested_end_date={parse_date_arg(end_date)} "
+        f"effective_end_date={effective_end_date}",
+        flush=True,
+    )
     price_window = download_incremental_krx_dataset(
         "price",
         stock_codes,
-        end_date=end_date,
+        end_date=effective_end_date,
         force_full=args.force_full,
         dry_run=args.dry_run,
         progress_interval=args.progress_interval,
@@ -899,7 +998,7 @@ def run_market_data_refresh(
     share_window = download_incremental_krx_dataset(
         "shares",
         stock_codes,
-        end_date=end_date,
+        end_date=effective_end_date,
         force_full=args.force_full,
         dry_run=args.dry_run,
         progress_interval=args.progress_interval,
@@ -951,15 +1050,22 @@ def run_resumable_stock_tasks(
     skipped = 0
     started_at = time.monotonic()
     tasks: list[tuple[str, int]] = []
+    resumed_symbols = state.completed_symbols(dataset)
 
     for original_offset, stock_code in enumerate(sorted_codes):
-        if state.is_symbol_completed(dataset, stock_code):
+        if stock_code in resumed_symbols:
             skipped += 1
             completed += 1
-            maybe_print_symbol_progress(dataset, completed, total, planned, 0, skipped, progress_interval, started_at)
             continue
         planned += 1
         tasks.append((stock_code, original_offset))
+
+    if skipped:
+        print(
+            f"[RESUME] {dataset} completed_symbols={skipped:,}/{total:,}, "
+            f"remaining_symbols={len(tasks):,}",
+            flush=True,
+        )
 
     if dry_run:
         print(f"[DRY-RUN] {dataset} planned_symbols={planned:,}, skipped_symbols={skipped:,}")
@@ -1894,33 +2000,70 @@ def download_incremental_krx_dataset(
     started_at = time.monotonic()
     tasks: list[tuple[str, Path, RefreshWindow]] = []
     end = _parse_yyyymmdd(end_date)
+    resumed_symbols = state.completed_symbols(dataset) if state is not None else set()
+    state_window_key = f"bronze-{dataset}"
+    resumed_window = state.step_window(state_window_key) if state is not None else None
+    if resumed_window is not None and resumed_window.end_date != parse_date_arg(end_date):
+        print(
+            f"[RESUME] bronze {dataset} effective end date changed "
+            f"from={resumed_window.end_date} to={parse_date_arg(end_date)}; "
+            "revalidating symbols",
+            flush=True,
+        )
+        resumed_window = None
+        resumed_symbols = set()
+        if state is not None:
+            state.reset_symbols(dataset)
+    resumed = 0
 
     for stock_code in sorted(stock_codes):
         path = output_dir / market_symbol_csv_name(stock_code)
+        if stock_code in resumed_symbols and resumed_window is not None:
+            resumed += 1
+            skipped += 1
+            processed += 1
+            continue
+
         latest = None if force_full else latest_date_in_csv(path)
         if latest is not None:
             latest_dates.append(latest)
         else:
             saw_missing = True
 
-        if state is not None and state.is_symbol_completed(dataset, stock_code) and latest is not None and latest >= end:
+        if (
+            stock_code in resumed_symbols
+            and latest is not None
+            and latest >= end
+        ):
+            resumed += 1
             skipped += 1
             processed += 1
-            maybe_print_symbol_progress(dataset, processed, total, planned, downloaded, skipped, progress_interval, started_at)
             continue
 
         window = build_refresh_window(latest, end_date=end_date, force_full=force_full)
         if not window.has_work:
             skipped += 1
             processed += 1
-            maybe_print_symbol_progress(dataset, processed, total, planned, downloaded, skipped, progress_interval, started_at)
             continue
 
         planned += 1
         tasks.append((stock_code, path, window))
-        if dry_run:
-            processed += 1
-            maybe_print_symbol_progress(dataset, processed, total, planned, downloaded, skipped, progress_interval, started_at)
+
+    if resumed:
+        print(
+            f"[RESUME] bronze {dataset} completed_symbols={resumed:,}/{total:,}, "
+            f"remaining_symbols={len(tasks):,}",
+            flush=True,
+        )
+
+    current_window = build_refresh_window(
+        None if saw_missing else (min(latest_dates) if latest_dates else None),
+        end_date=end_date,
+        force_full=force_full,
+    )
+    if state is not None and resumed_window is None:
+        state.record_window(state_window_key, current_window)
+        resumed_window = current_window
 
     if not dry_run and tasks:
         worker_count = max(1, int(workers or 1))
@@ -1951,11 +2094,7 @@ def download_incremental_krx_dataset(
                     processed += 1
                     maybe_print_symbol_progress(dataset, processed, total, planned, downloaded, skipped, progress_interval, started_at)
 
-    overall = build_refresh_window(
-        None if saw_missing else (min(latest_dates) if latest_dates else None),
-        end_date=end_date,
-        force_full=force_full,
-    )
+    overall = resumed_window or current_window
     print(
         f"[DONE] bronze {dataset} planned_symbols={planned:,}, "
         f"downloaded_symbols={downloaded:,}, skipped_symbols={skipped:,}, "
@@ -1971,6 +2110,12 @@ def _download_and_merge_krx_symbol(
     window: RefreshWindow,
 ) -> None:
     new_frame = fetch_krx_dataset_frame(dataset, stock_code, window.start_date, window.end_date)
+    if new_frame is None or new_frame.empty:
+        raise KRXEmptyResponseError(
+            f"KRX returned no {dataset} rows for trading-day window; "
+            f"symbol={stock_code}, start={window.start_date}, end={window.end_date}; "
+            "resume state was not advanced"
+        )
     merge_krx_symbol_csv(path, new_frame)
 
 def maybe_print_symbol_progress(
@@ -2007,6 +2152,28 @@ def fetch_krx_dataset_frame(dataset: str, stock_code: str, start_date: str, end_
 
     fetcher = fetch_price if dataset == "price" else fetch_share
     return _with_date_column(fetcher(stock_code, start_date, end_date))
+
+
+def resolve_krx_effective_end_date(end_date: str | date) -> str:
+    requested = parse_date_arg(end_date)
+    try:
+        from pykrx import stock
+
+        effective = parse_date_arg(
+            stock.get_nearest_business_day_in_a_week(requested, prev=True)
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"failed to resolve the latest KRX trading day on or before {requested}; "
+            "check KRX authentication and API availability"
+        ) from exc
+
+    if effective > requested:
+        raise RuntimeError(
+            f"KRX trading calendar returned a future date: "
+            f"requested={requested}, effective={effective}"
+        )
+    return effective
 
 def merge_krx_symbol_csv(path: str | Path, new_frame: pd.DataFrame) -> pd.DataFrame:
     path = Path(path)
@@ -2097,6 +2264,9 @@ def latest_date_in_csv(path: str | Path) -> date | None:
     path = Path(path)
     if not path.exists():
         return None
+    tail_date = latest_date_from_csv_tail(path)
+    if tail_date is not None:
+        return tail_date
     try:
         frame = pd.read_csv(path)
     except (OSError, pd.errors.EmptyDataError):
@@ -2108,6 +2278,34 @@ def latest_date_in_csv(path: str | Path) -> date | None:
     if dates.empty:
         return None
     return dates.max().date()
+
+
+def latest_date_from_csv_tail(path: str | Path, *, tail_bytes: int = 65536) -> date | None:
+    path = Path(path)
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - max(1, int(tail_bytes))))
+            payload = handle.read()
+    except OSError:
+        return None
+
+    for raw_line in reversed(payload.splitlines()):
+        if not raw_line.strip():
+            continue
+        try:
+            row = next(csv.reader([raw_line.decode("utf-8-sig")]))
+        except (UnicodeDecodeError, csv.Error, StopIteration):
+            continue
+        if not row:
+            continue
+        candidate = row[0].strip().lstrip("\ufeff")
+        try:
+            return datetime.strptime(candidate[:10], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+    return None
 
 
 def latest_dart_metadata_report_date(path: str | Path | None = None) -> date | None:

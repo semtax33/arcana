@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import sys
 from contextlib import redirect_stdout
 from datetime import date
@@ -199,6 +200,11 @@ class RefreshWorkflowTest(unittest.TestCase):
                 ["prog", "--targets", "market-data", "--dry-run", "--skip-clickhouse", "--end-date", "2026-06-22"],
             ),
             patch.object(refresh_workflow.download_workflow, "_stock_codes", return_value=["005930"]),
+            patch.object(
+                refresh_workflow,
+                "resolve_krx_effective_end_date",
+                return_value="20260622",
+            ),
             patch.object(refresh_workflow, "run_market_data_refresh") as run_market_data,
         ):
             refresh_workflow.main()
@@ -461,6 +467,34 @@ class RefreshWorkflowTest(unittest.TestCase):
             )
             self.assertTrue(loaded.is_symbol_completed("price", "005930"))
 
+    def test_refresh_state_does_not_overwrite_incomplete_run_with_new_signature(self):
+        with TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "refresh_state.json"
+            original_signature = {
+                "market": "kr",
+                "targets": ["market-data"],
+                "end_date": "20260622",
+            }
+            state = refresh_workflow.RefreshState.open(
+                state_path,
+                signature=original_signature,
+                resume=False,
+                enabled=True,
+            )
+            state.complete_symbol("price", "005930")
+
+            with self.assertRaisesRegex(RuntimeError, "incomplete run"):
+                refresh_workflow.RefreshState.open(
+                    state_path,
+                    signature={**original_signature, "end_date": "20260623"},
+                    resume=True,
+                    enabled=True,
+                )
+
+            preserved = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(preserved["signature"], original_signature)
+            self.assertEqual(preserved["completed_symbols"]["price"], ["005930"])
+
     def test_run_refresh_resume_skips_completed_market_data_step(self):
         with TemporaryDirectory() as temp_dir:
             state_path = Path(temp_dir) / "refresh_state.json"
@@ -490,6 +524,11 @@ class RefreshWorkflowTest(unittest.TestCase):
             stdout = io.StringIO()
             with (
                 patch.object(refresh_workflow.download_workflow, "_stock_codes", return_value=["005930"]),
+                patch.object(
+                    refresh_workflow,
+                    "resolve_krx_effective_end_date",
+                    return_value="20260622",
+                ),
                 patch.object(refresh_workflow, "run_market_data_refresh") as run_market_data,
                 redirect_stdout(stdout),
             ):
@@ -497,6 +536,91 @@ class RefreshWorkflowTest(unittest.TestCase):
 
         run_market_data.assert_not_called()
         self.assertIn("[RESUME] skipping completed step: market-data", stdout.getvalue())
+
+    def test_run_refresh_reopens_market_data_when_effective_end_date_changes(self):
+        with TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "refresh_state.json"
+            args = argparse.Namespace(
+                market="kr",
+                targets="market-data",
+                end_date="20260622",
+                workers=1,
+                sleep_seconds=5.0,
+                stock_retries=3,
+                stock_retry_backoff=30.0,
+                financial_basis="annual",
+                complete_universe_ratio=0.99,
+                consensus_sources="hankyung,valuefinder,equity",
+                dry_run=False,
+                skip_clickhouse=True,
+                force_full=False,
+                resume=True,
+                resume_state_path=str(state_path),
+                progress_interval=100,
+                clickhouse_mode="overlap-truncate",
+            )
+            signature = refresh_workflow.resume_signature(
+                args,
+                "20260622",
+                {"market-data"},
+            )
+            state = refresh_workflow.RefreshState.open(
+                state_path,
+                signature=signature,
+                resume=False,
+                enabled=True,
+            )
+            state.complete_step(
+                "market-data",
+                refresh_workflow.RefreshWindow(
+                    "20260621",
+                    "20260621",
+                    date(2026, 6, 20),
+                ),
+            )
+            updated_window = refresh_workflow.RefreshWindow(
+                "20260622",
+                "20260622",
+                date(2026, 6, 21),
+            )
+            stdout = io.StringIO()
+            with (
+                patch.object(
+                    refresh_workflow.download_workflow,
+                    "_stock_codes",
+                    return_value=["005930"],
+                ),
+                patch.object(
+                    refresh_workflow,
+                    "resolve_krx_effective_end_date",
+                    return_value="20260622",
+                ),
+                patch.object(
+                    refresh_workflow,
+                    "run_market_data_refresh",
+                    return_value=updated_window,
+                ) as run_market_data,
+                redirect_stdout(stdout),
+            ):
+                refresh_workflow.run_refresh(args)
+
+            reloaded = refresh_workflow.RefreshState.open(
+                state_path,
+                signature=signature,
+                resume=True,
+                enabled=True,
+            )
+
+        run_market_data.assert_called_once()
+        self.assertEqual(
+            run_market_data.call_args.kwargs["effective_end_date"],
+            "20260622",
+        )
+        self.assertEqual(reloaded.step_window("market-data"), updated_window)
+        self.assertIn(
+            "[RESUME] reopening completed step: market-data",
+            stdout.getvalue(),
+        )
 
     def test_run_market_data_refresh_passes_workers_and_state_to_krx_downloads(self):
         args = argparse.Namespace(
@@ -510,11 +634,18 @@ class RefreshWorkflowTest(unittest.TestCase):
         price_window = refresh_workflow.RefreshWindow("20260611", "20260622", date(2026, 6, 10))
         share_window = refresh_workflow.RefreshWindow("20260612", "20260622", date(2026, 6, 11))
 
-        with patch.object(
-            refresh_workflow,
-            "download_incremental_krx_dataset",
-            side_effect=[price_window, share_window],
-        ) as download_dataset:
+        with (
+            patch.object(
+                refresh_workflow,
+                "resolve_krx_effective_end_date",
+                return_value="20260620",
+            ) as resolve_end_date,
+            patch.object(
+                refresh_workflow,
+                "download_incremental_krx_dataset",
+                side_effect=[price_window, share_window],
+            ) as download_dataset,
+        ):
             window = refresh_workflow.run_market_data_refresh(
                 args,
                 ["005930"],
@@ -524,10 +655,22 @@ class RefreshWorkflowTest(unittest.TestCase):
             )
 
         self.assertEqual(window.start_date, "20260611")
+        resolve_end_date.assert_called_once_with("20260622")
         self.assertEqual(download_dataset.call_count, 2)
         for call in download_dataset.call_args_list:
+            self.assertEqual(call.kwargs["end_date"], "20260620")
             self.assertEqual(call.kwargs["workers"], 3)
             self.assertIs(call.kwargs["state"], state)
+
+    def test_resolve_krx_effective_end_date_adjusts_weekend(self):
+        with patch(
+            "pykrx.stock.get_nearest_business_day_in_a_week",
+            return_value="20260724",
+        ) as nearest_business_day:
+            effective = refresh_workflow.resolve_krx_effective_end_date("20260725")
+
+        self.assertEqual(effective, "20260724")
+        nearest_business_day.assert_called_once_with("20260725", prev=True)
 
     def test_filing_refresh_resumes_symbol_and_substep_state(self):
         with TemporaryDirectory() as temp_dir:
@@ -884,10 +1027,22 @@ class RefreshWorkflowTest(unittest.TestCase):
                 resume=False,
                 enabled=True,
             )
+            state.record_window(
+                "bronze-price",
+                refresh_workflow.RefreshWindow(
+                    "20260622",
+                    "20260622",
+                    date(2026, 6, 21),
+                ),
+            )
             state.complete_symbol("price", "005930")
             stdout = io.StringIO()
             with (
-                patch.object(refresh_workflow, "latest_date_in_csv", return_value=date(2026, 6, 22)),
+                patch.object(
+                    refresh_workflow,
+                    "latest_date_in_csv",
+                    return_value=date(2026, 6, 21),
+                ),
                 patch.object(refresh_workflow, "fetch_krx_dataset_frame") as fetch_frame,
                 redirect_stdout(stdout),
             ):
@@ -900,7 +1055,116 @@ class RefreshWorkflowTest(unittest.TestCase):
                 )
 
         fetch_frame.assert_not_called()
-        self.assertIn("skipped=1", stdout.getvalue())
+        self.assertIn(
+            "[RESUME] bronze price completed_symbols=1/1, remaining_symbols=0",
+            stdout.getvalue(),
+        )
+
+    def test_empty_krx_trading_day_response_does_not_complete_symbol(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            state = refresh_workflow.RefreshState.open(
+                root / "refresh_state.json",
+                signature={"market": "kr"},
+                resume=False,
+                enabled=True,
+            )
+            fake_data_lake = type(refresh_workflow.DATA_LAKE)(root / "data-lake")
+
+            with (
+                patch.object(refresh_workflow, "DATA_LAKE", fake_data_lake),
+                patch.object(
+                    refresh_workflow,
+                    "fetch_krx_dataset_frame",
+                    return_value=pd.DataFrame(),
+                ),
+                self.assertRaisesRegex(
+                    refresh_workflow.KRXEmptyResponseError,
+                    "resume state was not advanced",
+                ),
+            ):
+                refresh_workflow.download_incremental_krx_dataset(
+                    "shares",
+                    ["005930"],
+                    end_date="20260724",
+                    state=state,
+                    progress_interval=1,
+                )
+
+        self.assertFalse(state.is_symbol_completed("shares", "005930"))
+
+    def test_download_incremental_resume_window_skips_completed_file_scan(self):
+        with TemporaryDirectory() as temp_dir:
+            state = refresh_workflow.RefreshState.open(
+                Path(temp_dir) / "refresh_state.json",
+                signature={"market": "kr"},
+                resume=False,
+                enabled=True,
+            )
+            expected_window = refresh_workflow.RefreshWindow(
+                "20260622",
+                "20260622",
+                date(2026, 6, 21),
+            )
+            state.record_window("bronze-price", expected_window)
+            state.complete_symbol("price", "005930")
+
+            with (
+                patch.object(refresh_workflow, "latest_date_in_csv") as latest,
+                patch.object(refresh_workflow, "fetch_krx_dataset_frame") as fetch,
+            ):
+                actual_window = refresh_workflow.download_incremental_krx_dataset(
+                    "price",
+                    ["005930"],
+                    end_date="20260622",
+                    state=state,
+                    progress_interval=1,
+                )
+
+        latest.assert_not_called()
+        fetch.assert_not_called()
+        self.assertEqual(actual_window, expected_window)
+
+    def test_download_incremental_revalidates_state_when_effective_end_changes(self):
+        with TemporaryDirectory() as temp_dir:
+            state = refresh_workflow.RefreshState.open(
+                Path(temp_dir) / "refresh_state.json",
+                signature={"market": "kr"},
+                resume=False,
+                enabled=True,
+            )
+            state.record_window(
+                "bronze-shares",
+                refresh_workflow.RefreshWindow(
+                    "20260725",
+                    "20260725",
+                    date(2026, 7, 24),
+                ),
+            )
+            state.complete_symbol("shares", "005930")
+
+            with (
+                patch.object(
+                    refresh_workflow,
+                    "latest_date_in_csv",
+                    return_value=date(2026, 7, 24),
+                ) as latest,
+                patch.object(refresh_workflow, "fetch_krx_dataset_frame") as fetch,
+            ):
+                actual_window = refresh_workflow.download_incremental_krx_dataset(
+                    "shares",
+                    ["005930"],
+                    end_date="20260724",
+                    state=state,
+                    progress_interval=1,
+                )
+
+        latest.assert_called_once()
+        fetch.assert_not_called()
+        self.assertFalse(state.is_symbol_completed("shares", "005930"))
+        self.assertEqual(actual_window.end_date, "20260724")
+        self.assertIsNone(actual_window.start_date)
+
     def test_download_incremental_krx_dataset_uses_workers_and_updates_state(self):
         with TemporaryDirectory() as temp_dir:
             state = refresh_workflow.RefreshState.open(
