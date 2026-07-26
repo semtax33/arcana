@@ -150,6 +150,26 @@ STYLE_WEIGHTS = {
     },
 }
 
+# Korean weights above are intentionally unchanged.  US consensus coverage has
+# different stable fields, so it uses a separate provider-neutral score basket.
+US_STYLE_WEIGHTS = {
+    **{group: dict(weights) for group, weights in STYLE_WEIGHTS.items() if group != STYLE_CONSENSUS},
+    STYLE_CONSENSUS: {
+        "us_eps_revision_30d_pct": 0.35,
+        "us_eps_revision_breadth_30d_pct": 0.20,
+        "us_eps_revision_acceleration_30d_pct": 0.15,
+        "us_eps_dispersion_pct": 0.10,
+        "us_revenue_dispersion_pct": 0.05,
+        "us_eps_surprise_pct": 0.15,
+    },
+}
+US_CONSENSUS_CORE_FACTORS = {
+    "us_eps_revision_30d_pct",
+    "us_eps_revision_breadth_30d_pct",
+    "us_eps_revision_acceleration_30d_pct",
+    "us_eps_dispersion_pct",
+}
+
 
 TOTAL_WEIGHTS = {
     "DEFAULT": {
@@ -194,6 +214,8 @@ LOWER_BETTER_FACTORS = {
     "dps_volatility_10y",
     "dividend_cut",
     "special_dividend_ratio_pct",
+    "us_eps_dispersion_pct",
+    "us_revenue_dispersion_pct",
 }
 
 
@@ -241,27 +263,29 @@ def factor_direction(factor_id: str) -> int:
 def style_factor_definitions() -> dict[str, FactorDefinition]:
     definitions: dict[str, FactorDefinition] = {}
     reverse_aliases = {runtime: alias for alias, runtime in FACTOR_ALIASES.items()}
-    for style_group, weights in STYLE_WEIGHTS.items():
-        for factor_id, weight in weights.items():
-            existing = definitions.get(factor_id)
-            if existing is not None and weight <= existing.weight:
-                continue
-            low, high = (
-                (0.05, 0.95)
-                if style_group in {STYLE_GROWTH, STYLE_CONSENSUS, STYLE_DIVIDEND}
-                else (0.01, 0.99)
-            )
-            definitions[factor_id] = FactorDefinition(
-                factor_id=factor_id,
-                canonical_id=reverse_aliases.get(factor_id, factor_id.upper()),
-                style_group=style_group,
-                direction=factor_direction(factor_id),
-                weight=weight,
-                winsor_low=low,
-                winsor_high=high,
-                apply_to_financials=factor_id
-                not in {"ebitda_to_ev", "fcfpr", "asset_turnover"},
-            )
+    all_weights = [STYLE_WEIGHTS, US_STYLE_WEIGHTS]
+    for weight_set in all_weights:
+        for style_group, weights in weight_set.items():
+            for factor_id, weight in weights.items():
+                existing = definitions.get(factor_id)
+                if existing is not None and weight <= existing.weight:
+                    continue
+                low, high = (
+                    (0.05, 0.95)
+                    if style_group in {STYLE_GROWTH, STYLE_CONSENSUS, STYLE_DIVIDEND}
+                    else (0.01, 0.99)
+                )
+                definitions[factor_id] = FactorDefinition(
+                    factor_id=factor_id,
+                    canonical_id=reverse_aliases.get(factor_id, factor_id.upper()),
+                    style_group=style_group,
+                    direction=factor_direction(factor_id),
+                    weight=weight,
+                    winsor_low=low,
+                    winsor_high=high,
+                    apply_to_financials=factor_id
+                    not in {"ebitda_to_ev", "fcfpr", "asset_turnover"},
+                )
     return definitions
 
 
@@ -274,3 +298,7 @@ def style_profile_weights(style_profile: str) -> dict[str, float]:
         allowed = ", ".join(sorted(TOTAL_WEIGHTS))
         raise ValueError(f"style_profile must be one of: {allowed}")
     return TOTAL_WEIGHTS[profile]
+
+
+def style_weights_for_country(country: str | None) -> dict[str, dict[str, float]]:
+    return US_STYLE_WEIGHTS if str(country or "").strip().upper() == "US" else STYLE_WEIGHTS

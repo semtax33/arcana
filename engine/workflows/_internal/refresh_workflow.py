@@ -345,6 +345,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--valuefinder-cookie")
     parser.add_argument("--equity-cookie")
     parser.add_argument("--consensus-stale-days", type=int, default=180)
+    parser.add_argument(
+        "--us-consensus-sources",
+        default="alpha-vantage,yahoo",
+        help="Comma-separated US consensus sources: alpha-vantage,yahoo,all.",
+    )
+    parser.add_argument("--alpha-max-calls-per-minute", type=int, choices=range(1, 76), default=75, metavar="1..75")
+    parser.add_argument("--consensus-retries", type=int, default=3)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-clickhouse", action="store_true")
     parser.add_argument("--force-full", action="store_true")
@@ -758,6 +765,30 @@ def run_consensus_refresh(
     client: Any,
     state: RefreshState,
 ) -> None:
+    if args.market == "us":
+        if args.dry_run:
+            print(f"[DRY-RUN] US consensus end={_to_iso_date(end_date)}")
+            return
+        namespace = argparse.Namespace(
+            market="us",
+            symbols=getattr(args, "symbols", None),
+            us_consensus_sources=getattr(args, "us_consensus_sources", "alpha-vantage,yahoo"),
+            consensus_snapshot_date=end_date,
+            force=True,
+            alpha_max_calls_per_minute=getattr(args, "alpha_max_calls_per_minute", 75),
+            consensus_retries=getattr(args, "consensus_retries", 3),
+        )
+        download_workflow.download_us_consensus(namespace)
+        result = get_normalize_workflow().normalize_consensus(argparse.Namespace(market="us"))
+        if not result:
+            raise RuntimeError("US consensus normalization produced no outputs")
+        if not args.skip_clickhouse:
+            from engine.loaders.consensus import load_us_consensus
+
+            counts = load_us_consensus(client=client)
+            if not any(counts.values()):
+                raise RuntimeError("US consensus load prepared no rows")
+        return
     if args.dry_run:
         print(f"[DRY-RUN] KR consensus end={_to_iso_date(end_date)}")
         return

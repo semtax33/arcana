@@ -114,7 +114,7 @@ class YFinancePriceEltTest(unittest.TestCase):
         self.assertEqual(open_mock.call_count, 2)
         self.assertEqual(open_mock.call_args.kwargs["context"], "certifi-context")
 
-    def test_universe_filter_keeps_common_preferred_adr_and_class_stock(self):
+    def test_universe_filter_keeps_common_adr_and_class_stock_but_excludes_preferred(self):
         nasdaq = pd.DataFrame(
             [
                 {
@@ -196,7 +196,7 @@ class YFinancePriceEltTest(unittest.TestCase):
 
         result = filter_us_equity_universe(nasdaq, other)
 
-        self.assertEqual(result["ticker"].tolist(), ["AAPL", "BAC-B", "GOOG", "TSM", "XYZ"])
+        self.assertEqual(result["ticker"].tolist(), ["AAPL", "GOOG", "TSM", "XYZ"])
 
     def test_normalizer_maps_yfinance_csv_shape(self):
         raw = pd.DataFrame(

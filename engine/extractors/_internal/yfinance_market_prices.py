@@ -30,8 +30,10 @@ EXCLUDED_INSTRUMENT_PATTERN = (
 )
 INCLUDED_EQUITY_PATTERN = (
     r"\b(?:common stock|common shares?|capital stock|ordinary shares?|ordinary stock|"
-    r"american depositary|adr|ads|preferred|preference|depositary shares?)\b"
+    r"american depositary|adr|ads)\b"
 )
+PREFERRED_SHARE_PATTERN = r"\b(?:preferred|preference)\b"
+# ADR/ADS are eligible securities but are never deduplicated as domestic share classes.
 PREFERRED_OR_ADR_PATTERN = r"\b(?:preferred|preference|american depositary|adr|ads|depositary shares?)\b"
 SHARE_CLASS_PATTERN = re.compile(
     r"\bclass\s+(?P<class>iii|ii|iv|v|a|b|c|d|e|f|g|h|i)\b",
@@ -283,8 +285,8 @@ def filter_us_equity_universe(nasdaq: pd.DataFrame, other: pd.DataFrame) -> pd.D
     combined["is_etf"] = combined["is_etf"].str.upper()
     combined["test_issue"] = combined["test_issue"].str.upper()
 
-    preferred_or_adr = combined["security_name_lower"].str.contains(
-        PREFERRED_OR_ADR_PATTERN,
+    is_preferred_share = combined["security_name_lower"].str.contains(
+        PREFERRED_SHARE_PATTERN,
         regex=True,
         na=False,
     )
@@ -304,7 +306,8 @@ def filter_us_equity_universe(nasdaq: pd.DataFrame, other: pd.DataFrame) -> pd.D
         & combined["is_etf"].ne("Y")
         & combined["test_issue"].ne("Y")
         & has_included_equity_text
-        & (~has_excluded_instrument_text | preferred_or_adr)
+        & ~has_excluded_instrument_text
+        & ~is_preferred_share
     )
     result = combined.loc[keep, _universe_columns()].copy()
     result = _keep_lowest_voting_share_classes(result)

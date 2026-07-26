@@ -561,6 +561,45 @@ ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY toYYYYMM(as_of_date)
 ORDER BY (stock_code, as_of_date, target_period, metric_id);
 
+CREATE TABLE IF NOT EXISTS us_consensus_observations
+(
+    symbol String, security_id String, provider LowCardinality(String), dataset LowCardinality(String),
+    source_regime LowCardinality(String), snapshot_date Date, availability_date Date,
+    horizon LowCardinality(String), period_type LowCardinality(String), fiscal_period_end Nullable(Date),
+    forecast_slot LowCardinality(String), metric LowCardinality(String), statistic LowCardinality(String),
+    lookback_days Nullable(UInt16), value Nullable(Float64), currency LowCardinality(String),
+    analyst_count Nullable(Float64), raw_path String
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY toYYYYMM(snapshot_date)
+ORDER BY (symbol, snapshot_date, provider, horizon, metric, statistic);
+
+CREATE TABLE IF NOT EXISTS us_consensus_events
+(
+    symbol String, security_id String, provider LowCardinality(String), source_regime LowCardinality(String),
+    event_type LowCardinality(String), event_date Date, fiscal_period_end Nullable(Date),
+    reported_eps Nullable(Float64), estimated_eps Nullable(Float64), surprise_pct Nullable(Float64),
+    availability_date Date, snapshot_date Date, raw_path String
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY toYYYYMM(event_date)
+ORDER BY (symbol, event_date, provider, source_regime);
+
+CREATE TABLE IF NOT EXISTS us_consensus_factors
+(
+    symbol String, security_id String, factor_date Date, provider LowCardinality(String),
+    source_regime LowCardinality(String), horizon LowCardinality(String), analyst_count Nullable(Float64),
+    us_eps_consensus Nullable(Float64), us_revenue_consensus Nullable(Float64),
+    us_eps_revision_7d_pct Nullable(Float64), us_eps_revision_30d_pct Nullable(Float64),
+    us_eps_revision_60d_pct Nullable(Float64), us_eps_revision_90d_pct Nullable(Float64),
+    us_eps_revision_breadth_30d_pct Nullable(Float64), us_eps_revision_acceleration_30d_pct Nullable(Float64),
+    us_eps_dispersion_pct Nullable(Float64), us_revenue_dispersion_pct Nullable(Float64),
+    us_eps_surprise_pct Nullable(Float64), currency LowCardinality(String), raw_path String
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY toYYYYMM(factor_date)
+ORDER BY (security_id, factor_date, provider, source_regime, horizon);
+
 CREATE TABLE IF NOT EXISTS arcana.fact_daily_style_score
 (
     trade_date Date,

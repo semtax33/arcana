@@ -13,10 +13,12 @@ from engine.core.clickhouse import get_clickhouse_client
 from engine.transformers.style_score_definitions import (
     STYLE_FACTOR_DEFINITIONS,
     STYLE_WEIGHTS,
+    US_CONSENSUS_CORE_FACTORS,
     VALUE_LIMITS,
     canonical_factor_id,
     factor_direction,
     style_profile_weights,
+    style_weights_for_country,
 )
 
 
@@ -589,6 +591,9 @@ def calculate_factor_scores(
     ).dt.date
 
     merged = factors.merge(universe, on="security_id", how="inner", suffixes=("", "_u"))
+    if "country" not in merged.columns:
+        merged["country"] = ""
+    merged["country"] = merged["country"].fillna("").astype(str).str.upper()
     if "is_financial" not in merged.columns:
         merged["is_financial"] = False
     merged["is_financial"] = merged["is_financial"].fillna(False).astype(bool)
@@ -676,18 +681,26 @@ def calculate_style_scores(
         invalid_factor_ids: set[str] = set()
         style_confidences: dict[str, float] = {}
 
-        for style_group, factor_weights in STYLE_WEIGHTS.items():
+        country_style_weights = style_weights_for_country(first.get("country"))
+        for style_group, factor_weights in country_style_weights.items():
             style_score, confidence, available, invalid = _weighted_style_score(
                 group,
                 factor_weights,
             )
+            if (
+                str(first.get("country") or "").upper() == "US"
+                and style_group == "CONSENSUS"
+                and not US_CONSENSUS_CORE_FACTORS.issubset(available)
+            ):
+                style_score = None
+                confidence = 0.0
             score_row[STYLE_SCORE_COLUMNS[style_group]] = style_score
             style_confidences[style_group] = confidence
             available_factor_ids.update(available)
             invalid_factor_ids.update(invalid)
 
         total_score, total_confidence = _weighted_total_score(score_row, style_confidences, weights)
-        required_factor_ids = set().union(*(set(items) for items in STYLE_WEIGHTS.values()))
+        required_factor_ids = set().union(*(set(items) for items in country_style_weights.values()))
         missing_factor_ids = sorted(required_factor_ids - available_factor_ids - invalid_factor_ids)
         score_row.update(
             {
@@ -834,12 +847,14 @@ def _resolve_industry_fallback(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
     result["industry_group_code"] = result["industry_group_code"].fillna("").astype(str)
     result["sector_code"] = result["sector_code"].fillna("").astype(str)
+    if "country" not in result.columns:
+        result["country"] = ""
+    result["country"] = result["country"].fillna("").astype(str).str.upper()
     valid = result.loc[result["is_valid"]].copy()
-
-    group_counts = valid.groupby(["factor_id", "industry_group_code"]).size().to_dict()
-    sector_counts = valid.groupby(["factor_id", "sector_code"]).size().to_dict()
-    all_non_financial_counts = valid.loc[~valid["is_financial"]].groupby("factor_id").size().to_dict()
-    all_financial_counts = valid.loc[valid["is_financial"]].groupby("factor_id").size().to_dict()
+    group_counts = valid.groupby(["country", "factor_id", "industry_group_code"]).size().to_dict()
+    sector_counts = valid.groupby(["country", "factor_id", "sector_code"]).size().to_dict()
+    all_non_financial_counts = valid.loc[~valid["is_financial"]].groupby(["country", "factor_id"]).size().to_dict()
+    all_financial_counts = valid.loc[valid["is_financial"]].groupby(["country", "factor_id"]).size().to_dict()
 
     levels = []
     codes = []
@@ -847,17 +862,18 @@ def _resolve_industry_fallback(frame: pd.DataFrame) -> pd.DataFrame:
     n_peers = []
     for row in result.itertuples(index=False):
         factor_id = row.factor_id
+        country = str(row.country or "").upper()
         if bool(row.is_financial):
             levels.append("ALL_FINANCIAL")
             codes.append("ALL_FINANCIAL")
             names.append("All Financial")
-            n_peers.append(int(all_financial_counts.get(factor_id, 0)))
+            n_peers.append(int(all_financial_counts.get((country, factor_id), 0)))
             continue
 
         industry_group_code = str(row.industry_group_code or "")
         sector_code = str(row.sector_code or "")
-        industry_group_count = group_counts.get((factor_id, industry_group_code), 0)
-        sector_count = sector_counts.get((factor_id, sector_code), 0)
+        industry_group_count = group_counts.get((country, factor_id, industry_group_code), 0)
+        sector_count = sector_counts.get((country, factor_id, sector_code), 0)
         if industry_group_code and industry_group_count >= MIN_INDUSTRY_GROUP_PEERS:
             levels.append("INDUSTRY_GROUP")
             codes.append(industry_group_code)
@@ -872,7 +888,7 @@ def _resolve_industry_fallback(frame: pd.DataFrame) -> pd.DataFrame:
             levels.append("ALL_NON_FINANCIAL")
             codes.append("ALL_NON_FINANCIAL")
             names.append("All Non-Financial")
-            n_peers.append(int(all_non_financial_counts.get(factor_id, 0)))
+            n_peers.append(int(all_non_financial_counts.get((country, factor_id), 0)))
 
     result["industry_level"] = levels
     result["industry_code"] = codes
@@ -932,11 +948,11 @@ def _apply_percentile_and_robust_z(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _iter_assigned_peer_groups(frame: pd.DataFrame):
-    for (factor_id, industry_level, industry_code), target_index in frame.groupby(
-        ["factor_id", "industry_level", "industry_code"],
+    for (country, factor_id, industry_level, industry_code), target_index in frame.groupby(
+        ["country", "factor_id", "industry_level", "industry_code"],
         dropna=False,
     ).groups.items():
-        factor_mask = frame["factor_id"] == factor_id
+        factor_mask = (frame["factor_id"] == factor_id) & (frame["country"].fillna("").astype(str).str.upper() == str(country or "").upper())
         if industry_level == "INDUSTRY_GROUP":
             peer_mask = factor_mask & (frame["industry_group_code"].fillna("").astype(str) == str(industry_code or ""))
         elif industry_level == "SECTOR":

@@ -278,11 +278,13 @@ def normalize_business_infos(
 
 
 def normalize_consensus(args: argparse.Namespace) -> dict[str, Path | int]:
-    if args.market != "kr":
-        raise ValueError("consensus normalization is only supported for --market kr")
-    from engine.transformers.consensus import normalize_kr_consensus
-
-    return normalize_kr_consensus(stale_days=args.consensus_stale_days)
+    if args.market == "kr":
+        from engine.transformers.consensus import normalize_kr_consensus
+        return normalize_kr_consensus(stale_days=args.consensus_stale_days)
+    if args.market == "us":
+        from engine.transformers.consensus import normalize_us_consensus
+        return normalize_us_consensus()
+    raise ValueError("consensus normalization supports only --market kr or us")
 
 
 def normalize_all_statements() -> None:
@@ -571,7 +573,11 @@ def main() -> None:
             normalize_consensus(args)
         return
 
-    if args.target != "statements":
+    if args.target in {"consensus", "all"}:
+        normalize_consensus(args)
+    if args.target == "consensus":
+        return
+    if args.target not in {"statements", "all"}:
         raise ValueError(f"--target {args.target!r} is only supported for --market kr")
 
     from engine.transformers.sec_filings import normalize_us_sec_filings

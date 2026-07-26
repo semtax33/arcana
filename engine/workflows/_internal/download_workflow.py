@@ -272,7 +272,23 @@ def download_kr_consensus(args: argparse.Namespace) -> None:
 
 
 def download_us_consensus(args: argparse.Namespace) -> None:
-    raise NotImplementedError("US consensus not supported yet")
+    from engine.extractors.consensus import download_us_consensus as _download_us_consensus
+
+    sources = _parse_us_consensus_sources(getattr(args, "us_consensus_sources", None))
+    counts = _download_us_consensus(
+        symbols=_parse_symbols(args.symbols),
+        sources=sources,
+        snapshot_date=getattr(args, "consensus_snapshot_date", None),
+        force=args.force,
+        alpha_max_calls_per_minute=getattr(args, "alpha_max_calls_per_minute", 75),
+        alpha_retries=getattr(args, "consensus_retries", 3),
+    )
+    print(
+        "[DONE] us consensus download "
+        f"symbols={counts['symbols']:,}, written={counts['written']:,}, "
+        f"skipped={counts['skipped']:,}, failed={counts['failed']:,}",
+        flush=True,
+    )
 
 
 DOWNLOAD_ACTIONS = {
@@ -325,6 +341,21 @@ def main() -> None:
         default="hankyung,valuefinder,equity",
         help="Comma-separated KR consensus sources: hankyung,valuefinder,equity,html,all.",
     )
+    parser.add_argument(
+        "--us-consensus-sources",
+        default="alpha-vantage,yahoo",
+        help="Comma-separated US consensus sources: alpha-vantage,yahoo,all.",
+    )
+    parser.add_argument(
+        "--alpha-max-calls-per-minute",
+        type=int,
+        default=75,
+        choices=range(1, 76),
+        metavar="1..75",
+        help="Global Alpha Vantage rolling-window limit. Defaults to 75.",
+    )
+    parser.add_argument("--consensus-retries", type=int, default=3, help="Retries per Alpha Vantage consensus request.")
+    parser.add_argument("--consensus-snapshot-date", type=_parse_date_arg, help="Override consensus bronze snapshot date.")
     parser.add_argument(
         "--consensus-html-pages",
         type=int,
@@ -394,6 +425,24 @@ def _parse_consensus_sources(value: str | None) -> set[str]:
             choices = ", ".join(sorted([*aliases["all"], *aliases]))
             raise SystemExit(f"unknown consensus source: {source}; choices: {choices}")
         sources.add(source)
+    return sources
+
+
+def _parse_us_consensus_sources(value: str | None) -> set[str]:
+    aliases = {"all": {"alpha-vantage", "yahoo"}, "alpha": {"alpha-vantage"}, "yfinance": {"yahoo"}}
+    if value is None or not str(value).strip():
+        return set(aliases["all"])
+    sources: set[str] = set()
+    for item in str(value).split(","):
+        source = item.strip().lower()
+        if not source:
+            continue
+        if source in aliases:
+            sources.update(aliases[source])
+        elif source in {"alpha-vantage", "yahoo"}:
+            sources.add(source)
+        else:
+            raise SystemExit("unknown US consensus source: " + source)
     return sources
 
 

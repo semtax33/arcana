@@ -16,6 +16,13 @@ from engine.transformers.consensus import (
     SILVER_ESTIMATES_NAME,
     SILVER_HANKYUNG_CONSENSUS_DIR,
     SILVER_REPORTS_NAME,
+    SILVER_US_CONSENSUS_DIR,
+    US_EVENT_COLUMNS,
+    US_EVENTS_NAME,
+    US_FACTOR_COLUMNS,
+    US_FACTORS_NAME,
+    US_OBSERVATION_COLUMNS,
+    US_OBSERVATIONS_NAME,
 )
 
 
@@ -23,6 +30,12 @@ CONSENSUS_TABLE_FILES = {
     "real_consensus_reports": (SILVER_REPORTS_NAME, REPORT_COLUMNS),
     "real_consensus_estimates": (SILVER_ESTIMATES_NAME, ESTIMATE_COLUMNS),
     "real_consensus_daily": (SILVER_DAILY_NAME, DAILY_COLUMNS),
+}
+
+US_CONSENSUS_TABLE_FILES = {
+    "us_consensus_observations": (US_OBSERVATIONS_NAME, US_OBSERVATION_COLUMNS),
+    "us_consensus_events": (US_EVENTS_NAME, US_EVENT_COLUMNS),
+    "us_consensus_factors": (US_FACTORS_NAME, US_FACTOR_COLUMNS),
 }
 
 STRING_COLUMNS = {
@@ -59,6 +72,18 @@ STRING_COLUMNS = {
     "source_provider",
     "quality_flags",
     "payload_json",
+    "symbol",
+    "provider",
+    "dataset",
+    "source_regime",
+    "horizon",
+    "period_type",
+    "fiscal_period_end",
+    "forecast_slot",
+    "metric",
+    "statistic",
+    "event_type",
+    "raw_path",
 }
 
 DATE_COLUMNS = {
@@ -67,6 +92,10 @@ DATE_COLUMNS = {
     "register_date",
     "update_date",
     "as_of_date",
+    "snapshot_date",
+    "availability_date",
+    "event_date",
+    "factor_date",
 }
 
 DATETIME_COLUMNS = {"updated_at"}
@@ -76,6 +105,8 @@ INTEGER_COLUMNS = {
     "report_idx",
     "report_count",
     "broker_count",
+    "lookback_days",
+    "analyst_count",
 }
 
 NON_NULL_DATE_DEFAULTS = {
@@ -113,6 +144,21 @@ FLOAT_COLUMNS = {
     "consensus_median",
     "consensus_low",
     "consensus_high",
+    "value",
+    "reported_eps",
+    "estimated_eps",
+    "surprise_pct",
+    "us_eps_consensus",
+    "us_revenue_consensus",
+    "us_eps_revision_7d_pct",
+    "us_eps_revision_30d_pct",
+    "us_eps_revision_60d_pct",
+    "us_eps_revision_90d_pct",
+    "us_eps_revision_breadth_30d_pct",
+    "us_eps_revision_acceleration_30d_pct",
+    "us_eps_dispersion_pct",
+    "us_revenue_dispersion_pct",
+    "us_eps_surprise_pct",
 }
 
 
@@ -124,8 +170,15 @@ def load_hankyung_consensus(
     client: Any = None,
 ) -> dict[str, int]:
     market = str(market or "kr").strip().lower()
+    if market == "us":
+        resolved_silver_dir = Path(silver_dir)
+        return load_us_consensus(
+            silver_dir=SILVER_US_CONSENSUS_DIR if resolved_silver_dir == SILVER_HANKYUNG_CONSENSUS_DIR else resolved_silver_dir,
+            dry_run=dry_run,
+            client=client,
+        )
     if market != "kr":
-        raise NotImplementedError("US consensus not supported yet")
+        raise ValueError("market must be 'kr' or 'us'")
 
     counts: dict[str, int] = {}
     owns_client = client is None
@@ -149,6 +202,35 @@ def load_hankyung_consensus(
         f"reports={counts.get('real_consensus_reports', 0):,}, "
         f"estimates={counts.get('real_consensus_estimates', 0):,}, "
         f"daily={counts.get('real_consensus_daily', 0):,}",
+        flush=True,
+    )
+    return counts
+
+
+def load_us_consensus(
+    *,
+    silver_dir: str | Path = SILVER_US_CONSENSUS_DIR,
+    dry_run: bool = False,
+    client: Any = None,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    owns_client = client is None
+    if not dry_run:
+        client = client or get_clickhouse_client()
+    try:
+        for table_name, (file_name, columns) in US_CONSENSUS_TABLE_FILES.items():
+            frame = _read_silver_csv(Path(silver_dir) / file_name, columns=columns)
+            counts[table_name] = len(frame)
+            if not dry_run and not frame.empty:
+                client.insert_df(table_name, frame, column_names=list(frame.columns))
+    finally:
+        close = getattr(client, "close", None)
+        if owns_client and callable(close):
+            close()
+    print(
+        "[DONE] us consensus load "
+        f"observations={counts.get('us_consensus_observations', 0):,}, "
+        f"events={counts.get('us_consensus_events', 0):,}, factors={counts.get('us_consensus_factors', 0):,}",
         flush=True,
     )
     return counts
@@ -238,15 +320,15 @@ def _float_value(value: Any) -> float | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Load normalized KR consensus CSVs into ClickHouse.")
+    parser = argparse.ArgumentParser(description="Load normalized consensus CSVs into ClickHouse.")
     parser.add_argument("--market", default="kr", choices=["kr", "us"])
-    parser.add_argument("--silver-dir", default=str(SILVER_HANKYUNG_CONSENSUS_DIR))
+    parser.add_argument("--silver-dir")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     load_hankyung_consensus(
         market=args.market,
-        silver_dir=args.silver_dir,
+        silver_dir=args.silver_dir or (SILVER_US_CONSENSUS_DIR if args.market == "us" else SILVER_HANKYUNG_CONSENSUS_DIR),
         dry_run=args.dry_run,
     )
 
