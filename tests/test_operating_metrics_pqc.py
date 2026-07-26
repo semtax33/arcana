@@ -8,7 +8,10 @@ import pandas as pd
 from api.service.estimate_service import EstimateService
 from api.service.operating_metrics_service import OperatingMetricsService
 from engine.loaders.operating_metrics import load_operating_metrics
-from engine.transformers.operating_metrics import create_operating_metric_gold
+from engine.transformers.operating_metrics import (
+    create_operating_metric_gold,
+    create_operating_metric_gold_for_stocks,
+)
 
 
 class FailingClientFactory:
@@ -40,6 +43,23 @@ class QueryClient:
 
     def close(self):
         self.closed = True
+
+
+def test_create_operating_metric_gold_for_stocks_skips_missing_business_info_when_fail_fast(
+    tmp_path,
+    capsys,
+):
+    results = create_operating_metric_gold_for_stocks(
+        ["088980"],
+        silver_root=tmp_path / "silver" / "business-info",
+        progress=True,
+        continue_on_error=False,
+    )
+
+    assert results == []
+    output = capsys.readouterr().out
+    assert "[SKIP] operating metrics 1/1 stock=088980" in output
+    assert "processed=0/1, skipped=1, failed=0" in output
 
 
 def test_create_operating_metric_gold_builds_pqc_outputs(tmp_path):

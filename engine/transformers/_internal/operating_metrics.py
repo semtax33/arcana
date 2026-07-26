@@ -177,6 +177,10 @@ class TransformResult:
     estimate_consensus_history_rows: int
 
 
+class BusinessInfoSilverNotFoundError(FileNotFoundError):
+    """Raised when a stock has no normalized DART business-info inputs."""
+
+
 def create_operating_metric_gold(
     stock_code: str,
     *,
@@ -198,7 +202,9 @@ def create_operating_metric_gold(
     table_path = stock_silver_dir / "kr_business_info_tables.csv"
     row_path = stock_silver_dir / "kr_business_info_rows.csv"
     if not table_path.exists() or not row_path.exists():
-        raise FileNotFoundError(f"business-info silver CSV not found for stock_code={stock_code}")
+        raise BusinessInfoSilverNotFoundError(
+            f"business-info silver CSV not found for stock_code={stock_code}"
+        )
 
     table_df = pd.read_csv(table_path, dtype=str).fillna("")
     row_df = pd.read_csv(row_path, dtype=str).fillna("")
@@ -280,12 +286,22 @@ def create_operating_metric_gold_for_stocks(
     total = len(codes)
     results: list[TransformResult] = []
     failed_count = 0
+    skipped_count = 0
     if progress:
         print(f"[START] operating metrics stocks={total:,}", flush=True)
 
     for index, stock_code in enumerate(codes, start=1):
         try:
             result = create_operating_metric_gold(stock_code, **kwargs)
+        except BusinessInfoSilverNotFoundError as exc:
+            skipped_count += 1
+            if progress:
+                print(
+                    f"[SKIP] operating metrics {index:,}/{total:,} "
+                    f"stock={normalize_stock_code(stock_code)}: {exc}",
+                    flush=True,
+                )
+            continue
         except Exception as exc:
             failed_count += 1
             if progress:
@@ -305,13 +321,14 @@ def create_operating_metric_gold_for_stocks(
                 f"raw={result.raw_rows:,} metrics={result.metric_rows:,} "
                 f"unit={result.unit_rows:,} drivers={result.driver_rows:,} "
                 f"components={result.estimate_component_rows:,} consensus={result.estimate_consensus_rows:,} "
-                f"failed={failed_count:,}",
+                f"skipped={skipped_count:,} failed={failed_count:,}",
                 flush=True,
             )
 
     if progress:
         print(
-            f"[DONE] operating metrics processed={len(results):,}/{total:,}, failed={failed_count:,}",
+            f"[DONE] operating metrics processed={len(results):,}/{total:,}, "
+            f"skipped={skipped_count:,}, failed={failed_count:,}",
             flush=True,
         )
     return results
