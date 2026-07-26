@@ -13,3 +13,5 @@ data-lake/meta/refresh_locks/**
 data-lake/meta/refresh-manifests/**
 data-lake/source-archive/**
 outputs/
+output/
+tmp/
