@@ -88,6 +88,29 @@ class TestUSConsensusPipeline(unittest.TestCase):
             result = normalize_us_consensus(bronze_dir=root, output_dir=root / "silver")
             self.assertEqual(pd.read_csv(result["factors_path"]).shape[0], len(factors))
 
+    def test_normalizer_reads_actual_alpha_estimates_as_historical_fq1(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            _write_json(root / "alpha-vantage" / "splits" / "snapshot_date=2026-07-26" / "ticker=AAPL.json", {"symbol": "AAPL", "data": [{"effective_date": "2020-08-31", "split_factor": "4.0"}]})
+            _write_json(root / "alpha-vantage" / "earnings" / "snapshot_date=2026-07-26" / "ticker=AAPL.json", {"quarterlyEarnings": [{"fiscalDateEnding": "2020-09-30", "reportedDate": "2020-10-29", "reportedEPS": "0.97", "estimatedEPS": "0.95", "surprisePercentage": "2.11"}]})
+            _write_json(root / "alpha-vantage" / "earnings-estimates" / "snapshot_date=2026-07-26" / "ticker=AAPL.json", {"symbol": "AAPL", "estimates": [
+                {"date": "2020-09-30", "horizon": "fiscal quarter", "eps_estimate_average": "0.70", "eps_estimate_average_30_days_ago": "0.60", "eps_estimate_average_60_days_ago": "2.80", "eps_estimate_average_90_days_ago": "2.40", "eps_estimate_high": "0.80", "eps_estimate_low": "0.60", "eps_estimate_analyst_count": "10", "eps_estimate_revision_up_trailing_30_days": "4", "eps_estimate_revision_down_trailing_30_days": "1"},
+                {"date": "2021-03-31", "horizon": "fiscal quarter", "eps_estimate_average": "1.00", "eps_estimate_analyst_count": "10"}
+            ]})
+
+            observations, events, factors = build_us_consensus_frames(root)
+            alpha = factors.loc[factors["provider"] == "ALPHA_VANTAGE"].iloc[0]
+            self.assertEqual(len(events), 1)
+            self.assertEqual(len(factors.loc[factors["provider"] == "ALPHA_VANTAGE"]), 1)
+            self.assertEqual(alpha["horizon"], "FQ1")
+            self.assertEqual(alpha["factor_date"], "2020-10-30")
+            self.assertEqual(alpha["analyst_count"], 10.0)
+            self.assertAlmostEqual(alpha["us_eps_revision_30d_pct"], (0.7 - 0.6) / 0.6 * 100)
+            self.assertAlmostEqual(alpha["us_eps_revision_breadth_30d_pct"], 0.6)
+            self.assertEqual(alpha["us_eps_surprise_pct"], 2.11)
+            alpha_60 = observations.loc[(observations["provider"] == "ALPHA_VANTAGE") & (observations["lookback_days"] == 60), "value"].iloc[0]
+            self.assertEqual(alpha_60, 0.70)
+
     def test_us_style_score_uses_us_consensus_weights_and_requires_core_factors(self):
         values = {
             "us_eps_revision_30d_pct": 90.0, "us_eps_revision_breadth_30d_pct": 80.0,
@@ -115,6 +138,24 @@ class TestUSConsensusPipeline(unittest.TestCase):
             self.assertTrue(pd.isna(result.loc[1, "us_eps_revision_30d_pct"]))
             self.assertEqual(result.loc[1, "us_eps_consensus"], 11)
             self.assertEqual(result.loc[0, "us_consensus_source_regime"], "YAHOO_CURRENT")
+
+    def test_us_factor_merge_uses_alpha_fq1_until_yahoo_fy1_handoff(self):
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "us_consensus_factors.csv"
+            pd.DataFrame([
+                {"symbol": "AAPL", "factor_date": "2020-10-30", "provider": "ALPHA_VANTAGE", "source_regime": "ALPHA_VANTAGE_HISTORICAL", "horizon": "FQ1", "analyst_count": 4, "us_eps_revision_30d_pct": 12, "us_eps_revision_breadth_30d_pct": .5, "us_eps_revision_acceleration_30d_pct": 4, "us_eps_dispersion_pct": .1, "us_revenue_dispersion_pct": .2, "us_eps_surprise_pct": 3, "us_eps_consensus": .7, "us_revenue_consensus": 100, "us_eps_revision_7d_pct": 1, "us_eps_revision_60d_pct": 8, "us_eps_revision_90d_pct": 5, "raw_path": "alpha"},
+                {"symbol": "AAPL", "factor_date": "2020-11-05", "provider": "YAHOO_FINANCE", "source_regime": "YAHOO_CURRENT", "horizon": "FY1", "analyst_count": 4, "us_eps_revision_30d_pct": 22, "us_eps_revision_breadth_30d_pct": .7, "us_eps_revision_acceleration_30d_pct": 6, "us_eps_dispersion_pct": .1, "us_revenue_dispersion_pct": .2, "us_eps_surprise_pct": 4, "us_eps_consensus": 10, "us_revenue_consensus": 100, "us_eps_revision_7d_pct": 2, "us_eps_revision_60d_pct": 9, "us_eps_revision_90d_pct": 6, "raw_path": "yahoo"},
+                {"symbol": "AAPL", "factor_date": "2020-11-06", "provider": "ALPHA_VANTAGE", "source_regime": "ALPHA_VANTAGE_HISTORICAL", "horizon": "FQ1", "analyst_count": 4, "us_eps_revision_30d_pct": 99, "us_eps_revision_breadth_30d_pct": .9, "us_eps_revision_acceleration_30d_pct": 9, "us_eps_dispersion_pct": .1, "us_revenue_dispersion_pct": .2, "us_eps_surprise_pct": 9, "us_eps_consensus": 9, "us_revenue_consensus": 90, "us_eps_revision_7d_pct": 9, "us_eps_revision_60d_pct": 9, "us_eps_revision_90d_pct": 9, "raw_path": "late-alpha"},
+            ]).to_csv(path, index=False)
+            daily = pd.DataFrame({"trade_date": pd.to_datetime(["2020-10-29", "2020-10-30", "2020-11-04", "2020-11-05", "2020-11-06"])})
+
+            result = add_us_consensus_factors(daily, "AAPL", market="us", us_consensus_factors_path=path)
+            self.assertTrue(pd.isna(result.loc[0, "us_eps_revision_30d_pct"]))
+            self.assertEqual(result.loc[1, "us_eps_revision_30d_pct"], 12)
+            self.assertEqual(result.loc[2, "us_consensus_source_regime"], "ALPHA_VANTAGE_HISTORICAL")
+            self.assertEqual(result.loc[3, "us_eps_revision_30d_pct"], 22)
+            self.assertEqual(result.loc[4, "us_eps_revision_30d_pct"], 22)
+            self.assertEqual(result.loc[4, "us_consensus_source_regime"], "YAHOO_CURRENT")
 
 
 def _write_json(path: Path, payload) -> None:

@@ -1958,7 +1958,7 @@ def add_us_consensus_factors(
     us_consensus_factors_path=US_CONSENSUS_FACTORS_PATH,
     market="kr",
 ):
-    """Merge vendor-internal US FY1 consensus factors as point-in-time events."""
+    """Merge Alpha historical FQ1 and Yahoo operational FY1 factors as PIT events."""
     df = daily_df.sort_values("trade_date").copy()
     for column in [*US_CONSENSUS_FACTOR_COLUMNS, *US_CONSENSUS_INPUT_COLUMNS]:
         if column not in df.columns:
@@ -1969,10 +1969,22 @@ def add_us_consensus_factors(
     factors = read_us_consensus_factor_frame(stock_code, us_consensus_factors_path=us_consensus_factors_path)
     if factors.empty:
         return df
-    factors = factors.loc[factors["horizon"].astype(str) == "FY1"].copy()
+    horizons = factors["horizon"].astype(str)
+    regimes = factors["source_regime"].astype(str)
+    alpha_historical = regimes.eq("ALPHA_VANTAGE_HISTORICAL") & horizons.eq("FQ1")
+    yahoo_current = regimes.eq("YAHOO_CURRENT") & horizons.eq("FY1")
+    factors = factors.loc[alpha_historical | yahoo_current].copy()
     if factors.empty:
         return df
-    # Yahoo is the operational regime and wins only when both providers have the same availability date.
+    yahoo_start = factors.loc[factors["source_regime"].astype(str).eq("YAHOO_CURRENT"), "factor_date"].min()
+    if pd.notna(yahoo_start):
+        # Yahoo begins the operational regime. Do not let later-reported Alpha
+        # quarters re-enter the series after that handoff.
+        factors = factors.loc[
+            factors["source_regime"].astype(str).eq("YAHOO_CURRENT")
+            | factors["factor_date"].lt(yahoo_start)
+        ].copy()
+    # Yahoo also wins if both providers have the same availability date.
     factors["_provider_priority"] = factors["provider"].astype(str).eq("YAHOO_FINANCE").astype(int)
     factors = factors.sort_values(["factor_date", "_provider_priority", "raw_path"]).drop_duplicates("factor_date", keep="last")
     factors["_eligible"] = pd.to_numeric(factors["analyst_count"], errors="coerce") >= 3

@@ -210,6 +210,103 @@ page because EQUITY has a very large page count. Normalize writes silver CSV fil
 `data-lake/silver/consensus/hankyung/`, and the ClickHouse consensus loader reads only
 those silver CSV files.
 
+### 미국 컨센서스 (Alpha Vantage + Yahoo Finance)
+
+미국 컨센서스는 한국 컨센서스와 원본·정규화 테이블·팩터를 분리한다. Alpha Vantage는
+과거 이벤트 상대 리비전, 실적발표 결과 및 분할을 담당하고, Yahoo Finance/yfinance는
+현재 운용용 일별 컨센서스 스냅샷을 담당한다. `ALPHA_VANTAGE_API_KEY`는 고정 문자열이
+아닌 실행 환경변수 이름이며, 실제 키는 환경에서만 읽는다.
+
+```powershell
+$env:ALPHA_VANTAGE_API_KEY = "<YOUR_ALPHA_VANTAGE_KEY>"
+
+# 지정 종목의 Alpha Vantage 과거 데이터와 Yahoo 현재 스냅샷을 수집
+python -m engine.workflows.download --market us --symbols AAPL,MSFT consensus --us-consensus-sources alpha-vantage,yahoo
+
+# 각 공급자만 수집할 수도 있음
+python -m engine.workflows.download --market us --symbols AAPL consensus --us-consensus-sources alpha-vantage
+python -m engine.workflows.download --market us --symbols AAPL consensus --us-consensus-sources yahoo
+
+# Bronze -> Silver 정규화, Silver -> ClickHouse 적재
+python -m engine.workflows.normalize --market us --target consensus
+python -m engine.loaders.consensus --market us
+```
+
+Alpha Vantage 요청은 `EARNINGS_ESTIMATES`, `EARNINGS`, `SPLITS` 세 엔드포인트를
+사용하며 API 키 전체에서 rolling 60초 최대 75회로 제한된다. 재시도도 호출 한 건으로
+차감하고, 제한 응답(`429`, `Note`, `Information`)은 최소 60초 후 지수 백오프로 재시도한다.
+최근 요청 시각은 `data-lake/meta/consensus/alpha_vantage_rate_limit.json`에 보존된다.
+
+```text
+data-lake/bronze/consensus/alpha-vantage/earnings-estimates/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
+data-lake/bronze/consensus/alpha-vantage/earnings/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
+data-lake/bronze/consensus/alpha-vantage/splits/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
+data-lake/bronze/consensus/yahoo/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
+
+data-lake/silver/consensus/us/us_consensus_observations.csv
+data-lake/silver/consensus/us/us_consensus_events.csv
+data-lake/silver/consensus/us/us_consensus_factors.csv
+```
+
+Yahoo 스냅샷에는 `get_earnings_estimate()`, `get_revenue_estimate()`,
+`get_eps_trend()`, `get_eps_revisions()`, `get_earnings_history()`,
+`get_earnings_dates()`와 목표주가·추천등급 보조 데이터를 저장한다. `0q`, `+1q`,
+`0y`, `+1y`는 각각 `FQ1`, `FQ2`, `FY1`, `FY2`로 표시용 정규화하되, Yahoo의
+원본 슬롯도 보존한다. Alpha는 `period_type + fiscal_period_end`를 원본 기간 키로
+유지한다. 두 공급자의 EPS 수준이나 리비전을 직접 빼지 않는다.
+
+#### 미국 컨센서스 팩터 계산
+
+US Consensus Score는 Yahoo 운용 구간에서 FY1을 주 기준으로 계산하고 FQ1/FQ2/FY2
+원시 값도 Silver에 보관한다. Alpha Vantage가 제공하는 역사 추정치는 대부분 분기이므로,
+과거 백테스트 구간은 FQ1 `ALPHA_VANTAGE_HISTORICAL` 팩터를 사용한다. 이 값은 해당
+`fiscal_period_end`의 `EARNINGS.reportedDate` 다음 미국 거래일부터 이용 가능한 이벤트
+상대 PIT 프록시다. 연결된 실적발표일이 없는 미래 Alpha 추정치는 역사 팩터로 만들지
+않으며, Alpha 원본의 `snapshot_date`는 실제 수집일로 보존한다. Yahoo 일별 값은
+`YAHOO_CURRENT`의 FY1 엄밀 스냅샷 PIT이며, 최초 Yahoo FY1 스냅샷 이후에는 Yahoo가
+Alpha 역사 FQ1을 대체한다. 모든 과거 EPS 빈티지는 관측일과 기준일 사이의 주식분할
+`split_factor` 누적곱으로 나누어 분할 후 기준으로 맞춘다.
+
+```text
+revision_30d_pct = 100 * (EPS_current - EPS_30d_ago) / max(abs(EPS_30d_ago), 0.1)
+
+recent = (EPS_current - EPS_30d_ago) / max(abs(EPS_30d_ago), 0.1)
+prior_monthly = ((EPS_30d_ago - EPS_90d_ago) / max(abs(EPS_90d_ago), 0.1)) / 2
+revision_acceleration_30d_pct = recent - prior_monthly
+
+revision_breadth_30d_pct = (up_30d - down_30d) / max(up_30d + down_30d, 1)
+eps_dispersion_pct = (eps_high - eps_low) / max(abs(eps_average), 0.1)
+revenue_dispersion_pct = (revenue_high - revenue_low) / max(abs(revenue_average), 1)
+```
+
+`up_30d`와 `down_30d`가 모두 0이면 breadth는 0이며, 둘 중 하나라도 없으면 결측이다.
+EPS 및 매출 분산도는 낮을수록 좋게 순위를 반전한다. EPS 애널리스트 수가 3명 미만이면
+US Consensus Score를 계산하지 않는다. 핵심 네 팩터(EPS 30일 리비전, breadth, 가속도,
+EPS 분산도)는 모두 필요하고, 매출 분산도와 최근 120일 EPS 서프라이즈는 존재할 때만
+가중치를 재정규화한다.
+
+| US Consensus Score 구성 | 가중치 |
+| --- | ---: |
+| EPS 30일 리비전 | 35% |
+| EPS 리비전 breadth | 20% |
+| EPS 리비전 가속도 | 15% |
+| EPS 컨센서스 분산도 역순위 | 10% |
+| 매출 컨센서스 분산도 역순위 | 5% |
+| 최근 EPS 서프라이즈 | 15% |
+
+정규화는 존재하는 모든 Bronze 스냅샷을 읽으며, 누락된 날짜의 스냅샷을 인위적으로
+만들지는 않는다. US 팩터 로딩은 거래일 이전의 가장 최근 FY1 스냅샷을 `as-of`로
+참조한다. 현재 구현에는 최대 유효기간이 없으므로 장기간 수집이 중단되면 마지막 값이
+계속 사용될 수 있다. 운영 환경에서는 수집 상태를 모니터링하고 필요하면 stale 정책을
+추가해야 한다.
+
+US 원시 팩터를 ClickHouse의 일반 factor 테이블에 적재하려면 다음처럼 실행한다.
+
+```powershell
+python -m engine.loaders.factors --market us --stock-codes AAPL,MSFT --financial-basis annual `
+  --factor-ids us_eps_revision_30d_pct,us_eps_revision_breadth_30d_pct,us_eps_revision_acceleration_30d_pct,us_eps_dispersion_pct,us_revenue_dispersion_pct,us_eps_surprise_pct
+```
+
 `prices`와 `shares`는 KRX bronze CSV를 `data-lake/bronze/krx/...` 아래에
 저장합니다. DART 재무제표, 주석, 메타데이터, 배당 공시는
 `data-lake/bronze/dart/...` 아래에 저장합니다.

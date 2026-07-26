@@ -156,16 +156,17 @@ def _alpha_estimates(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     observations: list[dict[str, Any]] = []
     factors: list[dict[str, Any]] = []
-    for entries, period_type, horizon in (
-        (payload.get("quarterlyEstimates", []), "fiscal_quarter", "FQ1"),
-        (payload.get("annualEstimates", []), "fiscal_year", "FY1"),
-    ):
-        for entry in entries if isinstance(entries, list) else []:
+    for entries, period_type, horizon in _alpha_estimate_groups(payload):
+        for entry in entries:
             fiscal_end = _date_text(_pick(entry, "date", "fiscalDateEnding"))
-            anchor = anchors.get((symbol, fiscal_end), snapshot)
+            # Alpha Vantage does not provide an independent estimate as-of date. Only
+            # records linked to an already reported quarter can be event-relative PIT.
+            anchor = anchors.get((symbol, fiscal_end))
+            if not anchor:
+                continue
             availability = _next_us_trading_day(anchor)
             currency = _text(_pick(entry, "currency"))
-            analysts = _number(_pick(entry, "eps_estimate_number_of_analysts", "number_of_analysts", "numberOfAnalysts"))
+            analysts = _number(_pick(entry, "eps_estimate_analyst_count", "eps_estimate_number_of_analysts", "number_of_analysts", "numberOfAnalysts"))
             values = {}
             for label, aliases, lookback in (
                 ("current", ("eps_estimate_average", "epsEstimateAverage", "eps_average"), 0),
@@ -184,13 +185,44 @@ def _alpha_estimates(
             revenue_current = _number(_pick(entry, "revenue_estimate_average", "revenueEstimateAverage"))
             revenue_high = _number(_pick(entry, "revenue_estimate_high", "revenueEstimateHigh"))
             revenue_low = _number(_pick(entry, "revenue_estimate_low", "revenueEstimateLow"))
-            up = _number(_pick(entry, "eps_estimate_revision_up", "revision_up", "upLast30days"))
-            down = _number(_pick(entry, "eps_estimate_revision_down", "revision_down", "downLast30days"))
+            up = _number(_pick(entry, "eps_estimate_revision_up_trailing_30_days", "eps_estimate_revision_up", "revision_up", "upLast30days"))
+            down = _number(_pick(entry, "eps_estimate_revision_down_trailing_30_days", "eps_estimate_revision_down", "revision_down", "downLast30days"))
             for metric, statistic, value in (("eps", "high", eps_high), ("eps", "low", eps_low), ("revenue", "average", revenue_current), ("revenue", "high", revenue_high), ("revenue", "low", revenue_low), ("eps_revision", "up", up), ("eps_revision", "down", down)):
                 if value is not None:
                     observations.append(_observation(symbol, "ALPHA_VANTAGE", "EARNINGS_ESTIMATES", "ALPHA_VANTAGE_HISTORICAL", snapshot, availability, horizon, period_type, fiscal_end, "", metric, statistic, 30 if metric == "eps_revision" else 0, value, currency, analysts, raw_path))
             factors.append(_factor_row(symbol, availability, "ALPHA_VANTAGE", "ALPHA_VANTAGE_HISTORICAL", horizon, analysts, values, eps_high, eps_low, revenue_current, revenue_high, revenue_low, up, down, surprises.get((symbol, fiscal_end)), currency, raw_path))
     return observations, factors
+
+
+def _alpha_estimate_groups(payload: dict[str, Any]) -> list[tuple[list[dict[str, Any]], str, str]]:
+    """Return actual Alpha Vantage estimates plus the legacy fixture schema."""
+    actual_groups: dict[str, list[dict[str, Any]]] = {
+        "fiscal quarter": [],
+        "fiscal year": [],
+    }
+    actual_entries = payload.get("estimates", [])
+    if isinstance(actual_entries, list):
+        for entry in actual_entries:
+            if not isinstance(entry, dict):
+                continue
+            key = _text(_pick(entry, "horizon")).lower()
+            if key in actual_groups:
+                actual_groups[key].append(entry)
+    if any(actual_groups.values()):
+        return [
+            (actual_groups["fiscal quarter"], "fiscal_quarter", "FQ1"),
+            (actual_groups["fiscal year"], "fiscal_year", "FY1"),
+        ]
+
+    # Retain the earlier normalized fixture/provider shape for compatibility.
+    return [
+        (entries, period_type, horizon)
+        for entries, period_type, horizon in (
+            (payload.get("quarterlyEstimates", []), "fiscal_quarter", "FQ1"),
+            (payload.get("annualEstimates", []), "fiscal_year", "FY1"),
+        )
+        if isinstance(entries, list)
+    ]
 
 
 def _yahoo_frames(payload: dict[str, Any], *, symbol: str, snapshot: str, raw_path: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
