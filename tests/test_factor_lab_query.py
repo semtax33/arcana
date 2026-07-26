@@ -1,10 +1,12 @@
 import unittest
 
 from api.repository.factor_lab_query import (
+    build_factor_lab_insert_query,
     build_invalid_reason_counts_query,
     build_quality_summary_query,
     build_run_ranking_query,
     compile_factor_lab_graph,
+    node_type_specs,
     validate_factor_lab_graph,
 )
 
@@ -239,6 +241,202 @@ class FactorLabQueryTest(unittest.TestCase):
         self.assertTrue(result.query.endswith("WHERE toUInt8(is_valid) = 1"))
         self.assertEqual(result.parameters["node_composite_value_weight"], 0.6)
         self.assertEqual(result.parameters["node_composite_quality_weight"], 0.4)
+
+    def test_new_node_types_expose_expected_handles(self):
+        specs = {spec.type: spec for spec in node_type_specs()}
+
+        self.assertEqual(specs["greater_than"].inputs, ["left", "right"])
+        self.assertEqual(specs["condition"].inputs, ["condition", "if_true", "if_false"])
+        self.assertEqual(specs["condition_score"].inputs, ["condition", "score"])
+        self.assertEqual(specs["lag"].config_schema, {"period": "positive integer"})
+        self.assertEqual(specs["rolling_max"].config_schema, {"window": "positive integer"})
+        self.assertFalse(specs["weighted_score"].config_schema["missing_weight_renormalize"])
+
+    def test_logic_condition_and_condition_score_compile_with_exact_handles(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {"id": "factor_a", "type": "factor_input", "config": {"factor_id": "per"}},
+            {"id": "factor_b", "type": "factor_input", "config": {"factor_id": "pbr"}},
+            {"id": "greater", "type": "greater_than", "config": {}},
+            {"id": "choose", "type": "condition", "config": {}},
+            {"id": "gate", "type": "condition_score", "config": {}},
+            {
+                "id": "blended",
+                "type": "weighted_score",
+                "config": {
+                    "weights": {"direction": 0.6, "magnitude": 0.4},
+                    "missing_weight_renormalize": True,
+                },
+            },
+        ]
+        graph["edges"] = [
+            {"source": "factor_a", "target": "greater", "target_handle": "left"},
+            {"source": "factor_b", "target": "greater", "target_handle": "right"},
+            {"source": "greater", "target": "choose", "target_handle": "condition"},
+            {"source": "factor_a", "target": "choose", "target_handle": "if_true"},
+            {"source": "factor_b", "target": "choose", "target_handle": "if_false"},
+            {"source": "greater", "target": "gate", "target_handle": "condition"},
+            {"source": "choose", "target": "gate", "target_handle": "score"},
+            {"source": "gate", "target": "blended", "target_handle": "direction"},
+            {"source": "choose", "target": "blended", "target_handle": "magnitude"},
+        ]
+        graph["outputs"] = {"final_node_id": "blended"}
+
+        result = compile_factor_lab_graph(graph, known_factor_ids={"per", "pbr"})
+
+        self.assertIn("toFloat64(l.value > r.value)", result.query)
+        self.assertIn("node_choose AS", result.query)
+        self.assertIn("c.value != 0 AND NOT ifNull(t.is_valid, false)", result.query)
+        self.assertGreaterEqual(result.query.count("c.trade_date AS trade_date"), 2)
+        self.assertIn("LEFT JOIN node_factor_b AS f", result.query)
+        self.assertIn("LEFT JOIN node_gate AS direction", result.query)
+        self.assertIn("LEFT JOIN node_choose AS magnitude", result.query)
+        self.assertIn("'condition_not_met'", result.query)
+
+    def test_temporal_nodes_use_history_but_limit_final_dates(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {"id": "factor_per", "type": "factor_input", "config": {"factor_id": "per"}},
+            {"id": "lag_per", "type": "lag", "config": {"period": 2}},
+            {"id": "rolling_per", "type": "rolling_max", "config": {"window": 3}},
+        ]
+        graph["edges"] = [
+            {"source": "factor_per", "target": "lag_per", "target_handle": "input"},
+            {"source": "lag_per", "target": "rolling_per", "target_handle": "input"},
+        ]
+        graph["outputs"] = {"final_node_id": "rolling_per"}
+
+        result = compile_factor_lab_graph(
+            graph,
+            known_factor_ids={"per"},
+            trade_dates=["2026-06-30", "2026-03-31"],
+        )
+
+        self.assertEqual(result.parameters["temporal_end_date"], "2026-06-30")
+        self.assertIn("f.trade_date <= {temporal_end_date:Date}", result.query)
+        self.assertIn("lagInFrame(i.value", result.query)
+        self.assertIn("rolling_insufficient_history", result.query)
+        self.assertIn("ROWS BETWEEN {node_rolling_per_window_preceding:UInt32} PRECEDING", result.query)
+        self.assertIn("AND trade_date IN {trade_dates:Array(Date)}", result.query)
+
+    def test_temporal_history_is_limited_to_its_upstream_subgraph(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {"id": "temporal_input", "type": "factor_input", "config": {"factor_id": "per"}},
+            {"id": "lagged", "type": "lag", "config": {"period": 20}},
+            {"id": "static_input", "type": "factor_input", "config": {"factor_id": "pbr"}},
+            {"id": "final", "type": "add", "config": {}},
+        ]
+        graph["edges"] = [
+            {"source": "temporal_input", "target": "lagged", "target_handle": "input"},
+            {"source": "lagged", "target": "final", "target_handle": "left"},
+            {"source": "static_input", "target": "final", "target_handle": "right"},
+        ]
+        graph["outputs"] = {"final_node_id": "final"}
+
+        result = compile_factor_lab_graph(
+            graph,
+            known_factor_ids={"per", "pbr"},
+            trade_dates=["2026-06-30"],
+        )
+
+        temporal_cte = result.query.split("node_lagged AS", 1)[0]
+        static_cte = result.query.split("node_static_input AS", 1)[1].split("node_final AS", 1)[0]
+        lag_cte = result.query.split("node_lagged AS", 1)[1].split("node_static_input AS", 1)[0]
+        self.assertIn("f.trade_date <= {temporal_end_date:Date}", temporal_cte)
+        self.assertIn("f.trade_date IN {trade_dates:Array(Date)}", static_cte)
+        self.assertIn("WHERE trade_date IN {trade_dates:Array(Date)}", lag_cte)
+
+    def test_direct_temporal_factor_uses_exact_screen_lookback(self):
+        graph = nested_graph()
+        graph["experiment"]["start_date"] = "2026-06-30"
+        graph["experiment"]["end_date"] = "2026-06-30"
+        graph["nodes"] = [
+            {"id": "factor_per", "type": "factor_input", "config": {"factor_id": "per"}},
+            {"id": "lag_per", "type": "lag", "config": {"period": 20}},
+        ]
+        graph["edges"] = [
+            {"source": "factor_per", "target": "lag_per", "target_handle": "input"},
+        ]
+        graph["outputs"] = {"final_node_id": "lag_per"}
+
+        result = compile_factor_lab_graph(graph, known_factor_ids={"per"})
+
+        self.assertEqual(result.parameters["node_factor_per_history_row_limit"], 21)
+        self.assertIn(
+            "LIMIT {node_factor_per_history_row_limit:UInt32} BY security_id",
+            result.query,
+        )
+        insert_query, _ = build_factor_lab_insert_query(
+            result,
+            factor_id="lab_temporal_screen",
+            run_id="11111111-1111-1111-1111-111111111111",
+        )
+        self.assertIn("SETTINGS max_threads = 2", insert_query)
+
+    def test_temporal_config_requires_positive_integers(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {"id": "factor_per", "type": "factor_input", "config": {"factor_id": "per"}},
+            {"id": "lag_per", "type": "lag", "config": {"period": 0}},
+            {"id": "rolling_per", "type": "rolling_min", "config": {"window": True}},
+        ]
+        graph["edges"] = [
+            {"source": "factor_per", "target": "lag_per", "target_handle": "input"},
+            {"source": "lag_per", "target": "rolling_per", "target_handle": "input"},
+        ]
+        graph["outputs"] = {"final_node_id": "rolling_per"}
+
+        result = validate_factor_lab_graph(graph, known_factor_ids={"per"})
+
+        self.assertFalse(result.valid)
+        self.assertEqual({"invalid_period", "invalid_window"}, {error.code for error in result.errors})
+
+    def test_weighted_score_can_renormalize_available_inputs(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {"id": "factor_per", "type": "factor_input", "config": {"factor_id": "per"}},
+            {"id": "factor_pbr", "type": "factor_input", "config": {"factor_id": "pbr"}},
+            {
+                "id": "composite",
+                "type": "weighted_score",
+                "config": {
+                    "weights": {"value": 0.6, "quality": 0.4},
+                    "missing_weight_renormalize": True,
+                },
+            },
+        ]
+        graph["edges"] = [
+            {"source": "factor_per", "target": "composite", "target_handle": "value"},
+            {"source": "factor_pbr", "target": "composite", "target_handle": "quality"},
+        ]
+        graph["outputs"] = {"final_node_id": "composite"}
+
+        result = compile_factor_lab_graph(graph, known_factor_ids={"per", "pbr"})
+
+        self.assertIn("lab_base_universe AS", result.query)
+        self.assertIn("LEFT JOIN node_factor_per AS value", result.query)
+        self.assertIn("missing_weight_input", result.query)
+        self.assertIn("renormalize_zero_weight", result.query)
+        self.assertEqual(result.parameters["node_composite_total_weight"], 1.0)
+
+    def test_weighted_score_renormalize_option_must_be_boolean(self):
+        graph = nested_graph()
+        graph["nodes"][-1] = {
+            "id": "div_final",
+            "type": "weighted_score",
+            "config": {
+                "weights": {"left": 1.0, "right": 1.0},
+                "missing_weight_renormalize": "yes",
+            },
+        }
+        graph["edges"][-2]["target_handle"] = "left"
+        graph["edges"][-1]["target_handle"] = "right"
+
+        result = validate_factor_lab_graph(graph, known_factor_ids={"per", "pbr", "roe"})
+
+        self.assertFalse(result.valid)
+        self.assertIn("invalid_missing_weight_renormalize", {error.code for error in result.errors})
 
     def test_cycle_is_a_hard_error(self):
         graph = nested_graph()

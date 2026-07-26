@@ -15,11 +15,26 @@ NODE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
 FACTOR_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
-UNARY_NODES = {"log", "abs", "sqrt", "negate", "winsorize", "zscore", "shrunk_zscore", "rank", "dense_rank", "percent_rank", "dense_score", "neutralize", "bucket"}
-BINARY_NODES = {"add", "sub", "mul", "div"}
+MATH_UNARY_NODES = {"log", "abs", "sqrt", "negate"}
+TEMPORAL_NODES = {"lag", "rolling_max", "rolling_min"}
+UNARY_NODES = MATH_UNARY_NODES | TEMPORAL_NODES | {
+    "winsorize",
+    "zscore",
+    "shrunk_zscore",
+    "rank",
+    "dense_rank",
+    "percent_rank",
+    "dense_score",
+    "neutralize",
+    "bucket",
+}
+ARITHMETIC_NODES = {"add", "sub", "mul", "div"}
+COMPARISON_NODES = {"greater_than", "less_than"}
+LOGICAL_NODES = {"and", "or"}
+BINARY_NODES = ARITHMETIC_NODES | COMPARISON_NODES | LOGICAL_NODES
 INPUT_NODES = {"factor_input", "constant"}
 EVALUATE_NODES = {"ic", "bucket_return", "long_short", "turnover", "decay_test", "backtest"}
-SUPPORTED_NODES = INPUT_NODES | UNARY_NODES | BINARY_NODES | {"weighted_score"} | EVALUATE_NODES
+SUPPORTED_NODES = INPUT_NODES | UNARY_NODES | BINARY_NODES | {"condition", "condition_score", "weighted_score"} | EVALUATE_NODES
 
 GROUP_BY_ALIASES = {
     ("trade_date",): ("trade_date",),
@@ -41,6 +56,12 @@ INVALID_REASONS = {
     "missing_security_metadata",
     "missing_future_return",
     "non_finite_result",
+    "lag_insufficient_history",
+    "rolling_insufficient_history",
+    "rolling_input_invalid",
+    "condition_not_met",
+    "missing_weight_input",
+    "renormalize_zero_weight",
 }
 
 
@@ -89,10 +110,17 @@ def node_type_specs() -> list[NodeTypeSpec]:
         NodeTypeSpec("sub", "arithmetic", ["left", "right"], ["out"], {}),
         NodeTypeSpec("mul", "arithmetic", ["left", "right"], ["out"], {}),
         NodeTypeSpec("div", "arithmetic", ["left", "right"], ["out"], {}),
+        NodeTypeSpec("greater_than", "logic", ["left", "right"], ["out"], {}),
+        NodeTypeSpec("less_than", "logic", ["left", "right"], ["out"], {}),
+        NodeTypeSpec("and", "logic", ["left", "right"], ["out"], {}),
+        NodeTypeSpec("or", "logic", ["left", "right"], ["out"], {}),
         NodeTypeSpec("log", "transform", ["input"], ["out"], {}),
         NodeTypeSpec("abs", "transform", ["input"], ["out"], {}),
         NodeTypeSpec("sqrt", "transform", ["input"], ["out"], {}),
         NodeTypeSpec("negate", "transform", ["input"], ["out"], {}),
+        NodeTypeSpec("lag", "temporal", ["input"], ["out"], {"period": "positive integer"}),
+        NodeTypeSpec("rolling_max", "temporal", ["input"], ["out"], {"window": "positive integer"}),
+        NodeTypeSpec("rolling_min", "temporal", ["input"], ["out"], {"window": "positive integer"}),
         NodeTypeSpec("winsorize", "transform", ["input"], ["out"], {"group_by": ["trade_date"], "lower_quantile": 0.01, "upper_quantile": 0.99}),
         NodeTypeSpec("zscore", "transform", ["input"], ["out"], {"group_by": ["trade_date"], "stddev_method": "population", "min_count": 20, "zero_std_policy": "invalid", "direction": "as_is", "clip": None}),
         NodeTypeSpec("shrunk_zscore", "transform", ["input"], ["out"], {"group_key": "sector|industry_group", "min_market_count": 20, "min_group_count": 20, "shrinkage_strength": 20, "direction": "as_is", "clip": None}),
@@ -101,7 +129,9 @@ def node_type_specs() -> list[NodeTypeSpec]:
         NodeTypeSpec("dense_rank", "score", ["input"], ["out"], {"group_by": ["trade_date"], "order": "desc"}),
         NodeTypeSpec("percent_rank", "score", ["input"], ["out"], {"group_by": ["trade_date"], "order": "desc"}),
         NodeTypeSpec("dense_score", "score", ["input"], ["out"], {"group_by": ["trade_date"], "order": "desc", "scale": "0_100"}),
-        NodeTypeSpec("weighted_score", "score", ["named inputs from weights"], ["out"], {"weights": {"node_handle": 1.0}}),
+        NodeTypeSpec("condition", "logic", ["condition", "if_true", "if_false"], ["out"], {}),
+        NodeTypeSpec("condition_score", "logic", ["condition", "score"], ["out"], {}),
+        NodeTypeSpec("weighted_score", "score", ["named inputs from weights"], ["out"], {"weights": {"node_handle": 1.0}, "missing_weight_renormalize": False}),
         NodeTypeSpec("bucket", "score", ["input"], ["out"], {"bucket_count": 5, "order": "desc"}),
         NodeTypeSpec("ic", "evaluate", ["score"], [], {"horizons": [1, 5, 20]}),
         NodeTypeSpec("bucket_return", "evaluate", ["score"], [], {"bucket_count": 5, "horizons": [1, 5, 20]}),
@@ -181,6 +211,19 @@ def compile_factor_lab_graph(
     nodes = {node["id"]: node for node in graph["nodes"]}
     incoming = _incoming_by_handle(graph.get("edges") or [])
     experiment = _dict(graph.get("experiment"))
+    has_temporal_nodes = any(
+        nodes[node_id]["type"] in TEMPORAL_NODES
+        for node_id in validation.execution_order
+    )
+    temporal_history_input_node_ids = _temporal_history_input_node_ids(
+        nodes,
+        graph.get("edges") or [],
+    )
+    has_renormalized_weighted_score = any(
+        nodes[node_id]["type"] == "weighted_score"
+        and bool(_dict(nodes[node_id].get("config")).get("missing_weight_renormalize", False))
+        for node_id in validation.execution_order
+    )
     params: dict[str, Any] = {
         "start_date": _resolve_date(experiment.get("start_date")),
         "end_date": _resolve_date(experiment.get("end_date")),
@@ -190,15 +233,43 @@ def compile_factor_lab_graph(
         if not normalized_trade_dates:
             raise ValueError("trade_dates must not be empty")
         params["trade_dates"] = normalized_trade_dates
+    if has_temporal_nodes:
+        params["temporal_end_date"] = (
+            max(params["trade_dates"])
+            if "trade_dates" in params
+            else params["end_date"]
+        )
+    direct_temporal_row_limits = _direct_temporal_factor_row_limits(
+        nodes,
+        graph.get("edges") or [],
+        params,
+    )
 
     ctes: list[str] = []
     if _needs_security_universe(nodes, validation.execution_order, experiment):
         ctes.append(_compile_security_universe_cte(experiment, security_table, issuer_table, params))
-    if any(nodes[node_id]["type"] == "constant" for node_id in validation.execution_order):
+    base_universe_needs_history = any(
+        nodes[node_id]["type"] == "constant"
+        or (
+            nodes[node_id]["type"] == "weighted_score"
+            and bool(
+                _dict(nodes[node_id].get("config")).get(
+                    "missing_weight_renormalize", False
+                )
+            )
+        )
+        for node_id in temporal_history_input_node_ids
+    )
+    if (
+        any(nodes[node_id]["type"] == "constant" for node_id in validation.execution_order)
+        or has_renormalized_weighted_score
+    ):
         ctes.append(
             _compile_base_universe_cte(
                 price_table,
                 use_trade_dates="trade_dates" in params,
+                include_history=base_universe_needs_history,
+                restrict_to_security_universe=has_renormalized_weighted_score,
             )
         )
 
@@ -208,13 +279,46 @@ def compile_factor_lab_graph(
         config = _dict(node.get("config"))
         input_map = incoming.get(node_id, {})
         if node_type == "factor_input":
-            ctes.append(_compile_factor_input(node_id, config, factor_table, params))
+            ctes.append(
+                _compile_factor_input(
+                    node_id,
+                    config,
+                    factor_table,
+                    params,
+                    include_history=node_id in temporal_history_input_node_ids,
+                    history_row_limit=direct_temporal_row_limits.get(node_id),
+                )
+            )
         elif node_type == "constant":
             ctes.append(_compile_constant(node_id, config, params))
         elif node_type in BINARY_NODES:
-            ctes.append(_compile_binary(node_id, node_type, input_map))
-        elif node_type in {"log", "abs", "sqrt", "negate"}:
+            if node_type in ARITHMETIC_NODES:
+                ctes.append(_compile_binary(node_id, node_type, input_map))
+            else:
+                ctes.append(_compile_boolean_binary(node_id, node_type, input_map))
+        elif node_type in MATH_UNARY_NODES:
             ctes.append(_compile_unary_math(node_id, node_type, input_map["input"]))
+        elif node_type == "lag":
+            ctes.append(
+                _compile_lag(
+                    node_id,
+                    config,
+                    input_map["input"],
+                    params,
+                    limit_to_output_scope=node_id not in temporal_history_input_node_ids,
+                )
+            )
+        elif node_type in {"rolling_max", "rolling_min"}:
+            ctes.append(
+                _compile_rolling(
+                    node_id,
+                    node_type,
+                    config,
+                    input_map["input"],
+                    params,
+                    limit_to_output_scope=node_id not in temporal_history_input_node_ids,
+                )
+            )
         elif node_type == "winsorize":
             ctes.extend(_compile_winsorize(node_id, config, input_map["input"], params))
         elif node_type == "zscore":
@@ -227,6 +331,10 @@ def compile_factor_lab_graph(
             ctes.append(_compile_dense_score(node_id, config, input_map["input"]))
         elif node_type == "weighted_score":
             ctes.append(_compile_weighted_score(node_id, config, input_map, params))
+        elif node_type == "condition":
+            ctes.append(_compile_condition(node_id, input_map))
+        elif node_type == "condition_score":
+            ctes.append(_compile_condition_score(node_id, input_map))
         elif node_type == "neutralize":
             ctes.append(_compile_neutralize(node_id, config, input_map["input"]))
         elif node_type == "bucket":
@@ -241,7 +349,18 @@ def compile_factor_lab_graph(
     # that alias is used directly as the final filter (notably for weighted_score).
     # The explicit UInt8 predicate preserves the column through optimization while
     # retaining the same valid-row semantics.
-    query = "WITH\n" + ",\n".join(ctes) + f"\nSELECT *\nFROM {final_cte}\nWHERE toUInt8(is_valid) = 1"
+    final_scope_filter = ""
+    if has_temporal_nodes:
+        final_scope_filter = (
+            "\n    AND trade_date IN {trade_dates:Array(Date)}"
+            if "trade_dates" in params
+            else "\n    AND trade_date >= {start_date:Date}\n    AND trade_date <= {end_date:Date}"
+        )
+    query = (
+        "WITH\n"
+        + ",\n".join(ctes)
+        + f"\nSELECT *\nFROM {final_cte}\nWHERE toUInt8(is_valid) = 1{final_scope_filter}"
+    )
     return FactorLabCompileResult(
         query=query,
         parameters=params,
@@ -267,6 +386,11 @@ def build_factor_lab_insert_query(
         "run_id": run_id,
         "node_id": compile_result.final_node_id,
     }
+    temporal_execution_settings = (
+        "\nSETTINGS max_threads = 2"
+        if "temporal_end_date" in compile_result.parameters
+        else ""
+    )
     query = f"""
 INSERT INTO {factor_lab_table}
 (
@@ -298,7 +422,7 @@ SELECT
     invalid_reason
 FROM (
 {compile_result.query}
-)
+){temporal_execution_settings}
 """.strip()
     return query, params
 
@@ -560,6 +684,10 @@ def _validate_node_config(
         value = config.get("value")
         if not _is_finite_number(value):
             errors.append(FactorLabIssue("invalid_constant", "constant.value must be a finite number", node_id=node_id, field="config.value"))
+    elif node_type == "lag":
+        _validate_positive_integer_config(node_id, config, "period", errors)
+    elif node_type in {"rolling_max", "rolling_min"}:
+        _validate_positive_integer_config(node_id, config, "window", errors)
     elif node_type == "winsorize":
         lower = config.get("lower_quantile", 0.01)
         upper = config.get("upper_quantile", 0.99)
@@ -629,6 +757,34 @@ def _validate_node_config(
                 total += float(weight)
         if total == 0:
             errors.append(FactorLabIssue("invalid_weight_sum", "weighted_score weight sum must not be zero", node_id=node_id))
+        renormalize = config.get("missing_weight_renormalize", False)
+        if not isinstance(renormalize, bool):
+            errors.append(
+                FactorLabIssue(
+                    "invalid_missing_weight_renormalize",
+                    "missing_weight_renormalize must be a boolean",
+                    node_id=node_id,
+                    field="config.missing_weight_renormalize",
+                )
+            )
+
+
+def _validate_positive_integer_config(
+    node_id: str,
+    config: dict[str, Any],
+    field_name: str,
+    errors: list[FactorLabIssue],
+) -> None:
+    value = config.get(field_name)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        errors.append(
+            FactorLabIssue(
+                f"invalid_{field_name}",
+                f"{field_name} must be an integer >= 1",
+                node_id=node_id,
+                field=f"config.{field_name}",
+            )
+        )
 
 
 def _validate_group_by(node_id: str, config: dict[str, Any], errors: list[FactorLabIssue]) -> None:
@@ -675,6 +831,10 @@ def _validate_arity(
             _require_exact_handles(node_id, handles, {"input"}, errors)
         elif node_type in BINARY_NODES:
             _require_exact_handles(node_id, handles, {"left", "right"}, errors)
+        elif node_type == "condition":
+            _require_exact_handles(node_id, handles, {"condition", "if_true", "if_false"}, errors)
+        elif node_type == "condition_score":
+            _require_exact_handles(node_id, handles, {"condition", "score"}, errors)
         elif node_type in EVALUATE_NODES:
             _require_exact_handles(node_id, handles, {"score"}, errors)
         elif node_type == "weighted_score":
@@ -758,18 +918,30 @@ security_universe AS (
 )""".strip()
 
 
-def _compile_base_universe_cte(price_table: str, *, use_trade_dates: bool = False) -> str:
-    date_filter = (
-        "trade_date IN {trade_dates:Array(Date)}"
-        if use_trade_dates
-        else "trade_date >= {start_date:Date}\n        AND trade_date <= {end_date:Date}"
+def _compile_base_universe_cte(
+    price_table: str,
+    *,
+    use_trade_dates: bool = False,
+    include_history: bool = False,
+    restrict_to_security_universe: bool = False,
+) -> str:
+    if include_history:
+        date_filter = "p.trade_date <= {temporal_end_date:Date}"
+    elif use_trade_dates:
+        date_filter = "p.trade_date IN {trade_dates:Array(Date)}"
+    else:
+        date_filter = "p.trade_date >= {start_date:Date}\n        AND p.trade_date <= {end_date:Date}"
+    universe_join = (
+        "\n    INNER JOIN security_universe AS u\n        ON u.security_id = p.security_id"
+        if restrict_to_security_universe
+        else ""
     )
     return f"""
 lab_base_universe AS (
     SELECT DISTINCT
-        trade_date,
-        security_id
-    FROM {price_table}
+        p.trade_date AS trade_date,
+        p.security_id AS security_id
+    FROM {price_table} AS p{universe_join}
     WHERE {date_filter}
 )""".strip()
 
@@ -779,35 +951,47 @@ def _compile_factor_input(
     config: dict[str, Any],
     factor_table: str,
     params: dict[str, Any],
+    *,
+    include_history: bool = False,
+    history_row_limit: int | None = None,
 ) -> str:
     factor_id = canonical_factor_id(str(config["factor_id"]))
     _validate_factor_id(factor_id)
     param_prefix = _param_prefix(node_id)
     params[f"{param_prefix}_factor_id"] = factor_id
     params[f"{param_prefix}_financial_basis"] = str(config.get("financial_basis") or "annual")
-    date_filter = (
-        "f.trade_date IN {trade_dates:Array(Date)}"
-        if "trade_dates" in params
-        else "f.trade_date >= {start_date:Date}\n        AND f.trade_date <= {end_date:Date}"
-    )
+    if include_history:
+        date_filter = "f.trade_date <= {temporal_end_date:Date}"
+    elif "trade_dates" in params:
+        date_filter = "f.trade_date IN {trade_dates:Array(Date)}"
+    else:
+        date_filter = "f.trade_date >= {start_date:Date}\n        AND f.trade_date <= {end_date:Date}"
+    source_select = f"""
+SELECT
+    f.trade_date AS trade_date,
+    f.security_id AS security_id,
+    if(f.factor_value IS NULL OR NOT isFinite(toFloat64(f.factor_value)), NULL, toFloat64(f.factor_value)) AS value,
+    f.factor_value IS NOT NULL AND isFinite(toFloat64(f.factor_value)) AS is_valid,
+    multiIf(
+        f.factor_value IS NULL, 'source_null',
+        NOT isFinite(toFloat64(f.factor_value)), 'source_non_finite',
+        ''
+    ) AS invalid_reason
+FROM {factor_table} AS f
+INNER JOIN security_universe AS u
+    ON u.security_id = f.security_id
+WHERE f.factor_id = {{{param_prefix}_factor_id:String}}
+    AND f.financial_basis = {{{param_prefix}_financial_basis:String}}
+    AND {date_filter}""".strip()
+    row_limit_sql = ""
+    if history_row_limit is not None:
+        params[f"{param_prefix}_history_row_limit"] = history_row_limit
+        row_limit_sql = f"""
+    ORDER BY security_id ASC, trade_date DESC
+    LIMIT {{{param_prefix}_history_row_limit:UInt32}} BY security_id"""
     return f"""
 {_cte_name(node_id)} AS (
-    SELECT
-        f.trade_date AS trade_date,
-        f.security_id AS security_id,
-        if(f.factor_value IS NULL OR NOT isFinite(toFloat64(f.factor_value)), NULL, toFloat64(f.factor_value)) AS value,
-        f.factor_value IS NOT NULL AND isFinite(toFloat64(f.factor_value)) AS is_valid,
-        multiIf(
-            f.factor_value IS NULL, 'source_null',
-            NOT isFinite(toFloat64(f.factor_value)), 'source_non_finite',
-            ''
-        ) AS invalid_reason
-    FROM {factor_table} AS f
-    INNER JOIN security_universe AS u
-        ON u.security_id = f.security_id
-    WHERE f.factor_id = {{{param_prefix}_factor_id:String}}
-        AND f.financial_basis = {{{param_prefix}_financial_basis:String}}
-        AND {date_filter}
+    {source_select}{row_limit_sql}
 )""".strip()
 
 
@@ -840,8 +1024,8 @@ def _compile_binary(node_id: str, node_type: str, input_map: dict[str, str]) -> 
     return f"""
 {_cte_name(node_id)} AS (
     SELECT
-        l.trade_date,
-        l.security_id,
+        l.trade_date AS trade_date,
+        l.security_id AS security_id,
         if(NOT l.is_valid OR NOT r.is_valid{div_guard}, NULL, {op_expr}) AS value,
         l.is_valid AND r.is_valid{'' if node_type != 'div' else ' AND r.value != 0'} AND isFinite({op_expr}) AS is_valid,
         multiIf(
@@ -855,6 +1039,192 @@ def _compile_binary(node_id: str, node_type: str, input_map: dict[str, str]) -> 
     INNER JOIN {right_cte} AS r
         ON l.trade_date = r.trade_date
        AND l.security_id = r.security_id
+)""".strip()
+
+
+def _compile_boolean_binary(node_id: str, node_type: str, input_map: dict[str, str]) -> str:
+    left_cte = _cte_name(input_map["left"])
+    right_cte = _cte_name(input_map["right"])
+    predicate = {
+        "greater_than": "l.value > r.value",
+        "less_than": "l.value < r.value",
+        "and": "l.value != 0 AND r.value != 0",
+        "or": "l.value != 0 OR r.value != 0",
+    }[node_type]
+    return f"""
+{_cte_name(node_id)} AS (
+    SELECT
+        l.trade_date AS trade_date,
+        l.security_id AS security_id,
+        if(NOT l.is_valid OR NOT r.is_valid, NULL, toFloat64({predicate})) AS value,
+        l.is_valid AND r.is_valid AS is_valid,
+        multiIf(
+            NOT l.is_valid, l.invalid_reason,
+            NOT r.is_valid, r.invalid_reason,
+            ''
+        ) AS invalid_reason
+    FROM {left_cte} AS l
+    INNER JOIN {right_cte} AS r
+        ON l.trade_date = r.trade_date
+       AND l.security_id = r.security_id
+)""".strip()
+
+
+def _compile_lag(
+    node_id: str,
+    config: dict[str, Any],
+    input_node_id: str,
+    params: dict[str, Any],
+    *,
+    limit_to_output_scope: bool,
+) -> str:
+    input_cte = _cte_name(input_node_id)
+    param_prefix = _param_prefix(node_id)
+    params[f"{param_prefix}_period"] = int(config["period"])
+    window = """PARTITION BY i.security_id
+                ORDER BY i.trade_date
+                ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"""
+    output_scope_filter = _time_series_output_scope_filter(params) if limit_to_output_scope else ""
+    return f"""
+{_cte_name(node_id)} AS (
+    SELECT
+        trade_date,
+        security_id,
+        if(row_position <= {{{param_prefix}_period:UInt32}} OR NOT lag_is_valid, NULL, lag_value) AS value,
+        row_position > {{{param_prefix}_period:UInt32}}
+            AND lag_is_valid
+            AND isFinite(lag_value) AS is_valid,
+        multiIf(
+            row_position <= {{{param_prefix}_period:UInt32}}, 'lag_insufficient_history',
+            NOT lag_is_valid, lag_invalid_reason,
+            NOT isFinite(lag_value), 'non_finite_result',
+            ''
+        ) AS invalid_reason
+    FROM (
+        SELECT
+            i.trade_date,
+            i.security_id,
+            row_number() OVER (PARTITION BY i.security_id ORDER BY i.trade_date) AS row_position,
+            lagInFrame(i.value, {{{param_prefix}_period:UInt32}}, NULL) OVER ({window}) AS lag_value,
+            lagInFrame(i.is_valid, {{{param_prefix}_period:UInt32}}, false) OVER ({window}) AS lag_is_valid,
+            lagInFrame(i.invalid_reason, {{{param_prefix}_period:UInt32}}, 'lag_insufficient_history') OVER ({window}) AS lag_invalid_reason
+        FROM {input_cte} AS i
+    )
+    {output_scope_filter}
+)""".strip()
+
+
+def _compile_rolling(
+    node_id: str,
+    node_type: str,
+    config: dict[str, Any],
+    input_node_id: str,
+    params: dict[str, Any],
+    *,
+    limit_to_output_scope: bool,
+) -> str:
+    input_cte = _cte_name(input_node_id)
+    param_prefix = _param_prefix(node_id)
+    window_size = int(config["window"])
+    params[f"{param_prefix}_window"] = window_size
+    params[f"{param_prefix}_window_preceding"] = window_size - 1
+    aggregate = "max" if node_type == "rolling_max" else "min"
+    frame = f"""PARTITION BY i.security_id
+                ORDER BY i.trade_date
+                ROWS BETWEEN {{{param_prefix}_window_preceding:UInt32}} PRECEDING AND CURRENT ROW"""
+    output_scope_filter = _time_series_output_scope_filter(params) if limit_to_output_scope else ""
+    return f"""
+{_cte_name(node_id)} AS (
+    SELECT
+        trade_date,
+        security_id,
+        if(
+            row_count < {{{param_prefix}_window:UInt32}}
+                OR valid_count < {{{param_prefix}_window:UInt32}},
+            NULL,
+            rolling_value
+        ) AS value,
+        row_count >= {{{param_prefix}_window:UInt32}}
+            AND valid_count >= {{{param_prefix}_window:UInt32}}
+            AND isFinite(rolling_value) AS is_valid,
+        multiIf(
+            row_count < {{{param_prefix}_window:UInt32}}, 'rolling_insufficient_history',
+            valid_count < {{{param_prefix}_window:UInt32}}, 'rolling_input_invalid',
+            NOT isFinite(rolling_value), 'non_finite_result',
+            ''
+        ) AS invalid_reason
+    FROM (
+        SELECT
+            i.trade_date,
+            i.security_id,
+            count() OVER ({frame}) AS row_count,
+            countIf(i.is_valid) OVER ({frame}) AS valid_count,
+            {aggregate}(i.value) OVER ({frame}) AS rolling_value
+        FROM {input_cte} AS i
+    )
+    {output_scope_filter}
+)""".strip()
+
+
+def _time_series_output_scope_filter(params: dict[str, Any]) -> str:
+    if "trade_dates" in params:
+        return "WHERE trade_date IN {trade_dates:Array(Date)}"
+    return """WHERE trade_date >= {start_date:Date}
+        AND trade_date <= {end_date:Date}"""
+
+
+def _compile_condition(node_id: str, input_map: dict[str, str]) -> str:
+    condition_cte = _cte_name(input_map["condition"])
+    true_cte = _cte_name(input_map["if_true"])
+    false_cte = _cte_name(input_map["if_false"])
+    return f"""
+{_cte_name(node_id)} AS (
+    SELECT
+        c.trade_date AS trade_date,
+        c.security_id AS security_id,
+        if(
+            NOT c.is_valid
+                OR if(c.value != 0, NOT ifNull(t.is_valid, false), NOT ifNull(f.is_valid, false)),
+            NULL,
+            if(c.value != 0, t.value, f.value)
+        ) AS value,
+        c.is_valid AND if(c.value != 0, ifNull(t.is_valid, false), ifNull(f.is_valid, false)) AS is_valid,
+        multiIf(
+            NOT c.is_valid, c.invalid_reason,
+            c.value != 0 AND NOT ifNull(t.is_valid, false), ifNull(t.invalid_reason, 'source_null'),
+            c.value = 0 AND NOT ifNull(f.is_valid, false), ifNull(f.invalid_reason, 'source_null'),
+            ''
+        ) AS invalid_reason
+    FROM {condition_cte} AS c
+    LEFT JOIN {true_cte} AS t
+        ON c.trade_date = t.trade_date
+       AND c.security_id = t.security_id
+    LEFT JOIN {false_cte} AS f
+        ON c.trade_date = f.trade_date
+       AND c.security_id = f.security_id
+)""".strip()
+
+
+def _compile_condition_score(node_id: str, input_map: dict[str, str]) -> str:
+    condition_cte = _cte_name(input_map["condition"])
+    score_cte = _cte_name(input_map["score"])
+    return f"""
+{_cte_name(node_id)} AS (
+    SELECT
+        c.trade_date AS trade_date,
+        c.security_id AS security_id,
+        if(NOT c.is_valid OR c.value = 0 OR NOT ifNull(s.is_valid, false), NULL, s.value) AS value,
+        c.is_valid AND c.value != 0 AND ifNull(s.is_valid, false) AS is_valid,
+        multiIf(
+            NOT c.is_valid, c.invalid_reason,
+            c.value = 0, 'condition_not_met',
+            NOT ifNull(s.is_valid, false), ifNull(s.invalid_reason, 'source_null'),
+            ''
+        ) AS invalid_reason
+    FROM {condition_cte} AS c
+    LEFT JOIN {score_cte} AS s
+        ON c.trade_date = s.trade_date
+       AND c.security_id = s.security_id
 )""".strip()
 
 
@@ -879,8 +1249,8 @@ def _compile_unary_math(node_id: str, node_type: str, input_node_id: str) -> str
     return f"""
 {_cte_name(node_id)} AS (
     SELECT
-        i.trade_date,
-        i.security_id,
+        i.trade_date AS trade_date,
+        i.security_id AS security_id,
         if(NOT i.is_valid OR NOT ({value_guard}), NULL, {value_expr}) AS value,
         i.is_valid AND ({value_guard}) AND isFinite({value_expr}) AS is_valid,
         multiIf(
@@ -920,8 +1290,8 @@ def _compile_winsorize(
         f"""
 {_cte_name(node_id)} AS (
     SELECT
-        i.trade_date,
-        i.security_id,
+        i.trade_date AS trade_date,
+        i.security_id AS security_id,
         if(NOT i.is_valid OR ifNull(b.n, 0) = 0, NULL, greatest(least(i.value, b.upper_bound), b.lower_bound)) AS value,
         i.is_valid AND ifNull(b.n, 0) > 0 AS is_valid,
         multiIf(
@@ -1093,8 +1463,8 @@ def _compile_rank(node_id: str, node_type: str, config: dict[str, Any], input_no
     return f"""
 {_cte_name(node_id)} AS (
     SELECT
-        s.trade_date,
-        s.security_id,
+        s.trade_date AS trade_date,
+        s.security_id AS security_id,
         toFloat64({function_name}() OVER (PARTITION BY {partition_by} ORDER BY s.value {order_sql}, s.security_id ASC)) AS value,
         s.is_valid,
         s.invalid_reason
@@ -1136,6 +1506,9 @@ def _compile_weighted_score(
     input_map: dict[str, str],
     params: dict[str, Any],
 ) -> str:
+    if bool(config.get("missing_weight_renormalize", False)):
+        return _compile_weighted_score_renormalized(node_id, config, input_map, params)
+
     weights = {str(key): float(value) for key, value in _dict(config.get("weights")).items()}
     handles = list(weights)
     base_handle = handles[0]
@@ -1177,6 +1550,69 @@ def _compile_weighted_score(
 )""".strip()
 
 
+def _compile_weighted_score_renormalized(
+    node_id: str,
+    config: dict[str, Any],
+    input_map: dict[str, str],
+    params: dict[str, Any],
+) -> str:
+    weights = {str(key): float(value) for key, value in _dict(config.get("weights")).items()}
+    param_prefix = _param_prefix(node_id)
+    total_weight = sum(weights.values())
+    params[f"{param_prefix}_total_weight"] = total_weight
+    joins = []
+    weighted_value_parts = []
+    active_weight_parts = []
+    valid_parts = []
+    for handle, weight in weights.items():
+        param_name = f"{param_prefix}_{handle}_weight"
+        params[param_name] = weight
+        alias = handle
+        joins.append(
+            f"""LEFT JOIN {_cte_name(input_map[handle])} AS {alias}
+        ON base.trade_date = {alias}.trade_date
+       AND base.security_id = {alias}.security_id"""
+        )
+        is_valid = f"ifNull({alias}.is_valid, false)"
+        weighted_value_parts.append(
+            f"if({is_valid}, {{{param_name}:Float64}} * {alias}.value, 0.0)"
+        )
+        active_weight_parts.append(
+            f"if({is_valid}, {{{param_name}:Float64}}, 0.0)"
+        )
+        valid_parts.append(is_valid)
+
+    weighted_value = " + ".join(weighted_value_parts)
+    active_weight = " + ".join(active_weight_parts)
+    any_valid = " OR ".join(valid_parts)
+    normalized_value = (
+        f"(({weighted_value}) * {{{param_prefix}_total_weight:Float64}} "
+        f"/ nullIf(({active_weight}), 0.0))"
+    )
+    return f"""
+{_cte_name(node_id)} AS (
+    SELECT
+        base.trade_date AS trade_date,
+        base.security_id AS security_id,
+        if(
+            NOT ({any_valid}) OR ({active_weight}) = 0.0,
+            NULL,
+            {normalized_value}
+        ) AS value,
+        ({any_valid})
+            AND ({active_weight}) != 0.0
+            AND isFinite({normalized_value}) AS is_valid,
+        multiIf(
+            NOT ({any_valid}), 'missing_weight_input',
+            ({active_weight}) = 0.0, 'renormalize_zero_weight',
+            NOT isFinite({normalized_value}), 'non_finite_result',
+            ''
+        ) AS invalid_reason
+    FROM lab_base_universe AS base
+    {' '.join(joins)}
+)""".strip()
+
+
 def _compile_neutralize(node_id: str, config: dict[str, Any], input_node_id: str) -> str:
     input_cte = _cte_name(input_node_id)
     group_key = str(config.get("group_key", "sector"))
@@ -1190,8 +1626,8 @@ def _compile_neutralize(node_id: str, config: dict[str, Any], input_node_id: str
     return f"""
 {_cte_name(node_id)} AS (
     SELECT
-        x.trade_date,
-        x.security_id,
+        x.trade_date AS trade_date,
+        x.security_id AS security_id,
         if(empty({group_column}), NULL, x.value - avg(x.value) OVER (
             PARTITION BY x.trade_date, {group_column}
         )) AS value,
@@ -1215,8 +1651,8 @@ def _compile_bucket(node_id: str, config: dict[str, Any], input_node_id: str, pa
     return f"""
 {_cte_name(node_id)} AS (
     SELECT
-        i.trade_date,
-        i.security_id,
+        i.trade_date AS trade_date,
+        i.security_id AS security_id,
         toFloat64(ntile({{{param_prefix}_bucket_count:UInt32}}) OVER (
             PARTITION BY i.trade_date ORDER BY i.value {order_sql}, i.security_id ASC
         )) AS value,
@@ -1248,6 +1684,11 @@ def _needs_security_universe(
         node_type = node["type"]
         config = _dict(node.get("config"))
         if node_type in {"factor_input", "neutralize", "shrunk_zscore"}:
+            return True
+        if (
+            node_type == "weighted_score"
+            and bool(config.get("missing_weight_renormalize", False))
+        ):
             return True
         if _normalize_group_by(config.get("group_by", ["trade_date"])) in {
             ("trade_date", "sector"),
@@ -1341,6 +1782,94 @@ def _incoming_by_handle(edges: list[dict[str, Any]]) -> dict[str, dict[str, str]
         handle = str(edge.get("target_handle") or "input")
         incoming.setdefault(target, {})[handle] = source
     return incoming
+
+
+def _temporal_history_input_node_ids(
+    nodes: dict[str, dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> set[str]:
+    """Return the strict upstream closure of temporal nodes.
+
+    A temporal CTE needs history from its inputs, but a graph that merely contains
+    a temporal node must not widen unrelated factor-input CTEs to all history.
+    """
+    upstream: dict[str, set[str]] = {}
+    for edge in edges:
+        source = str(edge.get("source") or "")
+        target = str(edge.get("target") or "")
+        if source in nodes and target in nodes:
+            upstream.setdefault(target, set()).add(source)
+
+    pending = [
+        source
+        for node_id, node in nodes.items()
+        if node["type"] in TEMPORAL_NODES
+        for source in upstream.get(node_id, set())
+    ]
+    history_input_node_ids: set[str] = set()
+    while pending:
+        node_id = pending.pop()
+        if node_id in history_input_node_ids:
+            continue
+        history_input_node_ids.add(node_id)
+        pending.extend(upstream.get(node_id, set()))
+    return history_input_node_ids
+
+
+def _direct_temporal_factor_row_limits(
+    nodes: dict[str, dict[str, Any]],
+    edges: list[dict[str, Any]],
+    params: dict[str, Any],
+) -> dict[str, int]:
+    """Bound direct factor→temporal inputs for a single screen date.
+
+    `lag(k)` only requires the target observation plus its preceding k
+    observations, and a rolling window only requires its own window.  Applying
+    this exact bound to a direct factor input avoids sorting its entire history
+    for a one-date screen.  Multi-date history runs retain the complete history.
+    """
+    if "trade_dates" in params or params["start_date"] != params["end_date"]:
+        return {}
+
+    history_input_node_ids = _temporal_history_input_node_ids(nodes, edges)
+    downstream: dict[str, list[dict[str, Any]]] = {}
+    for edge in edges:
+        source = str(edge.get("source") or "")
+        target = str(edge.get("target") or "")
+        if source in nodes and target in nodes:
+            downstream.setdefault(source, []).append(edge)
+
+    row_limits: dict[str, int] = {}
+    for node_id, node in nodes.items():
+        if node["type"] != "factor_input":
+            continue
+        direct_temporal_edges = [
+            edge
+            for edge in downstream.get(node_id, [])
+            if nodes[str(edge["target"])]["type"] in TEMPORAL_NODES
+            and str(edge.get("target_handle") or "") == "input"
+        ]
+        if not direct_temporal_edges:
+            continue
+        # If this input also reaches a temporal node through an intermediate
+        # calculation, its observation requirement is graph-dependent; retain
+        # the full history for that general case.
+        if any(
+            str(edge["target"]) in history_input_node_ids
+            for edge in downstream.get(node_id, [])
+            if nodes[str(edge["target"])]["type"] not in TEMPORAL_NODES
+        ):
+            continue
+        required_rows = []
+        for edge in direct_temporal_edges:
+            target = nodes[str(edge["target"])]
+            config = _dict(target.get("config"))
+            if target["type"] == "lag":
+                required_rows.append(int(config["period"]) + 1)
+            else:
+                required_rows.append(int(config["window"]))
+        row_limits[node_id] = max(required_rows)
+    return row_limits
 
 
 def _dict(value: Any) -> dict[str, Any]:
