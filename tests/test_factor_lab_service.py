@@ -13,7 +13,7 @@ from api.service.dto import (
     FactorLabGraphDto,
     FactorLabRunRequestDto,
 )
-from api.service.factor_lab_service import FactorLabService
+from api.service.factor_lab_service import FactorLabService, _resolve_screening_factor_date
 
 
 def service_graph():
@@ -199,6 +199,35 @@ class FactorLabServiceTest(unittest.TestCase):
         self.assertEqual(response.final_node_id, "z_per")
         self.assertEqual(response.parameters["node_factor_per_factor_id"], "per")
         self.assertTrue(client.closed)
+
+    def test_screening_date_resolves_persisted_lab_factor_inputs(self):
+        client = FakeFactorLabClient()
+        original_query_df = client.query_df
+
+        def query_df(query, parameters=None):
+            if "FROM factor_lab_values" in query:
+                return pd.DataFrame({"trade_date": [pd.Timestamp("2026-12-30").date()]})
+            return original_query_df(query, parameters)
+
+        client.query_df = query_df
+        graph = service_graph()
+        graph["nodes"] = [
+            {
+                "id": "module",
+                "type": "factor_input",
+                "config": {
+                    "factor_id": "lab_11111111111111111111111111111111",
+                    "financial_basis": "ttm",
+                },
+            }
+        ]
+        graph["edges"] = []
+        graph["outputs"] = {"final_node_id": "module"}
+
+        factor_table, effective_date = _resolve_screening_factor_date(client, graph)
+
+        self.assertEqual(factor_table, "fact_daily_factors")
+        self.assertEqual(effective_date, date(2026, 12, 30))
 
     def test_run_graph_creates_tables_registers_factor_and_loads_quality(self):
         client = FakeFactorLabClient()

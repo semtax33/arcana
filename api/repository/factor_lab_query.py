@@ -284,6 +284,7 @@ def compile_factor_lab_graph(
                     node_id,
                     config,
                     factor_table,
+                    factor_lab_table,
                     params,
                     include_history=node_id in temporal_history_input_node_ids,
                     history_row_limit=direct_temporal_row_limits.get(node_id),
@@ -950,6 +951,7 @@ def _compile_factor_input(
     node_id: str,
     config: dict[str, Any],
     factor_table: str,
+    factor_lab_table: str,
     params: dict[str, Any],
     *,
     include_history: bool = False,
@@ -959,14 +961,40 @@ def _compile_factor_input(
     _validate_factor_id(factor_id)
     param_prefix = _param_prefix(node_id)
     params[f"{param_prefix}_factor_id"] = factor_id
-    params[f"{param_prefix}_financial_basis"] = str(config.get("financial_basis") or "annual")
+    is_lab_factor = _is_lab_factor_id(factor_id)
+    financial_basis = "lab" if is_lab_factor else str(config.get("financial_basis") or "annual")
+    params[f"{param_prefix}_financial_basis"] = financial_basis
     if include_history:
         date_filter = "f.trade_date <= {temporal_end_date:Date}"
     elif "trade_dates" in params:
         date_filter = "f.trade_date IN {trade_dates:Array(Date)}"
     else:
         date_filter = "f.trade_date >= {start_date:Date}\n        AND f.trade_date <= {end_date:Date}"
-    source_select = f"""
+    if is_lab_factor:
+        source_select = f"""
+SELECT
+    f.trade_date AS trade_date,
+    f.security_id AS security_id,
+    if(
+        NOT f.is_valid OR f.factor_value IS NULL OR NOT isFinite(toFloat64(f.factor_value)),
+        NULL,
+        toFloat64(f.factor_value)
+    ) AS value,
+    f.is_valid AND f.factor_value IS NOT NULL AND isFinite(toFloat64(f.factor_value)) AS is_valid,
+    multiIf(
+        NOT f.is_valid, if(empty(f.invalid_reason), 'source_invalid', f.invalid_reason),
+        f.factor_value IS NULL, 'source_null',
+        NOT isFinite(toFloat64(f.factor_value)), 'source_non_finite',
+        ''
+    ) AS invalid_reason
+FROM {factor_lab_table} AS f
+INNER JOIN security_universe AS u
+    ON u.security_id = f.security_id
+WHERE f.factor_id = {{{param_prefix}_factor_id:String}}
+    AND f.financial_basis = {{{param_prefix}_financial_basis:String}}
+    AND {date_filter}""".strip()
+    else:
+        source_select = f"""
 SELECT
     f.trade_date AS trade_date,
     f.security_id AS security_id,
@@ -1917,6 +1945,10 @@ def _validate_factor_id(value: str) -> str:
     if not isinstance(value, str) or not FACTOR_ID_RE.match(value):
         raise ValueError(f"invalid factor_id: {value!r}")
     return value
+
+
+def _is_lab_factor_id(factor_id: str) -> bool:
+    return factor_id.startswith("lab_")
 
 
 def _is_finite_number(value: Any) -> bool:

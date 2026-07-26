@@ -252,6 +252,31 @@ class FactorLabQueryTest(unittest.TestCase):
         self.assertEqual(specs["rolling_max"].config_schema, {"window": "positive integer"})
         self.assertFalse(specs["weighted_score"].config_schema["missing_weight_renormalize"])
 
+    def test_lab_factor_input_reads_persisted_factor_lab_values(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {
+                "id": "materialized",
+                "type": "factor_input",
+                "config": {
+                    "factor_id": "lab_11111111111111111111111111111111",
+                    "financial_basis": "ttm",
+                },
+            },
+        ]
+        graph["edges"] = []
+        graph["outputs"] = {"final_node_id": "materialized"}
+
+        result = compile_factor_lab_graph(
+            graph,
+            known_factor_ids={"lab_11111111111111111111111111111111"},
+        )
+
+        self.assertIn("FROM factor_lab_values AS f", result.query)
+        self.assertIn("f.is_valid AND f.factor_value IS NOT NULL", result.query)
+        self.assertEqual(result.parameters["node_materialized_financial_basis"], "lab")
+        self.assertNotIn("FROM fact_daily_factors AS f", result.query)
+
     def test_logic_condition_and_condition_score_compile_with_exact_handles(self):
         graph = nested_graph()
         graph["nodes"] = [

@@ -680,6 +680,16 @@ def _resolve_screening_factor_date(
             and node.get("config", {}).get("factor_id")
         }
     )
+    lab_factor_ids = sorted(
+        factor_id
+        for factor_id, _financial_basis in factor_pairs
+        if _is_lab_factor_id(factor_id)
+    )
+    raw_factor_pairs = [
+        (factor_id, financial_basis)
+        for factor_id, financial_basis in factor_pairs
+        if not _is_lab_factor_id(factor_id)
+    ]
     params: dict[str, Any] = {
         "as_of_date": requested_date.isoformat(),
         "candidate_dates": candidate_dates,
@@ -707,6 +717,37 @@ WHERE true{market_filter}
         raise ValueError(
             f"no market date found on or before {requested_date.isoformat()} "
             f"within {_screening_candidate_days()} days"
+        )
+
+    if lab_factor_ids:
+        if str(experiment.get("factor_data_mode") or "raw") == "point_in_time_snapshot":
+            raise ValueError(
+                "point_in_time_snapshot mode does not support derived lab_* factor inputs"
+            )
+        lab_dates = _eligible_lab_factor_dates(
+            client,
+            factor_ids=lab_factor_ids,
+            candidate_dates=candidate_dates,
+            market_filter=market_filter,
+            params=params,
+        )
+        if raw_factor_pairs:
+            raw_dates = _eligible_raw_factor_dates(
+                client,
+                factor_pairs=raw_factor_pairs,
+                candidate_dates=candidate_dates,
+                market_filter=market_filter,
+                params=params,
+            )
+            lab_date_set = set(lab_dates)
+            common_dates = [value for value in raw_dates if value in lab_date_set]
+        else:
+            common_dates = lab_dates
+        if common_dates:
+            return DEFAULT_FACTOR_TABLE, max(common_dates)
+        raise ValueError(
+            "no common raw/lab factor date found on or before "
+            f"{requested_date.isoformat()} within {_screening_candidate_days()} days"
         )
 
     params["factor_pair_count"] = len(factor_pairs)
@@ -779,21 +820,89 @@ LIMIT 1
     )
 
 
+def _eligible_lab_factor_dates(
+    client: Any,
+    *,
+    factor_ids: list[str],
+    candidate_dates: list[str],
+    market_filter: str,
+    params: dict[str, Any],
+) -> list[date]:
+    query_params = {
+        **params,
+        "lab_factor_ids": factor_ids,
+        "lab_factor_count": len(factor_ids),
+    }
+    rows = _records(
+        client.query_df(
+            f"""
+SELECT trade_date
+FROM factor_lab_values
+PREWHERE trade_date IN {{candidate_dates:Array(Date)}}
+WHERE has({{lab_factor_ids:Array(String)}}, factor_id)
+    AND is_valid{market_filter}
+GROUP BY trade_date
+HAVING uniqExact(factor_id) >= {{lab_factor_count:UInt64}}
+ORDER BY trade_date DESC
+""".strip(),
+            parameters=query_params,
+        )
+    )
+    return [_as_date(row["trade_date"]) for row in rows]
+
+
+def _eligible_raw_factor_dates(
+    client: Any,
+    *,
+    factor_pairs: list[tuple[str, str]],
+    candidate_dates: list[str],
+    market_filter: str,
+    params: dict[str, Any],
+) -> list[date]:
+    query_params = {**params, "raw_factor_pair_count": len(factor_pairs)}
+    pair_predicate = _factor_pair_predicate(
+        factor_pairs,
+        query_params,
+        parameter_prefix="screen_raw",
+    )
+    rows = _records(
+        client.query_df(
+            f"""
+SELECT trade_date
+FROM {DEFAULT_FACTOR_TABLE}
+PREWHERE trade_date IN {{candidate_dates:Array(Date)}}
+WHERE {pair_predicate}{market_filter}
+GROUP BY trade_date
+HAVING uniqExact(tuple(factor_id, financial_basis)) >= {{raw_factor_pair_count:UInt64}}
+ORDER BY trade_date DESC
+""".strip(),
+            parameters=query_params,
+        )
+    )
+    return [_as_date(row["trade_date"]) for row in rows]
+
+
 def _factor_pair_predicate(
     factor_pairs: list[tuple[str, str]],
     params: dict[str, Any],
+    *,
+    parameter_prefix: str = "screen",
 ) -> str:
     predicates = []
     for index, (factor_id, financial_basis) in enumerate(factor_pairs):
-        params[f"screen_factor_id_{index}"] = factor_id
-        params[f"screen_financial_basis_{index}"] = financial_basis
+        params[f"{parameter_prefix}_factor_id_{index}"] = factor_id
+        params[f"{parameter_prefix}_financial_basis_{index}"] = financial_basis
         predicates.append(
             "(factor_id = "
-            f"{{screen_factor_id_{index}:String}} "
+            f"{{{parameter_prefix}_factor_id_{index}:String}} "
             "AND financial_basis = "
-            f"{{screen_financial_basis_{index}:String}})"
-        )
+            f"{{{parameter_prefix}_financial_basis_{index}:String}})"
+    )
     return "(" + " OR ".join(predicates) + ")"
+
+
+def _is_lab_factor_id(factor_id: str) -> bool:
+    return factor_id.startswith("lab_")
 
 
 def _graph_for_screening_date(
@@ -831,6 +940,10 @@ def _require_history_snapshot_coverage(
             and node.get("config", {}).get("factor_id")
         }
     )
+    if any(_is_lab_factor_id(factor_id) for factor_id, _financial_basis in factor_pairs):
+        raise ValueError(
+            "point_in_time_snapshot mode does not support derived lab_* factor inputs"
+        )
     if not factor_pairs:
         raise ValueError("point_in_time_snapshot mode requires factor_input nodes")
     requested_dates = sorted(set(trade_dates))
