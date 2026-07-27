@@ -391,6 +391,7 @@ RIM에 사용되는 `forward_per`, `forward_roe`는 Hankyung의
 ```powershell
 python -m engine.workflows.normalize
 python -m engine.workflows.normalize --market kr
+python -m engine.workflows.normalize --market kr --target statements --start-year 2021 --end-year 2026
 python -m engine.workflows.normalize --market us --symbols AAPL,MSFT --start-year 2020 --end-year 2025
 python -m engine.workflows.normalize --target business-info
 python -m engine.workflows.normalize --target business-info --symbols 005930,105560 --start-year 2026 --end-year 2026 --workers 8
@@ -406,7 +407,7 @@ companyfacts, SEC Notes Data Sets, edgartools fallback 순서로 값을 채워
 `--target business-info`는 이미 다운로드된
 `data-lake/bronze/dart/business-info/{stock_code}/business_info_(YYYY.MM).html`
 파일을 읽어 사업의 내용 섹션과 표를 정규화합니다. `--symbols`로 종목을 제한할 수 있고,
-`--start-year`, `--end-year`는 business-info 파일명의 연도를 기준으로 포함 범위를 지정합니다.
+KR `statements`와 `business-info`에서 `--start-year`, `--end-year`는 파일명의 연도를 기준으로 포함 범위를 지정합니다. KR statements는 기간별 스냅샷을 유지하고, 종목별 통합 CSV를 모든 기존 스냅샷에서 다시 생성하므로 서로 다른 기간을 나눠 실행해도 기존 결과가 사라지지 않습니다.
 `--workers`는 business-info 파싱 스레드 수로 재사용됩니다. `--target all`은 KR 재무제표
 정규화 후 business-info 정규화를 이어서 실행합니다. business-info 정규화는 KR 전용입니다.
 
@@ -917,8 +918,9 @@ data-lake\silver\dart\normalized\kr_normalized_005930.csv
 data-lake\silver\dart\normalized\kr_normalized_005930.debug.csv
 ```
 
-The current KR `statements` workflow normalizes the full KOSPI/KOSDAQ universe
-over its built-in recent-year window. `--symbols`, `--start-year`, `--end-year`,
+The current KR `statements` workflow normalizes the full KOSPI/KOSDAQ universe.
+`--start-year` and `--end-year` restrict it to the inclusive fiscal-year range;
+when omitted, it retains the built-in recent completed-year window. `--symbols`
 and `--workers` are not applied to this KR statements path; use
 `NORMALIZE_MAX_WORKERS` for its process count. The validator commands below can
 still be restricted to selected stocks and years.

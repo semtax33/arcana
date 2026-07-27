@@ -98,6 +98,47 @@ class KrNormalizeOutputTest(unittest.TestCase):
             self.assertFalse(legacy.with_suffix(".debug.csv").exists())
             self.assertTrue(orphan.exists())
 
+    def test_consolidation_preserves_snapshots_from_separate_year_ranges(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            snapshot_dir = root / "normalized-snapshots"
+            output_dir = root / "normalized"
+            snapshot_dir.mkdir()
+
+            def write_snapshot(year: int, amount: int) -> None:
+                pd.DataFrame(
+                    [
+                        {
+                            "canonical_account_id": "REVENUE",
+                            "canonical_account_name": "Revenue",
+                            "original_account_name": "Revenue",
+                            "statement_type": "IS",
+                            "period": f"{year}.12",
+                            "normalized_amount": amount,
+                        }
+                    ]
+                ).to_csv(
+                    snapshot_dir / f"kr_normalized_005930_{year}.12.csv",
+                    index=False,
+                    encoding="utf-8",
+                )
+
+            for year in [2021, 2026]:
+                write_snapshot(year, year)
+            consolidate_statement_snapshots(
+                "005930", snapshot_dir, output_dir=output_dir, columns=BASE_COLUMNS
+            )
+
+            for year in [2016, 2020]:
+                write_snapshot(year, year)
+            normalized_path = consolidate_statement_snapshots(
+                "005930", snapshot_dir, output_dir=output_dir, columns=BASE_COLUMNS
+            )
+
+            normalized = pd.read_csv(normalized_path)
+            self.assertEqual(normalized["fiscal_year"].tolist(), [2016, 2020, 2021, 2026])
+            self.assertEqual(normalized["normalized_amount"].tolist(), [2016, 2020, 2021, 2026])
+
 
 if __name__ == "__main__":
     unittest.main()

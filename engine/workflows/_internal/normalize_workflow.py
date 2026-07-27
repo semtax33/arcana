@@ -287,19 +287,34 @@ def normalize_consensus(args: argparse.Namespace) -> dict[str, Path | int]:
     raise ValueError("consensus normalization supports only --market kr or us")
 
 
-def normalize_all_statements() -> None:
+def normalize_all_statements(
+    *,
+    start_year: int | None = None,
+    end_year: int | None = None,
+) -> None:
     corps_list = kospi_kosdaq_corp_list()
     stock_codes = sorted(corps_list["stock_code"].tolist())
     today = date.today()
-    end_year = today.year
-    start_year = end_year - 10
+    if start_year is None and end_year is None:
+        # Preserve the existing default window: the ten completed calendar years.
+        requested_start_year = today.year - 10
+        requested_end_year = today.year - 1
+    else:
+        requested_end_year = end_year if end_year is not None else today.year
+        requested_start_year = (
+            start_year if start_year is not None else requested_end_year - 10
+        )
+
+    if requested_start_year > requested_end_year:
+        raise ValueError("--start-year must be less than or equal to --end-year")
 
     dependency_paths = normalization_dependency_paths()
     newest_dependency_mtime = max(p.stat().st_mtime for p in dependency_paths)
     tasks, skipped_count, missing_count = build_normalization_tasks(
         stock_codes,
-        start_year=start_year,
-        end_year=end_year,
+        start_year=requested_start_year,
+        # build_normalization_tasks uses an exclusive upper bound. CLI years are inclusive.
+        end_year=requested_end_year + 1,
         dependency_paths=dependency_paths,
         save_debug=SAVE_DEBUG,
         newest_dependency_mtime=newest_dependency_mtime,
@@ -533,8 +548,16 @@ def main() -> None:
         help="Normalize financial statements, DART business-info HTML, or both. business-info is KR-only.",
     )
     parser.add_argument("--symbols", help="Comma-separated symbols. US examples: AAPL,MSFT")
-    parser.add_argument("--start-year", type=int)
-    parser.add_argument("--end-year", type=int)
+    parser.add_argument(
+        "--start-year",
+        type=int,
+        help="First included fiscal year (KR statements and business-info; US statements).",
+    )
+    parser.add_argument(
+        "--end-year",
+        type=int,
+        help="Last included fiscal year (KR statements and business-info; US statements).",
+    )
     parser.add_argument("--no-debug", action="store_true")
     parser.add_argument("--no-notes", action="store_true")
     parser.add_argument("--no-edgartools", action="store_true")
@@ -561,7 +584,13 @@ def main() -> None:
 
     if args.market == "kr":
         if args.target in {"statements", "all"}:
-            normalize_all_statements()
+            if args.start_year is None and args.end_year is None:
+                normalize_all_statements()
+            else:
+                normalize_all_statements(
+                    start_year=args.start_year,
+                    end_year=args.end_year,
+                )
         if args.target in {"business-info", "all"}:
             normalize_business_infos(
                 symbols=symbols,

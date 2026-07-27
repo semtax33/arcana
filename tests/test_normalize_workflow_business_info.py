@@ -6,6 +6,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+import pandas as pd
+
 
 def _load_workflow_with_stubs():
     filings = types.ModuleType("engine.transformers.filings")
@@ -143,6 +145,56 @@ class NormalizeWorkflowBusinessInfoTest(unittest.TestCase):
 
         statements_mock.assert_called_once_with()
         business_mock.assert_not_called()
+
+    def test_main_passes_inclusive_year_range_to_kr_statements(self):
+        workflow = _load_workflow_with_stubs()
+
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "normalize",
+                    "--market",
+                    "kr",
+                    "--target",
+                    "statements",
+                    "--start-year",
+                    "2021",
+                    "--end-year",
+                    "2026",
+                ],
+            ),
+            patch.object(workflow, "normalize_all_statements") as statements_mock,
+        ):
+            workflow.main()
+
+        statements_mock.assert_called_once_with(start_year=2021, end_year=2026)
+
+    def test_normalize_all_statements_uses_inclusive_year_bounds(self):
+        workflow = _load_workflow_with_stubs()
+        dependency = Path(__file__)
+
+        with (
+            patch.object(
+                workflow,
+                "kospi_kosdaq_corp_list",
+                return_value=pd.DataFrame({"stock_code": ["005930"]}),
+            ),
+            patch.object(workflow, "normalization_dependency_paths", return_value=[dependency]),
+            patch.object(
+                workflow,
+                "build_normalization_tasks",
+                return_value=([], 0, 0),
+            ) as build_tasks_mock,
+            patch.object(workflow, "consolidate_statement_snapshots", return_value=None),
+            patch.object(workflow, "consolidate_statement_debug_snapshots", return_value=None),
+            patch.object(workflow, "remove_legacy_statement_snapshots", return_value=0),
+        ):
+            workflow.normalize_all_statements(start_year=2021, end_year=2026)
+
+        self.assertEqual(build_tasks_mock.call_args.kwargs["start_year"], 2021)
+        self.assertEqual(build_tasks_mock.call_args.kwargs["end_year"], 2027)
 
     def test_business_info_target_rejects_us_market(self):
         workflow = _load_workflow_with_stubs()
