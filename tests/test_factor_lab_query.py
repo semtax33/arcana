@@ -242,6 +242,42 @@ class FactorLabQueryTest(unittest.TestCase):
         self.assertEqual(result.parameters["node_composite_value_weight"], 0.6)
         self.assertEqual(result.parameters["node_composite_quality_weight"], 0.4)
 
+    def test_factor_input_can_fill_missing_values_with_cross_sectional_median(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {
+                "id": "factor_per",
+                "type": "factor_input",
+                "config": {
+                    "factor_id": "per",
+                    "missing_policy": "cross_sectional_median",
+                },
+            },
+        ]
+        graph["edges"] = []
+        graph["outputs"] = {"final_node_id": "factor_per"}
+
+        result = compile_factor_lab_graph(graph, known_factor_ids={"per"})
+
+        self.assertIn("lab_base_universe AS", result.query)
+        self.assertIn("quantileExact(0.5)(value) AS median_value", result.query)
+        self.assertIn("LEFT JOIN source_values AS source", result.query)
+        self.assertIn("LEFT JOIN cross_sectional_medians AS median", result.query)
+        self.assertIn("cross_sectional_median_unavailable", result.query)
+        self.assertIn("INNER JOIN security_universe AS u\n        ON u.security_id = p.security_id", result.query)
+
+    def test_factor_input_rejects_unknown_missing_policy(self):
+        graph = nested_graph()
+        graph["nodes"][0]["config"]["missing_policy"] = "cross_sectional_mean"
+
+        result = validate_factor_lab_graph(
+            graph,
+            known_factor_ids={"per", "pbr", "roe"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertIn("invalid_missing_policy", {error.code for error in result.errors})
+
     def test_new_node_types_expose_expected_handles(self):
         specs = {spec.type: spec for spec in node_type_specs()}
 

@@ -162,12 +162,20 @@ US_CONSENSUS_FACTOR_COLUMNS = [
 US_CONSENSUS_INPUT_COLUMNS = [
     "us_eps_consensus",
     "us_revenue_consensus",
+    "us_operating_income_consensus",
     "us_eps_revision_7d_pct",
     "us_eps_revision_60d_pct",
     "us_eps_revision_90d_pct",
     "us_consensus_analyst_count",
     "us_consensus_source_regime",
+    "us_consensus_horizon",
 ]
+US_CONSENSUS_STRING_INPUT_COLUMNS = {
+    "us_consensus_source_regime",
+    "us_consensus_horizon",
+}
+
+EPS_IMPLIED_OPERATING_INCOME_SURPRISE_FACTOR = "eps_implied_operating_income_surprise_pct"
 
 DEFAULT_FORWARD_CONSENSUS_STALE_DAYS = 180
 DEFAULT_RIM_DECAY_FACTOR = 0.8
@@ -1962,7 +1970,7 @@ def add_us_consensus_factors(
     df = daily_df.sort_values("trade_date").copy()
     for column in [*US_CONSENSUS_FACTOR_COLUMNS, *US_CONSENSUS_INPUT_COLUMNS]:
         if column not in df.columns:
-            df[column] = math.nan if column != "us_consensus_source_regime" else ""
+            df[column] = "" if column in US_CONSENSUS_STRING_INPUT_COLUMNS else math.nan
     if str(market or "kr").strip().lower() != "us" or df.empty:
         return df
 
@@ -1990,7 +1998,18 @@ def add_us_consensus_factors(
     factors["_eligible"] = pd.to_numeric(factors["analyst_count"], errors="coerce") >= 3
     for column in US_CONSENSUS_FACTOR_COLUMNS:
         factors[column] = pd.to_numeric(factors[column], errors="coerce").where(factors["_eligible"])
-    merge_columns = [*US_CONSENSUS_FACTOR_COLUMNS, "us_eps_consensus", "us_revenue_consensus", "us_eps_revision_7d_pct", "us_eps_revision_60d_pct", "us_eps_revision_90d_pct", "analyst_count", "source_regime"]
+    merge_columns = [
+        *US_CONSENSUS_FACTOR_COLUMNS,
+        "us_eps_consensus",
+        "us_revenue_consensus",
+        "us_operating_income_consensus",
+        "us_eps_revision_7d_pct",
+        "us_eps_revision_60d_pct",
+        "us_eps_revision_90d_pct",
+        "analyst_count",
+        "source_regime",
+        "horizon",
+    ]
     for column in merge_columns:
         if column not in factors.columns:
             factors[column] = pd.NA
@@ -2006,14 +2025,90 @@ def add_us_consensus_factors(
     raw_mapping = {
         "us_eps_consensus": "us_eps_consensus",
         "us_revenue_consensus": "us_revenue_consensus",
+        "us_operating_income_consensus": "us_operating_income_consensus",
         "us_eps_revision_7d_pct": "us_eps_revision_7d_pct",
         "us_eps_revision_60d_pct": "us_eps_revision_60d_pct",
         "us_eps_revision_90d_pct": "us_eps_revision_90d_pct",
         "us_consensus_analyst_count": "analyst_count",
         "us_consensus_source_regime": "source_regime",
+        "us_consensus_horizon": "horizon",
     }
     for target, source in raw_mapping.items():
-        df.loc[merged["_us_consensus_row"], target] = merged[source].to_numpy()
+        values = merged[source]
+        if target not in US_CONSENSUS_STRING_INPUT_COLUMNS:
+            values = pd.to_numeric(values, errors="coerce")
+        df.loc[merged["_us_consensus_row"], target] = values.to_numpy()
+    return df
+
+
+def _us_analyst_consensus_is_eligible(df):
+    analyst_count = pd.to_numeric(
+        numeric_column(df, "us_consensus_analyst_count"),
+        errors="coerce",
+    )
+    horizon = (
+        df["us_consensus_horizon"].fillna("").astype(str).str.upper()
+        if "us_consensus_horizon" in df.columns
+        else pd.Series("", index=df.index, dtype="object")
+    )
+    return (analyst_count >= 3) & (horizon.eq("") | horizon.eq("FY1"))
+
+
+def _us_current_operating_income(df):
+    return finite_numeric_series(first_value_frame(df, "oiadp", "OPERATING_INCOME"))
+
+
+def _us_current_net_income(df):
+    return finite_numeric_series(first_value_frame(df, "ni_parent", "ni", "NET_INCOME"))
+
+
+def _us_diluted_shares(df):
+    return finite_numeric_series(
+        first_value_frame(
+            df,
+            "DILUTED_SHARES",
+            "BASIC_SHARES",
+            "COMMON_SHARES_OUTSTANDING",
+            "shares",
+        )
+    )
+
+
+def _eps_implied_operating_income(df):
+    """Infer FY1 operating income by holding the disclosed OI/NI relation constant."""
+    consensus_eps = finite_numeric_series(numeric_column(df, "us_eps_consensus"))
+    operating_income = _us_current_operating_income(df)
+    net_income = _us_current_net_income(df)
+    diluted_shares = _us_diluted_shares(df)
+    implied_net_income = consensus_eps * diluted_shares
+    implied_operating_income = operating_income * implied_net_income / net_income
+    valid = (
+        _us_analyst_consensus_is_eligible(df)
+        & (consensus_eps > 0)
+        & (diluted_shares > 0)
+        & (net_income > 0)
+        & (operating_income > 0)
+        & np.isfinite(implied_operating_income)
+    )
+    return implied_operating_income.where(valid)
+
+
+def add_eps_implied_operating_income_surprise_factor(daily_df, *, market="kr"):
+    """Add a US FY1 EPS-consensus-implied operating-income surprise factor.
+
+    The estimate keeps the latest disclosed operating-income-to-net-income
+    relation and diluted-share count constant, then compares the implied FY1
+    operating income against the disclosed operating income.
+    """
+    df = daily_df.copy()
+    df[EPS_IMPLIED_OPERATING_INCOME_SURPRISE_FACTOR] = math.nan
+    if str(market or "kr").strip().lower() != "us" or df.empty:
+        return df
+
+    operating_income = _us_current_operating_income(df)
+    implied_operating_income = _eps_implied_operating_income(df)
+    surprise = (implied_operating_income - operating_income) / operating_income.abs() * 100
+    df[EPS_IMPLIED_OPERATING_INCOME_SURPRISE_FACTOR] = finite_numeric_series(surprise)
     return df
 
 
@@ -2722,6 +2817,7 @@ def add_equity_valuation_factors(
     daily_df,
     *,
     rim_decay_factor=DEFAULT_RIM_DECAY_FACTOR,
+    market="kr",
 ):
     decay = float(rim_decay_factor)
     if not 0 <= decay < 1:
@@ -2732,11 +2828,42 @@ def add_equity_valuation_factors(
     forward_roe = (
         pd.to_numeric(numeric_column(df, "forward_roe"), errors="coerce") / 100
     )
+    forward_roe = forward_roe.where(np.isfinite(forward_roe))
     historical_roe = pd.to_numeric(
         numeric_column(df, "historical_roe_3y_avg"),
         errors="coerce",
     ) / 100
-    rim_roe = forward_roe.fillna(historical_roe)
+    historical_roe = historical_roe.where(np.isfinite(historical_roe))
+    if str(market or "kr").strip().lower() == "us":
+        current_roe = pd.to_numeric(numeric_column(df, "roe"), errors="coerce") / 100
+        current_roe = current_roe.where(np.isfinite(current_roe))
+        operating_income = _us_current_operating_income(df)
+        analyst_operating_income = finite_numeric_series(
+            first_value_frame(
+                df,
+                "us_operating_income_consensus",
+                "operating_income_consensus",
+            )
+        )
+        analyst_roe = current_roe * analyst_operating_income / operating_income
+        analyst_roe = analyst_roe.where(
+            _us_analyst_consensus_is_eligible(df)
+            & (operating_income > 0)
+            & (analyst_operating_income > 0)
+            & np.isfinite(analyst_roe)
+        )
+        eps_implied_surprise = finite_numeric_series(
+            numeric_column(df, EPS_IMPLIED_OPERATING_INCOME_SURPRISE_FACTOR)
+        )
+        eps_implied_roe = current_roe * (1 + eps_implied_surprise / 100)
+        eps_implied_roe = eps_implied_roe.where(
+            (operating_income > 0)
+            & eps_implied_surprise.notna()
+            & np.isfinite(eps_implied_roe)
+        )
+        rim_roe = analyst_roe.fillna(eps_implied_roe).fillna(historical_roe)
+    else:
+        rim_roe = forward_roe.fillna(historical_roe)
     required_return = pd.to_numeric(numeric_column(df, "cost_of_equity"), errors="coerce") / 100
     price = positive_denominator(numeric_column(df, "close"))
     book_value_per_share = positive_denominator(numeric_column(df, "bps"))
@@ -2792,22 +2919,27 @@ def add_equity_valuation_factors(
 
 def add_rim_historical_roe_fallback(
     daily_df,
-    annual_financial_df,
+    financial_df,
     *,
     required_years=RIM_HISTORICAL_ROE_YEARS,
+    periods_per_year=1,
 ):
-    """Merge the latest disclosed average ROE for consecutive annual periods."""
+    """Merge a point-in-time average of consecutive disclosed ROE observations."""
 
     required_years = int(required_years)
     if required_years < 1:
         raise ValueError("required_years must be at least 1")
+    periods_per_year = int(periods_per_year)
+    if periods_per_year < 1:
+        raise ValueError("periods_per_year must be at least 1")
+    required_periods = required_years * periods_per_year
 
     df = daily_df.sort_values("trade_date").copy()
     df["historical_roe_3y_avg"] = math.nan
-    if df.empty or annual_financial_df is None or annual_financial_df.empty:
+    if df.empty or financial_df is None or financial_df.empty:
         return df
 
-    history = annual_financial_df.copy()
+    history = financial_df.copy()
     if "financial_period" not in history.columns or "roe" not in history.columns:
         return df
     history["financial_period"] = pd.to_datetime(
@@ -2826,30 +2958,47 @@ def add_rim_historical_roe_fallback(
         ).fillna(history["financial_period"].dt.year)
     else:
         history["fiscal_year"] = history["financial_period"].dt.year
+    if "fiscal_month" in history.columns:
+        history["fiscal_month"] = pd.to_numeric(
+            history["fiscal_month"],
+            errors="coerce",
+        ).fillna(history["financial_period"].dt.month)
+    else:
+        history["fiscal_month"] = history["financial_period"].dt.month
     history["roe"] = pd.to_numeric(history["roe"], errors="coerce")
     history["roe"] = history["roe"].where(np.isfinite(history["roe"]))
     history = history.dropna(
-        subset=["financial_period", "report_date", "fiscal_year"]
+        subset=["financial_period", "report_date", "fiscal_year", "fiscal_month"]
     )
     if history.empty:
         return df
 
     history["fiscal_year"] = history["fiscal_year"].astype(int)
+    history["fiscal_month"] = history["fiscal_month"].astype(int)
     history = (
-        history.sort_values(["fiscal_year", "report_date"])
-        .drop_duplicates("fiscal_year", keep="last")
+        history.sort_values(["financial_period", "report_date"])
+        .drop_duplicates(["fiscal_year", "fiscal_month"], keep="last")
         .reset_index(drop=True)
     )
-    rolling_mean = history["roe"].rolling(
-        required_years,
-        min_periods=required_years,
-    ).mean()
-    consecutive_years = pd.Series(True, index=history.index)
-    for offset in range(1, required_years):
-        consecutive_years &= history["fiscal_year"].eq(
-            history["fiscal_year"].shift(offset) + offset
+    if periods_per_year == 1:
+        history = (
+            history.sort_values(["fiscal_year", "report_date"])
+            .drop_duplicates("fiscal_year", keep="last")
+            .reset_index(drop=True)
         )
-    history["historical_roe_3y_avg"] = rolling_mean.where(consecutive_years)
+        period_sequence = history["fiscal_year"]
+    else:
+        quarter = (history["fiscal_month"] - 1) // 3 + 1
+        period_sequence = history["fiscal_year"] * periods_per_year + quarter
+
+    rolling_mean = history["roe"].rolling(
+        required_periods,
+        min_periods=required_periods,
+    ).mean()
+    consecutive_periods = pd.Series(True, index=history.index)
+    for offset in range(1, required_periods):
+        consecutive_periods &= period_sequence.eq(period_sequence.shift(offset) + offset)
+    history["historical_roe_3y_avg"] = rolling_mean.where(consecutive_periods)
 
     events = history.dropna(subset=["historical_roe_3y_avg"]).copy()
     if events.empty:
@@ -3082,8 +3231,18 @@ def create_stock_factor_dataframe(
         us_consensus_factors_path=us_consensus_factors_path,
         market=market,
     )
-    if market == "kr" and financial_basis == "annual":
+    daily_df = add_eps_implied_operating_income_surprise_factor(
+        daily_df,
+        market=market,
+    )
+    if market in {"kr", "us"} and financial_basis == "annual":
         daily_df = add_rim_historical_roe_fallback(daily_df, financial_df)
+    elif market == "us" and financial_basis == "ttm":
+        daily_df = add_rim_historical_roe_fallback(
+            daily_df,
+            financial_df,
+            periods_per_year=4,
+        )
     daily_df = add_wacc_factors(
         daily_df,
         market=market,
@@ -3097,6 +3256,7 @@ def create_stock_factor_dataframe(
     daily_df = add_equity_valuation_factors(
         daily_df,
         rim_decay_factor=rim_decay_factor,
+        market=market,
     )
     daily_df = add_price_momentum_factors(daily_df)
     daily_df["updated_at"] = datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
@@ -3268,6 +3428,7 @@ def preferred_factor_columns():
         "us_eps_dispersion_pct",
         "us_revenue_dispersion_pct",
         "us_eps_surprise_pct",
+        EPS_IMPLIED_OPERATING_INCOME_SURPRISE_FACTOR,
         "us_consensus_analyst_count",
         "asset_yoy_pct",
         "cfo_yoy_pct",

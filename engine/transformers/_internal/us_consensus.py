@@ -33,7 +33,7 @@ US_EVENT_COLUMNS = [
 ]
 US_FACTOR_COLUMNS = [
     "symbol", "security_id", "factor_date", "provider", "source_regime", "horizon", "analyst_count",
-    "us_eps_consensus", "us_revenue_consensus", "us_eps_revision_7d_pct", "us_eps_revision_30d_pct",
+    "us_eps_consensus", "us_revenue_consensus", "us_operating_income_consensus", "us_eps_revision_7d_pct", "us_eps_revision_30d_pct",
     "us_eps_revision_60d_pct", "us_eps_revision_90d_pct", "us_eps_revision_breadth_30d_pct",
     "us_eps_revision_acceleration_30d_pct", "us_eps_dispersion_pct", "us_revenue_dispersion_pct",
     "us_eps_surprise_pct", "currency", "raw_path",
@@ -190,7 +190,14 @@ def _alpha_estimates(
             for metric, statistic, value in (("eps", "high", eps_high), ("eps", "low", eps_low), ("revenue", "average", revenue_current), ("revenue", "high", revenue_high), ("revenue", "low", revenue_low), ("eps_revision", "up", up), ("eps_revision", "down", down)):
                 if value is not None:
                     observations.append(_observation(symbol, "ALPHA_VANTAGE", "EARNINGS_ESTIMATES", "ALPHA_VANTAGE_HISTORICAL", snapshot, availability, horizon, period_type, fiscal_end, "", metric, statistic, 30 if metric == "eps_revision" else 0, value, currency, analysts, raw_path))
-            factors.append(_factor_row(symbol, availability, "ALPHA_VANTAGE", "ALPHA_VANTAGE_HISTORICAL", horizon, analysts, values, eps_high, eps_low, revenue_current, revenue_high, revenue_low, up, down, surprises.get((symbol, fiscal_end)), currency, raw_path))
+            operating_income_current = _number(
+                _pick(
+                    entry,
+                    "operating_income_estimate_average",
+                    "operatingIncomeEstimateAverage",
+                )
+            )
+            factors.append(_factor_row(symbol, availability, "ALPHA_VANTAGE", "ALPHA_VANTAGE_HISTORICAL", horizon, analysts, values, eps_high, eps_low, revenue_current, revenue_high, revenue_low, operating_income_current, up, down, surprises.get((symbol, fiscal_end)), currency, raw_path))
     return observations, factors
 
 
@@ -229,6 +236,7 @@ def _yahoo_frames(payload: dict[str, Any], *, symbol: str, snapshot: str, raw_pa
     data = payload.get("data", {}) if isinstance(payload, dict) else {}
     earnings = _frame(data.get("earnings_estimate"))
     revenue = _frame(data.get("revenue_estimate"))
+    operating_income = _frame(data.get("operating_income_estimate"))
     trend = _frame(data.get("eps_trend"))
     revisions = _frame(data.get("eps_revisions"))
     history = _frame(data.get("earnings_history"))
@@ -247,6 +255,7 @@ def _yahoo_frames(payload: dict[str, Any], *, symbol: str, snapshot: str, raw_pa
     for slot, horizon in (("0q", "FQ1"), ("+1q", "FQ2"), ("0y", "FY1"), ("+1y", "FY2")):
         estimate = _row_for_slot(earnings, slot)
         revenue_row = _row_for_slot(revenue, slot)
+        operating_income_row = _row_for_slot(operating_income, slot)
         trend_row = _row_for_slot(trend, slot)
         revision_row = _row_for_slot(revisions, slot)
         analysts = _number(_row_value(estimate, "numberOfAnalysts", "number_of_analysts"))
@@ -255,17 +264,18 @@ def _yahoo_frames(payload: dict[str, Any], *, symbol: str, snapshot: str, raw_pa
         values = {"current": eps_current, "7d": _number(_row_value(trend_row, "7daysAgo")), "30d": _number(_row_value(trend_row, "30daysAgo")), "60d": _number(_row_value(trend_row, "60daysAgo")), "90d": _number(_row_value(trend_row, "90daysAgo"))}
         eps_high, eps_low = _number(_row_value(estimate, "high")), _number(_row_value(estimate, "low"))
         revenue_current = _number(_row_value(revenue_row, "avg"))
+        operating_income_current = _number(_row_value(operating_income_row, "avg"))
         revenue_high, revenue_low = _number(_row_value(revenue_row, "high")), _number(_row_value(revenue_row, "low"))
         up = _number(_row_value(revision_row, "upLast30days", "upLast30Days"))
         down = _number(_row_value(revision_row, "downLast30days", "downLast30Days"))
         for metric, statistic, lookback, value in (("eps", "average", 0, eps_current), ("eps", "average", 7, values["7d"]), ("eps", "average", 30, values["30d"]), ("eps", "average", 60, values["60d"]), ("eps", "average", 90, values["90d"]), ("eps", "high", 0, eps_high), ("eps", "low", 0, eps_low), ("revenue", "average", 0, revenue_current), ("revenue", "high", 0, revenue_high), ("revenue", "low", 0, revenue_low), ("eps_revision", "up", 30, up), ("eps_revision", "down", 30, down)):
             if value is not None:
                 observations.append(_observation(symbol, "YAHOO_FINANCE", "YAHOO_ANALYSIS", "YAHOO_CURRENT", snapshot_day, snapshot_day, horizon, "forward", "", slot, metric, statistic, lookback, value, currency, analysts, raw_path))
-        factors.append(_factor_row(symbol, snapshot_day, "YAHOO_FINANCE", "YAHOO_CURRENT", horizon, analysts, values, eps_high, eps_low, revenue_current, revenue_high, revenue_low, up, down, surprise, currency, raw_path))
+        factors.append(_factor_row(symbol, snapshot_day, "YAHOO_FINANCE", "YAHOO_CURRENT", horizon, analysts, values, eps_high, eps_low, revenue_current, revenue_high, revenue_low, operating_income_current, up, down, surprise, currency, raw_path))
     return observations, events, factors
 
 
-def _factor_row(symbol: str, factor_date: str, provider: str, regime: str, horizon: str, analysts: float | None, values: dict[str, float | None], eps_high: float | None, eps_low: float | None, revenue_current: float | None, revenue_high: float | None, revenue_low: float | None, up: float | None, down: float | None, surprise: float | None, currency: str, raw_path: str) -> dict[str, Any]:
+def _factor_row(symbol: str, factor_date: str, provider: str, regime: str, horizon: str, analysts: float | None, values: dict[str, float | None], eps_high: float | None, eps_low: float | None, revenue_current: float | None, revenue_high: float | None, revenue_low: float | None, operating_income_current: float | None, up: float | None, down: float | None, surprise: float | None, currency: str, raw_path: str) -> dict[str, Any]:
     revision = {days: _revision(values.get("current"), values.get(f"{days}d")) for days in (7, 30, 60, 90)}
     breadth = None if up is None or down is None else (up - down) / max(up + down, 1.0)
     prior_monthly = _revision(values.get("30d"), values.get("90d"))
@@ -274,6 +284,7 @@ def _factor_row(symbol: str, factor_date: str, provider: str, regime: str, horiz
         "symbol": symbol, "security_id": _security_id(symbol), "factor_date": factor_date, "provider": provider,
         "source_regime": regime, "horizon": horizon, "analyst_count": analysts,
         "us_eps_consensus": values.get("current"), "us_revenue_consensus": revenue_current,
+        "us_operating_income_consensus": operating_income_current,
         "us_eps_revision_7d_pct": revision[7], "us_eps_revision_30d_pct": revision[30],
         "us_eps_revision_60d_pct": revision[60], "us_eps_revision_90d_pct": revision[90],
         "us_eps_revision_breadth_30d_pct": breadth,

@@ -206,6 +206,7 @@ GROWTH_FACTORS = {
     "us_eps_dispersion_pct",
     "us_revenue_dispersion_pct",
     "us_eps_surprise_pct",
+    "eps_implied_operating_income_surprise_pct",
     "asset_yoy_pct",
     "cfo_yoy_pct",
     "fcf_yoy_pct",
@@ -361,6 +362,7 @@ FACTOR_NAME_OVERRIDES = {
     "us_eps_dispersion_pct": "US EPS Consensus Dispersion",
     "us_revenue_dispersion_pct": "US Revenue Consensus Dispersion",
     "us_eps_surprise_pct": "US EPS Surprise",
+    "eps_implied_operating_income_surprise_pct": "EPS-Implied Operating Income Surprise",
     "eps_surprise_pct": "EPS Surprise",
     "revenue_surprise_pct": "Revenue Surprise",
     "operating_income_surprise_pct": "Operating Income Surprise",
@@ -395,8 +397,13 @@ FACTOR_DESCRIPTION_OVERRIDES = {
         "FY1 forward P/E와 CAPM 자기자본비용으로 계산한 20년 주식 modified duration."
     ),
     "rim_upside_potential": (
-        "BPS, 애널리스트 forward ROE(결측 시 최근 3개년 실적 ROE 평균), "
-        "CAPM 자기자본비용과 ROE 유지율을 사용한 RIM 목표가의 현재가 대비 상승여력."
+        "BPS, 애널리스트 영업이익 추정(결측 시 EPS-implied 영업이익 surprise, "
+        "그마저 없으면 최근 3개년 실적 ROE 평균), CAPM 자기자본비용과 ROE 유지율을 "
+        "사용한 RIM 목표가의 현재가 대비 상승여력."
+    ),
+    "eps_implied_operating_income_surprise_pct": (
+        "FY1 EPS 컨센서스와 최근 공시 영업이익/순이익 관계로 유도한 FY1 영업이익의 "
+        "최근 공시 영업이익 대비 변화율."
     ),
 }
 

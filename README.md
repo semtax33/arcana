@@ -304,7 +304,7 @@ US 원시 팩터를 ClickHouse의 일반 factor 테이블에 적재하려면 다
 
 ```powershell
 python -m engine.loaders.factors --market us --stock-codes AAPL,MSFT --financial-basis annual `
-  --factor-ids us_eps_revision_30d_pct,us_eps_revision_breadth_30d_pct,us_eps_revision_acceleration_30d_pct,us_eps_dispersion_pct,us_revenue_dispersion_pct,us_eps_surprise_pct
+  --factor-ids us_eps_revision_30d_pct,us_eps_revision_breadth_30d_pct,us_eps_revision_acceleration_30d_pct,us_eps_dispersion_pct,us_revenue_dispersion_pct,us_eps_surprise_pct,eps_implied_operating_income_surprise_pct
 ```
 
 `prices`와 `shares`는 KRX bronze CSV를 `data-lake/bronze/krx/...` 아래에
@@ -360,7 +360,8 @@ KR beta uses the existing KRX price and benchmark data already stored under
 | --- | --- | --- |
 | `k_ratio_3y` | KRX 조정주가 | 756거래일 가격 VAMI |
 | `equity_duration_20y` | KRX 가격, KOSPI200, FRED, Damodaran ERP, Hankyung 컨센서스 | beta, 자기자본비용, FY1 forward P/E |
-| `rim_upside_potential` | KRX 가격·주식수, DART 연간 재무제표, FRED, Damodaran ERP, Hankyung 컨센서스 | BPS, 자기자본비용, FY1 forward ROE 또는 최근 3개년 실적 ROE 평균 |
+| `rim_upside_potential` | KR: KRX 가격·주식수, DART 연간 재무제표, FRED, Damodaran ERP, Hankyung 컨센서스 / US annual·TTM: SEC 재무제표, 가격·주식수, FRED, Damodaran ERP, FY1 EPS·영업이익 컨센서스 | BPS, 자기자본비용, 우선순위별 예상 ROE |
+| `eps_implied_operating_income_surprise_pct` | US FY1 EPS 컨센서스, SEC 재무제표 | EPS에서 유도한 FY1 영업이익의 최근 공시 영업이익 대비 변화율 |
 
 Hankyung 토큰은 명령행에 직접 기록하지 않고 환경 변수로 전달합니다.
 
@@ -379,8 +380,11 @@ K-Ratio가 사용하는 KRX OHLCV는 `adjusted=True`로 요청합니다. Equity 
 RIM에 사용되는 `forward_per`, `forward_roe`는 Hankyung의
 `STOCK_PRE_PER`, `STOCK_PRE_ROE`에서 생성됩니다. ValueFinder/EQUITY HTML
 목록은 현재 투자의견 자료이며 이 두 forward metric의 대체 입력으로 사용하지 않습니다.
-단, RIM은 forward ROE가 없거나 180일 만료된 거래일에 한해 공시가 완료된 최근
-3개 연속 연간 실적 ROE의 평균을 fallback으로 사용합니다.
+단, KR RIM은 forward ROE가 없거나 180일 만료된 거래일에 한해 공시가 완료된 최근
+3개 연속 연간 실적 ROE의 평균을 fallback으로 사용합니다. US RIM은 FY1 실제 애널리스트
+영업이익 컨센서스가 들어오면 이를 우선 사용하고, 없으면 EPS 컨센서스와 최신 공시
+영업이익/순이익 관계로 유도한 영업이익 surprise를 사용합니다. 둘 다 없으면 US annual은
+최근 3개 연속 연간 ROE 평균, US TTM은 최근 12개 연속 분기(3년) TTM ROE 평균을 사용합니다.
 
 ### 2. Transform / Normalize
 
@@ -786,14 +790,17 @@ python -m engine.loaders.factors --market kr --financial-basis annual --start-da
 - `equity_duration_20y`: FY1 forward P/E와 CAPM 자기자본비용으로 계산한
   20년 modified duration이며 단위는 `years`입니다.
 - `rim_upside_potential`: `RIM Target / Price - 1`인 비율 값입니다.
-  기본 ROE 유지율은 0.8이며 forward ROE를 우선 사용합니다.
+  기본 ROE 유지율은 0.8이며 KR은 forward ROE를 우선 사용합니다.
 - forward 컨센서스는 거래일 당시 이용 가능했던 가장 가까운 미래 연간 결산기를
   선택하며 최종 관측 후 180일이 지나면 결측 처리합니다.
-- forward P/E는 현재 PER로 대체하지 않습니다. RIM의 forward ROE만 결측 시
-  거래일 당시 공시된 최근 3개 연속 연간 실적 ROE 평균으로 대체합니다.
-  3개년 중 하나라도 ROE가 없거나 회계연도가 연속되지 않으면 RIM도 결측입니다.
-- `equity_duration_20y`와 `rim_upside_potential`은 현재 KR만 지원합니다.
-  미국 컨센서스 입력은 아직 지원하지 않습니다.
+- forward P/E는 현재 PER로 대체하지 않습니다. KR RIM의 forward ROE만 결측 시 거래일 당시
+  공시된 최근 3개 연속 연간 실적 ROE 평균으로 대체합니다. US RIM은 `us_operating_income_consensus`
+  (향후 실제 애널리스트 영업이익 컨센서스) → `eps_implied_operating_income_surprise_pct` →
+  해당 basis의 3년 실적 ROE 순으로 사용합니다. EPS-implied 값은 FY1·분석가 3명 이상인
+  컨센서스에만 생성합니다. 해당 기간에 ROE가 없거나 보고 분기가 연속되지 않으면 RIM도 결측입니다.
+- `equity_duration_20y`는 현재 KR만 지원합니다. `rim_upside_potential`은 KR annual과
+  US annual·TTM을 지원합니다. 미국 실제 영업이익 컨센서스가 아직 없을 때에는
+  EPS-implied 영업이익 surprise를 우선 적용합니다.
 - `--rim-decay-factor`는 `0 <= value < 1`이어야 합니다. 값을 변경하면 동일
   factor_id의 전 기간 raw factor와 snapshot을 다시 생성해야 합니다.
 

@@ -38,6 +38,12 @@ US_CONSENSUS_TABLE_FILES = {
     "us_consensus_factors": (US_FACTORS_NAME, US_FACTOR_COLUMNS),
 }
 
+US_CONSENSUS_FACTORS_SCHEMA_MIGRATIONS = (
+    "ALTER TABLE us_consensus_factors "
+    "ADD COLUMN IF NOT EXISTS us_operating_income_consensus Nullable(Float64) "
+    "AFTER us_revenue_consensus",
+)
+
 STRING_COLUMNS = {
     "security_id",
     "stock_code",
@@ -150,6 +156,7 @@ FLOAT_COLUMNS = {
     "surprise_pct",
     "us_eps_consensus",
     "us_revenue_consensus",
+    "us_operating_income_consensus",
     "us_eps_revision_7d_pct",
     "us_eps_revision_30d_pct",
     "us_eps_revision_60d_pct",
@@ -218,6 +225,8 @@ def load_us_consensus(
     if not dry_run:
         client = client or get_clickhouse_client()
     try:
+        if not dry_run:
+            ensure_us_consensus_factor_schema(client)
         for table_name, (file_name, columns) in US_CONSENSUS_TABLE_FILES.items():
             frame = _read_silver_csv(Path(silver_dir) / file_name, columns=columns)
             counts[table_name] = len(frame)
@@ -234,6 +243,15 @@ def load_us_consensus(
         flush=True,
     )
     return counts
+
+
+def ensure_us_consensus_factor_schema(client: Any) -> None:
+    for query in US_CONSENSUS_FACTORS_SCHEMA_MIGRATIONS:
+        command = getattr(client, "command", None)
+        if callable(command):
+            command(query)
+        else:
+            client.execute(query)
 
 
 def _read_silver_csv(path: Path, *, columns: list[str]) -> pd.DataFrame:

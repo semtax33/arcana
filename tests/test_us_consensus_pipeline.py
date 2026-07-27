@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from engine.extractors._internal.us_consensus import RollingRateLimiter, download_us_consensus
+from engine.loaders._internal.clickhouse_consensus import load_us_consensus
 from engine.transformers._internal.us_consensus import build_us_consensus_frames, normalize_us_consensus
 from engine.transformers.factors import add_us_consensus_factors
 from engine.workflows._internal.score_workflow import calculate_style_scores
@@ -27,6 +28,26 @@ class _Response:
 
 
 class TestUSConsensusPipeline(unittest.TestCase):
+    def test_us_consensus_load_applies_operating_income_schema_migration(self):
+        class RecordingClient:
+            def __init__(self):
+                self.commands = []
+
+            def command(self, query):
+                self.commands.append(query)
+
+            def close(self):
+                pass
+
+        client = RecordingClient()
+        with TemporaryDirectory() as temp:
+            load_us_consensus(silver_dir=temp, client=client)
+
+        self.assertIn(
+            "ADD COLUMN IF NOT EXISTS us_operating_income_consensus Nullable(Float64)",
+            client.commands[0],
+        )
+
     def test_alpha_collector_reads_environment_key_and_writes_all_three_datasets(self):
         with TemporaryDirectory() as temp, patch.dict(os.environ, {"ALPHA_VANTAGE_API_KEY": "runtime-secret"}):
             root = Path(temp)
@@ -129,15 +150,17 @@ class TestUSConsensusPipeline(unittest.TestCase):
         with TemporaryDirectory() as temp:
             path = Path(temp) / "us_consensus_factors.csv"
             pd.DataFrame([
-                {"symbol": "AAPL", "factor_date": "2026-07-20", "provider": "YAHOO_FINANCE", "source_regime": "YAHOO_CURRENT", "horizon": "FY1", "analyst_count": 4, "us_eps_revision_30d_pct": 12, "us_eps_revision_breadth_30d_pct": .5, "us_eps_revision_acceleration_30d_pct": 4, "us_eps_dispersion_pct": .1, "us_revenue_dispersion_pct": .2, "us_eps_surprise_pct": 3, "us_eps_consensus": 10, "us_revenue_consensus": 100, "us_eps_revision_7d_pct": 1, "us_eps_revision_60d_pct": 8, "us_eps_revision_90d_pct": 5, "raw_path": "a"},
-                {"symbol": "AAPL", "factor_date": "2026-07-25", "provider": "YAHOO_FINANCE", "source_regime": "YAHOO_CURRENT", "horizon": "FY1", "analyst_count": 2, "us_eps_revision_30d_pct": 99, "us_eps_revision_breadth_30d_pct": .9, "us_eps_revision_acceleration_30d_pct": 9, "us_eps_dispersion_pct": .1, "us_revenue_dispersion_pct": .2, "us_eps_surprise_pct": 3, "us_eps_consensus": 11, "us_revenue_consensus": 110, "us_eps_revision_7d_pct": 2, "us_eps_revision_60d_pct": 9, "us_eps_revision_90d_pct": 6, "raw_path": "b"},
+                {"symbol": "AAPL", "factor_date": "2026-07-20", "provider": "YAHOO_FINANCE", "source_regime": "YAHOO_CURRENT", "horizon": "FY1", "analyst_count": 4, "us_eps_revision_30d_pct": 12, "us_eps_revision_breadth_30d_pct": .5, "us_eps_revision_acceleration_30d_pct": 4, "us_eps_dispersion_pct": .1, "us_revenue_dispersion_pct": .2, "us_eps_surprise_pct": 3, "us_eps_consensus": 10, "us_revenue_consensus": 100, "us_operating_income_consensus": 150, "us_eps_revision_7d_pct": 1, "us_eps_revision_60d_pct": 8, "us_eps_revision_90d_pct": 5, "raw_path": "a"},
+                {"symbol": "AAPL", "factor_date": "2026-07-25", "provider": "YAHOO_FINANCE", "source_regime": "YAHOO_CURRENT", "horizon": "FY1", "analyst_count": 2, "us_eps_revision_30d_pct": 99, "us_eps_revision_breadth_30d_pct": .9, "us_eps_revision_acceleration_30d_pct": 9, "us_eps_dispersion_pct": .1, "us_revenue_dispersion_pct": .2, "us_eps_surprise_pct": 3, "us_eps_consensus": 11, "us_revenue_consensus": 110, "us_operating_income_consensus": 160, "us_eps_revision_7d_pct": 2, "us_eps_revision_60d_pct": 9, "us_eps_revision_90d_pct": 6, "raw_path": "b"},
             ]).to_csv(path, index=False)
             daily = pd.DataFrame({"trade_date": pd.to_datetime(["2026-07-24", "2026-07-26"])})
             result = add_us_consensus_factors(daily, "AAPL", market="us", us_consensus_factors_path=path)
             self.assertEqual(result.loc[0, "us_eps_revision_30d_pct"], 12)
             self.assertTrue(pd.isna(result.loc[1, "us_eps_revision_30d_pct"]))
             self.assertEqual(result.loc[1, "us_eps_consensus"], 11)
+            self.assertEqual(result.loc[0, "us_operating_income_consensus"], 150)
             self.assertEqual(result.loc[0, "us_consensus_source_regime"], "YAHOO_CURRENT")
+            self.assertEqual(result.loc[0, "us_consensus_horizon"], "FY1")
 
     def test_us_factor_merge_uses_alpha_fq1_until_yahoo_fy1_handoff(self):
         with TemporaryDirectory() as temp:

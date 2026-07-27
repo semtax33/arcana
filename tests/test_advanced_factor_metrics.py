@@ -206,6 +206,26 @@ class AdvancedFactorMetricsTest(unittest.TestCase):
             expected_target / 80 - 1,
         )
 
+    def test_rim_uses_historical_roe_when_forward_roe_is_nonfinite(self):
+        daily = pd.DataFrame(
+            {
+                "forward_per": [10.0],
+                "forward_roe": [math.inf],
+                "historical_roe_3y_avg": [15.0],
+                "cost_of_equity": [10.0],
+                "bps": [100.0],
+                "close": [80.0],
+            }
+        )
+
+        result = add_equity_valuation_factors(daily, rim_decay_factor=0.8)
+
+        expected_target = 100 + 100 * (0.15 - 0.10) * 0.8 / (1 - 0.8 + 0.10)
+        self.assertAlmostEqual(
+            result["rim_upside_potential"].iat[0],
+            expected_target / 80 - 1,
+        )
+
     def test_rim_prefers_forward_roe_over_historical_fallback(self):
         daily = pd.DataFrame(
             {
@@ -256,6 +276,57 @@ class AdvancedFactorMetricsTest(unittest.TestCase):
         nonconsecutive = financials.iloc[[0, 2, 3]].copy()
         missing_year_result = add_rim_historical_roe_fallback(daily, nonconsecutive)
         self.assertTrue(missing_year_result["historical_roe_3y_avg"].isna().all())
+
+    def test_ttm_historical_roe_fallback_uses_three_year_average_point_in_time(self):
+        periods = pd.to_datetime(
+            [
+                "2022-03-31", "2022-06-30", "2022-09-30", "2022-12-31",
+                "2023-03-31", "2023-06-30", "2023-09-30", "2023-12-31",
+                "2024-03-31", "2024-06-30", "2024-09-30", "2024-12-31",
+                "2025-03-31",
+            ]
+        )
+        report_dates = periods + pd.Timedelta(days=30)
+        financials = pd.DataFrame(
+            {
+                "fiscal_year": [2022] * 4 + [2023] * 4 + [2024] * 4 + [2025],
+                "fiscal_month": [3, 6, 9, 12] * 3 + [3],
+                "financial_period": periods,
+                "report_date": report_dates,
+                "roe": list(range(10, 23)),
+            }
+        )
+        daily = pd.DataFrame(
+            {
+                "trade_date": [report_dates[10], report_dates[11], report_dates[12]],
+                "forward_per": [10.0, 10.0, 10.0],
+                "forward_roe": [math.nan, math.nan, math.nan],
+                "cost_of_equity": [10.0, 10.0, 10.0],
+                "bps": [100.0, 100.0, 100.0],
+                "close": [100.0, 100.0, 100.0],
+            }
+        )
+
+        result = add_rim_historical_roe_fallback(
+            daily,
+            financials,
+            periods_per_year=4,
+        )
+        result = add_equity_valuation_factors(result, rim_decay_factor=0.8)
+
+        self.assertTrue(pd.isna(result["historical_roe_3y_avg"].iat[0]))
+        self.assertAlmostEqual(result["historical_roe_3y_avg"].iat[1], 15.5)
+        self.assertAlmostEqual(result["historical_roe_3y_avg"].iat[2], 16.5)
+        expected_target = 100 + 100 * (0.165 - 0.10) * 0.8 / (1 - 0.8 + 0.10)
+        self.assertAlmostEqual(result["rim_upside_potential"].iat[2], expected_target / 100 - 1)
+
+        missing_quarter = financials.drop(index=6)
+        missing_result = add_rim_historical_roe_fallback(
+            daily,
+            missing_quarter,
+            periods_per_year=4,
+        )
+        self.assertTrue(missing_result["historical_roe_3y_avg"].isna().all())
 
     def test_invalid_valuation_inputs_and_decay_are_rejected(self):
         daily = pd.DataFrame(

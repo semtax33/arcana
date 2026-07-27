@@ -14,6 +14,8 @@ from api.service.factor_identity import canonical_factor_id
 NODE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
 FACTOR_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
+MISSING_POLICIES = {"drop", "cross_sectional_median"}
+CROSS_SECTIONAL_MEDIAN_MISSING_POLICY = "cross_sectional_median"
 
 MATH_UNARY_NODES = {"log", "abs", "sqrt", "negate"}
 TEMPORAL_NODES = {"lag", "rolling_max", "rolling_min"}
@@ -104,7 +106,17 @@ class NodeTypeSpec:
 
 def node_type_specs() -> list[NodeTypeSpec]:
     return [
-        NodeTypeSpec("factor_input", "input", [], ["out"], {"factor_id": "string", "financial_basis": "annual|quarterly|ttm", "missing_policy": "drop"}),
+        NodeTypeSpec(
+            "factor_input",
+            "input",
+            [],
+            ["out"],
+            {
+                "factor_id": "string",
+                "financial_basis": "annual|quarterly|ttm",
+                "missing_policy": "drop|cross_sectional_median",
+            },
+        ),
         NodeTypeSpec("constant", "input", [], ["out"], {"value": "finite number"}),
         NodeTypeSpec("add", "arithmetic", ["left", "right"], ["out"], {}),
         NodeTypeSpec("sub", "arithmetic", ["left", "right"], ["out"], {}),
@@ -224,6 +236,12 @@ def compile_factor_lab_graph(
         and bool(_dict(nodes[node_id].get("config")).get("missing_weight_renormalize", False))
         for node_id in validation.execution_order
     )
+    has_cross_sectional_median_input = any(
+        nodes[node_id]["type"] == "factor_input"
+        and _missing_policy(_dict(nodes[node_id].get("config")))
+        == CROSS_SECTIONAL_MEDIAN_MISSING_POLICY
+        for node_id in validation.execution_order
+    )
     params: dict[str, Any] = {
         "start_date": _resolve_date(experiment.get("start_date")),
         "end_date": _resolve_date(experiment.get("end_date")),
@@ -259,17 +277,26 @@ def compile_factor_lab_graph(
             )
         )
         for node_id in temporal_history_input_node_ids
+    ) or any(
+        nodes[node_id]["type"] == "factor_input"
+        and _missing_policy(_dict(nodes[node_id].get("config")))
+        == CROSS_SECTIONAL_MEDIAN_MISSING_POLICY
+        for node_id in temporal_history_input_node_ids
     )
     if (
         any(nodes[node_id]["type"] == "constant" for node_id in validation.execution_order)
         or has_renormalized_weighted_score
+        or has_cross_sectional_median_input
     ):
         ctes.append(
             _compile_base_universe_cte(
                 price_table,
                 use_trade_dates="trade_dates" in params,
                 include_history=base_universe_needs_history,
-                restrict_to_security_universe=has_renormalized_weighted_score,
+                restrict_to_security_universe=(
+                    has_renormalized_weighted_score
+                    or has_cross_sectional_median_input
+                ),
             )
         )
 
@@ -681,6 +708,16 @@ def _validate_node_config(
         basis = str(config.get("financial_basis") or "annual")
         if basis not in {"annual", "quarterly", "ttm", "lab"}:
             errors.append(FactorLabIssue("invalid_financial_basis", "financial_basis must be annual, quarterly, ttm, or lab", node_id=node_id, field="config.financial_basis"))
+        missing_policy = _missing_policy(config)
+        if missing_policy not in MISSING_POLICIES:
+            errors.append(
+                FactorLabIssue(
+                    "invalid_missing_policy",
+                    "factor_input.missing_policy must be drop or cross_sectional_median",
+                    node_id=node_id,
+                    field="config.missing_policy",
+                )
+            )
     elif node_type == "constant":
         value = config.get("value")
         if not _is_finite_number(value):
@@ -1017,9 +1054,75 @@ WHERE f.factor_id = {{{param_prefix}_factor_id:String}}
         row_limit_sql = f"""
     ORDER BY security_id ASC, trade_date DESC
     LIMIT {{{param_prefix}_history_row_limit:UInt32}} BY security_id"""
+    if _missing_policy(config) == CROSS_SECTIONAL_MEDIAN_MISSING_POLICY:
+        return _compile_factor_input_with_cross_sectional_median(
+            node_id,
+            f"{source_select}{row_limit_sql}",
+        )
     return f"""
 {_cte_name(node_id)} AS (
     {source_select}{row_limit_sql}
+)""".strip()
+
+
+def _compile_factor_input_with_cross_sectional_median(
+    node_id: str,
+    source_select: str,
+) -> str:
+    """Fill missing input values with the same-date eligible-universe median.
+
+    The median is calculated from valid source values only.  The base universe is
+    restricted to ``security_universe`` by the caller, so a value from a sector or
+    market outside the experiment cannot affect the imputation.
+    """
+
+    return f"""
+{_cte_name(node_id)} AS (
+    WITH
+    source_values AS (
+        {source_select}
+    ),
+    cross_sectional_medians AS (
+        SELECT
+            trade_date,
+            quantileExact(0.5)(value) AS median_value
+        FROM source_values
+        WHERE is_valid
+        GROUP BY trade_date
+    )
+    SELECT
+        trade_date,
+        security_id,
+        if(candidate_is_valid, candidate_value, NULL) AS value,
+        candidate_is_valid AS is_valid,
+        multiIf(
+            source_is_valid, '',
+            median_value IS NULL, 'cross_sectional_median_unavailable',
+            NOT ifNull(isFinite(candidate_value), false), 'cross_sectional_median_non_finite',
+            ''
+        ) AS invalid_reason
+    FROM (
+        SELECT
+            base.trade_date AS trade_date,
+            base.security_id AS security_id,
+            ifNull(source.is_valid, false) AS source_is_valid,
+            median.median_value AS median_value,
+            if(
+                ifNull(source.is_valid, false),
+                source.value,
+                median.median_value
+            ) AS candidate_value,
+            (
+                ifNull(source.is_valid, false)
+                OR median.median_value IS NOT NULL
+            ) AND ifNull(isFinite(candidate_value), false) AS candidate_is_valid
+        FROM lab_base_universe AS base
+        LEFT JOIN source_values AS source
+            ON base.trade_date = source.trade_date
+           AND base.security_id = source.security_id
+        LEFT JOIN cross_sectional_medians AS median
+            ON base.trade_date = median.trade_date
+    )
 )""".strip()
 
 
@@ -1902,6 +2005,10 @@ def _direct_temporal_factor_row_limits(
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _missing_policy(config: dict[str, Any]) -> str:
+    return str(config.get("missing_policy") or "drop").strip().lower()
 
 
 def _as_string_list(value: Any) -> list[str]:
