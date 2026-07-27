@@ -899,18 +899,15 @@ class DividendNormalizerTest(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "us_dividend_normalized.csv"
             with (
-                patch.object(dividend_loader, "write_us_sec_dividend_events_file", return_value=pd.DataFrame({"ticker": ["AAPL"]})) as events_mock,
-                patch.object(dividend_loader, "create_all_stock_dividend_dataframe", return_value=daily) as daily_mock,
+                patch.object(dividend_loader, "write_us_dividend_events_file", return_value=pd.DataFrame({"ticker": ["AAPL"]})) as events_mock,
+                patch.object(dividend_loader, "create_us_stock_dividend_dataframe", return_value=daily) as daily_mock,
                 patch.object(dividend_loader, "dividend_output_path", return_value=output_path),
             ):
                 result = dividend_loader.refresh_silver_dividend_files(market="us")
             output_exists = output_path.exists()
 
-        events_mock.assert_called_once_with(
-            use_edgartools=True,
-            use_yfinance_fallback=True,
-        )
-        daily_mock.assert_called_once_with(market="us", path=None)
+        events_mock.assert_called_once_with()
+        daily_mock.assert_called_once_with(events_path=dividend_loader.US_DIVIDEND_EVENTS_PATH)
         self.assertEqual(len(result), 1)
         self.assertTrue(output_exists)
 
@@ -934,7 +931,7 @@ class DividendNormalizerTest(unittest.TestCase):
                     "write_silver_dividend_summary_files",
                     return_value=(pd.DataFrame(), pd.DataFrame(), pd.DataFrame()),
                 ) as kr_summary_mock,
-                patch.object(dividend_loader, "write_us_sec_dividend_events_file") as us_events_mock,
+                patch.object(dividend_loader, "write_us_dividend_events_file") as us_events_mock,
                 patch.object(dividend_loader, "create_all_stock_dividend_dataframe", return_value=daily) as daily_mock,
                 patch.object(dividend_loader, "dividend_output_path", return_value=output_path),
             ):

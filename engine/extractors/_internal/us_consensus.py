@@ -123,7 +123,8 @@ def download_us_consensus(
             else None,
             sleeper=sleeper,
         )
-        with SourceRefreshLock("us-consensus-alpha-vantage"):
+        lock_root = DATA_LAKE.root if root == BRONZE_US_CONSENSUS_DIR else root
+        with SourceRefreshLock("alpha-vantage", data_lake_root=lock_root):
             for symbol in resolved_symbols:
                 for dataset, function in ALPHA_VANTAGE_ENDPOINTS.items():
                     path = root / "alpha-vantage" / dataset / f"snapshot_date={day}" / f"ticker={symbol}.json"

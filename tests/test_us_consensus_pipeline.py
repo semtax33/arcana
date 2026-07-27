@@ -47,6 +47,10 @@ class TestUSConsensusPipeline(unittest.TestCase):
             "ADD COLUMN IF NOT EXISTS us_operating_income_consensus Nullable(Float64)",
             client.commands[0],
         )
+        self.assertIn(
+            "ADD COLUMN IF NOT EXISTS us_target_price Nullable(Float64)",
+            client.commands[1],
+        )
 
     def test_alpha_collector_reads_environment_key_and_writes_all_three_datasets(self):
         with TemporaryDirectory() as temp, patch.dict(os.environ, {"ALPHA_VANTAGE_API_KEY": "runtime-secret"}):
@@ -132,6 +136,39 @@ class TestUSConsensusPipeline(unittest.TestCase):
             alpha_60 = observations.loc[(observations["provider"] == "ALPHA_VANTAGE") & (observations["lookback_days"] == 60), "value"].iloc[0]
             self.assertEqual(alpha_60, 0.70)
 
+    def test_us_normalizer_reads_yahoo_mean_target_price(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            _write_json(
+                root / "yahoo" / "snapshot_date=2026-07-26" / "ticker=AAPL.json",
+                {
+                    "data": {
+                        "earnings_estimate": _frame(
+                            [
+                                {
+                                    "period": "0y",
+                                    "numberOfAnalysts": 4,
+                                    "currency": "USD",
+                                }
+                            ]
+                        ),
+                        "analyst_price_targets": {"mean": 125.0, "median": 120.0},
+                    }
+                },
+            )
+
+            observations, _, factors = build_us_consensus_frames(root)
+            target_row = factors.loc[
+                (factors["provider"] == "YAHOO_FINANCE")
+                & (factors["horizon"] == "FY1")
+            ].iloc[0]
+
+            self.assertEqual(target_row["us_target_price"], 125.0)
+            self.assertEqual(
+                observations.loc[observations["metric"] == "target_price", "value"].iloc[0],
+                125.0,
+            )
+
     def test_us_style_score_uses_us_consensus_weights_and_requires_core_factors(self):
         values = {
             "us_eps_revision_30d_pct": 90.0, "us_eps_revision_breadth_30d_pct": 80.0,
@@ -161,6 +198,52 @@ class TestUSConsensusPipeline(unittest.TestCase):
             self.assertEqual(result.loc[0, "us_operating_income_consensus"], 150)
             self.assertEqual(result.loc[0, "us_consensus_source_regime"], "YAHOO_CURRENT")
             self.assertEqual(result.loc[0, "us_consensus_horizon"], "FY1")
+
+    def test_us_price_to_target_price_uses_eligible_mean_target_price(self):
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "us_consensus_factors.csv"
+            pd.DataFrame(
+                [
+                    {
+                        "symbol": "AAPL",
+                        "factor_date": "2026-07-20",
+                        "provider": "YAHOO_FINANCE",
+                        "source_regime": "YAHOO_CURRENT",
+                        "horizon": "FY1",
+                        "analyst_count": 4,
+                        "us_target_price": 125.0,
+                        "raw_path": "a",
+                    },
+                    {
+                        "symbol": "AAPL",
+                        "factor_date": "2026-07-25",
+                        "provider": "YAHOO_FINANCE",
+                        "source_regime": "YAHOO_CURRENT",
+                        "horizon": "FY1",
+                        "analyst_count": 2,
+                        "us_target_price": 250.0,
+                        "raw_path": "b",
+                    },
+                ]
+            ).to_csv(path, index=False)
+            daily = pd.DataFrame(
+                {
+                    "trade_date": pd.to_datetime(["2026-07-24", "2026-07-26"]),
+                    "close": [100.0, 100.0],
+                }
+            )
+
+            result = add_us_consensus_factors(
+                daily,
+                "AAPL",
+                market="us",
+                us_consensus_factors_path=path,
+            )
+
+            self.assertEqual(result.loc[0, "us_target_price"], 125.0)
+            self.assertAlmostEqual(result.loc[0, "us_price_to_target_price"], 0.8)
+            self.assertTrue(pd.isna(result.loc[1, "us_target_price"]))
+            self.assertTrue(pd.isna(result.loc[1, "us_price_to_target_price"]))
 
     def test_us_factor_merge_uses_alpha_fq1_until_yahoo_fy1_handoff(self):
         with TemporaryDirectory() as temp:

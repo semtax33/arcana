@@ -14,8 +14,12 @@ from engine.core.paths import DATA_LAKE, market_csv_name
 from engine.transformers.dividends import (
     create_all_stock_dividend_dataframe,
     silver_dividend_dir,
-    write_us_sec_dividend_events_file,
     write_silver_dividend_summary_files,
+)
+from engine.transformers._internal.us_dividends import (
+    US_DIVIDEND_EVENTS_PATH,
+    create_us_stock_dividend_dataframe,
+    write_us_dividend_events_file,
 )
 
 
@@ -58,13 +62,15 @@ def refresh_silver_dividend_files(
             f"failed={len(failed_df):,}"
         )
     elif market == "us" and path is None:
-        events_df = write_us_sec_dividend_events_file(
-            use_edgartools=use_edgartools,
-            use_yfinance_fallback=use_yfinance_fallback,
-        )
-        print(f"refreshed US SEC dividend events: rows={len(events_df):,}")
+        events_df = write_us_dividend_events_file()
+        print(f"refreshed US dividend events from bronze snapshots: rows={len(events_df):,}")
 
-    normalized_stock_dividends_df = create_all_stock_dividend_dataframe(market=market, path=path)
+    if market == "us":
+        normalized_stock_dividends_df = create_us_stock_dividend_dataframe(
+            events_path=Path(path) if path is not None else US_DIVIDEND_EVENTS_PATH,
+        )
+    else:
+        normalized_stock_dividends_df = create_all_stock_dividend_dataframe(market=market, path=path)
     output_path = dividend_output_path(market)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     normalized_stock_dividends_df.to_csv(output_path, index=False, encoding="utf-8-sig")
@@ -135,7 +141,7 @@ def main():
     parser.add_argument(
         "--path",
         default=None,
-        help="Optional source CSV path. For US, omit for SEC events or pass an event/yfinance legacy CSV.",
+        help="Optional source CSV path. For US, pass a normalized dividend event CSV instead of the bronze-derived default.",
     )
     parser.add_argument("--no-edgartools", action="store_true")
     parser.add_argument("--no-yfinance-fallback", action="store_true")

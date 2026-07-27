@@ -42,6 +42,9 @@ US_CONSENSUS_FACTORS_SCHEMA_MIGRATIONS = (
     "ALTER TABLE us_consensus_factors "
     "ADD COLUMN IF NOT EXISTS us_operating_income_consensus Nullable(Float64) "
     "AFTER us_revenue_consensus",
+    "ALTER TABLE us_consensus_factors "
+    "ADD COLUMN IF NOT EXISTS us_target_price Nullable(Float64) "
+    "AFTER us_operating_income_consensus",
 )
 
 STRING_COLUMNS = {
@@ -157,6 +160,7 @@ FLOAT_COLUMNS = {
     "us_eps_consensus",
     "us_revenue_consensus",
     "us_operating_income_consensus",
+    "us_target_price",
     "us_eps_revision_7d_pct",
     "us_eps_revision_30d_pct",
     "us_eps_revision_60d_pct",

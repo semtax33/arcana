@@ -287,6 +287,18 @@ def normalize_consensus(args: argparse.Namespace) -> dict[str, Path | int]:
     raise ValueError("consensus normalization supports only --market kr or us")
 
 
+def normalize_us_dividend_history() -> dict[str, Path | int]:
+    from engine.transformers._internal.us_dividends import normalize_us_dividends
+
+    result = normalize_us_dividends()
+    print(
+        "[DONE] us dividend normalize "
+        f"events={result['events']:,}, daily_rows={result['daily_rows']:,}, "
+        f"events_path={result['events_path']}, daily_path={result['daily_path']}",
+    )
+    return result
+
+
 def normalize_all_statements(
     *,
     start_year: int | None = None,
@@ -544,8 +556,8 @@ def main() -> None:
     parser.add_argument(
         "--target",
         default="statements",
-        choices=["statements", "business-info", "consensus", "all"],
-        help="Normalize financial statements, DART business-info HTML, or both. business-info is KR-only.",
+        choices=["statements", "business-info", "consensus", "dividend", "all"],
+        help="Normalize statements, consensus, or dividend sources. business-info is KR-only.",
     )
     parser.add_argument("--symbols", help="Comma-separated symbols. US examples: AAPL,MSFT")
     parser.add_argument(
@@ -600,11 +612,15 @@ def main() -> None:
             )
         if args.target in {"consensus", "all"}:
             normalize_consensus(args)
+        if args.target == "dividend":
+            raise ValueError("--target 'dividend' is only supported for --market us")
         return
 
     if args.target in {"consensus", "all"}:
         normalize_consensus(args)
-    if args.target == "consensus":
+    if args.target in {"dividend", "all"}:
+        normalize_us_dividend_history()
+    if args.target in {"consensus", "dividend"}:
         return
     if args.target not in {"statements", "all"}:
         raise ValueError(f"--target {args.target!r} is only supported for --market kr")

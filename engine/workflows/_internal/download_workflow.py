@@ -291,6 +291,26 @@ def download_us_consensus(args: argparse.Namespace) -> None:
     )
 
 
+def download_all_us_dividend(args: argparse.Namespace) -> None:
+    from engine.extractors.us_dividends import download_us_dividends
+
+    counts = download_us_dividends(
+        symbols=_parse_symbols(args.symbols),
+        sources=_parse_us_dividend_sources(getattr(args, "us_dividend_sources", None)),
+        snapshot_date=getattr(args, "dividend_snapshot_date", None),
+        force=args.force,
+        alpha_max_calls_per_minute=getattr(args, "alpha_max_calls_per_minute", 75),
+        alpha_retries=getattr(args, "dividend_retries", 3),
+    )
+    print(
+        "[DONE] us dividend download "
+        f"symbols={counts['symbols']:,}, written={counts['written']:,}, "
+        f"skipped={counts['skipped']:,}, failed={counts['failed']:,}, "
+        f"edgartools_not_implemented={counts.get('not_implemented', 0):,}",
+        flush=True,
+    )
+
+
 DOWNLOAD_ACTIONS = {
     "statements": download_all_statements,
     "comments": download_all_statement_comments,
@@ -311,6 +331,7 @@ US_DOWNLOAD_ACTIONS = {
     "benchmarks": download_us_benchmarks,
     "sec-tickers": download_sec_company_tickers,
     "consensus": download_us_consensus,
+    "dividend": download_all_us_dividend,
     "erp": download_erp_inputs,
     "wacc-inputs": download_wacc_inputs,
 }
@@ -356,6 +377,13 @@ def main() -> None:
     )
     parser.add_argument("--consensus-retries", type=int, default=3, help="Retries per Alpha Vantage consensus request.")
     parser.add_argument("--consensus-snapshot-date", type=_parse_date_arg, help="Override consensus bronze snapshot date.")
+    parser.add_argument(
+        "--us-dividend-sources",
+        default="alpha-vantage,edgartools,yfinance",
+        help="Comma-separated US dividend sources: alpha-vantage,edgartools,yfinance,all.",
+    )
+    parser.add_argument("--dividend-retries", type=int, default=3, help="Retries per Alpha Vantage dividend request.")
+    parser.add_argument("--dividend-snapshot-date", type=_parse_date_arg, help="Override US dividend bronze snapshot date.")
     parser.add_argument(
         "--consensus-html-pages",
         type=int,
@@ -443,6 +471,29 @@ def _parse_us_consensus_sources(value: str | None) -> set[str]:
             sources.add(source)
         else:
             raise SystemExit("unknown US consensus source: " + source)
+    return sources
+
+
+def _parse_us_dividend_sources(value: str | None) -> set[str]:
+    aliases = {
+        "all": {"alpha-vantage", "edgartools", "yfinance"},
+        "alpha": {"alpha-vantage"},
+        "edgar": {"edgartools"},
+        "yahoo": {"yfinance"},
+    }
+    if value is None or not str(value).strip():
+        return set(aliases["all"])
+    sources: set[str] = set()
+    for item in str(value).split(","):
+        source = item.strip().lower()
+        if not source:
+            continue
+        if source in aliases:
+            sources.update(aliases[source])
+        elif source in {"alpha-vantage", "edgartools", "yfinance"}:
+            sources.add(source)
+        else:
+            raise SystemExit("unknown US dividend source: " + source)
     return sources
 
 

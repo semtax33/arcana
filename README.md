@@ -467,19 +467,36 @@ Normalize dividend silver CSV만 갱신:
 python -c "from engine.loaders.dividends import refresh_silver_dividend_files; refresh_silver_dividend_files()"
 ```
 
-US SEC dividend event CSV와 daily dividend CSV 갱신:
+US dividend bronze download and silver refresh:
 
 ```powershell
-python -c "from engine.loaders.dividends import refresh_silver_dividend_files; refresh_silver_dividend_files(market='us')"
+$env:ALPHA_VANTAGE_API_KEY = "<YOUR_ALPHA_VANTAGE_KEY>"
+
+# KR dividend download remains the default
+python -m engine.workflows.download dividend
+
+# US common-stock/ADR dividend history (all filtered US symbols)
+python -m engine.workflows.download --market us dividend
+
+# Selected US symbols only
+python -m engine.workflows.download --market us --symbols AAPL,MSFT dividend
+
+# Bronze -> US dividend event/daily CSV -> ClickHouse
+python -m engine.workflows.normalize --market us --target dividend
+python -m engine.loaders.dividends --market us
 ```
 
-US 배당 정규화는 `data-lake/bronze/sec/financial-statement-and-notes-data-set/`의
-SEC Notes Dataset을 1순위로 사용하고, 부족한 값은 선택 의존성인
-edgartools fallback으로 보완합니다. 매핑 규칙은
-`data-lake/meta/rules/us_dividend.yaml`에 있으며, `10-K`, `10-Q`, `8-K`
-및 amendment form의 XBRL fact에서 선언일, 기준일, 지급일, 1주당 배당금을
-추출합니다. `10-K` 원문 HTML/PDF를 직접 파싱하지 않고 SEC Notes/companyfacts
-및 edgartools가 노출하는 XBRL fact를 사용합니다.
+US dividend downloads use Alpha Vantage `DIVIDENDS` first and store each
+provider response as a dated bronze JSON snapshot.  The source fallback order
+is Alpha Vantage, the reserved edgartools `999.Ex` stub, then yfinance.  A
+lower source is called only when the higher-priority source has no usable event
+for the ticker.  `ALPHA_VANTAGE_API_KEY` is read only from the process
+environment.
+
+```text
+data-lake/bronze/dividend/alpha-vantage/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
+data-lake/bronze/dividend/yfinance/snapshot_date=YYYY-MM-DD/ticker=MSFT.json
+```
 
 산출물:
 
@@ -491,16 +508,19 @@ data-lake/silver/us/dividend/us_dividend_normalized.csv
 `us_dividend_events.csv` 컬럼:
 
 ```text
-ticker,cik,company_name,exchange,dividend_declared_date,dividend_record_date,
-dividend_payment_date,dividend_amount_per_share,sec_filing_date,source_form,
+ticker,cik,company_name,exchange,dividend_ex_date,dividend_declared_date,
+dividend_record_date,dividend_payment_date,dividend_amount_per_share,source,
+source_snapshot_date,sec_filing_date,source_form,
 annual_dps,annual_eps,payout_ratio_dps_over_eps,
 payout_ratio_total_dividends_over_net_income
 ```
 
 `us_dividend_normalized.csv`는 기존 `stock_dividend` 적재 스키마를 유지하며
 `trade_date=dividend_payment_date`, `dividend=dividend_amount_per_share`로 생성됩니다.
-US 팩터 계산과 백테스트 입력 factor table은 이 SEC 기반 daily dividend CSV를
-읽어 배당수익률, DPS, payout ratio, 배당 성장/삭감 관련 팩터를 계산합니다.
+배당락일(`dividend_ex_date`), 공시일(`dividend_declared_date`), 기준일,
+지급일을 이벤트 CSV에 별도 보존합니다. yfinance fallback은 배당락일과 금액만
+보존하므로 지급일이 없는 행은 이벤트 CSV에는 남지만 daily/ClickHouse 행으로는
+변환하지 않습니다.
 
 Normalize benchmark silver CSV만 갱신:
 

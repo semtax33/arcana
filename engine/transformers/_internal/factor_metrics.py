@@ -163,6 +163,7 @@ US_CONSENSUS_INPUT_COLUMNS = [
     "us_eps_consensus",
     "us_revenue_consensus",
     "us_operating_income_consensus",
+    "us_target_price",
     "us_eps_revision_7d_pct",
     "us_eps_revision_60d_pct",
     "us_eps_revision_90d_pct",
@@ -176,6 +177,7 @@ US_CONSENSUS_STRING_INPUT_COLUMNS = {
 }
 
 EPS_IMPLIED_OPERATING_INCOME_SURPRISE_FACTOR = "eps_implied_operating_income_surprise_pct"
+US_PRICE_TO_TARGET_PRICE_FACTOR = "us_price_to_target_price"
 
 DEFAULT_FORWARD_CONSENSUS_STALE_DAYS = 180
 DEFAULT_RIM_DECAY_FACTOR = 0.8
@@ -1971,6 +1973,8 @@ def add_us_consensus_factors(
     for column in [*US_CONSENSUS_FACTOR_COLUMNS, *US_CONSENSUS_INPUT_COLUMNS]:
         if column not in df.columns:
             df[column] = "" if column in US_CONSENSUS_STRING_INPUT_COLUMNS else math.nan
+    if US_PRICE_TO_TARGET_PRICE_FACTOR not in df.columns:
+        df[US_PRICE_TO_TARGET_PRICE_FACTOR] = math.nan
     if str(market or "kr").strip().lower() != "us" or df.empty:
         return df
 
@@ -1997,12 +2001,22 @@ def add_us_consensus_factors(
     factors = factors.sort_values(["factor_date", "_provider_priority", "raw_path"]).drop_duplicates("factor_date", keep="last")
     factors["_eligible"] = pd.to_numeric(factors["analyst_count"], errors="coerce") >= 3
     for column in US_CONSENSUS_FACTOR_COLUMNS:
+        if column not in factors.columns:
+            factors[column] = math.nan
         factors[column] = pd.to_numeric(factors[column], errors="coerce").where(factors["_eligible"])
+    source_target_price = factors.get("us_target_price")
+    if source_target_price is None:
+        source_target_price = pd.Series(math.nan, index=factors.index, dtype="float64")
+    factors["us_target_price"] = pd.to_numeric(
+        source_target_price,
+        errors="coerce",
+    ).where(factors["_eligible"])
     merge_columns = [
         *US_CONSENSUS_FACTOR_COLUMNS,
         "us_eps_consensus",
         "us_revenue_consensus",
         "us_operating_income_consensus",
+        "us_target_price",
         "us_eps_revision_7d_pct",
         "us_eps_revision_60d_pct",
         "us_eps_revision_90d_pct",
@@ -2026,6 +2040,7 @@ def add_us_consensus_factors(
         "us_eps_consensus": "us_eps_consensus",
         "us_revenue_consensus": "us_revenue_consensus",
         "us_operating_income_consensus": "us_operating_income_consensus",
+        "us_target_price": "us_target_price",
         "us_eps_revision_7d_pct": "us_eps_revision_7d_pct",
         "us_eps_revision_60d_pct": "us_eps_revision_60d_pct",
         "us_eps_revision_90d_pct": "us_eps_revision_90d_pct",
@@ -2038,6 +2053,14 @@ def add_us_consensus_factors(
         if target not in US_CONSENSUS_STRING_INPUT_COLUMNS:
             values = pd.to_numeric(values, errors="coerce")
         df.loc[merged["_us_consensus_row"], target] = values.to_numpy()
+    source_close = df.get("close")
+    if source_close is None:
+        source_close = pd.Series(math.nan, index=df.index, dtype="float64")
+    close = pd.to_numeric(source_close, errors="coerce")
+    target_price = pd.to_numeric(df["us_target_price"], errors="coerce")
+    df[US_PRICE_TO_TARGET_PRICE_FACTOR] = (close / target_price).where(
+        close.gt(0) & target_price.gt(0)
+    )
     return df
 
 
@@ -3428,6 +3451,7 @@ def preferred_factor_columns():
         "us_eps_dispersion_pct",
         "us_revenue_dispersion_pct",
         "us_eps_surprise_pct",
+        US_PRICE_TO_TARGET_PRICE_FACTOR,
         EPS_IMPLIED_OPERATING_INCOME_SURPRISE_FACTOR,
         "us_consensus_analyst_count",
         "asset_yoy_pct",

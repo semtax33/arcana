@@ -348,7 +348,12 @@ class AdvancedFactorMetricsTest(unittest.TestCase):
 
     def test_factor_catalog_registers_advanced_factor_metadata(self):
         catalog = create_factor_catalog_dataframe(
-            ["k_ratio_3y", "equity_duration_20y", "rim_upside_potential"]
+            [
+                "k_ratio_3y",
+                "equity_duration_20y",
+                "rim_upside_potential",
+                "us_price_to_target_price",
+            ]
         ).set_index("factor_id")
 
         self.assertEqual(catalog.loc["k_ratio_3y", "factor_type"], "technical")
@@ -361,6 +366,9 @@ class AdvancedFactorMetricsTest(unittest.TestCase):
         self.assertEqual(catalog.loc["rim_upside_potential", "factor_type"], "valuation")
         self.assertEqual(catalog.loc["rim_upside_potential", "unit"], "ratio")
         self.assertEqual(catalog.loc["rim_upside_potential", "value_direction"], "HIGHER_BETTER")
+        self.assertEqual(catalog.loc["us_price_to_target_price", "factor_type"], "valuation")
+        self.assertEqual(catalog.loc["us_price_to_target_price", "unit"], "ratio")
+        self.assertEqual(catalog.loc["us_price_to_target_price", "value_direction"], "HIGHER_BETTER")
         self.assertTrue(catalog["description"].str.len().gt(0).all())
 
     def test_advanced_factors_use_existing_long_format_loader(self):

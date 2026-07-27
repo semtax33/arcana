@@ -33,7 +33,7 @@ US_EVENT_COLUMNS = [
 ]
 US_FACTOR_COLUMNS = [
     "symbol", "security_id", "factor_date", "provider", "source_regime", "horizon", "analyst_count",
-    "us_eps_consensus", "us_revenue_consensus", "us_operating_income_consensus", "us_eps_revision_7d_pct", "us_eps_revision_30d_pct",
+    "us_eps_consensus", "us_revenue_consensus", "us_operating_income_consensus", "us_target_price", "us_eps_revision_7d_pct", "us_eps_revision_30d_pct",
     "us_eps_revision_60d_pct", "us_eps_revision_90d_pct", "us_eps_revision_breadth_30d_pct",
     "us_eps_revision_acceleration_30d_pct", "us_eps_dispersion_pct", "us_revenue_dispersion_pct",
     "us_eps_surprise_pct", "currency", "raw_path",
@@ -240,6 +240,7 @@ def _yahoo_frames(payload: dict[str, Any], *, symbol: str, snapshot: str, raw_pa
     trend = _frame(data.get("eps_trend"))
     revisions = _frame(data.get("eps_revisions"))
     history = _frame(data.get("earnings_history"))
+    target_price = _yahoo_target_price(data.get("analyst_price_targets"))
     snapshot_day = _date_text(snapshot)
     observations: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
@@ -271,11 +272,33 @@ def _yahoo_frames(payload: dict[str, Any], *, symbol: str, snapshot: str, raw_pa
         for metric, statistic, lookback, value in (("eps", "average", 0, eps_current), ("eps", "average", 7, values["7d"]), ("eps", "average", 30, values["30d"]), ("eps", "average", 60, values["60d"]), ("eps", "average", 90, values["90d"]), ("eps", "high", 0, eps_high), ("eps", "low", 0, eps_low), ("revenue", "average", 0, revenue_current), ("revenue", "high", 0, revenue_high), ("revenue", "low", 0, revenue_low), ("eps_revision", "up", 30, up), ("eps_revision", "down", 30, down)):
             if value is not None:
                 observations.append(_observation(symbol, "YAHOO_FINANCE", "YAHOO_ANALYSIS", "YAHOO_CURRENT", snapshot_day, snapshot_day, horizon, "forward", "", slot, metric, statistic, lookback, value, currency, analysts, raw_path))
-        factors.append(_factor_row(symbol, snapshot_day, "YAHOO_FINANCE", "YAHOO_CURRENT", horizon, analysts, values, eps_high, eps_low, revenue_current, revenue_high, revenue_low, operating_income_current, up, down, surprise, currency, raw_path))
+        if horizon == "FY1" and target_price is not None:
+            observations.append(
+                _observation(
+                    symbol,
+                    "YAHOO_FINANCE",
+                    "YAHOO_ANALYSIS",
+                    "YAHOO_CURRENT",
+                    snapshot_day,
+                    snapshot_day,
+                    horizon,
+                    "forward",
+                    "",
+                    slot,
+                    "target_price",
+                    "mean",
+                    0,
+                    target_price,
+                    currency,
+                    analysts,
+                    raw_path,
+                )
+            )
+        factors.append(_factor_row(symbol, snapshot_day, "YAHOO_FINANCE", "YAHOO_CURRENT", horizon, analysts, values, eps_high, eps_low, revenue_current, revenue_high, revenue_low, operating_income_current, up, down, surprise, currency, raw_path, target_price=target_price if horizon == "FY1" else None))
     return observations, events, factors
 
 
-def _factor_row(symbol: str, factor_date: str, provider: str, regime: str, horizon: str, analysts: float | None, values: dict[str, float | None], eps_high: float | None, eps_low: float | None, revenue_current: float | None, revenue_high: float | None, revenue_low: float | None, operating_income_current: float | None, up: float | None, down: float | None, surprise: float | None, currency: str, raw_path: str) -> dict[str, Any]:
+def _factor_row(symbol: str, factor_date: str, provider: str, regime: str, horizon: str, analysts: float | None, values: dict[str, float | None], eps_high: float | None, eps_low: float | None, revenue_current: float | None, revenue_high: float | None, revenue_low: float | None, operating_income_current: float | None, up: float | None, down: float | None, surprise: float | None, currency: str, raw_path: str, *, target_price: float | None = None) -> dict[str, Any]:
     revision = {days: _revision(values.get("current"), values.get(f"{days}d")) for days in (7, 30, 60, 90)}
     breadth = None if up is None or down is None else (up - down) / max(up + down, 1.0)
     prior_monthly = _revision(values.get("30d"), values.get("90d"))
@@ -285,6 +308,7 @@ def _factor_row(symbol: str, factor_date: str, provider: str, regime: str, horiz
         "source_regime": regime, "horizon": horizon, "analyst_count": analysts,
         "us_eps_consensus": values.get("current"), "us_revenue_consensus": revenue_current,
         "us_operating_income_consensus": operating_income_current,
+        "us_target_price": target_price,
         "us_eps_revision_7d_pct": revision[7], "us_eps_revision_30d_pct": revision[30],
         "us_eps_revision_60d_pct": revision[60], "us_eps_revision_90d_pct": revision[90],
         "us_eps_revision_breadth_30d_pct": breadth,
@@ -293,6 +317,17 @@ def _factor_row(symbol: str, factor_date: str, provider: str, regime: str, horiz
         "us_revenue_dispersion_pct": _dispersion(revenue_high, revenue_low, revenue_current, 1.0),
         "us_eps_surprise_pct": surprise, "currency": currency, "raw_path": raw_path,
     }
+
+
+def _yahoo_target_price(value: Any) -> float | None:
+    """Return Yahoo's mean analyst target price, falling back to the median."""
+    if not isinstance(value, dict):
+        return None
+    for key in ("mean", "targetMeanPrice", "median", "targetMedianPrice"):
+        target = _number(_pick(value, key))
+        if target is not None and target > 0:
+            return target
+    return None
 
 
 def _load_splits(root: Path) -> dict[str, list[tuple[pd.Timestamp, float]]]:

@@ -122,6 +122,7 @@ VALUATION_FACTORS = {
     "psr",
     "peg",
     "rim_upside_potential",
+    "us_price_to_target_price",
 }
 
 QUALITY_FACTORS = {
@@ -362,6 +363,7 @@ FACTOR_NAME_OVERRIDES = {
     "us_eps_dispersion_pct": "US EPS Consensus Dispersion",
     "us_revenue_dispersion_pct": "US Revenue Consensus Dispersion",
     "us_eps_surprise_pct": "US EPS Surprise",
+    "us_price_to_target_price": "US Price / Target Price",
     "eps_implied_operating_income_surprise_pct": "EPS-Implied Operating Income Surprise",
     "eps_surprise_pct": "EPS Surprise",
     "revenue_surprise_pct": "Revenue Surprise",
@@ -400,6 +402,10 @@ FACTOR_DESCRIPTION_OVERRIDES = {
         "BPS, 애널리스트 영업이익 추정(결측 시 EPS-implied 영업이익 surprise, "
         "그마저 없으면 최근 3개년 실적 ROE 평균), CAPM 자기자본비용과 ROE 유지율을 "
         "사용한 RIM 목표가의 현재가 대비 상승여력."
+    ),
+    "us_price_to_target_price": (
+        "Yahoo Finance FY1 애널리스트 평균 목표주가를 같은 날 종가로 나눈 값. "
+        "높을수록 우수하게 평가합니다."
     ),
     "eps_implied_operating_income_surprise_pct": (
         "FY1 EPS 컨센서스와 최근 공시 영업이익/순이익 관계로 유도한 FY1 영업이익의 "
