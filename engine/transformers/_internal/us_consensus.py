@@ -106,6 +106,20 @@ def build_us_consensus_frames(bronze_dir: str | Path) -> tuple[pd.DataFrame, pd.
         observations.extend(obs)
         factors.extend(rows)
 
+    for path in sorted(alpha_root.glob("overview/snapshot_date=*/ticker=*.json")):
+        payload = _read_json(path)
+        symbol, snapshot = _path_identity(path)
+        if not symbol or not payload:
+            continue
+        obs, rows = _alpha_overview_target(
+            payload,
+            symbol=symbol,
+            snapshot=snapshot,
+            raw_path=str(path),
+        )
+        observations.extend(obs)
+        factors.extend(rows)
+
     for path in sorted((root / "yahoo").glob("snapshot_date=*/ticker=*.json")):
         payload = _read_json(path)
         symbol, snapshot = _path_identity(path)
@@ -230,6 +244,79 @@ def _alpha_estimate_groups(payload: dict[str, Any]) -> list[tuple[list[dict[str,
         )
         if isinstance(entries, list)
     ]
+
+
+def _alpha_overview_target(
+    payload: dict[str, Any],
+    *,
+    symbol: str,
+    snapshot: str,
+    raw_path: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Normalize Alpha Vantage's current aggregate analyst target price."""
+    target_price = _number(
+        _pick(payload, "AnalystTargetPrice", "analystTargetPrice")
+    )
+    if target_price is None or target_price <= 0:
+        return [], []
+
+    snapshot_day = _date_text(snapshot)
+    if not snapshot_day:
+        return [], []
+    currency = _text(_pick(payload, "Currency", "currency"))
+    rating_counts = [
+        _number(_pick(payload, key))
+        for key in (
+            "AnalystRatingStrongBuy",
+            "AnalystRatingBuy",
+            "AnalystRatingHold",
+            "AnalystRatingSell",
+            "AnalystRatingStrongSell",
+        )
+    ]
+    available_counts = [value for value in rating_counts if value is not None and value >= 0]
+    analysts = sum(available_counts) if available_counts else None
+    observation = _observation(
+        symbol,
+        "ALPHA_VANTAGE",
+        "OVERVIEW",
+        "ALPHA_VANTAGE_CURRENT",
+        snapshot_day,
+        snapshot_day,
+        "FY1",
+        "forward",
+        "",
+        "",
+        "target_price",
+        "mean",
+        0,
+        target_price,
+        currency,
+        analysts,
+        raw_path,
+    )
+    factor = _factor_row(
+        symbol,
+        snapshot_day,
+        "ALPHA_VANTAGE",
+        "ALPHA_VANTAGE_CURRENT",
+        "FY1",
+        analysts,
+        {},
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        currency,
+        raw_path,
+        target_price=target_price,
+    )
+    return [observation], [factor]
 
 
 def _yahoo_frames(payload: dict[str, Any], *, symbol: str, snapshot: str, raw_path: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:

@@ -1766,11 +1766,11 @@ def latest_us_bronze_date(symbols: list[str] | None = None) -> date | None:
     root = DATA_LAKE.bronze("yfinance", "price")
     if symbols:
         from engine.extractors._internal.yfinance_market_prices import (
-            normalize_yfinance_ticker,
+            yfinance_price_storage_stem,
         )
 
         paths = [
-            root / f"{normalize_yfinance_ticker(symbol)}.csv"
+            root / f"{yfinance_price_storage_stem(symbol)}.csv"
             for symbol in symbols
         ]
         if any(not path.exists() for path in paths):

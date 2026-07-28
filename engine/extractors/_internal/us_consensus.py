@@ -32,6 +32,7 @@ ALPHA_VANTAGE_QUERY_URL = "https://www.alphavantage.co/query"
 ALPHA_VANTAGE_ENDPOINTS = {
     "earnings-estimates": "EARNINGS_ESTIMATES",
     "earnings": "EARNINGS",
+    "overview": "OVERVIEW",
     "splits": "SPLITS",
 }
 BRONZE_US_CONSENSUS_DIR = DATA_LAKE.bronze("consensus")

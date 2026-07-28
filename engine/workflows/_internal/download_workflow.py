@@ -140,6 +140,10 @@ def download_all_us_prices(args: argparse.Namespace) -> None:
         sleep_seconds=args.sleep_seconds,
         start_date=args.start_date,
         end_date=args.end_date,
+        request_timeout=args.yfinance_timeout,
+        retries=args.yfinance_retries,
+        retry_backoff_seconds=args.yfinance_retry_backoff,
+        repair=args.yfinance_repair,
     )
 
 
@@ -356,6 +360,29 @@ def main() -> None:
     parser.add_argument("--sleep-seconds", type=float, default=0.0)
     parser.add_argument("--stock-retries", type=int, default=3, help="Per-symbol retry count for supported downloads.")
     parser.add_argument("--stock-retry-backoff", type=float, default=30.0, help="Base seconds for per-symbol retry backoff.")
+    parser.add_argument(
+        "--yfinance-timeout",
+        type=float,
+        default=15.0,
+        help="Maximum seconds to wait for each Yahoo Finance HTTP response.",
+    )
+    parser.add_argument(
+        "--yfinance-retries",
+        type=int,
+        default=2,
+        help="Retries for one Yahoo Finance ticker after an error or empty result.",
+    )
+    parser.add_argument(
+        "--yfinance-retry-backoff",
+        type=float,
+        default=2.0,
+        help="Initial Yahoo Finance retry delay in seconds; doubles per retry.",
+    )
+    parser.add_argument(
+        "--yfinance-repair",
+        action="store_true",
+        help="Enable yfinance price-repair processing; disabled by default for batch stability.",
+    )
     parser.add_argument("--hankyung-token", help="JWT bearer token for Hankyung consensus downloads.")
     parser.add_argument(
         "--consensus-sources",

@@ -1968,7 +1968,7 @@ def add_us_consensus_factors(
     us_consensus_factors_path=US_CONSENSUS_FACTORS_PATH,
     market="kr",
 ):
-    """Merge Alpha historical FQ1 and Yahoo operational FY1 factors as PIT events."""
+    """Merge US consensus factors and Alpha-first target-price events as PIT data."""
     df = daily_df.sort_values("trade_date").copy()
     for column in [*US_CONSENSUS_FACTOR_COLUMNS, *US_CONSENSUS_INPUT_COLUMNS]:
         if column not in df.columns:
@@ -1981,78 +1981,89 @@ def add_us_consensus_factors(
     factors = read_us_consensus_factor_frame(stock_code, us_consensus_factors_path=us_consensus_factors_path)
     if factors.empty:
         return df
+    target_events = _us_target_price_events(factors)
+
     horizons = factors["horizon"].astype(str)
     regimes = factors["source_regime"].astype(str)
     alpha_historical = regimes.eq("ALPHA_VANTAGE_HISTORICAL") & horizons.eq("FQ1")
     yahoo_current = regimes.eq("YAHOO_CURRENT") & horizons.eq("FY1")
     factors = factors.loc[alpha_historical | yahoo_current].copy()
-    if factors.empty:
-        return df
-    yahoo_start = factors.loc[factors["source_regime"].astype(str).eq("YAHOO_CURRENT"), "factor_date"].min()
-    if pd.notna(yahoo_start):
-        # Yahoo begins the operational regime. Do not let later-reported Alpha
-        # quarters re-enter the series after that handoff.
-        factors = factors.loc[
-            factors["source_regime"].astype(str).eq("YAHOO_CURRENT")
-            | factors["factor_date"].lt(yahoo_start)
-        ].copy()
-    # Yahoo also wins if both providers have the same availability date.
-    factors["_provider_priority"] = factors["provider"].astype(str).eq("YAHOO_FINANCE").astype(int)
-    factors = factors.sort_values(["factor_date", "_provider_priority", "raw_path"]).drop_duplicates("factor_date", keep="last")
-    factors["_eligible"] = pd.to_numeric(factors["analyst_count"], errors="coerce") >= 3
-    for column in US_CONSENSUS_FACTOR_COLUMNS:
-        if column not in factors.columns:
-            factors[column] = math.nan
-        factors[column] = pd.to_numeric(factors[column], errors="coerce").where(factors["_eligible"])
-    source_target_price = factors.get("us_target_price")
-    if source_target_price is None:
-        source_target_price = pd.Series(math.nan, index=factors.index, dtype="float64")
-    factors["us_target_price"] = pd.to_numeric(
-        source_target_price,
-        errors="coerce",
-    ).where(factors["_eligible"])
-    merge_columns = [
-        *US_CONSENSUS_FACTOR_COLUMNS,
-        "us_eps_consensus",
-        "us_revenue_consensus",
-        "us_operating_income_consensus",
-        "us_target_price",
-        "us_eps_revision_7d_pct",
-        "us_eps_revision_60d_pct",
-        "us_eps_revision_90d_pct",
-        "analyst_count",
-        "source_regime",
-        "horizon",
-    ]
-    for column in merge_columns:
-        if column not in factors.columns:
-            factors[column] = pd.NA
-    left = (
-        df.reset_index(names="_us_consensus_row")
-        .drop(columns=merge_columns, errors="ignore")
-        .sort_values("trade_date")
-    )
-    right = factors[["factor_date", *merge_columns]].sort_values("factor_date")
-    merged = pd.merge_asof(left, right, left_on="trade_date", right_on="factor_date", direction="backward", suffixes=("", "_us"))
-    for column in US_CONSENSUS_FACTOR_COLUMNS:
-        df.loc[merged["_us_consensus_row"], column] = pd.to_numeric(merged[column], errors="coerce").to_numpy()
-    raw_mapping = {
-        "us_eps_consensus": "us_eps_consensus",
-        "us_revenue_consensus": "us_revenue_consensus",
-        "us_operating_income_consensus": "us_operating_income_consensus",
-        "us_target_price": "us_target_price",
-        "us_eps_revision_7d_pct": "us_eps_revision_7d_pct",
-        "us_eps_revision_60d_pct": "us_eps_revision_60d_pct",
-        "us_eps_revision_90d_pct": "us_eps_revision_90d_pct",
-        "us_consensus_analyst_count": "analyst_count",
-        "us_consensus_source_regime": "source_regime",
-        "us_consensus_horizon": "horizon",
-    }
-    for target, source in raw_mapping.items():
-        values = merged[source]
-        if target not in US_CONSENSUS_STRING_INPUT_COLUMNS:
-            values = pd.to_numeric(values, errors="coerce")
-        df.loc[merged["_us_consensus_row"], target] = values.to_numpy()
+    if not factors.empty:
+        yahoo_start = factors.loc[factors["source_regime"].astype(str).eq("YAHOO_CURRENT"), "factor_date"].min()
+        if pd.notna(yahoo_start):
+            # Yahoo begins the operational EPS regime. Do not let later-reported
+            # Alpha quarters re-enter the series after that handoff.
+            factors = factors.loc[
+                factors["source_regime"].astype(str).eq("YAHOO_CURRENT")
+                | factors["factor_date"].lt(yahoo_start)
+            ].copy()
+        # Yahoo also wins if both EPS providers have the same availability date.
+        factors["_provider_priority"] = factors["provider"].astype(str).eq("YAHOO_FINANCE").astype(int)
+        factors = factors.sort_values(["factor_date", "_provider_priority", "raw_path"]).drop_duplicates("factor_date", keep="last")
+        factors["_eligible"] = pd.to_numeric(factors["analyst_count"], errors="coerce") >= 3
+        for column in US_CONSENSUS_FACTOR_COLUMNS:
+            if column not in factors.columns:
+                factors[column] = math.nan
+            factors[column] = pd.to_numeric(factors[column], errors="coerce").where(factors["_eligible"])
+        merge_columns = [
+            *US_CONSENSUS_FACTOR_COLUMNS,
+            "us_eps_consensus",
+            "us_revenue_consensus",
+            "us_operating_income_consensus",
+            "us_eps_revision_7d_pct",
+            "us_eps_revision_60d_pct",
+            "us_eps_revision_90d_pct",
+            "analyst_count",
+            "source_regime",
+            "horizon",
+        ]
+        for column in merge_columns:
+            if column not in factors.columns:
+                factors[column] = pd.NA
+        left = (
+            df.reset_index(names="_us_consensus_row")
+            .drop(columns=merge_columns, errors="ignore")
+            .sort_values("trade_date")
+        )
+        right = factors[["factor_date", *merge_columns]].sort_values("factor_date")
+        merged = pd.merge_asof(left, right, left_on="trade_date", right_on="factor_date", direction="backward", suffixes=("", "_us"))
+        for column in US_CONSENSUS_FACTOR_COLUMNS:
+            df.loc[merged["_us_consensus_row"], column] = pd.to_numeric(merged[column], errors="coerce").to_numpy()
+        raw_mapping = {
+            "us_eps_consensus": "us_eps_consensus",
+            "us_revenue_consensus": "us_revenue_consensus",
+            "us_operating_income_consensus": "us_operating_income_consensus",
+            "us_eps_revision_7d_pct": "us_eps_revision_7d_pct",
+            "us_eps_revision_60d_pct": "us_eps_revision_60d_pct",
+            "us_eps_revision_90d_pct": "us_eps_revision_90d_pct",
+            "us_consensus_analyst_count": "analyst_count",
+            "us_consensus_source_regime": "source_regime",
+            "us_consensus_horizon": "horizon",
+        }
+        for target, source in raw_mapping.items():
+            values = merged[source]
+            if target not in US_CONSENSUS_STRING_INPUT_COLUMNS:
+                values = pd.to_numeric(values, errors="coerce")
+            df.loc[merged["_us_consensus_row"], target] = values.to_numpy()
+
+    if not target_events.empty:
+        left = (
+            df.reset_index(names="_us_target_row")
+            .drop(columns=["us_target_price"], errors="ignore")
+            .sort_values("trade_date")
+        )
+        merged_targets = pd.merge_asof(
+            left,
+            target_events[["factor_date", "us_target_price"]].sort_values("factor_date"),
+            left_on="trade_date",
+            right_on="factor_date",
+            direction="backward",
+        )
+        df.loc[merged_targets["_us_target_row"], "us_target_price"] = pd.to_numeric(
+            merged_targets["us_target_price"],
+            errors="coerce",
+        ).to_numpy()
+
     source_close = df.get("close")
     if source_close is None:
         source_close = pd.Series(math.nan, index=df.index, dtype="float64")
@@ -2062,6 +2073,50 @@ def add_us_consensus_factors(
         close.gt(0) & target_price.gt(0)
     )
     return df
+
+
+def _us_target_price_events(factors):
+    """Choose Alpha Vantage target price first and Yahoo as same-date fallback."""
+    horizons = factors["horizon"].fillna("").astype(str)
+    regimes = factors["source_regime"].fillna("").astype(str)
+    providers = factors["provider"].fillna("").astype(str)
+    is_alpha = providers.eq("ALPHA_VANTAGE") & regimes.eq("ALPHA_VANTAGE_CURRENT")
+    is_yahoo = providers.eq("YAHOO_FINANCE") & regimes.eq("YAHOO_CURRENT")
+    events = factors.loc[horizons.eq("FY1") & (is_alpha | is_yahoo)].copy()
+    if events.empty:
+        return pd.DataFrame(columns=["factor_date", "us_target_price"])
+
+    events["us_target_price"] = pd.to_numeric(
+        events.get("us_target_price"),
+        errors="coerce",
+    )
+    analysts = pd.to_numeric(events.get("analyst_count"), errors="coerce")
+    events["_target_eligible"] = (
+        events["us_target_price"].gt(0)
+        & events["us_target_price"].map(np.isfinite)
+        & analysts.ge(3)
+    )
+    events["us_target_price"] = events["us_target_price"].where(
+        events["_target_eligible"]
+    )
+    events["_provider_priority"] = events["provider"].astype(str).map(
+        {"YAHOO_FINANCE": 1, "ALPHA_VANTAGE": 2}
+    ).fillna(0)
+    if "raw_path" not in events.columns:
+        events["raw_path"] = ""
+    return (
+        events.sort_values(
+            [
+                "factor_date",
+                "_target_eligible",
+                "_provider_priority",
+                "raw_path",
+            ]
+        )
+        .drop_duplicates("factor_date", keep="last")
+        .sort_values("factor_date")
+        .reset_index(drop=True)
+    )
 
 
 def _us_analyst_consensus_is_eligible(df):

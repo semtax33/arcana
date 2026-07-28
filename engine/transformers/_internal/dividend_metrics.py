@@ -17,7 +17,11 @@ from engine.core.paths import (
     market_csv_name,
 )
 from engine.core.identifiers import security_id_of
-from engine.extractors._internal.yfinance_market_prices import normalize_yfinance_ticker
+from engine.extractors._internal.yfinance_market_prices import (
+    normalize_yfinance_ticker,
+    yfinance_price_storage_stem,
+    yfinance_price_ticker_from_storage_stem,
+)
 from engine.markets.us import US_MARKET_CONFIG
 from engine.transformers._internal.edgar_identity import configure_edgar_identity
 from engine.transformers._internal.statement_files import read_statement_period_frames
@@ -1586,7 +1590,7 @@ def _extract_yfinance_dividend_events(
         ticker = US_MARKET_CONFIG.normalize_symbol(item.get("ticker"))
         if not ticker:
             continue
-        file_path = price_dir / f"{normalize_yfinance_ticker(ticker)}.csv"
+        file_path = price_dir / f"{yfinance_price_storage_stem(ticker)}.csv"
         if not file_path.exists():
             continue
         try:
@@ -1873,7 +1877,7 @@ def _us_dividend_events_to_daily_frame(events, stock_code=None):
 
 def _read_yfinance_dividend_frame(file_path, price_column="Close"):
     file_path = Path(file_path)
-    ticker = normalize_yfinance_ticker(file_path.stem)
+    ticker = yfinance_price_ticker_from_storage_stem(file_path.stem)
     raw = pd.read_csv(file_path)
     if raw.empty:
         return pd.DataFrame(columns=_dividend_schema_columns())

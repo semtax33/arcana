@@ -98,6 +98,110 @@ class YFinancePriceEltTest(unittest.TestCase):
         )
         self.assertEqual(fetch.call_args.kwargs["start_date"], "2026-07-24")
 
+    def test_us_price_download_retries_then_continues_after_a_ticker_failure(self):
+        frame = pd.DataFrame(
+            {
+                "Date": ["2026-07-24"],
+                "Open": [102],
+                "High": [103],
+                "Low": [101],
+                "Close": [102.5],
+                "Volume": [1200],
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            stdout = io.StringIO()
+            with (
+                patch.object(
+                    yfinance_market_prices,
+                    "fetch_yfinance_price",
+                    side_effect=[TimeoutError("timed out"), pd.DataFrame(), frame],
+                ) as fetch,
+                patch.object(yfinance_market_prices, "sleep") as sleep_mock,
+                redirect_stdout(stdout),
+            ):
+                written = yfinance_market_prices.download_us_price_histories(
+                    symbols=["COMP", "CON"],
+                    output_dir=output_dir,
+                    retries=1,
+                    retry_backoff_seconds=0.5,
+                )
+
+            self.assertEqual([path.name for path in written], ["__ARCANA_WIN_RESERVED__CON.csv"])
+
+        self.assertEqual(fetch.call_count, 3)
+        self.assertEqual(sleep_mock.call_args_list[0].args, (0.5,))
+        output = stdout.getvalue()
+        self.assertIn("ticker=COMP attempts=2 reason=empty result", output)
+        self.assertIn("downloaded CON rows=1", output)
+
+    def test_fetch_yfinance_price_uses_bounded_single_threaded_requests(self):
+        class FakeYFinance:
+            def __init__(self):
+                self.kwargs = None
+
+            def download(self, ticker, **kwargs):
+                self.kwargs = kwargs
+                return pd.DataFrame(
+                    {"Close": [100]},
+                    index=pd.DatetimeIndex(["2026-07-24"], name="Date"),
+                )
+
+        fake_yf = FakeYFinance()
+        with patch.object(yfinance_market_prices, "_import_yfinance", return_value=fake_yf):
+            result = yfinance_market_prices.fetch_yfinance_price("COMP", timeout=12.5)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(fake_yf.kwargs["timeout"], 12.5)
+        self.assertFalse(fake_yf.kwargs["threads"])
+        self.assertFalse(fake_yf.kwargs["repair"])
+
+    def test_flatten_yfinance_columns_preserves_repaired_marker(self):
+        raw = pd.DataFrame(
+            [[100, False]],
+            columns=pd.MultiIndex.from_tuples(
+                [("Close", "COMP"), ("Repaired?", "COMP")]
+            ),
+        )
+
+        result = yfinance_market_prices._flatten_yfinance_columns(raw)
+
+        self.assertEqual(result.columns.tolist(), ["Close", "Repaired?"])
+
+    def test_yfinance_price_storage_stem_avoids_windows_reserved_ticker_names(self):
+        stored = yfinance_market_prices.yfinance_price_storage_stem("CON")
+
+        self.assertEqual(stored, "__ARCANA_WIN_RESERVED__CON")
+        self.assertEqual(
+            yfinance_market_prices.yfinance_price_ticker_from_storage_stem(stored),
+            "CON",
+        )
+        self.assertEqual(yfinance_market_prices.yfinance_price_storage_stem("COMP"), "COMP")
+
+    def test_price_normalizer_restores_ticker_from_windows_safe_filename(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            safe_path = Path(temp_dir) / "__ARCANA_WIN_RESERVED__CON.csv"
+            pd.DataFrame(
+                {
+                    "Date": ["2026-07-24"],
+                    "Open": [100],
+                    "High": [101],
+                    "Low": [99],
+                    "Close": [100.5],
+                    "Adj Close": [100],
+                    "Volume": [1000],
+                }
+            ).to_csv(safe_path, index=False)
+
+            result = normalize_us_price(
+                Path(temp_dir) / "*.csv",
+                output_path=None,
+                log_progress=False,
+            )
+
+        self.assertEqual(result["security_id"].tolist(), ["SEC_US_CON"])
+
     def test_download_text_retries_ssl_failures_with_certifi_context(self):
         cert_error = URLError(ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED"))
         with (
@@ -467,6 +571,10 @@ class YFinancePriceEltTest(unittest.TestCase):
         self.assertEqual(download_us.call_args.kwargs["limit"], 2)
         self.assertIsNone(download_us.call_args.kwargs["start_date"])
         self.assertIsNone(download_us.call_args.kwargs["end_date"])
+        self.assertEqual(download_us.call_args.kwargs["request_timeout"], 15.0)
+        self.assertEqual(download_us.call_args.kwargs["retries"], 2)
+        self.assertEqual(download_us.call_args.kwargs["retry_backoff_seconds"], 2.0)
+        self.assertFalse(download_us.call_args.kwargs["repair"])
 
         with (
             patch.object(sys, "argv", ["prog", "--start-date", "2024-01-01", "--end-date", "20240131", "prices"]),

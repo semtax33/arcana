@@ -37,6 +37,11 @@ US_CONSENSUS_TABLE_FILES = {
     "us_consensus_events": (US_EVENTS_NAME, US_EVENT_COLUMNS),
     "us_consensus_factors": (US_FACTORS_NAME, US_FACTOR_COLUMNS),
 }
+US_CONSENSUS_TABLE_DATE_COLUMNS = {
+    "us_consensus_observations": "snapshot_date",
+    "us_consensus_events": "event_date",
+    "us_consensus_factors": "factor_date",
+}
 
 US_CONSENSUS_FACTORS_SCHEMA_MIGRATIONS = (
     "ALTER TABLE us_consensus_factors "
@@ -87,7 +92,6 @@ STRING_COLUMNS = {
     "source_regime",
     "horizon",
     "period_type",
-    "fiscal_period_end",
     "forecast_slot",
     "metric",
     "statistic",
@@ -105,6 +109,7 @@ DATE_COLUMNS = {
     "availability_date",
     "event_date",
     "factor_date",
+    "fiscal_period_end",
 }
 
 DATETIME_COLUMNS = {"updated_at"}
@@ -235,7 +240,7 @@ def load_us_consensus(
             frame = _read_silver_csv(Path(silver_dir) / file_name, columns=columns)
             counts[table_name] = len(frame)
             if not dry_run and not frame.empty:
-                client.insert_df(table_name, frame, column_names=list(frame.columns))
+                _insert_us_consensus_frame(client, table_name, frame)
     finally:
         close = getattr(client, "close", None)
         if owns_client and callable(close):
@@ -256,6 +261,25 @@ def ensure_us_consensus_factor_schema(client: Any) -> None:
             command(query)
         else:
             client.execute(query)
+
+
+def _insert_us_consensus_frame(client: Any, table_name: str, frame: pd.DataFrame) -> None:
+    """Insert one ClickHouse month at a time to stay below its partition limit."""
+    date_column = US_CONSENSUS_TABLE_DATE_COLUMNS[table_name]
+    dates = pd.to_datetime(frame[date_column], errors="coerce")
+    if dates.isna().any():
+        invalid_count = int(dates.isna().sum())
+        raise ValueError(
+            f"{table_name}.{date_column} contains {invalid_count:,} invalid date value(s)"
+        )
+    batches = frame.assign(_partition=dates.dt.to_period("M")).groupby(
+        "_partition",
+        sort=True,
+        observed=True,
+    )
+    for _, batch in batches:
+        prepared = batch.drop(columns="_partition")
+        client.insert_df(table_name, prepared, column_names=list(prepared.columns))
 
 
 def _read_silver_csv(path: Path, *, columns: list[str]) -> pd.DataFrame:

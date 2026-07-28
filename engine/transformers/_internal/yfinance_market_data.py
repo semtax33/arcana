@@ -8,7 +8,10 @@ import pandas as pd
 
 from engine.core.identifiers import security_id_of
 from engine.core.paths import DATA_LAKE, PROJECT_ROOT, market_csv_name
-from engine.extractors._internal.yfinance_market_prices import normalize_yfinance_ticker
+from engine.extractors._internal.yfinance_market_prices import (
+    normalize_yfinance_ticker,
+    yfinance_price_ticker_from_storage_stem,
+)
 from engine.markets.us import US_MARKET_CONFIG
 
 
@@ -72,7 +75,7 @@ def normalize_us_price(
     frames = []
     for file_index, file in enumerate(files, start=1):
         file_path = Path(file)
-        ticker = normalize_yfinance_ticker(file_path.stem)
+        ticker = yfinance_price_ticker_from_storage_stem(file_path.stem)
         if log_progress and _should_log_progress(file_index, total_files, progress_interval):
             print(
                 f"normalizing price file ticker={ticker} ({file_index:,}/{total_files:,})",

@@ -337,6 +337,10 @@ or omit `--symbols` to download the SEC ticker map universe.
 
 US price downloads use NasdaqTrader symbol directories for the universe and yfinance
 `period=max` history files under `data-lake/bronze/yfinance/price/{TICKER}.csv`.
+On Windows, device-name tickers such as `CON` are stored with an internal safe
+prefix and restored to their original ticker during normalization. Each request
+uses a 15-second response timeout and retries twice with exponential backoff;
+use `--yfinance-repair` only when Yahoo price-repair processing is required.
 Install yfinance first if needed: `pip install yfinance`.
 
 WACC input downloads:

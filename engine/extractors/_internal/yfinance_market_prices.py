@@ -21,6 +21,20 @@ OTHER_LISTED_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
 BRONZE_YFINANCE_PRICE_DIR = DATA_LAKE.bronze("yfinance", "price")
 BRONZE_YFINANCE_UNIVERSE_DIR = DATA_LAKE.bronze("yfinance", "universe")
 FILTERED_UNIVERSE_PATH = BRONZE_YFINANCE_UNIVERSE_DIR / "us_equity_universe.csv"
+DEFAULT_YFINANCE_TIMEOUT_SECONDS = 15.0
+DEFAULT_YFINANCE_RETRIES = 2
+DEFAULT_YFINANCE_RETRY_BACKOFF_SECONDS = 2.0
+WINDOWS_RESERVED_FILE_STEMS = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{number}" for number in range(1, 10)),
+        *(f"LPT{number}" for number in range(1, 10)),
+    }
+)
+WINDOWS_RESERVED_TICKER_PREFIX = "__ARCANA_WIN_RESERVED__"
 
 EXCLUDED_INSTRUMENT_PATTERN = (
     r"\b(?:"
@@ -77,7 +91,18 @@ def download_us_price_histories(
     output_dir: str | Path = BRONZE_YFINANCE_PRICE_DIR,
     start_date: str | None = None,
     end_date: str | None = None,
+    request_timeout: float | None = DEFAULT_YFINANCE_TIMEOUT_SECONDS,
+    retries: int = DEFAULT_YFINANCE_RETRIES,
+    retry_backoff_seconds: float = DEFAULT_YFINANCE_RETRY_BACKOFF_SECONDS,
+    repair: bool = False,
 ) -> list[Path]:
+    if request_timeout is not None and request_timeout <= 0:
+        raise ValueError("request_timeout must be positive or None")
+    if retries < 0:
+        raise ValueError("retries must be zero or greater")
+    if retry_backoff_seconds < 0:
+        raise ValueError("retry_backoff_seconds must be zero or greater")
+
     resolved_symbols = _resolve_download_symbols(symbols)
     selected_symbols = resolved_symbols[max(offset, 0):]
     if limit is not None:
@@ -88,7 +113,7 @@ def download_us_price_histories(
     written: list[Path] = []
 
     for index, ticker in enumerate(selected_symbols, start=max(offset, 0)):
-        out_path = output_dir / f"{ticker}.csv"
+        out_path = output_dir / f"{yfinance_price_storage_stem(ticker)}.csv"
         existing = pd.DataFrame()
         effective_start = start_date
         if out_path.exists() and not force:
@@ -105,14 +130,17 @@ def download_us_price_histories(
                     print(f"skipping {ticker} (already fresh through {latest})")
                     continue
 
-        print(f"downloading {ticker} (download_offset : {index})....")
-        frame = fetch_yfinance_price(
+        print(f"downloading {ticker} (download_offset : {index})....", flush=True)
+        frame = _fetch_yfinance_price_with_retry(
             ticker,
             start_date=effective_start,
             end_date=end_date,
+            request_timeout=request_timeout,
+            retries=retries,
+            retry_backoff_seconds=retry_backoff_seconds,
+            repair=repair,
         )
         if frame.empty:
-            print(f"empty yfinance result: {ticker}")
             continue
 
         if not existing.empty:
@@ -125,6 +153,7 @@ def download_us_price_histories(
             metadata={"ticker": ticker},
         )
         written.append(out_path)
+        print(f"downloaded {ticker} rows={len(frame):,}", flush=True)
         if sleep_seconds > 0:
             sleep(sleep_seconds)
 
@@ -190,6 +219,8 @@ def fetch_yfinance_price(
     start_date: str | date | None = None,
     end_date: str | date | None = None,
     normalize_ticker: bool = True,
+    timeout: float | None = DEFAULT_YFINANCE_TIMEOUT_SECONDS,
+    repair: bool = False,
 ) -> pd.DataFrame:
     yf = _import_yfinance()
     ticker = (
@@ -201,8 +232,10 @@ def fetch_yfinance_price(
         "interval": "1d",
         "auto_adjust": False,
         "actions": True,
-        "repair": True,
+        "repair": repair,
         "progress": False,
+        "threads": False,
+        "timeout": timeout,
     }
     if start_date or end_date:
         if start_date:
@@ -220,6 +253,51 @@ def fetch_yfinance_price(
     if frame.index.name is not None or not isinstance(frame.index, pd.RangeIndex):
         frame = frame.reset_index()
     return frame
+
+
+def _fetch_yfinance_price_with_retry(
+    ticker: str,
+    *,
+    start_date: str | date | None,
+    end_date: str | date | None,
+    request_timeout: float | None,
+    retries: int,
+    retry_backoff_seconds: float,
+    repair: bool,
+) -> pd.DataFrame:
+    """Return a non-empty price frame, retrying transient Yahoo failures per ticker."""
+    attempts = retries + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            frame = fetch_yfinance_price(
+                ticker,
+                start_date=start_date,
+                end_date=end_date,
+                timeout=request_timeout,
+                repair=repair,
+            )
+            if frame is not None and not frame.empty:
+                return frame
+            detail = "empty result"
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+
+        if attempt == attempts:
+            print(
+                f"[ERROR] yfinance price skipped ticker={ticker} "
+                f"attempts={attempts} reason={detail}",
+                flush=True,
+            )
+            return pd.DataFrame()
+
+        delay = retry_backoff_seconds * (2 ** (attempt - 1))
+        print(
+            f"[WARN] yfinance price ticker={ticker} attempt={attempt}/{attempts} "
+            f"reason={detail}; retrying_in={delay:.1f}s",
+            flush=True,
+        )
+        if delay > 0:
+            sleep(delay)
 
 
 def download_us_equity_universe(
@@ -320,6 +398,24 @@ def normalize_yfinance_ticker(symbol: object) -> str:
     for old, new in ((".", "-"), ("/", "-"), ("^", "-"), ("$", "-")):
         ticker = ticker.replace(old, new)
     return "".join(ticker.split())
+
+
+def yfinance_price_storage_stem(symbol: object) -> str:
+    """Map a ticker to a Windows-safe CSV stem without changing its market symbol."""
+    ticker = normalize_yfinance_ticker(symbol)
+    if ticker in WINDOWS_RESERVED_FILE_STEMS:
+        return f"{WINDOWS_RESERVED_TICKER_PREFIX}{ticker}"
+    return ticker
+
+
+def yfinance_price_ticker_from_storage_stem(stem: object) -> str:
+    """Recover the market ticker represented by a yfinance price CSV stem."""
+    normalized_stem = normalize_yfinance_ticker(stem)
+    if normalized_stem.startswith(WINDOWS_RESERVED_TICKER_PREFIX):
+        ticker = normalized_stem.removeprefix(WINDOWS_RESERVED_TICKER_PREFIX)
+        if ticker in WINDOWS_RESERVED_FILE_STEMS:
+            return ticker
+    return normalized_stem
 
 
 def _resolve_download_symbols(symbols: Iterable[str] | None) -> list[str]:
@@ -529,6 +625,7 @@ def _flatten_yfinance_columns(frame: pd.DataFrame) -> pd.DataFrame:
         "Volume",
         "Dividends",
         "Stock Splits",
+        "Repaired?",
     }
     flattened.columns = [
         next((str(part) for part in column if str(part) in known_columns), str(column[-1]))
