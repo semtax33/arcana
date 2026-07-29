@@ -122,6 +122,7 @@ VALUATION_FACTORS = {
     "psr",
     "peg",
     "rim_upside_potential",
+    "kr_price_to_target_price",
     "us_price_to_target_price",
 }
 
@@ -363,6 +364,7 @@ FACTOR_NAME_OVERRIDES = {
     "us_eps_dispersion_pct": "US EPS Consensus Dispersion",
     "us_revenue_dispersion_pct": "US Revenue Consensus Dispersion",
     "us_eps_surprise_pct": "US EPS Surprise",
+    "kr_price_to_target_price": "KR Price / Target Price",
     "us_price_to_target_price": "US Price / Target Price",
     "eps_implied_operating_income_surprise_pct": "EPS-Implied Operating Income Surprise",
     "eps_surprise_pct": "EPS Surprise",
@@ -402,6 +404,11 @@ FACTOR_DESCRIPTION_OVERRIDES = {
         "BPS, 애널리스트 영업이익 추정(결측 시 EPS-implied 영업이익 surprise, "
         "그마저 없으면 최근 3개년 실적 ROE 평균), CAPM 자기자본비용과 ROE 유지율을 "
         "사용한 RIM 목표가의 현재가 대비 상승여력."
+    ),
+    "kr_price_to_target_price": (
+        "최근 120일 Hankyung 보고서에서 증권사·애널리스트별 최신 목표주가를 평균한 뒤 "
+        "한국 종목의 종가를 나눈 값. 높을수록 목표주가 대비 시장가격이 강하게 선행하며 "
+        "자기강화적 기대가 형성된 상태로 평가합니다."
     ),
     "us_price_to_target_price": (
         "Yahoo Finance FY1 애널리스트 평균 목표주가를 같은 날 종가로 나눈 값. "

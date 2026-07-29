@@ -210,6 +210,13 @@ page because EQUITY has a very large page count. Normalize writes silver CSV fil
 `data-lake/silver/consensus/hankyung/`, and the ClickHouse consensus loader reads only
 those silver CSV files.
 
+Hankyung 목표주가는 정규화 과정에서
+`data-lake/silver/consensus/hankyung/kr_hankyung_target_price_consensus.csv`로
+별도 저장됩니다. `kr_price_to_target_price` 팩터는 최근 120일 동안
+증권사·애널리스트별 최신 목표주가가 3건 이상일 때 `종가 / 평균 목표주가`로 계산하며,
+보고서 날짜의 다음 거래일부터 반영됩니다. 목표주가 대비 시장가격의 자기강화적 선행을
+포착하기 위해 factor catalog에서는 `HIGHER_BETTER`로 등록됩니다.
+
 ### 미국 컨센서스 (Alpha Vantage + Yahoo Finance)
 
 미국 컨센서스는 한국 컨센서스와 원본·정규화 테이블·팩터를 분리한다. Alpha Vantage는

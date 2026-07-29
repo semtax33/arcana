@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+import heapq
 import json
 import math
 import re
 from pathlib import Path
+from statistics import median
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -21,7 +23,9 @@ SILVER_KR_CONSENSUS_DIR = SILVER_HANKYUNG_CONSENSUS_DIR
 SILVER_REPORTS_NAME = "kr_hankyung_consensus_reports.csv"
 SILVER_ESTIMATES_NAME = "kr_hankyung_consensus_estimates.csv"
 SILVER_DAILY_NAME = "kr_hankyung_consensus_daily.csv"
+SILVER_TARGET_PRICE_NAME = "kr_hankyung_target_price_consensus.csv"
 DEFAULT_STALE_DAYS = 180
+TARGET_PRICE_LOOKBACK_DAYS = 120
 
 REPORT_COLUMNS = [
     "security_id",
@@ -114,6 +118,20 @@ DAILY_COLUMNS = [
     "updated_at",
 ]
 
+TARGET_PRICE_COLUMNS = [
+    "security_id",
+    "stock_code",
+    "event_date",
+    "target_price_mean",
+    "target_price_median",
+    "target_price_low",
+    "target_price_high",
+    "analyst_count",
+    "currency",
+    "source_provider",
+    "updated_at",
+]
+
 PRE_METRIC_FIELDS = {
     "STOCK_PRE_EPS": "basic_eps",
     "STOCK_EXPECTED_SALES": "revenue",
@@ -138,26 +156,32 @@ def normalize_hankyung_consensus(
 
     reports_df, estimates_df = build_hankyung_consensus_frames(bronze_path)
     daily_df = build_hankyung_daily_consensus(estimates_df, stale_days=stale_days)
+    target_price_df = build_hankyung_target_price_consensus(reports_df)
 
     reports_path = output_path / SILVER_REPORTS_NAME
     estimates_path = output_path / SILVER_ESTIMATES_NAME
     daily_path = output_path / SILVER_DAILY_NAME
+    target_price_path = output_path / SILVER_TARGET_PRICE_NAME
     _write_csv(reports_path, reports_df, REPORT_COLUMNS)
     _write_csv(estimates_path, estimates_df, ESTIMATE_COLUMNS)
     _write_csv(daily_path, daily_df, DAILY_COLUMNS)
+    _write_csv(target_price_path, target_price_df, TARGET_PRICE_COLUMNS)
 
     print(
         "[DONE] hankyung consensus normalize "
-        f"reports={len(reports_df):,}, estimates={len(estimates_df):,}, daily={len(daily_df):,}",
+        f"reports={len(reports_df):,}, estimates={len(estimates_df):,}, "
+        f"daily={len(daily_df):,}, target_prices={len(target_price_df):,}",
         flush=True,
     )
     return {
         "reports_path": reports_path,
         "estimates_path": estimates_path,
         "daily_path": daily_path,
+        "target_price_path": target_price_path,
         "reports": len(reports_df),
         "estimates": len(estimates_df),
         "daily": len(daily_df),
+        "target_prices": len(target_price_df),
     }
 
 
@@ -173,33 +197,40 @@ def normalize_kr_consensus(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    reports_df, estimates_df = build_kr_consensus_frames(
-        hankyung_bronze_dir=hankyung_bronze_dir,
+    hankyung_reports, estimates_df = build_hankyung_consensus_frames(hankyung_bronze_dir)
+    reports_df = _combine_kr_consensus_reports(
+        hankyung_reports,
         valuefinder_bronze_dir=valuefinder_bronze_dir,
         equity_bronze_dir=equity_bronze_dir,
         stock_name_lookup=stock_name_lookup,
     )
     daily_df = build_hankyung_daily_consensus(estimates_df, stale_days=stale_days)
+    target_price_df = build_hankyung_target_price_consensus(hankyung_reports)
 
     reports_path = output_path / SILVER_REPORTS_NAME
     estimates_path = output_path / SILVER_ESTIMATES_NAME
     daily_path = output_path / SILVER_DAILY_NAME
+    target_price_path = output_path / SILVER_TARGET_PRICE_NAME
     _write_csv(reports_path, reports_df, REPORT_COLUMNS)
     _write_csv(estimates_path, estimates_df, ESTIMATE_COLUMNS)
     _write_csv(daily_path, daily_df, DAILY_COLUMNS)
+    _write_csv(target_price_path, target_price_df, TARGET_PRICE_COLUMNS)
 
     print(
         "[DONE] kr consensus normalize "
-        f"reports={len(reports_df):,}, estimates={len(estimates_df):,}, daily={len(daily_df):,}",
+        f"reports={len(reports_df):,}, estimates={len(estimates_df):,}, "
+        f"daily={len(daily_df):,}, target_prices={len(target_price_df):,}",
         flush=True,
     )
     return {
         "reports_path": reports_path,
         "estimates_path": estimates_path,
         "daily_path": daily_path,
+        "target_price_path": target_price_path,
         "reports": len(reports_df),
         "estimates": len(estimates_df),
         "daily": len(daily_df),
+        "target_prices": len(target_price_df),
     }
 
 
@@ -211,6 +242,22 @@ def build_kr_consensus_frames(
     stock_name_lookup: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     hankyung_reports, hankyung_estimates = build_hankyung_consensus_frames(hankyung_bronze_dir)
+    reports_df = _combine_kr_consensus_reports(
+        hankyung_reports,
+        valuefinder_bronze_dir=valuefinder_bronze_dir,
+        equity_bronze_dir=equity_bronze_dir,
+        stock_name_lookup=stock_name_lookup,
+    )
+    return reports_df, hankyung_estimates
+
+
+def _combine_kr_consensus_reports(
+    hankyung_reports: pd.DataFrame,
+    *,
+    valuefinder_bronze_dir: str | Path | None,
+    equity_bronze_dir: str | Path | None,
+    stock_name_lookup: dict[str, str] | None,
+) -> pd.DataFrame:
     report_frames = []
     if not hankyung_reports.empty:
         report_frames.append(hankyung_reports)
@@ -235,7 +282,7 @@ def build_kr_consensus_frames(
                 reports_df[column] = pd.NA
         reports_df = reports_df[REPORT_COLUMNS]
 
-    return reports_df, hankyung_estimates
+    return reports_df
 
 
 def build_hankyung_consensus_frames(bronze_dir: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -483,6 +530,137 @@ def build_hankyung_daily_consensus(
         return pd.DataFrame(columns=DAILY_COLUMNS)
     return pd.DataFrame(rows, columns=DAILY_COLUMNS).sort_values(
         ["stock_code", "target_period", "metric_id", "as_of_date"]
+    ).reset_index(drop=True)
+
+
+def build_hankyung_target_price_consensus(
+    reports_df: pd.DataFrame,
+    *,
+    lookback_days: int = TARGET_PRICE_LOOKBACK_DAYS,
+) -> pd.DataFrame:
+    """Build PIT target-price states at report and expiry boundaries."""
+
+    if int(lookback_days) <= 0:
+        raise ValueError("lookback_days must be positive")
+    if reports_df is None or reports_df.empty:
+        return pd.DataFrame(columns=TARGET_PRICE_COLUMNS)
+
+    df = reports_df.copy().reset_index(drop=True)
+    for column in [
+        "security_id",
+        "stock_code",
+        "report_date",
+        "file_register_date",
+        "report_idx",
+        "office_name",
+        "report_writer",
+        "target_stock_prices",
+    ]:
+        if column not in df.columns:
+            df[column] = pd.NA
+
+    df["_row_order"] = range(len(df))
+    df["_report_date"] = pd.to_datetime(df["report_date"], errors="coerce")
+    df["_file_register_date"] = pd.to_datetime(df["file_register_date"], errors="coerce")
+    df["_report_date"] = df["_report_date"].fillna(df["_file_register_date"])
+    df["_target_price"] = pd.to_numeric(df["target_stock_prices"], errors="coerce")
+    df = df.loc[
+        df["_report_date"].notna()
+        & df["stock_code"].fillna("").astype(str).str.strip().ne("")
+        & df["_target_price"].gt(0)
+        & df["_target_price"].map(math.isfinite)
+    ].copy()
+    if df.empty:
+        return pd.DataFrame(columns=TARGET_PRICE_COLUMNS)
+
+    broker = df["office_name"].fillna("").astype(str).str.strip().str.casefold()
+    analyst = df["report_writer"].fillna("").astype(str).str.strip().str.casefold()
+    df["_analyst_key"] = broker + "|" + analyst
+    missing_identity = broker.eq("") & analyst.eq("")
+    report_idx = df["report_idx"].fillna("").astype(str).str.strip()
+    fallback_key = "report:" + report_idx
+    fallback_key = fallback_key.where(
+        report_idx.ne(""),
+        "row:" + df["_row_order"].astype(str),
+    )
+    df.loc[missing_identity, "_analyst_key"] = fallback_key.loc[missing_identity]
+    df["_report_sort"] = pd.to_numeric(df["report_idx"], errors="coerce").fillna(0)
+
+    rows: list[dict[str, Any]] = []
+    updated_at = _updated_at()
+    lookback = pd.Timedelta(days=int(lookback_days))
+    sort_columns = [
+        "_report_date",
+        "_file_register_date",
+        "_report_sort",
+        "_row_order",
+    ]
+    for (security_id, stock_code), group in df.groupby(
+        ["security_id", "stock_code"],
+        dropna=False,
+    ):
+        group = group.sort_values(sort_columns).reset_index(drop=True)
+        report_events: dict[pd.Timestamp, list[tuple[str, float, int]]] = {}
+        expiry_dates: set[pd.Timestamp] = set()
+        event_records = group[
+            ["_report_date", "_analyst_key", "_target_price"]
+        ].itertuples(index=False, name=None)
+        for sequence, (
+            report_date_value,
+            analyst_key_value,
+            target_price_value,
+        ) in enumerate(event_records):
+            report_date = pd.Timestamp(report_date_value)
+            analyst_key = str(analyst_key_value)
+            target_price = float(target_price_value)
+            report_events.setdefault(report_date, []).append(
+                (analyst_key, target_price, sequence)
+            )
+            expiry_dates.add(report_date + lookback)
+
+        boundary_dates = sorted(set(report_events) | expiry_dates)
+        current_targets: dict[str, tuple[int, float]] = {}
+        expiry_heap: list[tuple[pd.Timestamp, int, str]] = []
+        for boundary_date in boundary_dates:
+            boundary = pd.Timestamp(boundary_date)
+            while expiry_heap and expiry_heap[0][0] <= boundary:
+                _, sequence, analyst_key = heapq.heappop(expiry_heap)
+                current = current_targets.get(analyst_key)
+                if current is not None and current[0] == sequence:
+                    del current_targets[analyst_key]
+
+            for analyst_key, target_price, sequence in report_events.get(boundary, []):
+                current_targets[analyst_key] = (sequence, target_price)
+                heapq.heappush(
+                    expiry_heap,
+                    (boundary + lookback, sequence, analyst_key),
+                )
+
+            values = [target_price for _, target_price in current_targets.values()]
+            rows.append(
+                {
+                    "security_id": security_id,
+                    "stock_code": stock_code,
+                    "event_date": boundary.date().isoformat(),
+                    "target_price_mean": (
+                        float(math.fsum(values) / len(values))
+                        if values
+                        else math.nan
+                    ),
+                    "target_price_median": float(median(values)) if values else math.nan,
+                    "target_price_low": float(min(values)) if values else math.nan,
+                    "target_price_high": float(max(values)) if values else math.nan,
+                    "analyst_count": int(len(values)),
+                    "currency": "KRW",
+                    "source_provider": "hankyung",
+                    "updated_at": updated_at,
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame(columns=TARGET_PRICE_COLUMNS)
+    return pd.DataFrame(rows, columns=TARGET_PRICE_COLUMNS).sort_values(
+        ["stock_code", "event_date"]
     ).reset_index(drop=True)
 
 

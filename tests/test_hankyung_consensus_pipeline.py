@@ -13,8 +13,16 @@ from engine.extractors._internal.html_consensus import (
 )
 from engine.loaders.consensus import load_hankyung_consensus
 from engine.loaders.factors import create_factor_catalog_dataframe
-from engine.transformers.consensus import normalize_hankyung_consensus, normalize_kr_consensus
-from engine.transformers.factors import add_real_consensus_factors
+from engine.transformers.consensus import (
+    TARGET_PRICE_COLUMNS,
+    build_hankyung_target_price_consensus,
+    normalize_hankyung_consensus,
+    normalize_kr_consensus,
+)
+from engine.transformers.factors import (
+    add_kr_target_price_factor,
+    add_real_consensus_factors,
+)
 from engine.workflows._internal import download_workflow, normalize_workflow
 
 
@@ -111,6 +119,7 @@ def test_normalize_loader_and_real_factors_use_silver_csv(tmp_path: Path):
     reports = pd.read_csv(result["reports_path"], dtype={"stock_code": str})
     estimates = pd.read_csv(result["estimates_path"], dtype={"stock_code": str})
     daily = pd.read_csv(result["daily_path"], dtype={"stock_code": str})
+    target_prices = pd.read_csv(result["target_price_path"], dtype={"stock_code": str})
 
     assert len(reports) == 2
     assert set(reports["stock_code"]) == {"005930"}
@@ -129,6 +138,8 @@ def test_normalize_loader_and_real_factors_use_silver_csv(tmp_path: Path):
     assert daily.loc[daily["metric_id"] == "basic_eps", "consensus_mean"].iloc[-1] == 120
     assert daily.loc[daily["metric_id"] == "forward_per", "consensus_mean"].iloc[-1] == 10
     assert daily.loc[daily["metric_id"] == "forward_roe", "consensus_mean"].iloc[-1] == 15
+    assert list(target_prices.columns) == TARGET_PRICE_COLUMNS
+    assert result["target_prices"] == len(target_prices)
 
     client = RecordingClient()
     counts = load_hankyung_consensus(silver_dir=silver_dir, client=client)
@@ -172,6 +183,95 @@ def test_normalize_loader_and_real_factors_use_silver_csv(tmp_path: Path):
     assert factors.loc[1, "real_eps_expected_growth"] == 20
     assert factors.loc[1, "real_eps_revision_1m_pct"] == 20
     assert round(factors.loc[2, "real_eps_surprise_pct"], 6) == round((130 - 120) / 120 * 100, 6)
+
+
+def test_hankyung_target_price_consensus_deduplicates_and_expires_analysts():
+    reports = pd.DataFrame(
+        [
+            _target_report("2026-01-01", 1, "Broker A", "Analyst A", 100),
+            _target_report("2026-01-10", 2, "Broker B", "Analyst B", 120),
+            _target_report("2026-01-15", 3, "Broker C", "Analyst C", 130),
+            _target_report("2026-01-20", 4, "Broker A", "Analyst A", 110),
+            _target_report("2026-01-21", 5, "Broker D", "Analyst D", 0),
+            _target_report("2026-01-22", 6, "", "", -10),
+        ]
+    )
+
+    result = build_hankyung_target_price_consensus(reports)
+    by_date = result.set_index("event_date")
+
+    assert by_date.loc["2026-01-15", "analyst_count"] == 3
+    assert by_date.loc["2026-01-15", "target_price_mean"] == (100 + 120 + 130) / 3
+    assert by_date.loc["2026-01-20", "analyst_count"] == 3
+    assert by_date.loc["2026-01-20", "target_price_mean"] == 120
+
+    broker_b_expiry = (pd.Timestamp("2026-01-10") + pd.Timedelta(days=120)).date().isoformat()
+    assert by_date.loc[broker_b_expiry, "analyst_count"] == 2
+    assert by_date.loc[broker_b_expiry, "target_price_mean"] == 120
+    assert (result["source_provider"] == "hankyung").all()
+
+    anonymous_reports = pd.DataFrame(
+        [
+            _target_report("2026-02-01", 10, "", "", 90),
+            _target_report("2026-02-01", 11, "", "", 100),
+            _target_report("2026-02-01", 12, "", "", 110),
+        ]
+    )
+    anonymous = build_hankyung_target_price_consensus(anonymous_reports).iloc[0]
+    assert anonymous["analyst_count"] == 3
+    assert anonymous["target_price_mean"] == 100
+
+
+def test_kr_price_to_target_price_is_pit_and_requires_three_analysts(tmp_path: Path):
+    target_price_path = tmp_path / "kr_hankyung_target_price_consensus.csv"
+    pd.DataFrame(
+        [
+            {
+                "stock_code": "005930",
+                "event_date": "2026-07-17",
+                "target_price_mean": 200,
+                "analyst_count": 3,
+            },
+            {
+                "stock_code": "005930",
+                "event_date": "2026-07-21",
+                "target_price_mean": 210,
+                "analyst_count": 2,
+            },
+        ]
+    ).to_csv(target_price_path, index=False)
+    daily = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(
+                ["2026-07-17", "2026-07-20", "2026-07-21", "2026-07-22"]
+            ),
+            "close": [100, 100, 105, 105],
+        }
+    )
+
+    result = add_kr_target_price_factor(
+        daily,
+        "005930",
+        market="kr",
+        target_price_consensus_path=target_price_path,
+    )
+
+    assert pd.isna(result.loc[0, "kr_price_to_target_price"])
+    assert result.loc[1, "kr_target_price"] == 200
+    assert result.loc[1, "kr_price_to_target_price"] == 0.5
+    assert result.loc[2, "kr_price_to_target_price"] == 105 / 200
+    assert result.loc[2, "kr_target_price_analyst_count"] == 3
+    assert pd.isna(result.loc[3, "kr_target_price"])
+    assert result.loc[3, "kr_target_price_analyst_count"] == 2
+    assert pd.isna(result.loc[3, "kr_price_to_target_price"])
+
+    us_result = add_kr_target_price_factor(
+        daily,
+        "AAPL",
+        market="us",
+        target_price_consensus_path=target_price_path,
+    )
+    assert us_result["kr_price_to_target_price"].isna().all()
 
 
 def test_html_consensus_sources_download_and_normalize_report_opinions(tmp_path: Path):
@@ -299,6 +399,37 @@ def test_real_consensus_factor_catalog_and_cli_dispatch():
     assert "consensus" in download_workflow.DOWNLOAD_ACTIONS
     assert "consensus" in download_workflow.US_DOWNLOAD_ACTIONS
     assert callable(normalize_workflow.normalize_consensus)
+
+
+def test_kr_price_to_target_price_catalog_metadata():
+    catalog = create_factor_catalog_dataframe(
+        ["kr_price_to_target_price"]
+    ).set_index("factor_id")
+
+    row = catalog.loc["kr_price_to_target_price"]
+    assert row["factor_type"] == "valuation"
+    assert row["unit"] == "ratio"
+    assert row["value_direction"] == "HIGHER_BETTER"
+    assert "자기강화적 기대" in row["description"]
+
+
+def _target_report(
+    report_date: str,
+    report_idx: int,
+    office_name: str,
+    report_writer: str,
+    target_price: float,
+) -> dict[str, object]:
+    return {
+        "security_id": "SEC_KR_005930",
+        "stock_code": "005930",
+        "report_date": report_date,
+        "file_register_date": report_date,
+        "report_idx": report_idx,
+        "office_name": office_name,
+        "report_writer": report_writer,
+        "target_stock_prices": target_price,
+    }
 
 
 def _write_report(

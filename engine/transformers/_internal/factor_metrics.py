@@ -46,6 +46,11 @@ from engine.transformers._internal.wacc_inputs import (
 FINANCIAL_DIR = DATA_LAKE.silver("dart", "normalized")
 ESTIMATE_GOLD_ROOT = DATA_LAKE.root / "gold" / "estimates"
 HANKYUNG_CONSENSUS_DAILY_PATH = DATA_LAKE.silver("consensus", "hankyung", "kr_hankyung_consensus_daily.csv")
+HANKYUNG_TARGET_PRICE_CONSENSUS_PATH = DATA_LAKE.silver(
+    "consensus",
+    "hankyung",
+    "kr_hankyung_target_price_consensus.csv",
+)
 US_CONSENSUS_FACTORS_PATH = DATA_LAKE.silver("consensus", "us", "us_consensus_factors.csv")
 PRICE_PATH = DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price"))
 LEGACY_PRICE_PATHS = (
@@ -176,10 +181,17 @@ US_CONSENSUS_STRING_INPUT_COLUMNS = {
     "us_consensus_horizon",
 }
 
+KR_TARGET_PRICE_INPUT_COLUMNS = [
+    "kr_target_price",
+    "kr_target_price_analyst_count",
+]
+
 EPS_IMPLIED_OPERATING_INCOME_SURPRISE_FACTOR = "eps_implied_operating_income_surprise_pct"
+KR_PRICE_TO_TARGET_PRICE_FACTOR = "kr_price_to_target_price"
 US_PRICE_TO_TARGET_PRICE_FACTOR = "us_price_to_target_price"
 
 DEFAULT_FORWARD_CONSENSUS_STALE_DAYS = 180
+MIN_KR_TARGET_PRICE_ANALYSTS = 3
 DEFAULT_RIM_DECAY_FACTOR = 0.8
 RIM_HISTORICAL_ROE_YEARS = 3
 K_RATIO_3Y_WINDOW = 252 * 3
@@ -1961,6 +1973,74 @@ def add_real_consensus_factors(
     return merge_real_consensus_factor_events(df, events)
 
 
+def add_kr_target_price_factor(
+    daily_df,
+    stock_code,
+    *,
+    target_price_consensus_path=HANKYUNG_TARGET_PRICE_CONSENSUS_PATH,
+    market="kr",
+):
+    """Merge PIT Hankyung target prices from the first trading day after each event."""
+
+    df = daily_df.sort_values("trade_date").copy()
+    for column in KR_TARGET_PRICE_INPUT_COLUMNS:
+        if column not in df.columns:
+            df[column] = math.nan
+    if KR_PRICE_TO_TARGET_PRICE_FACTOR not in df.columns:
+        df[KR_PRICE_TO_TARGET_PRICE_FACTOR] = math.nan
+    if str(market or "kr").strip().lower() != "kr" or df.empty:
+        return df
+
+    events = read_kr_target_price_consensus_frame(
+        stock_code,
+        target_price_consensus_path=target_price_consensus_path,
+    )
+    if events.empty:
+        return df
+
+    left = (
+        df.reset_index(names="_kr_target_row")
+        .drop(columns=KR_TARGET_PRICE_INPUT_COLUMNS, errors="ignore")
+        .sort_values("trade_date")
+    )
+    merged = pd.merge_asof(
+        left,
+        events[["event_date", "target_price_mean", "analyst_count"]].sort_values(
+            "event_date"
+        ),
+        left_on="trade_date",
+        right_on="event_date",
+        direction="backward",
+        allow_exact_matches=False,
+    )
+    target_price = pd.to_numeric(merged["target_price_mean"], errors="coerce")
+    analyst_count = pd.to_numeric(merged["analyst_count"], errors="coerce")
+    eligible = (
+        target_price.gt(0)
+        & target_price.map(np.isfinite)
+        & analyst_count.ge(MIN_KR_TARGET_PRICE_ANALYSTS)
+    )
+    eligible_target_price = target_price.where(eligible)
+    df.loc[merged["_kr_target_row"], "kr_target_price"] = eligible_target_price.to_numpy()
+    df.loc[
+        merged["_kr_target_row"],
+        "kr_target_price_analyst_count",
+    ] = analyst_count.to_numpy()
+
+    source_close = df.get("close")
+    if source_close is None:
+        source_close = pd.Series(math.nan, index=df.index, dtype="float64")
+    close = pd.to_numeric(source_close, errors="coerce")
+    target_price = pd.to_numeric(df["kr_target_price"], errors="coerce")
+    df[KR_PRICE_TO_TARGET_PRICE_FACTOR] = (close / target_price).where(
+        close.gt(0)
+        & close.map(np.isfinite)
+        & target_price.gt(0)
+        & target_price.map(np.isfinite)
+    )
+    return df
+
+
 def add_us_consensus_factors(
     daily_df,
     stock_code,
@@ -2234,6 +2314,45 @@ def _cached_real_consensus_daily_frame(path_text):
     if not path.exists():
         return pd.DataFrame()
     return pd.read_csv(path, dtype={"stock_code": str, "target_period": str, "metric_id": str})
+
+
+def read_kr_target_price_consensus_frame(
+    stock_code,
+    *,
+    target_price_consensus_path=HANKYUNG_TARGET_PRICE_CONSENSUS_PATH,
+):
+    path = Path(target_price_consensus_path)
+    frame = _cached_kr_target_price_consensus_frame(str(path))
+    required_columns = {
+        "stock_code",
+        "event_date",
+        "target_price_mean",
+        "analyst_count",
+    }
+    if frame.empty or not required_columns.issubset(frame.columns):
+        return pd.DataFrame()
+    stock_code = normalize_stock_code(stock_code)
+    result = frame.loc[
+        frame["stock_code"].astype(str).map(normalize_stock_code) == stock_code
+    ].copy()
+    if result.empty:
+        return result
+    result["stock_code"] = result["stock_code"].map(normalize_stock_code)
+    result["event_date"] = pd.to_datetime(result["event_date"], errors="coerce")
+    result["target_price_mean"] = pd.to_numeric(
+        result["target_price_mean"],
+        errors="coerce",
+    )
+    result["analyst_count"] = pd.to_numeric(result["analyst_count"], errors="coerce")
+    return result.dropna(subset=["event_date"]).sort_values("event_date")
+
+
+@lru_cache(maxsize=4)
+def _cached_kr_target_price_consensus_frame(path_text):
+    path = Path(path_text)
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.read_csv(path, dtype={"stock_code": str})
 
 
 def merge_forward_consensus_inputs(
@@ -3175,6 +3294,7 @@ def create_stock_factor_dataframe(
     wacc_online_backfill=False,
     estimate_gold_root=ESTIMATE_GOLD_ROOT,
     real_consensus_daily_path=HANKYUNG_CONSENSUS_DAILY_PATH,
+    target_price_consensus_path=HANKYUNG_TARGET_PRICE_CONSENSUS_PATH,
     us_consensus_factors_path=US_CONSENSUS_FACTORS_PATH,
     rim_decay_factor=DEFAULT_RIM_DECAY_FACTOR,
 ):
@@ -3301,6 +3421,12 @@ def create_stock_factor_dataframe(
         financial_df,
         stock_code,
         real_consensus_daily_path=real_consensus_daily_path,
+        market=market,
+    )
+    daily_df = add_kr_target_price_factor(
+        daily_df,
+        stock_code,
+        target_price_consensus_path=target_price_consensus_path,
         market=market,
     )
     daily_df = add_us_consensus_factors(
@@ -3495,6 +3621,7 @@ def preferred_factor_columns():
         "real_revenue_surprise_pct",
         "real_operating_income_surprise_pct",
         "real_net_income_surprise_pct",
+        KR_PRICE_TO_TARGET_PRICE_FACTOR,
         "us_eps_consensus",
         "us_revenue_consensus",
         "us_eps_revision_7d_pct",
