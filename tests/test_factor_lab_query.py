@@ -263,8 +263,110 @@ class FactorLabQueryTest(unittest.TestCase):
         self.assertIn("quantileExact(0.5)(value) AS median_value", result.query)
         self.assertIn("LEFT JOIN source_values AS source", result.query)
         self.assertIn("LEFT JOIN cross_sectional_medians AS median", result.query)
+        self.assertIn("source_is_valid AS is_observed", result.query)
         self.assertIn("cross_sectional_median_unavailable", result.query)
         self.assertIn("INNER JOIN security_universe AS u\n        ON u.security_id = p.security_id", result.query)
+
+    def test_dense_score_can_assign_imputed_rows_neutral_score_and_average_ties(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {
+                "id": "factor_per",
+                "type": "factor_input",
+                "config": {
+                    "factor_id": "per",
+                    "missing_policy": "cross_sectional_median",
+                },
+            },
+            {
+                "id": "score_per",
+                "type": "dense_score",
+                "config": {
+                    "group_by": ["trade_date"],
+                    "order": "desc",
+                    "scale": "0_100",
+                    "tie_method": "average",
+                    "missing_score": 50,
+                },
+            },
+        ]
+        graph["edges"] = [
+            {"source": "factor_per", "target": "score_per", "target_handle": "input"},
+        ]
+        graph["outputs"] = {"final_node_id": "score_per"}
+
+        validation = validate_factor_lab_graph(graph, known_factor_ids={"per"})
+        result = compile_factor_lab_graph(graph, known_factor_ids={"per"})
+
+        self.assertTrue(validation.valid)
+        self.assertEqual(result.parameters["node_score_per_missing_score"], 50.0)
+        self.assertIn(
+            "NOT is_observed, {node_score_per_missing_score:Float64}",
+            result.query,
+        )
+        self.assertIn("s.trade_date, s.is_observed, s.value", result.query)
+        self.assertIn("rank() OVER", result.query)
+        self.assertNotIn(
+            "ORDER BY s.value DESC, s.security_id ASC",
+            result.query[result.query.index("node_score_per AS"):],
+        )
+
+    def test_dense_score_rejects_missing_score_without_median_factor_input(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {
+                "id": "factor_per",
+                "type": "factor_input",
+                "config": {"factor_id": "per", "missing_policy": "drop"},
+            },
+            {
+                "id": "score_per",
+                "type": "dense_score",
+                "config": {"tie_method": "average", "missing_score": 50},
+            },
+        ]
+        graph["edges"] = [
+            {"source": "factor_per", "target": "score_per", "target_handle": "input"},
+        ]
+        graph["outputs"] = {"final_node_id": "score_per"}
+
+        result = validate_factor_lab_graph(graph, known_factor_ids={"per"})
+
+        self.assertFalse(result.valid)
+        self.assertIn(
+            "invalid_missing_score_input",
+            {error.code for error in result.errors},
+        )
+
+    def test_dense_score_rejects_unknown_tie_method_and_out_of_range_missing_score(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {
+                "id": "factor_per",
+                "type": "factor_input",
+                "config": {
+                    "factor_id": "per",
+                    "missing_policy": "cross_sectional_median",
+                },
+            },
+            {
+                "id": "score_per",
+                "type": "dense_score",
+                "config": {"tie_method": "random", "missing_score": 101},
+            },
+        ]
+        graph["edges"] = [
+            {"source": "factor_per", "target": "score_per", "target_handle": "input"},
+        ]
+        graph["outputs"] = {"final_node_id": "score_per"}
+
+        result = validate_factor_lab_graph(graph, known_factor_ids={"per"})
+
+        self.assertFalse(result.valid)
+        self.assertEqual(
+            {"invalid_tie_method", "invalid_missing_score"},
+            {error.code for error in result.errors},
+        )
 
     def test_factor_input_rejects_unknown_missing_policy(self):
         graph = nested_graph()
@@ -286,6 +388,8 @@ class FactorLabQueryTest(unittest.TestCase):
         self.assertEqual(specs["condition_score"].inputs, ["condition", "score"])
         self.assertEqual(specs["lag"].config_schema, {"period": "positive integer"})
         self.assertEqual(specs["rolling_max"].config_schema, {"window": "positive integer"})
+        self.assertEqual(specs["dense_score"].config_schema["tie_method"], "ordinal|average")
+        self.assertIsNone(specs["dense_score"].config_schema["missing_score"])
         self.assertFalse(specs["weighted_score"].config_schema["missing_weight_renormalize"])
 
     def test_lab_factor_input_reads_persisted_factor_lab_values(self):

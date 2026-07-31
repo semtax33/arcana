@@ -864,11 +864,11 @@ def _add_derived_fcf(values: list[PeriodValue]) -> list[PeriodValue]:
         ]
         if not capex_values:
             continue
-        capex = sum(capex_values)
+        gross_capex = sum(abs(value) for value in capex_values)
         if cfo.value is None:
             fcf_value = None
         else:
-            fcf_value = cfo.value + capex
+            fcf_value = cfo.value - gross_capex
         derived.append(
             PeriodValue(
                 canonical_id=DERIVED_FCF_ID,
@@ -1080,7 +1080,7 @@ def _load_canonical_accounts(path: Path) -> dict[str, CanonicalAccount]:
             account_name="잉여현금흐름(FCF)",
             statement_type="CF",
             is_derived=True,
-            formula="CFO + CAPEX_PPE + CAPEX_INTANG",
+            formula="CFO - ABS(CAPEX_PPE) - ABS(CAPEX_INTANG)",
             description="영업활동현금흐름에서 유형/무형자산 취득 지출을 반영한 잉여현금흐름",
             order=10_000,
         ),
@@ -1230,7 +1230,7 @@ def _virtual_catalog_item(canonical_id: str, statement_type: str) -> CanonicalAc
             account_name="잉여현금흐름(FCF)",
             statement_type="CF",
             is_derived=True,
-            formula="CFO + CAPEX_PPE + CAPEX_INTANG",
+            formula="CFO - ABS(CAPEX_PPE) - ABS(CAPEX_INTANG)",
             description="영업활동현금흐름에서 유형/무형자산 취득 지출을 반영한 잉여현금흐름",
         )
     return CanonicalAccount(

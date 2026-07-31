@@ -1265,7 +1265,11 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["oibdp"] = df["oibdp"].fillna(df["oiadp"] + df["dp"])
 
     df["oancf"] = numeric_column(df, "CFO")
-    df["capx"] = numeric_column(df, "CAPEX_PPE").abs()
+    capex_ppe = numeric_column(df, "CAPEX_PPE").abs()
+    capex_intang = numeric_column(df, "CAPEX_INTANG").abs()
+    df["capx"] = (capex_ppe.fillna(0) + capex_intang.fillna(0)).where(
+        capex_ppe.notna() | capex_intang.notna()
+    )
     df["fcf"] = df["oancf"] - df["capx"]
     df["ffo"] = df["ni"] + df["dp"].fillna(0)
     df["sstk"] = numeric_column(df, "EQ_ISSUE")

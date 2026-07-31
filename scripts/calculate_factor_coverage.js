@@ -470,7 +470,16 @@ function addAnnualFinancialFactors(rows) {
     r.oibdp = first(source, "EBITDA");
     if (!isCovered(r.oibdp)) r.oibdp = add(r.oiadp, r.dp);
     r.oancf = source.CFO ?? null;
-    r.capx = isCovered(source.CAPEX_PPE) ? Math.abs(source.CAPEX_PPE) : null;
+    const capexPpe = isCovered(source.CAPEX_PPE)
+      ? Math.abs(source.CAPEX_PPE)
+      : null;
+    const capexIntang = isCovered(source.CAPEX_INTANG)
+      ? Math.abs(source.CAPEX_INTANG)
+      : null;
+    r.capx =
+      isCovered(capexPpe) || isCovered(capexIntang)
+        ? fill0(capexPpe) + fill0(capexIntang)
+        : null;
     r.fcf = sub(r.oancf, r.capx);
     r.ffo = add(r.ni, fill0(r.dp));
     r.sstk = source.EQ_ISSUE ?? null;

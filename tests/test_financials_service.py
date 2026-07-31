@@ -96,10 +96,14 @@ class FinancialStatementsServiceTest(unittest.TestCase):
                 _row("CF", "CFO", 2025, 6, 170),
                 _row("CF", "CFO", 2025, 9, 260),
                 _row("CF", "CFO", 2025, 12, 360),
-                _row("CF", "CAPEX_PPE", 2025, 3, -10),
-                _row("CF", "CAPEX_PPE", 2025, 6, -30),
-                _row("CF", "CAPEX_PPE", 2025, 9, -60),
-                _row("CF", "CAPEX_PPE", 2025, 12, -100),
+                _row("CF", "CAPEX_PPE", 2025, 3, 10),
+                _row("CF", "CAPEX_PPE", 2025, 6, 30),
+                _row("CF", "CAPEX_PPE", 2025, 9, 60),
+                _row("CF", "CAPEX_PPE", 2025, 12, 100),
+                _row("CF", "CAPEX_INTANG", 2025, 3, 2),
+                _row("CF", "CAPEX_INTANG", 2025, 6, 5),
+                _row("CF", "CAPEX_INTANG", 2025, 9, 9),
+                _row("CF", "CAPEX_INTANG", 2025, 12, 14),
             ]
         )
 
@@ -117,8 +121,33 @@ class FinancialStatementsServiceTest(unittest.TestCase):
 
         cash_accounts = {account.canonical_id: account for account in ttm.sections[0].accounts}
         self.assertEqual(cash_accounts["CFO"].values[-1].value, 360)
-        self.assertEqual(cash_accounts["FCF"].values[-1].value, 260)
+        self.assertEqual(cash_accounts["FCF"].values[-1].value, 246)
         self.assertTrue(cash_accounts["FCF"].is_derived)
+        self.assertEqual(
+            cash_accounts["FCF"].formula,
+            "CFO - ABS(CAPEX_PPE) - ABS(CAPEX_INTANG)",
+        )
+
+    def test_derived_fcf_treats_legacy_negative_capex_as_outflow(self):
+        client = FakeClickHouseClient(
+            [
+                _row("CF", "CFO", 2025, 12, 100),
+                _row("CF", "CAPEX_PPE", 2025, 12, -20),
+                _row("CF", "CAPEX_INTANG", 2025, 12, -5),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = FinancialStatementsService(
+                client_factory=lambda: client,
+                today_factory=lambda: date(2026, 5, 21),
+                canonical_accounts_path=_catalog_path(temp_dir),
+            ).get_statements("236200", period="annual", statement="CF")
+
+        cash_accounts = {
+            account.canonical_id: account for account in result.sections[0].accounts
+        }
+        self.assertEqual(cash_accounts["FCF"].values[-1].value, 75)
 
     def test_unit_scale_outlier_is_repaired_before_display(self):
         client = FakeClickHouseClient(
@@ -326,6 +355,7 @@ def _catalog_path(temp_dir):
                 "TOTAL_ASSETS,자산총계,BS,FALSE,,자산총계,",
                 "CFO,영업활동현금흐름,CF,FALSE,,영업활동현금흐름,",
                 "CAPEX_PPE,유형자산의 취득,CF,FALSE,,유형자산의 취득,",
+                "CAPEX_INTANG,무형자산의 취득,CF,FALSE,,무형자산의 취득,",
             ]
         ),
         encoding="utf-8",

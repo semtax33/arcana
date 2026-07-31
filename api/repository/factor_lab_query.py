@@ -140,7 +140,19 @@ def node_type_specs() -> list[NodeTypeSpec]:
         NodeTypeSpec("rank", "score", ["input"], ["out"], {"group_by": ["trade_date"], "order": "desc"}),
         NodeTypeSpec("dense_rank", "score", ["input"], ["out"], {"group_by": ["trade_date"], "order": "desc"}),
         NodeTypeSpec("percent_rank", "score", ["input"], ["out"], {"group_by": ["trade_date"], "order": "desc"}),
-        NodeTypeSpec("dense_score", "score", ["input"], ["out"], {"group_by": ["trade_date"], "order": "desc", "scale": "0_100"}),
+        NodeTypeSpec(
+            "dense_score",
+            "score",
+            ["input"],
+            ["out"],
+            {
+                "group_by": ["trade_date"],
+                "order": "desc",
+                "scale": "0_100",
+                "tie_method": "ordinal|average",
+                "missing_score": None,
+            },
+        ),
         NodeTypeSpec("condition", "logic", ["condition", "if_true", "if_false"], ["out"], {}),
         NodeTypeSpec("condition_score", "logic", ["condition", "score"], ["out"], {}),
         NodeTypeSpec("weighted_score", "score", ["named inputs from weights"], ["out"], {"weights": {"node_handle": 1.0}, "missing_weight_renormalize": False}),
@@ -173,6 +185,7 @@ def validate_factor_lab_graph(
     _validate_nodes(nodes, known_factor_ids=known_factor_ids, errors=errors)
     incoming = _validate_edges(nodes, edges, errors)
     _validate_arity(nodes, incoming, errors)
+    _validate_dense_score_missing_inputs(nodes, incoming, errors)
 
     if not final_node_id:
         errors.append(FactorLabIssue("missing_final_node", "outputs.final_node_id is required", field="outputs.final_node_id"))
@@ -356,7 +369,7 @@ def compile_factor_lab_graph(
         elif node_type in {"rank", "dense_rank", "percent_rank"}:
             ctes.append(_compile_rank(node_id, node_type, config, input_map["input"]))
         elif node_type == "dense_score":
-            ctes.append(_compile_dense_score(node_id, config, input_map["input"]))
+            ctes.append(_compile_dense_score(node_id, config, input_map["input"], params))
         elif node_type == "weighted_score":
             ctes.append(_compile_weighted_score(node_id, config, input_map, params))
         elif node_type == "condition":
@@ -773,6 +786,33 @@ def _validate_node_config(
         if str(config.get("order", "desc")) not in {"asc", "desc"}:
             errors.append(FactorLabIssue("invalid_order", "order must be asc or desc", node_id=node_id))
         _validate_group_by(node_id, config, errors)
+        if node_type == "dense_score":
+            tie_method = str(config.get("tie_method", "ordinal"))
+            if tie_method not in {"ordinal", "average"}:
+                errors.append(
+                    FactorLabIssue(
+                        "invalid_tie_method",
+                        "dense_score.tie_method must be ordinal or average",
+                        node_id=node_id,
+                        field="config.tie_method",
+                    )
+                )
+            missing_score = config.get("missing_score")
+            if missing_score is not None:
+                scale = 100.0 if str(config.get("scale", "0_100")) == "0_100" else 1.0
+                if (
+                    not _is_finite_number(missing_score)
+                    or float(missing_score) < 0
+                    or float(missing_score) > scale
+                ):
+                    errors.append(
+                        FactorLabIssue(
+                            "invalid_missing_score",
+                            f"dense_score.missing_score must be between 0 and {scale:g}",
+                            node_id=node_id,
+                            field="config.missing_score",
+                        )
+                    )
     elif node_type == "bucket":
         bucket_count = config.get("bucket_count", 5)
         if not isinstance(bucket_count, int) or bucket_count < 2:
@@ -893,6 +933,35 @@ def _require_exact_handles(
         errors.append(FactorLabIssue("missing_input", f"missing input handle(s): {', '.join(missing)}", node_id=node_id))
     if extra:
         errors.append(FactorLabIssue("unknown_handle", f"unknown input handle(s): {', '.join(extra)}", node_id=node_id))
+
+
+def _validate_dense_score_missing_inputs(
+    nodes: dict[str, dict[str, Any]],
+    incoming: dict[str, dict[str, str]],
+    errors: list[FactorLabIssue],
+) -> None:
+    for node_id, node in nodes.items():
+        if node.get("type") != "dense_score":
+            continue
+        config = _dict(node.get("config"))
+        if config.get("missing_score") is None:
+            continue
+        input_node_id = incoming.get(node_id, {}).get("input")
+        input_node = nodes.get(input_node_id or "")
+        input_config = _dict(input_node.get("config")) if input_node else {}
+        if (
+            not input_node
+            or input_node.get("type") != "factor_input"
+            or _missing_policy(input_config) != CROSS_SECTIONAL_MEDIAN_MISSING_POLICY
+        ):
+            errors.append(
+                FactorLabIssue(
+                    "invalid_missing_score_input",
+                    "dense_score.missing_score requires a direct factor_input using cross_sectional_median",
+                    node_id=node_id,
+                    field="config.missing_score",
+                )
+            )
 
 
 def _topological_order(
@@ -1094,6 +1163,7 @@ def _compile_factor_input_with_cross_sectional_median(
         trade_date,
         security_id,
         if(candidate_is_valid, candidate_value, NULL) AS value,
+        source_is_valid AS is_observed,
         candidate_is_valid AS is_valid,
         multiIf(
             source_is_valid, '',
@@ -1604,12 +1674,20 @@ def _compile_rank(node_id: str, node_type: str, config: dict[str, Any], input_no
 )""".strip()
 
 
-def _compile_dense_score(node_id: str, config: dict[str, Any], input_node_id: str) -> str:
+def _compile_dense_score(
+    node_id: str,
+    config: dict[str, Any],
+    input_node_id: str,
+    params: dict[str, Any],
+) -> str:
     input_cte = _cte_name(input_node_id)
     order_sql = _order_sql(config)
     partition_by = _partition_by_sql(config.get("group_by", ["trade_date"]), alias="s")
     scale = 100.0 if str(config.get("scale", "0_100")) == "0_100" else 1.0
-    return f"""
+    tie_method = str(config.get("tie_method", "ordinal"))
+    missing_score = config.get("missing_score")
+    if tie_method == "ordinal" and missing_score is None:
+        return f"""
 {_cte_name(node_id)} AS (
     SELECT
         trade_date,
@@ -1623,6 +1701,55 @@ def _compile_dense_score(node_id: str, config: dict[str, Any], input_node_id: st
             s.security_id,
             toFloat64(dense_rank() OVER (PARTITION BY {partition_by} ORDER BY s.value {order_sql}, s.security_id ASC)) AS dense_value,
             toFloat64(count() OVER (PARTITION BY {partition_by})) AS max_rank,
+            s.is_valid,
+            s.invalid_reason
+        FROM {_group_source_sql(input_cte, config.get("group_by", ["trade_date"]))} AS s
+        WHERE s.is_valid
+    )
+)""".strip()
+
+    observation_partition = (
+        f"{partition_by}, s.is_observed"
+        if missing_score is not None
+        else partition_by
+    )
+    tie_partition = f"{observation_partition}, s.value"
+    observed_column = "s.is_observed" if missing_score is not None else "true"
+    missing_score_branch = ""
+    if missing_score is not None:
+        param_name = f"{_param_prefix(node_id)}_missing_score"
+        params[param_name] = float(missing_score)
+        missing_score_branch = (
+            f"NOT is_observed, {{{param_name}:Float64}},\n            "
+        )
+    return f"""
+{_cte_name(node_id)} AS (
+    SELECT
+        trade_date,
+        security_id,
+        multiIf(
+            {missing_score_branch}group_count <= 1, {scale},
+            ({scale}) * (
+                group_count - (first_rank + ((tie_count - 1) / 2.0))
+            ) / (group_count - 1)
+        ) AS value,
+        is_valid,
+        invalid_reason
+    FROM (
+        SELECT
+            s.trade_date,
+            s.security_id,
+            {observed_column} AS is_observed,
+            toFloat64(rank() OVER (
+                PARTITION BY {observation_partition}
+                ORDER BY s.value {order_sql}
+            )) AS first_rank,
+            toFloat64(count() OVER (
+                PARTITION BY {tie_partition}
+            )) AS tie_count,
+            toFloat64(count() OVER (
+                PARTITION BY {observation_partition}
+            )) AS group_count,
             s.is_valid,
             s.invalid_reason
         FROM {_group_source_sql(input_cte, config.get("group_by", ["trade_date"]))} AS s

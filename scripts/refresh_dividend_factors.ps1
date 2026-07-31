@@ -162,7 +162,15 @@ frame = create_price_dataframe(market="kr", source="silver")
 frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce")
 client = get_clickhouse_client()
 try:
-    latest = pd.Timestamp(client.query_df("SELECT max(trade_date) AS d FROM price_daily").iloc[0, 0])
+    latest = pd.Timestamp(
+        client.query_df(
+            """
+SELECT max(trade_date) AS d
+FROM price_daily
+WHERE startsWith(security_id, 'SEC_KR_')
+""".strip()
+        ).iloc[0, 0]
+    )
     candidate = frame.loc[(frame["trade_date"] > latest) & (frame["trade_date"] <= as_of)].copy()
     candidate["trade_date"] = candidate["trade_date"].dt.date
     if not candidate.empty:

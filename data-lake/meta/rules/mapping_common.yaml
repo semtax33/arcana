@@ -570,18 +570,6 @@ rules:
     cash_direction: outflow
     reason: 유형자산 취득 지출
 
-  - id: cf_capex_ppe_in
-    fs_type: CF
-    priority: 800
-    exact_any:
-      - 유형자산의 처분
-      - 유형자산의처분
-      - 유형자산처분
-    canonical_id: CAPEX_PPE
-    amount_policy: abs
-    cash_direction: inflow
-    reason: 유형자산 처분 수입
-
   - id: cf_capex_intang
     fs_type: CF
     priority: 800
@@ -592,18 +580,6 @@ rules:
     amount_policy: abs
     cash_direction: outflow
     reason: 무형자산 취득 지출
-
-  - id: cf_capex_intang_in
-    fs_type: CF
-    priority: 800
-    exact_any:
-      - 무형자산의 처분
-      - 무형자산의처분
-      - 무형자산처분
-    canonical_id: CAPEX_INTANG
-    amount_policy: abs
-    cash_direction: inflow
-    reason: 무형자산 처분 수익
 
   - id: cf_depreciation_expense
     fs_type: CF
@@ -632,6 +608,7 @@ rules:
     fs_type: CF
     priority: 800
     exact_any:
+      - 유형자산의 처분
       - 유형자산의처분
       - 유형자산처분
     canonical_id: PPE_DISPOSAL_PROCEEDS
@@ -643,6 +620,7 @@ rules:
     fs_type: CF
     priority: 800
     exact_any:
+      - 무형자산의 처분
       - 무형자산의처분
       - 무형자산처분
     canonical_id: INTANGIBLE_DISPOSAL_PROCEEDS

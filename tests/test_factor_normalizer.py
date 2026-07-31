@@ -636,6 +636,50 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["fcf_interest_coverage"], 16.0)
         self.assertAlmostEqual(latest["fcf_negative_freq_5y_pct"], 0.0)
 
+    def test_fcf_and_fcff_use_gross_ppe_and_intangible_capex_magnitudes(self):
+        cases = [
+            ({"CAPEX_PPE": -20, "CAPEX_INTANG": 5}, 25),
+            ({"CAPEX_INTANG": 5}, 5),
+        ]
+
+        for capex_columns, expected_capex in cases:
+            with self.subTest(capex_columns=capex_columns):
+                financial_df = pd.DataFrame(
+                    [
+                        {
+                            "fiscal_year": 2025,
+                            "financial_period": "2025-12-31",
+                            "REVENUE": 1_000,
+                            "OPERATING_INCOME": 100,
+                            "PBT": 100,
+                            "TAX_EXPENSE": 20,
+                            "DEPRECIATION_EXPENSE": 10,
+                            "CURRENT_ASSETS": 200,
+                            "CURRENT_LIABILITIES": 100,
+                            "CFO": 100,
+                            **capex_columns,
+                        }
+                    ]
+                )
+
+                latest = add_annual_financial_factors(financial_df).iloc[-1]
+
+                self.assertEqual(latest["capx"], expected_capex)
+                self.assertEqual(latest["fcf"], 100 - expected_capex)
+                self.assertEqual(latest["fcff"], 90 - expected_capex)
+                self.assertAlmostEqual(
+                    latest["fcf_margin"],
+                    (100 - expected_capex) / 1_000 * 100,
+                )
+                self.assertAlmostEqual(
+                    latest["capex_to_sales_pct"],
+                    expected_capex / 1_000 * 100,
+                )
+                self.assertAlmostEqual(
+                    latest["capex_to_cfo_pct"],
+                    expected_capex / 100 * 100,
+                )
+
     def test_rnd_to_market_cap_factor_is_percent_of_market_cap(self):
         daily_df = pd.DataFrame(
             {
