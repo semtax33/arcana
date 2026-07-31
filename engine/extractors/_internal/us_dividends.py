@@ -60,13 +60,12 @@ def download_us_dividends(
     resolved_sources = _parse_sources(sources)
     api_key = _alpha_api_key() if "alpha-vantage" in resolved_sources else None
     if symbols is None:
-        # The requested all-US mode should include newly listed eligible names,
-        # not merely the universe cached by a prior price or consensus run.
+        # Refresh once so newly listed eligible names enter the full-market run.
         download_us_equity_universe()
     resolved_symbols = list(
         dict.fromkeys(
             normalize_yfinance_ticker(symbol)
-            for symbol in _resolve_symbols(symbols)
+            for symbol in _resolve_symbols(symbols, refresh_universe=False)
             if str(symbol).strip()
         )
     )

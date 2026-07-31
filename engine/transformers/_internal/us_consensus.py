@@ -3,9 +3,12 @@ from __future__ import annotations
 """Normalize vendor-isolated US consensus bronze payloads and calculate raw factors."""
 
 from datetime import date
+import hashlib
+import heapq
 import json
 import math
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 import pandas as pd
@@ -20,11 +23,15 @@ SILVER_US_CONSENSUS_DIR = DATA_LAKE.silver("consensus", "us")
 US_OBSERVATIONS_NAME = "us_consensus_observations.csv"
 US_EVENTS_NAME = "us_consensus_events.csv"
 US_FACTORS_NAME = "us_consensus_factors.csv"
+US_TARGET_PRICE_RATINGS_NAME = "us_target_price_ratings.csv"
+US_TARGET_PRICE_CONSENSUS_NAME = "us_target_price_consensus.csv"
+FINNWORLDS_TARGET_PRICE_LOOKBACK_DAYS = 120
 
 US_OBSERVATION_COLUMNS = [
     "symbol", "security_id", "provider", "dataset", "source_regime", "snapshot_date",
     "availability_date", "horizon", "period_type", "fiscal_period_end", "forecast_slot",
-    "metric", "statistic", "lookback_days", "value", "currency", "analyst_count", "raw_path",
+    "metric", "statistic", "lookback_days", "value", "currency", "analyst_count",
+    "publishers_json", "raw_path",
 ]
 US_EVENT_COLUMNS = [
     "symbol", "security_id", "provider", "source_regime", "event_type", "event_date",
@@ -38,6 +45,19 @@ US_FACTOR_COLUMNS = [
     "us_eps_revision_acceleration_30d_pct", "us_eps_dispersion_pct", "us_revenue_dispersion_pct",
     "us_eps_surprise_pct", "currency", "raw_path",
 ]
+US_TARGET_PRICE_RATING_COLUMNS = [
+    "rating_key", "symbol", "security_id", "provider", "snapshot_date",
+    "rating_date", "availability_date", "target_date", "analyst_name",
+    "analyst_firm", "analyst_role", "price_target", "rating", "conclusion",
+    "currency", "raw_path",
+]
+US_TARGET_PRICE_CONSENSUS_COLUMNS = [
+    "consensus_key", "symbol", "security_id", "provider", "consensus_kind",
+    "source_regime", "snapshot_date", "event_date", "availability_date",
+    "target_price_mean", "target_price_median", "target_price_low",
+    "target_price_high", "analyst_count", "buy_count", "hold_count",
+    "sell_count", "currency", "raw_path",
+]
 
 
 def normalize_us_consensus(
@@ -46,22 +66,46 @@ def normalize_us_consensus(
     output_dir: str | Path = SILVER_US_CONSENSUS_DIR,
 ) -> dict[str, Path | int]:
     observations, events, factors = build_us_consensus_frames(bronze_dir)
+    ratings, target_consensus, _, _ = build_finnworlds_target_price_frames(
+        bronze_dir
+    )
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     paths = {
         "observations_path": output / US_OBSERVATIONS_NAME,
         "events_path": output / US_EVENTS_NAME,
         "factors_path": output / US_FACTORS_NAME,
+        "target_price_ratings_path": output / US_TARGET_PRICE_RATINGS_NAME,
+        "target_price_consensus_path": output / US_TARGET_PRICE_CONSENSUS_NAME,
     }
     _write_csv(paths["observations_path"], observations, US_OBSERVATION_COLUMNS)
     _write_csv(paths["events_path"], events, US_EVENT_COLUMNS)
     _write_csv(paths["factors_path"], factors, US_FACTOR_COLUMNS)
+    _write_csv(
+        paths["target_price_ratings_path"],
+        ratings,
+        US_TARGET_PRICE_RATING_COLUMNS,
+    )
+    _write_csv(
+        paths["target_price_consensus_path"],
+        target_consensus,
+        US_TARGET_PRICE_CONSENSUS_COLUMNS,
+    )
     print(
         "[DONE] us consensus normalize "
-        f"observations={len(observations):,}, events={len(events):,}, factors={len(factors):,}",
+        f"observations={len(observations):,}, events={len(events):,}, "
+        f"factors={len(factors):,}, target_ratings={len(ratings):,}, "
+        f"target_consensus={len(target_consensus):,}",
         flush=True,
     )
-    return {**paths, "observations": len(observations), "events": len(events), "factors": len(factors)}
+    return {
+        **paths,
+        "observations": len(observations),
+        "events": len(events),
+        "factors": len(factors),
+        "target_price_ratings": len(ratings),
+        "target_price_consensus": len(target_consensus),
+    }
 
 
 def build_us_consensus_frames(bronze_dir: str | Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -70,6 +114,33 @@ def build_us_consensus_frames(bronze_dir: str | Path) -> tuple[pd.DataFrame, pd.
     observations: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
     factors: list[dict[str, Any]] = []
+    _, _, finnworlds_observations, finnworlds_factors = (
+        build_finnworlds_target_price_frames(root)
+    )
+    observations.extend(finnworlds_observations)
+    factors.extend(finnworlds_factors)
+    fmp_records = _load_fmp_estimate_records(root / "fmp" / "analyst-estimates")
+    fmp_observations, fmp_factors = _fmp_estimate_frames(fmp_records)
+    observations.extend(fmp_observations)
+    factors.extend(fmp_factors)
+    for path in sorted(
+        (root / "fmp" / "price-target-summary").glob(
+            "snapshot_date=*/ticker=*.json"
+        )
+    ):
+        payload = _read_json(path)
+        symbol, snapshot = _path_identity(path)
+        if not symbol or not payload:
+            continue
+        obs, rows = _fmp_price_target_frames(
+            payload,
+            symbol=symbol,
+            snapshot=snapshot,
+            raw_path=str(path),
+        )
+        observations.extend(obs)
+        factors.extend(rows)
+
     alpha_root = root / "alpha-vantage"
     for path in sorted(alpha_root.glob("earnings/snapshot_date=*/ticker=*.json")):
         payload = _read_json(path)
@@ -141,6 +212,843 @@ def build_us_consensus_frames(bronze_dir: str | Path) -> tuple[pd.DataFrame, pd.
         factor_frame.sort_values(["symbol", "factor_date", "provider", "horizon"], na_position="last").reset_index(drop=True)
         if not factor_frame.empty else factor_frame,
     )
+
+
+def build_finnworlds_target_price_frames(
+    bronze_dir: str | Path,
+    *,
+    lookback_days: int = FINNWORLDS_TARGET_PRICE_LOOKBACK_DAYS,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Normalize Finnworlds ratings and build official plus historical PIT targets."""
+    if int(lookback_days) <= 0:
+        raise ValueError("lookback_days must be positive")
+    root = Path(bronze_dir)
+    rating_rows: list[dict[str, Any]] = []
+    official_rows: list[dict[str, Any]] = []
+
+    for path in sorted(
+        (root / "finnworlds" / "company-ratings").glob(
+            "snapshot_date=*/ticker=*.json"
+        )
+    ):
+        envelope = _read_json(path)
+        if (
+            envelope.get("provider") != "FINNWORLDS"
+            or envelope.get("dataset") != "COMPANY_RATINGS"
+            or envelope.get("complete") is not True
+        ):
+            continue
+        raw = envelope.get("data")
+        if not isinstance(raw, dict):
+            continue
+        result = raw.get("result")
+        output = result.get("output") if isinstance(result, dict) else None
+        if not isinstance(output, dict):
+            continue
+        path_symbol, path_snapshot = _path_identity(path)
+        basics = result.get("basics") if isinstance(result, dict) else {}
+        symbol = (
+            _text(envelope.get("symbol"))
+            or _text(_pick(basics, "company_ticker", "stock_ticker_symbol", "ticker"))
+            or path_symbol
+        ).upper()
+        snapshot = (
+            _date_text(envelope.get("snapshot_date"))
+            or path_snapshot
+            or _date_text(envelope.get("date_to"))
+        )
+        if not symbol or not snapshot:
+            continue
+
+        analysts = output.get("analysts")
+        if isinstance(analysts, dict):
+            analysts = [analysts]
+        if isinstance(analysts, list):
+            for analyst in analysts:
+                if not isinstance(analyst, dict):
+                    continue
+                rating = analyst.get("rating")
+                if not isinstance(rating, dict):
+                    rating = {}
+                analyst_name = _text(
+                    _pick(analyst, "analyst_name", "name")
+                )
+                analyst_firm = _text(
+                    _pick(analyst, "analyst_firm", "firm")
+                )
+                analyst_role = _text(
+                    _pick(analyst, "analyst_role", "role")
+                )
+                rating_date = _date_text(
+                    _pick(rating, "date_rating", "rating_date", "date")
+                )
+                target_date = _date_text(
+                    _pick(rating, "target_date", "date_target")
+                )
+                price_target = _number(
+                    _pick(rating, "price_target", "target_price")
+                )
+                rated = _text(_pick(rating, "rated", "rating"))
+                conclusion = _text(_pick(rating, "conclusion"))
+                normalized_identity = (
+                    analyst_firm.strip().casefold(),
+                    analyst_name.strip().casefold(),
+                )
+                if rating_date and any(normalized_identity):
+                    key_values = (
+                        symbol,
+                        *normalized_identity,
+                        rating_date,
+                    )
+                else:
+                    key_values = (
+                        symbol,
+                        analyst_firm,
+                        analyst_name,
+                        analyst_role,
+                        rating_date,
+                        target_date,
+                        price_target,
+                        rated,
+                        conclusion,
+                    )
+                rating_rows.append(
+                    {
+                        "rating_key": _stable_text_key(*key_values),
+                        "symbol": symbol,
+                        "security_id": _security_id(symbol),
+                        "provider": "FINNWORLDS",
+                        "snapshot_date": snapshot,
+                        "rating_date": rating_date,
+                        "availability_date": _next_us_trading_day(rating_date),
+                        "target_date": target_date,
+                        "analyst_name": analyst_name,
+                        "analyst_firm": analyst_firm,
+                        "analyst_role": analyst_role,
+                        "price_target": price_target,
+                        "rating": rated,
+                        "conclusion": conclusion,
+                        "currency": "USD",
+                        "raw_path": str(path),
+                    }
+                )
+
+        consensus = output.get("analyst_consensus")
+        if isinstance(consensus, dict):
+            event_date = _date_text(
+                _pick(consensus, "consensus_date", "date")
+            ) or snapshot
+            official_rows.append(
+                {
+                    "consensus_key": _stable_text_key(
+                        symbol,
+                        "official",
+                        event_date,
+                    ),
+                    "symbol": symbol,
+                    "security_id": _security_id(symbol),
+                    "provider": "FINNWORLDS",
+                    "consensus_kind": "official",
+                    "source_regime": "FINNWORLDS_OFFICIAL_CURRENT",
+                    "snapshot_date": snapshot,
+                    "event_date": event_date,
+                    # The endpoint exposes a current summary. It must not be
+                    # backdated to consensus_date during historical PIT work.
+                    "availability_date": _next_us_trading_day(snapshot),
+                    "target_price_mean": _number(
+                        _pick(consensus, "analyst_average", "average")
+                    ),
+                    "target_price_median": None,
+                    "target_price_low": _number(
+                        _pick(consensus, "analyst_lowest", "lowest")
+                    ),
+                    "target_price_high": _number(
+                        _pick(consensus, "analyst_highest", "highest")
+                    ),
+                    "analyst_count": _number(
+                        _pick(consensus, "analysts_number", "analyst_count")
+                    ),
+                    "buy_count": _number(_pick(consensus, "buy")),
+                    "hold_count": _number(_pick(consensus, "hold")),
+                    "sell_count": _number(_pick(consensus, "sell")),
+                    "currency": "USD",
+                    "raw_path": str(path),
+                }
+            )
+
+    ratings = pd.DataFrame(
+        rating_rows,
+        columns=US_TARGET_PRICE_RATING_COLUMNS,
+    )
+    if not ratings.empty:
+        ratings = (
+            ratings.sort_values(
+                ["snapshot_date", "raw_path", "rating_key"],
+                kind="stable",
+            )
+            .drop_duplicates("rating_key", keep="last")
+            .sort_values(["symbol", "rating_date", "analyst_firm", "analyst_name"])
+            .reset_index(drop=True)
+        )
+
+    official = pd.DataFrame(
+        official_rows,
+        columns=US_TARGET_PRICE_CONSENSUS_COLUMNS,
+    )
+    if not official.empty:
+        official = (
+            official.sort_values(
+                ["snapshot_date", "raw_path"],
+                kind="stable",
+            )
+            .drop_duplicates("consensus_key", keep="last")
+            .reset_index(drop=True)
+        )
+    pit = _build_finnworlds_pit_consensus(
+        ratings,
+        lookback_days=int(lookback_days),
+    )
+    consensus_records = [
+        record
+        for frame in (official, pit)
+        for record in frame.to_dict("records")
+    ]
+    if not consensus_records:
+        target_consensus = pd.DataFrame(
+            columns=US_TARGET_PRICE_CONSENSUS_COLUMNS
+        )
+    else:
+        target_consensus = pd.DataFrame(
+            consensus_records,
+            columns=US_TARGET_PRICE_CONSENSUS_COLUMNS,
+        ).sort_values(
+            ["symbol", "event_date", "consensus_kind", "snapshot_date"],
+            na_position="last",
+        ).reset_index(drop=True)
+
+    observations, factors = _finnworlds_consensus_outputs(
+        target_consensus,
+        lookback_days=int(lookback_days),
+    )
+    return ratings, target_consensus, observations, factors
+
+
+def _build_finnworlds_pit_consensus(
+    ratings: pd.DataFrame,
+    *,
+    lookback_days: int,
+) -> pd.DataFrame:
+    if ratings.empty:
+        return pd.DataFrame(columns=US_TARGET_PRICE_CONSENSUS_COLUMNS)
+    working = ratings.copy()
+    working["_rating_date"] = pd.to_datetime(
+        working["rating_date"],
+        errors="coerce",
+    )
+    working["_price_target"] = pd.to_numeric(
+        working["price_target"],
+        errors="coerce",
+    )
+    working = working.loc[
+        working["_rating_date"].notna()
+        & working["_price_target"].gt(0)
+        & working["_price_target"].map(math.isfinite)
+    ].copy()
+    if working.empty:
+        return pd.DataFrame(columns=US_TARGET_PRICE_CONSENSUS_COLUMNS)
+
+    firm = working["analyst_firm"].fillna("").astype(str).str.strip().str.casefold()
+    analyst = working["analyst_name"].fillna("").astype(str).str.strip().str.casefold()
+    working["_analyst_key"] = firm + "|" + analyst
+    anonymous = firm.eq("") & analyst.eq("")
+    working.loc[anonymous, "_analyst_key"] = (
+        "rating:" + working.loc[anonymous, "rating_key"].astype(str)
+    )
+    working = working.sort_values(
+        ["symbol", "_rating_date", "snapshot_date", "raw_path", "rating_key"]
+    ).reset_index(drop=True)
+
+    rows: list[dict[str, Any]] = []
+    lookback = pd.Timedelta(days=lookback_days)
+    for symbol, group in working.groupby("symbol", sort=True):
+        report_events: dict[pd.Timestamp, list[tuple[str, float, int]]] = {}
+        expiry_dates: set[pd.Timestamp] = set()
+        for sequence, row in enumerate(group.to_dict("records")):
+            rating_date = pd.Timestamp(row["_rating_date"]).normalize()
+            analyst_key = str(row["_analyst_key"])
+            target = float(row["_price_target"])
+            report_events.setdefault(rating_date, []).append(
+                (analyst_key, target, sequence)
+            )
+            expiry_dates.add(rating_date + lookback)
+
+        current_targets: dict[str, tuple[int, float]] = {}
+        expiry_heap: list[tuple[pd.Timestamp, int, str]] = []
+        latest_snapshot = _date_text(group["snapshot_date"].max())
+        raw_path = str(group.sort_values(["snapshot_date", "raw_path"]).iloc[-1]["raw_path"])
+        for boundary in sorted(set(report_events) | expiry_dates):
+            while expiry_heap and expiry_heap[0][0] <= boundary:
+                _, sequence, analyst_key = heapq.heappop(expiry_heap)
+                current = current_targets.get(analyst_key)
+                if current is not None and current[0] == sequence:
+                    del current_targets[analyst_key]
+            for analyst_key, target, sequence in report_events.get(boundary, []):
+                current_targets[analyst_key] = (sequence, target)
+                heapq.heappush(
+                    expiry_heap,
+                    (boundary + lookback, sequence, analyst_key),
+                )
+
+            values = [target for _, target in current_targets.values()]
+            event_date = boundary.date().isoformat()
+            rows.append(
+                {
+                    "consensus_key": _stable_text_key(
+                        symbol,
+                        "pit_120d",
+                        event_date,
+                    ),
+                    "symbol": symbol,
+                    "security_id": _security_id(symbol),
+                    "provider": "FINNWORLDS",
+                    "consensus_kind": "pit_120d",
+                    "source_regime": "FINNWORLDS_PIT_HISTORICAL",
+                    "snapshot_date": latest_snapshot,
+                    "event_date": event_date,
+                    "availability_date": _next_us_trading_day(event_date),
+                    "target_price_mean": (
+                        float(math.fsum(values) / len(values))
+                        if values
+                        else math.nan
+                    ),
+                    "target_price_median": (
+                        float(median(values)) if values else math.nan
+                    ),
+                    "target_price_low": (
+                        float(min(values)) if values else math.nan
+                    ),
+                    "target_price_high": (
+                        float(max(values)) if values else math.nan
+                    ),
+                    "analyst_count": len(values),
+                    "buy_count": math.nan,
+                    "hold_count": math.nan,
+                    "sell_count": math.nan,
+                    "currency": "USD",
+                    "raw_path": raw_path,
+                }
+            )
+    return pd.DataFrame(rows, columns=US_TARGET_PRICE_CONSENSUS_COLUMNS)
+
+
+def _finnworlds_consensus_outputs(
+    consensus: pd.DataFrame,
+    *,
+    lookback_days: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    observations: list[dict[str, Any]] = []
+    factors: list[dict[str, Any]] = []
+    next_official_availability: dict[str, str] = {}
+    official = consensus.loc[
+        consensus["consensus_kind"].eq("official")
+    ].copy()
+    if not official.empty:
+        official = official.sort_values(
+            [
+                "symbol",
+                "availability_date",
+                "snapshot_date",
+                "event_date",
+                "consensus_key",
+            ],
+            kind="stable",
+        )
+        for _, group in official.groupby("symbol", sort=False):
+            records = group.to_dict("records")
+            for position, record in enumerate(records[:-1]):
+                next_official_availability[
+                    _text(record.get("consensus_key"))
+                ] = _date_text(
+                    records[position + 1].get("availability_date")
+                )
+
+    for row in consensus.to_dict("records"):
+        availability = _date_text(row.get("availability_date"))
+        snapshot = _date_text(row.get("snapshot_date"))
+        if not availability or not snapshot:
+            continue
+        regime = _text(row.get("source_regime"))
+        analyst_count = _number(row.get("analyst_count"))
+        raw_path = _text(row.get("raw_path"))
+        for statistic, column in (
+            ("mean", "target_price_mean"),
+            ("median", "target_price_median"),
+            ("low", "target_price_low"),
+            ("high", "target_price_high"),
+        ):
+            value = _number(row.get(column))
+            if value is None:
+                continue
+            observations.append(
+                _observation(
+                    _text(row.get("symbol")),
+                    "FINNWORLDS",
+                    "COMPANY_RATINGS",
+                    regime,
+                    snapshot,
+                    availability,
+                    "FY1",
+                    "forward",
+                    "",
+                    _text(row.get("consensus_kind")),
+                    "target_price",
+                    statistic,
+                    lookback_days
+                    if row.get("consensus_kind") == "pit_120d"
+                    else 0,
+                    value,
+                    "USD",
+                    analyst_count,
+                    raw_path,
+                )
+            )
+
+        mean_target = _number(row.get("target_price_mean"))
+        if row.get("consensus_kind") == "official":
+            expiry_date = (
+                pd.Timestamp(row.get("event_date"))
+                + pd.Timedelta(days=lookback_days)
+            )
+            expiry_availability = _next_us_trading_day(expiry_date)
+            current_is_temporally_valid = (
+                mean_target is not None
+                and expiry_availability
+                and pd.Timestamp(expiry_availability) > pd.Timestamp(availability)
+            )
+            if current_is_temporally_valid:
+                factors.append(
+                    _factor_row(
+                        _text(row.get("symbol")),
+                        availability,
+                        "FINNWORLDS",
+                        regime,
+                        "FY1",
+                        analyst_count,
+                        {},
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        "USD",
+                        raw_path,
+                        target_price=mean_target,
+                    )
+                )
+            next_availability = next_official_availability.get(
+                _text(row.get("consensus_key")),
+                "",
+            )
+            expires_before_replacement = (
+                not next_availability
+                or pd.Timestamp(expiry_availability)
+                < pd.Timestamp(next_availability)
+            )
+            if not current_is_temporally_valid or expires_before_replacement:
+                factors.append(
+                    _factor_row(
+                        _text(row.get("symbol")),
+                        (
+                            expiry_availability
+                            if current_is_temporally_valid
+                            else availability
+                        ),
+                        "FINNWORLDS",
+                        "FINNWORLDS_OFFICIAL_EXPIRED",
+                        "FY1",
+                        0,
+                        {},
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        "USD",
+                        raw_path,
+                        target_price=None,
+                    )
+                )
+        else:
+            factors.append(
+                _factor_row(
+                    _text(row.get("symbol")),
+                    availability,
+                    "FINNWORLDS",
+                    regime,
+                    "FY1",
+                    analyst_count,
+                    {},
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "USD",
+                    raw_path,
+                    target_price=mean_target,
+                )
+            )
+    return observations, factors
+
+
+def _stable_text_key(*values: Any) -> str:
+    text = "\x1f".join("" if value is None else str(value) for value in values)
+    return hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
+
+
+def _load_fmp_estimate_records(root: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for period, period_type, prefix in (
+        ("annual", "fiscal_year", "FY"),
+        ("quarter", "fiscal_quarter", "FQ"),
+    ):
+        for path in sorted(
+            (root / f"period={period}").glob("snapshot_date=*/ticker=*.json")
+        ):
+            payload = _read_json(path)
+            symbol, snapshot = _path_identity(path)
+            rows = payload.get("data", []) if isinstance(payload, dict) else []
+            if not symbol or not snapshot or not isinstance(rows, list):
+                continue
+            prepared = [
+                (row, _date_text(_pick(row, "date", "fiscalDateEnding")))
+                for row in rows
+                if isinstance(row, dict)
+            ]
+            prepared = [(row, fiscal_end) for row, fiscal_end in prepared if fiscal_end]
+            horizon_map = _fmp_horizon_map(
+                [fiscal_end for _, fiscal_end in prepared],
+                snapshot=snapshot,
+                prefix=prefix,
+            )
+            for row, fiscal_end in prepared:
+                records.append(
+                    {
+                        "symbol": symbol,
+                        "snapshot": snapshot,
+                        "period": period,
+                        "period_type": period_type,
+                        "horizon": horizon_map[fiscal_end],
+                        "fiscal_end": fiscal_end,
+                        "row": row,
+                        "raw_path": str(path),
+                    }
+                )
+    return sorted(
+        records,
+        key=lambda item: (
+            item["symbol"],
+            item["period"],
+            item["fiscal_end"],
+            item["snapshot"],
+        ),
+    )
+
+
+def _fmp_horizon_map(
+    fiscal_dates: list[str],
+    *,
+    snapshot: str,
+    prefix: str,
+) -> dict[str, str]:
+    dates = sorted(set(fiscal_dates))
+    snapshot_date = pd.Timestamp(snapshot)
+    future = [
+        value
+        for value in dates
+        if pd.Timestamp(value) >= snapshot_date
+    ]
+    past = [
+        value
+        for value in reversed(dates)
+        if pd.Timestamp(value) < snapshot_date
+    ]
+    mapping = {
+        value: f"{prefix}{index}"
+        for index, value in enumerate(future, start=1)
+    }
+    for index, value in enumerate(past):
+        mapping[value] = f"{prefix}{-index}"
+    return mapping
+
+
+def _fmp_estimate_frames(
+    records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    observations: list[dict[str, Any]] = []
+    factors: list[dict[str, Any]] = []
+    history: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for record in records:
+        history.setdefault(
+            (record["symbol"], record["period"], record["fiscal_end"]),
+            [],
+        ).append(record)
+
+    metric_specs = {
+        "revenue": (
+            "revenueLow",
+            "revenueHigh",
+            "revenueAvg",
+            "numAnalystsRevenue",
+        ),
+        "ebitda": ("ebitdaLow", "ebitdaHigh", "ebitdaAvg", None),
+        "ebit": ("ebitLow", "ebitHigh", "ebitAvg", None),
+        "net_income": ("netIncomeLow", "netIncomeHigh", "netIncomeAvg", None),
+        "sga_expense": (
+            "sgaExpenseLow",
+            "sgaExpenseHigh",
+            "sgaExpenseAvg",
+            None,
+        ),
+        "eps": ("epsLow", "epsHigh", "epsAvg", "numAnalystsEps"),
+    }
+    for record in records:
+        row = record["row"]
+        symbol = record["symbol"]
+        snapshot = record["snapshot"]
+        horizon = record["horizon"]
+        fiscal_end = record["fiscal_end"]
+        period_type = record["period_type"]
+        currency = _text(_pick(row, "currency", "reportedCurrency"))
+        metric_values: dict[str, dict[str, float | None]] = {}
+        for metric, (low_key, high_key, average_key, analysts_key) in metric_specs.items():
+            analysts = _number(_pick(row, analysts_key)) if analysts_key else None
+            values = {
+                "low": _number(_pick(row, low_key)),
+                "high": _number(_pick(row, high_key)),
+                "average": _number(_pick(row, average_key)),
+            }
+            metric_values[metric] = values
+            for statistic, value in values.items():
+                if value is None:
+                    continue
+                observations.append(
+                    _observation(
+                        symbol,
+                        "FMP",
+                        "ANALYST_ESTIMATES",
+                        "FMP_CURRENT",
+                        snapshot,
+                        snapshot,
+                        horizon,
+                        period_type,
+                        fiscal_end,
+                        fiscal_end,
+                        metric,
+                        statistic,
+                        0,
+                        value,
+                        currency,
+                        analysts,
+                        record["raw_path"],
+                    )
+                )
+
+        eps_values: dict[str, float | None] = {
+            "current": metric_values["eps"]["average"]
+        }
+        group = history[(symbol, record["period"], fiscal_end)]
+        current_snapshot = pd.Timestamp(snapshot)
+        for days in (7, 30, 60, 90):
+            prior = _fmp_prior_record(
+                group,
+                cutoff=current_snapshot - pd.Timedelta(days=days),
+            )
+            value = (
+                _number(_pick(prior["row"], "epsAvg"))
+                if prior is not None
+                else None
+            )
+            eps_values[f"{days}d"] = value
+            if value is not None:
+                observations.append(
+                    _observation(
+                        symbol,
+                        "FMP",
+                        "ANALYST_ESTIMATES",
+                        "FMP_CURRENT",
+                        snapshot,
+                        snapshot,
+                        horizon,
+                        period_type,
+                        fiscal_end,
+                        fiscal_end,
+                        "eps",
+                        "average",
+                        days,
+                        value,
+                        currency,
+                        _number(_pick(row, "numAnalystsEps")),
+                        record["raw_path"],
+                    )
+                )
+
+        factors.append(
+            _factor_row(
+                symbol,
+                snapshot,
+                "FMP",
+                "FMP_CURRENT",
+                horizon,
+                _number(_pick(row, "numAnalystsEps")),
+                eps_values,
+                metric_values["eps"]["high"],
+                metric_values["eps"]["low"],
+                metric_values["revenue"]["average"],
+                metric_values["revenue"]["high"],
+                metric_values["revenue"]["low"],
+                metric_values["ebit"]["average"],
+                None,
+                None,
+                None,
+                currency,
+                record["raw_path"],
+            )
+        )
+    return observations, factors
+
+
+def _fmp_prior_record(
+    records: list[dict[str, Any]],
+    *,
+    cutoff: pd.Timestamp,
+) -> dict[str, Any] | None:
+    eligible = [
+        record
+        for record in records
+        if pd.Timestamp(record["snapshot"]) <= cutoff
+    ]
+    if not eligible:
+        return None
+    return max(eligible, key=lambda record: record["snapshot"])
+
+
+def _fmp_price_target_frames(
+    payload: dict[str, Any],
+    *,
+    symbol: str,
+    snapshot: str,
+    raw_path: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    rows = payload.get("data", []) if isinstance(payload, dict) else []
+    if not isinstance(rows, list) or not rows:
+        return [], []
+    row = next((item for item in rows if isinstance(item, dict)), None)
+    if row is None:
+        return [], []
+    publishers_json = _publishers_json(_pick(row, "publishers"))
+    currency = _text(_pick(row, "currency"))
+    observations: list[dict[str, Any]] = []
+    chosen: tuple[float, float] | None = None
+    windows = (
+        ("lastMonth", 30),
+        ("lastQuarter", 90),
+        ("lastYear", 365),
+        ("allTime", 0),
+    )
+    for prefix, lookback in windows:
+        target = _number(_pick(row, f"{prefix}AvgPriceTarget"))
+        analysts = _number(_pick(row, f"{prefix}Count"))
+        if target is not None:
+            observations.append(
+                _observation(
+                    symbol,
+                    "FMP",
+                    "PRICE_TARGET_SUMMARY",
+                    "FMP_CURRENT",
+                    snapshot,
+                    snapshot,
+                    "FY1",
+                    "forward",
+                    "",
+                    prefix,
+                    "target_price",
+                    "average",
+                    lookback,
+                    target,
+                    currency,
+                    analysts,
+                    raw_path,
+                    publishers_json=publishers_json,
+                )
+            )
+        if (
+            chosen is None
+            and target is not None
+            and target > 0
+            and analysts is not None
+            and analysts >= 3
+        ):
+            chosen = (target, analysts)
+    if chosen is None:
+        return observations, []
+    target, analysts = chosen
+    factor = _factor_row(
+        symbol,
+        snapshot,
+        "FMP",
+        "FMP_CURRENT",
+        "FY1",
+        analysts,
+        {},
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        currency,
+        raw_path,
+        target_price=target,
+    )
+    return observations, [factor]
+
+
+def _publishers_json(value: Any) -> str:
+    publishers: list[str]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = [value]
+        publishers = parsed if isinstance(parsed, list) else [str(parsed)]
+    elif isinstance(value, list):
+        publishers = value
+    else:
+        publishers = []
+    normalized = list(
+        dict.fromkeys(
+            str(publisher).strip()
+            for publisher in publishers
+            if str(publisher).strip()
+        )
+    )
+    return json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
 
 
 def _alpha_events(payload: dict[str, Any], *, symbol: str, snapshot: str, raw_path: str) -> list[dict[str, Any]]:
@@ -468,8 +1376,48 @@ def _latest_yahoo_surprise(history: pd.DataFrame, snapshot: str) -> float | None
     return value * 100.0 if value is not None and abs(value) <= 1 else value
 
 
-def _observation(symbol: str, provider: str, dataset: str, regime: str, snapshot: str, availability: str, horizon: str, period_type: str, fiscal_end: str, slot: str, metric: str, statistic: str, lookback: int, value: float, currency: str, analysts: float | None, raw_path: str) -> dict[str, Any]:
-    return {"symbol": symbol, "security_id": _security_id(symbol), "provider": provider, "dataset": dataset, "source_regime": regime, "snapshot_date": snapshot, "availability_date": availability, "horizon": horizon, "period_type": period_type, "fiscal_period_end": fiscal_end, "forecast_slot": slot, "metric": metric, "statistic": statistic, "lookback_days": lookback, "value": value, "currency": currency, "analyst_count": analysts, "raw_path": raw_path}
+def _observation(
+    symbol: str,
+    provider: str,
+    dataset: str,
+    regime: str,
+    snapshot: str,
+    availability: str,
+    horizon: str,
+    period_type: str,
+    fiscal_end: str,
+    slot: str,
+    metric: str,
+    statistic: str,
+    lookback: int,
+    value: float,
+    currency: str,
+    analysts: float | None,
+    raw_path: str,
+    *,
+    publishers_json: str = "[]",
+) -> dict[str, Any]:
+    return {
+        "symbol": symbol,
+        "security_id": _security_id(symbol),
+        "provider": provider,
+        "dataset": dataset,
+        "source_regime": regime,
+        "snapshot_date": snapshot,
+        "availability_date": availability,
+        "horizon": horizon,
+        "period_type": period_type,
+        "fiscal_period_end": fiscal_end,
+        "forecast_slot": slot,
+        "metric": metric,
+        "statistic": statistic,
+        "lookback_days": lookback,
+        "value": value,
+        "currency": currency,
+        "analyst_count": analysts,
+        "publishers_json": publishers_json,
+        "raw_path": raw_path,
+    }
 
 
 def _frame(value: Any) -> pd.DataFrame:

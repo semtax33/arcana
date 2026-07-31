@@ -284,15 +284,50 @@ def download_us_consensus(args: argparse.Namespace) -> None:
         sources=sources,
         snapshot_date=getattr(args, "consensus_snapshot_date", None),
         force=args.force,
+        finnworlds_date_from=getattr(
+            args,
+            "finnworlds_date_from",
+            "2000-01-01",
+        ),
+        finnworlds_date_to=getattr(args, "finnworlds_date_to", None),
+        finnworlds_max_calls_per_minute=getattr(
+            args,
+            "finnworlds_max_calls_per_minute",
+            120,
+        ),
+        finnworlds_retries=getattr(args, "finnworlds_retries", 3),
+        fmp_max_calls_per_minute=getattr(args, "fmp_max_calls_per_minute", 720),
+        fmp_retries=getattr(args, "fmp_retries", 3),
         alpha_max_calls_per_minute=getattr(args, "alpha_max_calls_per_minute", 75),
         alpha_retries=getattr(args, "consensus_retries", 3),
     )
     print(
         "[DONE] us consensus download "
         f"symbols={counts['symbols']:,}, written={counts['written']:,}, "
-        f"skipped={counts['skipped']:,}, failed={counts['failed']:,}",
+        f"skipped={counts['skipped']:,}, failed={counts['failed']:,}, "
+        f"no_data={counts.get('no_data', 0):,}, "
+        f"fallback_symbols={counts.get('fallback_symbols', 0):,}",
         flush=True,
     )
+    for provider, provider_counts in counts.get("providers", {}).items():
+        print(
+            "[DONE] us consensus provider "
+            f"provider={provider} written={provider_counts.get('written', 0):,} "
+            f"skipped={provider_counts.get('skipped', 0):,} "
+            f"failed={provider_counts.get('failed', 0):,} "
+            f"no_data={provider_counts.get('no_data', 0):,} "
+            f"auth_disabled={bool(provider_counts.get('auth_disabled'))}",
+            flush=True,
+        )
+    finnworlds = counts.get("providers", {}).get("finnworlds", {})
+    if (
+        sources == {"finnworlds"}
+        and finnworlds.get("auth_disabled")
+        and counts.get("fallback_symbols", 0)
+    ):
+        raise RuntimeError(
+            "Finnworlds-only backfill is incomplete because authentication is unavailable"
+        )
 
 
 def download_all_us_dividend(args: argparse.Namespace) -> None:
@@ -391,9 +426,43 @@ def main() -> None:
     )
     parser.add_argument(
         "--us-consensus-sources",
-        default="alpha-vantage,yahoo",
-        help="Comma-separated US consensus sources: alpha-vantage,yahoo,all.",
+        default="finnworlds,fmp,alpha-vantage,yfinance",
+        help="Comma-separated US consensus sources: finnworlds,fmp,alpha-vantage,yfinance,all.",
     )
+    parser.add_argument(
+        "--finnworlds-date-from",
+        type=_parse_date_arg,
+        default="2000-01-01",
+        help="Inclusive Finnworlds ratings start date. Defaults to 2000-01-01.",
+    )
+    parser.add_argument(
+        "--finnworlds-date-to",
+        type=_parse_date_arg,
+        help="Inclusive Finnworlds ratings end date. Defaults to the consensus snapshot date.",
+    )
+    parser.add_argument(
+        "--finnworlds-max-calls-per-minute",
+        type=int,
+        default=120,
+        choices=range(1, 121),
+        metavar="1..120",
+        help="Global Finnworlds rolling-window limit. Defaults to 120.",
+    )
+    parser.add_argument(
+        "--finnworlds-retries",
+        type=int,
+        default=3,
+        help="Retries per Finnworlds company-ratings request.",
+    )
+    parser.add_argument(
+        "--fmp-max-calls-per-minute",
+        type=int,
+        default=720,
+        choices=range(1, 751),
+        metavar="1..750",
+        help="Global FMP rolling-window limit. Defaults to 720.",
+    )
+    parser.add_argument("--fmp-retries", type=int, default=3, help="Retries per FMP consensus request.")
     parser.add_argument(
         "--alpha-max-calls-per-minute",
         type=int,
@@ -484,7 +553,15 @@ def _parse_consensus_sources(value: str | None) -> set[str]:
 
 
 def _parse_us_consensus_sources(value: str | None) -> set[str]:
-    aliases = {"all": {"alpha-vantage", "yahoo"}, "alpha": {"alpha-vantage"}, "yfinance": {"yahoo"}}
+    aliases = {
+        "all": {"finnworlds", "fmp", "alpha-vantage", "yfinance"},
+        "finnworld": {"finnworlds"},
+        "finnworlds": {"finnworlds"},
+        "fmp": {"fmp"},
+        "alpha": {"alpha-vantage"},
+        "yahoo": {"yfinance"},
+        "yfinance": {"yfinance"},
+    }
     if value is None or not str(value).strip():
         return set(aliases["all"])
     sources: set[str] = set()
@@ -494,7 +571,7 @@ def _parse_us_consensus_sources(value: str | None) -> set[str]:
             continue
         if source in aliases:
             sources.update(aliases[source])
-        elif source in {"alpha-vantage", "yahoo"}:
+        elif source in {"finnworlds", "fmp", "alpha-vantage", "yfinance"}:
             sources.add(source)
         else:
             raise SystemExit("unknown US consensus source: " + source)

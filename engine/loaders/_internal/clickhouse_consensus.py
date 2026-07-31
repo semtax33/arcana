@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date, datetime
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,10 @@ from engine.transformers.consensus import (
     US_FACTORS_NAME,
     US_OBSERVATION_COLUMNS,
     US_OBSERVATIONS_NAME,
+    US_TARGET_PRICE_CONSENSUS_COLUMNS,
+    US_TARGET_PRICE_CONSENSUS_NAME,
+    US_TARGET_PRICE_RATING_COLUMNS,
+    US_TARGET_PRICE_RATINGS_NAME,
 )
 
 
@@ -36,12 +41,57 @@ US_CONSENSUS_TABLE_FILES = {
     "us_consensus_observations": (US_OBSERVATIONS_NAME, US_OBSERVATION_COLUMNS),
     "us_consensus_events": (US_EVENTS_NAME, US_EVENT_COLUMNS),
     "us_consensus_factors": (US_FACTORS_NAME, US_FACTOR_COLUMNS),
+    "us_target_price_ratings": (
+        US_TARGET_PRICE_RATINGS_NAME,
+        US_TARGET_PRICE_RATING_COLUMNS,
+    ),
+    "us_target_price_consensus": (
+        US_TARGET_PRICE_CONSENSUS_NAME,
+        US_TARGET_PRICE_CONSENSUS_COLUMNS,
+    ),
 }
 US_CONSENSUS_TABLE_DATE_COLUMNS = {
     "us_consensus_observations": "snapshot_date",
     "us_consensus_events": "event_date",
     "us_consensus_factors": "factor_date",
+    "us_target_price_ratings": "snapshot_date",
+    "us_target_price_consensus": "event_date",
 }
+US_TARGET_PRICE_TABLE_DDL = (
+    """
+    CREATE TABLE IF NOT EXISTS us_target_price_ratings
+    (
+        rating_key String, symbol String, security_id String,
+        provider LowCardinality(String), snapshot_date Date,
+        rating_date Nullable(Date), availability_date Nullable(Date),
+        target_date Nullable(Date), analyst_name String, analyst_firm String,
+        analyst_role String, price_target Nullable(Float64), rating String,
+        conclusion String, currency LowCardinality(String), raw_path String
+    )
+    ENGINE = ReplacingMergeTree
+    PARTITION BY toYYYYMM(snapshot_date)
+    ORDER BY (symbol, provider, rating_key)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS us_target_price_consensus
+    (
+        consensus_key String, symbol String, security_id String,
+        provider LowCardinality(String), consensus_kind LowCardinality(String),
+        source_regime LowCardinality(String), snapshot_date Date,
+        event_date Date, availability_date Date,
+        target_price_mean Nullable(Float64),
+        target_price_median Nullable(Float64),
+        target_price_low Nullable(Float64),
+        target_price_high Nullable(Float64),
+        analyst_count Nullable(UInt32), buy_count Nullable(UInt32),
+        hold_count Nullable(UInt32), sell_count Nullable(UInt32),
+        currency LowCardinality(String), raw_path String
+    )
+    ENGINE = ReplacingMergeTree
+    PARTITION BY toYYYYMM(event_date)
+    ORDER BY (symbol, provider, consensus_kind, event_date, consensus_key)
+    """,
+)
 
 US_CONSENSUS_FACTORS_SCHEMA_MIGRATIONS = (
     "ALTER TABLE us_consensus_factors "
@@ -50,6 +100,23 @@ US_CONSENSUS_FACTORS_SCHEMA_MIGRATIONS = (
     "ALTER TABLE us_consensus_factors "
     "ADD COLUMN IF NOT EXISTS us_target_price Nullable(Float64) "
     "AFTER us_operating_income_consensus",
+)
+US_CONSENSUS_OBSERVATIONS_SCHEMA_MIGRATIONS = (
+    "ALTER TABLE us_consensus_observations "
+    "ADD COLUMN IF NOT EXISTS publishers_json String DEFAULT '[]' "
+    "AFTER analyst_count",
+    "ALTER TABLE us_consensus_observations "
+    "ADD COLUMN IF NOT EXISTS consensus_row_key UInt64 AFTER raw_path, "
+    "MODIFY ORDER BY "
+    "(symbol, snapshot_date, provider, horizon, metric, statistic, "
+    "consensus_row_key)",
+)
+US_CONSENSUS_FACTORS_ORDER_MIGRATION = (
+    "ALTER TABLE us_consensus_factors "
+    "ADD COLUMN IF NOT EXISTS consensus_row_key UInt64 AFTER raw_path, "
+    "MODIFY ORDER BY "
+    "(security_id, factor_date, provider, source_regime, horizon, "
+    "consensus_row_key)"
 )
 
 STRING_COLUMNS = {
@@ -97,6 +164,14 @@ STRING_COLUMNS = {
     "statistic",
     "event_type",
     "raw_path",
+    "publishers_json",
+    "rating_key",
+    "consensus_key",
+    "consensus_kind",
+    "rating",
+    "conclusion",
+    "analyst_firm",
+    "analyst_role",
 }
 
 DATE_COLUMNS = {
@@ -110,6 +185,8 @@ DATE_COLUMNS = {
     "event_date",
     "factor_date",
     "fiscal_period_end",
+    "rating_date",
+    "target_date",
 }
 
 DATETIME_COLUMNS = {"updated_at"}
@@ -121,6 +198,9 @@ INTEGER_COLUMNS = {
     "broker_count",
     "lookback_days",
     "analyst_count",
+    "buy_count",
+    "hold_count",
+    "sell_count",
 }
 
 NON_NULL_DATE_DEFAULTS = {
@@ -175,6 +255,11 @@ FLOAT_COLUMNS = {
     "us_eps_dispersion_pct",
     "us_revenue_dispersion_pct",
     "us_eps_surprise_pct",
+    "price_target",
+    "target_price_mean",
+    "target_price_median",
+    "target_price_low",
+    "target_price_high",
 }
 
 
@@ -235,11 +320,12 @@ def load_us_consensus(
         client = client or get_clickhouse_client()
     try:
         if not dry_run:
-            ensure_us_consensus_factor_schema(client)
+            ensure_us_consensus_schema(client)
         for table_name, (file_name, columns) in US_CONSENSUS_TABLE_FILES.items():
             frame = _read_silver_csv(Path(silver_dir) / file_name, columns=columns)
             counts[table_name] = len(frame)
             if not dry_run and not frame.empty:
+                _delete_legacy_zero_key_rows(client, table_name)
                 _insert_us_consensus_frame(client, table_name, frame)
     finally:
         close = getattr(client, "close", None)
@@ -248,7 +334,10 @@ def load_us_consensus(
     print(
         "[DONE] us consensus load "
         f"observations={counts.get('us_consensus_observations', 0):,}, "
-        f"events={counts.get('us_consensus_events', 0):,}, factors={counts.get('us_consensus_factors', 0):,}",
+        f"events={counts.get('us_consensus_events', 0):,}, "
+        f"factors={counts.get('us_consensus_factors', 0):,}, "
+        f"target_ratings={counts.get('us_target_price_ratings', 0):,}, "
+        f"target_consensus={counts.get('us_target_price_consensus', 0):,}",
         flush=True,
     )
     return counts
@@ -263,8 +352,47 @@ def ensure_us_consensus_factor_schema(client: Any) -> None:
             client.execute(query)
 
 
+def ensure_us_consensus_schema(client: Any) -> None:
+    for query in US_TARGET_PRICE_TABLE_DDL:
+        command = getattr(client, "command", None)
+        if callable(command):
+            command(query)
+        else:
+            client.execute(query)
+    ensure_us_consensus_factor_schema(client)
+    for query in US_CONSENSUS_OBSERVATIONS_SCHEMA_MIGRATIONS:
+        command = getattr(client, "command", None)
+        if callable(command):
+            command(query)
+        else:
+            client.execute(query)
+    command = getattr(client, "command", None)
+    if callable(command):
+        command(US_CONSENSUS_FACTORS_ORDER_MIGRATION)
+    else:
+        client.execute(US_CONSENSUS_FACTORS_ORDER_MIGRATION)
+
+
+def _delete_legacy_zero_key_rows(client: Any, table_name: str) -> None:
+    if table_name not in {
+        "us_consensus_observations",
+        "us_consensus_factors",
+    }:
+        return
+    query = (
+        f"ALTER TABLE {table_name} DELETE WHERE consensus_row_key = 0 "
+        "SETTINGS mutations_sync = 2"
+    )
+    command = getattr(client, "command", None)
+    if callable(command):
+        command(query)
+    else:
+        client.execute(query)
+
+
 def _insert_us_consensus_frame(client: Any, table_name: str, frame: pd.DataFrame) -> None:
     """Insert one ClickHouse month at a time to stay below its partition limit."""
+    frame = _with_consensus_row_key(table_name, frame)
     date_column = US_CONSENSUS_TABLE_DATE_COLUMNS[table_name]
     dates = pd.to_datetime(frame[date_column], errors="coerce")
     if dates.isna().any():
@@ -280,6 +408,46 @@ def _insert_us_consensus_frame(client: Any, table_name: str, frame: pd.DataFrame
     for _, batch in batches:
         prepared = batch.drop(columns="_partition")
         client.insert_df(table_name, prepared, column_names=list(prepared.columns))
+
+
+def _with_consensus_row_key(table_name: str, frame: pd.DataFrame) -> pd.DataFrame:
+    if table_name == "us_consensus_observations":
+        identity_columns = (
+            "dataset",
+            "source_regime",
+            "availability_date",
+            "period_type",
+            "fiscal_period_end",
+            "forecast_slot",
+            "lookback_days",
+        )
+    elif table_name == "us_consensus_factors":
+        identity_columns = ("raw_path",)
+    else:
+        return frame
+    result = frame.copy()
+    result["consensus_row_key"] = [
+        _stable_row_key(row, identity_columns)
+        for _, row in result.iterrows()
+    ]
+    return result
+
+
+def _stable_row_key(row: pd.Series, columns: tuple[str, ...]) -> int:
+    values = []
+    for column in columns:
+        value = row.get(column)
+        if value is None or (not isinstance(value, (list, dict)) and pd.isna(value)):
+            values.append("")
+        elif hasattr(value, "isoformat"):
+            values.append(value.isoformat())
+        else:
+            values.append(str(value))
+    digest = hashlib.blake2b(
+        "\x1f".join(values).encode("utf-8"),
+        digest_size=8,
+    ).digest()
+    return int.from_bytes(digest, byteorder="big", signed=False)
 
 
 def _read_silver_csv(path: Path, *, columns: list[str]) -> pd.DataFrame:

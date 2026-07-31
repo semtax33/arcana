@@ -568,11 +568,15 @@ CREATE TABLE IF NOT EXISTS us_consensus_observations
     horizon LowCardinality(String), period_type LowCardinality(String), fiscal_period_end Nullable(Date),
     forecast_slot LowCardinality(String), metric LowCardinality(String), statistic LowCardinality(String),
     lookback_days Nullable(UInt16), value Nullable(Float64), currency LowCardinality(String),
-    analyst_count Nullable(Float64), raw_path String
+    analyst_count Nullable(Float64), publishers_json String DEFAULT '[]', raw_path String,
+    consensus_row_key UInt64
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY toYYYYMM(snapshot_date)
-ORDER BY (symbol, snapshot_date, provider, horizon, metric, statistic);
+ORDER BY (
+    symbol, snapshot_date, provider, horizon, metric, statistic,
+    consensus_row_key
+);
 
 CREATE TABLE IF NOT EXISTS us_consensus_events
 (
@@ -590,15 +594,66 @@ CREATE TABLE IF NOT EXISTS us_consensus_factors
     symbol String, security_id String, factor_date Date, provider LowCardinality(String),
     source_regime LowCardinality(String), horizon LowCardinality(String), analyst_count Nullable(Float64),
     us_eps_consensus Nullable(Float64), us_revenue_consensus Nullable(Float64),
+    us_operating_income_consensus Nullable(Float64), us_target_price Nullable(Float64),
     us_eps_revision_7d_pct Nullable(Float64), us_eps_revision_30d_pct Nullable(Float64),
     us_eps_revision_60d_pct Nullable(Float64), us_eps_revision_90d_pct Nullable(Float64),
     us_eps_revision_breadth_30d_pct Nullable(Float64), us_eps_revision_acceleration_30d_pct Nullable(Float64),
     us_eps_dispersion_pct Nullable(Float64), us_revenue_dispersion_pct Nullable(Float64),
-    us_eps_surprise_pct Nullable(Float64), currency LowCardinality(String), raw_path String
+    us_eps_surprise_pct Nullable(Float64), currency LowCardinality(String), raw_path String,
+    consensus_row_key UInt64
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY toYYYYMM(factor_date)
-ORDER BY (security_id, factor_date, provider, source_regime, horizon);
+ORDER BY (security_id, factor_date, provider, source_regime, horizon, consensus_row_key);
+
+CREATE TABLE IF NOT EXISTS us_target_price_ratings
+(
+    rating_key String,
+    symbol String,
+    security_id String,
+    provider LowCardinality(String),
+    snapshot_date Date,
+    rating_date Nullable(Date),
+    availability_date Nullable(Date),
+    target_date Nullable(Date),
+    analyst_name String,
+    analyst_firm String,
+    analyst_role String,
+    price_target Nullable(Float64),
+    rating String,
+    conclusion String,
+    currency LowCardinality(String),
+    raw_path String
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY toYYYYMM(snapshot_date)
+ORDER BY (symbol, provider, rating_key);
+
+CREATE TABLE IF NOT EXISTS us_target_price_consensus
+(
+    consensus_key String,
+    symbol String,
+    security_id String,
+    provider LowCardinality(String),
+    consensus_kind LowCardinality(String),
+    source_regime LowCardinality(String),
+    snapshot_date Date,
+    event_date Date,
+    availability_date Date,
+    target_price_mean Nullable(Float64),
+    target_price_median Nullable(Float64),
+    target_price_low Nullable(Float64),
+    target_price_high Nullable(Float64),
+    analyst_count Nullable(UInt32),
+    buy_count Nullable(UInt32),
+    hold_count Nullable(UInt32),
+    sell_count Nullable(UInt32),
+    currency LowCardinality(String),
+    raw_path String
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY toYYYYMM(event_date)
+ORDER BY (symbol, provider, consensus_kind, event_date, consensus_key);
 
 CREATE TABLE IF NOT EXISTS arcana.fact_daily_style_score
 (

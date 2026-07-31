@@ -41,6 +41,56 @@ class FakeClickHouseClient:
 
 
 class RefreshWorkflowTest(unittest.TestCase):
+    def test_us_consensus_refresh_passes_finnworlds_resume_controls(self):
+        args = argparse.Namespace(
+            market="us",
+            dry_run=False,
+            skip_clickhouse=True,
+            symbols="AAPL,MSFT",
+            force_full=False,
+            us_consensus_sources="finnworlds,fmp",
+            finnworlds_date_from="20000101",
+            finnworlds_max_calls_per_minute=120,
+            finnworlds_retries=4,
+        )
+        normalized = type(
+            "NormalizeWorkflow",
+            (),
+            {
+                "normalize_consensus": staticmethod(
+                    lambda namespace: {"factors": 1}
+                )
+            },
+        )
+        with (
+            patch.object(
+                refresh_workflow.download_workflow,
+                "download_us_consensus",
+            ) as download,
+            patch.object(
+                refresh_workflow,
+                "get_normalize_workflow",
+                return_value=normalized,
+            ),
+        ):
+            refresh_workflow.run_consensus_refresh(
+                args,
+                "20260731",
+                client=None,
+                state=None,
+            )
+
+        namespace = download.call_args.args[0]
+        self.assertEqual(
+            namespace.us_consensus_sources,
+            "finnworlds,fmp",
+        )
+        self.assertEqual(namespace.finnworlds_date_from, "20000101")
+        self.assertEqual(namespace.finnworlds_date_to, "20260731")
+        self.assertEqual(namespace.finnworlds_max_calls_per_minute, 120)
+        self.assertEqual(namespace.finnworlds_retries, 4)
+        self.assertFalse(namespace.force)
+
     def test_build_refresh_window_starts_after_latest_date(self):
         window = refresh_workflow.build_refresh_window(
             date(2026, 6, 10),
@@ -220,7 +270,7 @@ class RefreshWorkflowTest(unittest.TestCase):
         self.assertTrue(parser.parse_args([]).resume)
         self.assertFalse(parser.parse_args(["--no-resume"]).resume)
 
-    def test_us_all_targets_exclude_kr_only_steps(self):
+    def test_us_all_targets_include_consensus_and_exclude_kr_only_steps(self):
         targets = refresh_workflow.expand_targets("all", market="us")
 
         self.assertIn("market-data", targets)
@@ -228,7 +278,7 @@ class RefreshWorkflowTest(unittest.TestCase):
         self.assertIn("factors", targets)
         self.assertIn("snapshots", targets)
         self.assertNotIn("business-info", targets)
-        self.assertNotIn("consensus", targets)
+        self.assertIn("consensus", targets)
         self.assertNotIn("operating-metrics", targets)
 
     def test_latest_complete_trade_date_ignores_partial_latest_session(self):

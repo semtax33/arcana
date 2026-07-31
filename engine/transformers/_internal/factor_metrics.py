@@ -169,6 +169,9 @@ US_CONSENSUS_INPUT_COLUMNS = [
     "us_revenue_consensus",
     "us_operating_income_consensus",
     "us_target_price",
+    "us_target_price_analyst_count",
+    "us_target_price_provider",
+    "us_target_price_source_regime",
     "us_eps_revision_7d_pct",
     "us_eps_revision_60d_pct",
     "us_eps_revision_90d_pct",
@@ -179,6 +182,8 @@ US_CONSENSUS_INPUT_COLUMNS = [
 US_CONSENSUS_STRING_INPUT_COLUMNS = {
     "us_consensus_source_regime",
     "us_consensus_horizon",
+    "us_target_price_provider",
+    "us_target_price_source_regime",
 }
 
 KR_TARGET_PRICE_INPUT_COLUMNS = [
@@ -2052,7 +2057,7 @@ def add_us_consensus_factors(
     us_consensus_factors_path=US_CONSENSUS_FACTORS_PATH,
     market="kr",
 ):
-    """Merge US consensus factors and Alpha-first target-price events as PIT data."""
+    """Merge provider-neutral US consensus factors as point-in-time data."""
     df = daily_df.sort_values("trade_date").copy()
     for column in [*US_CONSENSUS_FACTOR_COLUMNS, *US_CONSENSUS_INPUT_COLUMNS]:
         if column not in df.columns:
@@ -2066,29 +2071,8 @@ def add_us_consensus_factors(
     if factors.empty:
         return df
     target_events = _us_target_price_events(factors)
-
-    horizons = factors["horizon"].astype(str)
-    regimes = factors["source_regime"].astype(str)
-    alpha_historical = regimes.eq("ALPHA_VANTAGE_HISTORICAL") & horizons.eq("FQ1")
-    yahoo_current = regimes.eq("YAHOO_CURRENT") & horizons.eq("FY1")
-    factors = factors.loc[alpha_historical | yahoo_current].copy()
-    if not factors.empty:
-        yahoo_start = factors.loc[factors["source_regime"].astype(str).eq("YAHOO_CURRENT"), "factor_date"].min()
-        if pd.notna(yahoo_start):
-            # Yahoo begins the operational EPS regime. Do not let later-reported
-            # Alpha quarters re-enter the series after that handoff.
-            factors = factors.loc[
-                factors["source_regime"].astype(str).eq("YAHOO_CURRENT")
-                | factors["factor_date"].lt(yahoo_start)
-            ].copy()
-        # Yahoo also wins if both EPS providers have the same availability date.
-        factors["_provider_priority"] = factors["provider"].astype(str).eq("YAHOO_FINANCE").astype(int)
-        factors = factors.sort_values(["factor_date", "_provider_priority", "raw_path"]).drop_duplicates("factor_date", keep="last")
-        factors["_eligible"] = pd.to_numeric(factors["analyst_count"], errors="coerce") >= 3
-        for column in US_CONSENSUS_FACTOR_COLUMNS:
-            if column not in factors.columns:
-                factors[column] = math.nan
-            factors[column] = pd.to_numeric(factors[column], errors="coerce").where(factors["_eligible"])
+    composite = _us_consensus_composite_events(factors)
+    if not composite.empty:
         merge_columns = [
             *US_CONSENSUS_FACTOR_COLUMNS,
             "us_eps_consensus",
@@ -2102,14 +2086,14 @@ def add_us_consensus_factors(
             "horizon",
         ]
         for column in merge_columns:
-            if column not in factors.columns:
-                factors[column] = pd.NA
+            if column not in composite.columns:
+                composite[column] = pd.NA
         left = (
             df.reset_index(names="_us_consensus_row")
             .drop(columns=merge_columns, errors="ignore")
             .sort_values("trade_date")
         )
-        right = factors[["factor_date", *merge_columns]].sort_values("factor_date")
+        right = composite[["factor_date", *merge_columns]].sort_values("factor_date")
         merged = pd.merge_asof(left, right, left_on="trade_date", right_on="factor_date", direction="backward", suffixes=("", "_us"))
         for column in US_CONSENSUS_FACTOR_COLUMNS:
             df.loc[merged["_us_consensus_row"], column] = pd.to_numeric(merged[column], errors="coerce").to_numpy()
@@ -2131,22 +2115,31 @@ def add_us_consensus_factors(
             df.loc[merged["_us_consensus_row"], target] = values.to_numpy()
 
     if not target_events.empty:
+        target_columns = [
+            "us_target_price",
+            "us_target_price_analyst_count",
+            "us_target_price_provider",
+            "us_target_price_source_regime",
+        ]
         left = (
             df.reset_index(names="_us_target_row")
-            .drop(columns=["us_target_price"], errors="ignore")
+            .drop(columns=target_columns, errors="ignore")
             .sort_values("trade_date")
         )
         merged_targets = pd.merge_asof(
             left,
-            target_events[["factor_date", "us_target_price"]].sort_values("factor_date"),
+            target_events[["factor_date", *target_columns]].sort_values(
+                "factor_date"
+            ),
             left_on="trade_date",
             right_on="factor_date",
             direction="backward",
         )
-        df.loc[merged_targets["_us_target_row"], "us_target_price"] = pd.to_numeric(
-            merged_targets["us_target_price"],
-            errors="coerce",
-        ).to_numpy()
+        for column in target_columns:
+            values = merged_targets[column]
+            if column not in US_CONSENSUS_STRING_INPUT_COLUMNS:
+                values = pd.to_numeric(values, errors="coerce")
+            df.loc[merged_targets["_us_target_row"], column] = values.to_numpy()
 
     source_close = df.get("close")
     if source_close is None:
@@ -2154,53 +2147,302 @@ def add_us_consensus_factors(
     close = pd.to_numeric(source_close, errors="coerce")
     target_price = pd.to_numeric(df["us_target_price"], errors="coerce")
     df[US_PRICE_TO_TARGET_PRICE_FACTOR] = (close / target_price).where(
-        close.gt(0) & target_price.gt(0)
+        close.gt(0)
+        & close.map(np.isfinite)
+        & target_price.gt(0)
+        & target_price.map(np.isfinite)
     )
     return df
 
 
+def _us_consensus_composite_events(factors):
+    """Coalesce each field FMP -> Alpha Vantage -> Yahoo without cross-provider revisions."""
+    numeric_columns = [
+        *US_CONSENSUS_FACTOR_COLUMNS,
+        "us_eps_consensus",
+        "us_revenue_consensus",
+        "us_operating_income_consensus",
+        "us_eps_revision_7d_pct",
+        "us_eps_revision_60d_pct",
+        "us_eps_revision_90d_pct",
+        "analyst_count",
+    ]
+    working = factors.copy()
+    for column in numeric_columns:
+        if column not in working.columns:
+            working[column] = math.nan
+        working[column] = pd.to_numeric(working[column], errors="coerce")
+    for column in ("provider", "source_regime", "horizon", "raw_path"):
+        if column not in working.columns:
+            working[column] = ""
+        working[column] = working[column].fillna("").astype(str)
+
+    regimes = working["source_regime"]
+    horizons = working["horizon"]
+    is_fmp_current = regimes.eq("FMP_CURRENT") & horizons.eq("FY1")
+    is_alpha_historical = regimes.eq("ALPHA_VANTAGE_HISTORICAL") & horizons.eq("FQ1")
+    is_yahoo_current = regimes.eq("YAHOO_CURRENT") & horizons.eq("FY1")
+    non_target_columns = [
+        *US_CONSENSUS_FACTOR_COLUMNS,
+        "us_eps_consensus",
+        "us_revenue_consensus",
+        "us_operating_income_consensus",
+        "us_eps_revision_7d_pct",
+        "us_eps_revision_60d_pct",
+        "us_eps_revision_90d_pct",
+    ]
+    has_consensus_value = working[non_target_columns].notna().any(axis=1)
+    working = working.loc[
+        has_consensus_value
+        & (is_fmp_current | is_alpha_historical | is_yahoo_current)
+    ].copy()
+    if working.empty:
+        return pd.DataFrame()
+
+    current_mask = working["source_regime"].isin({"FMP_CURRENT", "YAHOO_CURRENT"})
+    current_start = working.loc[current_mask, "factor_date"].min()
+    if pd.notna(current_start):
+        working = working.loc[
+            ~working["source_regime"].eq("ALPHA_VANTAGE_HISTORICAL")
+            | working["factor_date"].lt(current_start)
+        ].copy()
+    working = _collapse_us_provider_rows(working, numeric_columns)
+    if working.empty:
+        return pd.DataFrame()
+
+    event_dates = sorted(working["factor_date"].dropna().unique())
+    provider_order = ("FMP", "ALPHA_VANTAGE", "YAHOO_FINANCE")
+    rows = []
+    for factor_date in event_dates:
+        available = working.loc[working["factor_date"].le(factor_date)]
+        latest = {}
+        for provider in provider_order:
+            provider_rows = available.loc[available["provider"].eq(provider)]
+            if provider == "ALPHA_VANTAGE" and pd.notna(current_start) and pd.Timestamp(
+                factor_date
+            ) >= pd.Timestamp(current_start):
+                provider_rows = provider_rows.loc[
+                    ~provider_rows["source_regime"].eq(
+                        "ALPHA_VANTAGE_HISTORICAL"
+                    )
+                ]
+            if provider_rows.empty:
+                continue
+            latest[provider] = provider_rows.sort_values(
+                ["factor_date", "raw_path"]
+            ).iloc[-1]
+        if not latest:
+            continue
+        output = {"factor_date": pd.Timestamp(factor_date)}
+        source_row = None
+        for column in US_CONSENSUS_FACTOR_COLUMNS:
+            value, row = _first_eligible_us_value(
+                latest,
+                provider_order,
+                column,
+                require_analysts=True,
+            )
+            output[column] = value
+            if column == "us_eps_revision_30d_pct" and row is not None:
+                source_row = row
+        for column in (
+            "us_eps_consensus",
+            "us_revenue_consensus",
+            "us_operating_income_consensus",
+            "us_eps_revision_7d_pct",
+            "us_eps_revision_60d_pct",
+            "us_eps_revision_90d_pct",
+        ):
+            value, row = _first_eligible_us_value(
+                latest,
+                provider_order,
+                column,
+                require_analysts=False,
+            )
+            output[column] = value
+            if source_row is None and column == "us_eps_consensus" and row is not None:
+                source_row = row
+        if source_row is not None:
+            output["analyst_count"] = pd.to_numeric(
+                source_row.get("analyst_count"), errors="coerce"
+            )
+            output["source_regime"] = str(source_row.get("source_regime", ""))
+            output["horizon"] = str(source_row.get("horizon", ""))
+        else:
+            output["analyst_count"] = math.nan
+            output["source_regime"] = ""
+            output["horizon"] = ""
+        rows.append(output)
+    return pd.DataFrame(rows).sort_values("factor_date").reset_index(drop=True)
+
+
+def _collapse_us_provider_rows(factors, numeric_columns):
+    rows = []
+    group_columns = ["factor_date", "provider", "source_regime", "horizon"]
+    for keys, group in factors.sort_values(["factor_date", "raw_path"]).groupby(
+        group_columns,
+        sort=True,
+        dropna=False,
+    ):
+        row = dict(zip(group_columns, keys))
+        for column in numeric_columns:
+            values = pd.to_numeric(group[column], errors="coerce").dropna()
+            row[column] = values.iloc[-1] if not values.empty else math.nan
+        row["raw_path"] = str(group["raw_path"].iloc[-1])
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _first_eligible_us_value(
+    latest,
+    provider_order,
+    column,
+    *,
+    require_analysts,
+):
+    candidates = []
+    for provider in provider_order:
+        row = latest.get(provider)
+        if row is None:
+            continue
+        value = pd.to_numeric(row.get(column), errors="coerce")
+        if pd.isna(value) or not np.isfinite(value):
+            continue
+        analysts = pd.to_numeric(row.get("analyst_count"), errors="coerce")
+        if require_analysts and (pd.isna(analysts) or analysts < 3):
+            continue
+        candidates.append(
+            (
+                pd.Timestamp(row.get("factor_date")),
+                -provider_order.index(provider),
+                float(value),
+                row,
+            )
+        )
+    if candidates:
+        _, _, value, row = max(candidates, key=lambda candidate: candidate[:2])
+        return value, row
+    return math.nan, None
+
+
 def _us_target_price_events(factors):
-    """Choose Alpha Vantage target price first and Yahoo as same-date fallback."""
+    """Choose PIT targets in strict Finnworlds, FMP, Alpha, Yahoo order."""
     horizons = factors["horizon"].fillna("").astype(str)
     regimes = factors["source_regime"].fillna("").astype(str)
     providers = factors["provider"].fillna("").astype(str)
+    is_finnworlds = providers.eq("FINNWORLDS") & regimes.isin(
+        {
+            "FINNWORLDS_OFFICIAL_CURRENT",
+            "FINNWORLDS_OFFICIAL_EXPIRED",
+            "FINNWORLDS_PIT_HISTORICAL",
+        }
+    )
+    is_fmp = providers.eq("FMP") & regimes.eq("FMP_CURRENT")
     is_alpha = providers.eq("ALPHA_VANTAGE") & regimes.eq("ALPHA_VANTAGE_CURRENT")
     is_yahoo = providers.eq("YAHOO_FINANCE") & regimes.eq("YAHOO_CURRENT")
-    events = factors.loc[horizons.eq("FY1") & (is_alpha | is_yahoo)].copy()
+    events = factors.loc[
+        horizons.eq("FY1")
+        & (is_finnworlds | is_fmp | is_alpha | is_yahoo)
+    ].copy()
     if events.empty:
-        return pd.DataFrame(columns=["factor_date", "us_target_price"])
+        return pd.DataFrame(
+            columns=[
+                "factor_date",
+                "us_target_price",
+                "us_target_price_analyst_count",
+                "us_target_price_provider",
+                "us_target_price_source_regime",
+            ]
+        )
 
     events["us_target_price"] = pd.to_numeric(
         events.get("us_target_price"),
         errors="coerce",
     )
-    analysts = pd.to_numeric(events.get("analyst_count"), errors="coerce")
+    events["analyst_count"] = pd.to_numeric(
+        events.get("analyst_count"),
+        errors="coerce",
+    )
     events["_target_eligible"] = (
         events["us_target_price"].gt(0)
         & events["us_target_price"].map(np.isfinite)
-        & analysts.ge(3)
+        & events["analyst_count"].ge(3)
     )
-    events["us_target_price"] = events["us_target_price"].where(
-        events["_target_eligible"]
-    )
-    events["_provider_priority"] = events["provider"].astype(str).map(
-        {"YAHOO_FINANCE": 1, "ALPHA_VANTAGE": 2}
-    ).fillna(0)
     if "raw_path" not in events.columns:
         events["raw_path"] = ""
-    return (
-        events.sort_values(
-            [
-                "factor_date",
-                "_target_eligible",
-                "_provider_priority",
-                "raw_path",
-            ]
-        )
-        .drop_duplicates("factor_date", keep="last")
-        .sort_values("factor_date")
-        .reset_index(drop=True)
+    provider_order = (
+        "FINNWORLDS",
+        "FMP",
+        "ALPHA_VANTAGE",
+        "YAHOO_FINANCE",
     )
+    rows = []
+    for factor_date in sorted(events["factor_date"].dropna().unique()):
+        available = events.loc[events["factor_date"].le(factor_date)]
+        chosen = None
+        for provider in provider_order:
+            provider_rows = available.loc[available["provider"].eq(provider)]
+            if provider_rows.empty:
+                continue
+            if provider == "FINNWORLDS":
+                official_rows = provider_rows.loc[
+                    provider_rows["source_regime"].isin(
+                        {
+                            "FINNWORLDS_OFFICIAL_CURRENT",
+                            "FINNWORLDS_OFFICIAL_EXPIRED",
+                        }
+                    )
+                ]
+                official = (
+                    official_rows.sort_values(["factor_date", "raw_path"]).iloc[-1]
+                    if not official_rows.empty
+                    else None
+                )
+                if official is not None and bool(official["_target_eligible"]):
+                    chosen = official
+                else:
+                    pit_rows = provider_rows.loc[
+                        provider_rows["source_regime"].eq(
+                            "FINNWORLDS_PIT_HISTORICAL"
+                        )
+                    ]
+                    pit = (
+                        pit_rows.sort_values(["factor_date", "raw_path"]).iloc[-1]
+                        if not pit_rows.empty
+                        else None
+                    )
+                    if pit is not None and bool(pit["_target_eligible"]):
+                        chosen = pit
+            else:
+                latest = provider_rows.sort_values(
+                    ["factor_date", "raw_path"]
+                ).iloc[-1]
+                if bool(latest["_target_eligible"]):
+                    chosen = latest
+            if chosen is not None:
+                break
+        rows.append(
+            {
+                "factor_date": pd.Timestamp(factor_date),
+                "us_target_price": (
+                    float(chosen["us_target_price"])
+                    if chosen is not None
+                    else math.nan
+                ),
+                "us_target_price_analyst_count": (
+                    float(chosen["analyst_count"])
+                    if chosen is not None
+                    else math.nan
+                ),
+                "us_target_price_provider": (
+                    str(chosen["provider"]) if chosen is not None else ""
+                ),
+                "us_target_price_source_regime": (
+                    str(chosen["source_regime"]) if chosen is not None else ""
+                ),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("factor_date").reset_index(drop=True)
 
 
 def _us_analyst_consensus_is_eligible(df):

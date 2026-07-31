@@ -411,8 +411,10 @@ FACTOR_DESCRIPTION_OVERRIDES = {
         "자기강화적 기대가 형성된 상태로 평가합니다."
     ),
     "us_price_to_target_price": (
-        "Yahoo Finance FY1 애널리스트 평균 목표주가를 같은 날 종가로 나눈 값. "
-        "높을수록 우수하게 평가합니다."
+        "120일 이내이고 애널리스트가 3명 이상인 Finnworlds FY1 목표주가를 "
+        "우선하고, 유효하지 않으면 FMP, Alpha Vantage, Yahoo Finance 순으로 "
+        "선택한 뒤 같은 날 종가를 목표주가로 나눈 값. 높을수록 목표주가 대비 "
+        "시장가격이 강하게 선행한 상태로 평가합니다."
     ),
     "eps_implied_operating_income_surprise_pct": (
         "FY1 EPS 컨센서스와 최근 공시 영업이익/순이익 관계로 유도한 FY1 영업이익의 "

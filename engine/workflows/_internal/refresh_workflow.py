@@ -347,9 +347,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--consensus-stale-days", type=int, default=180)
     parser.add_argument(
         "--us-consensus-sources",
-        default="alpha-vantage,yahoo",
-        help="Comma-separated US consensus sources: alpha-vantage,yahoo,all.",
+        default="finnworlds,fmp,alpha-vantage,yfinance",
+        help="Comma-separated US consensus sources: finnworlds,fmp,alpha-vantage,yfinance,all.",
     )
+    parser.add_argument("--finnworlds-date-from", type=parse_date_arg, default="20000101")
+    parser.add_argument("--finnworlds-max-calls-per-minute", type=int, choices=range(1, 121), default=120, metavar="1..120")
+    parser.add_argument("--finnworlds-retries", type=int, default=3)
+    parser.add_argument("--fmp-max-calls-per-minute", type=int, choices=range(1, 751), default=720, metavar="1..750")
+    parser.add_argument("--fmp-retries", type=int, default=3)
     parser.add_argument("--alpha-max-calls-per-minute", type=int, choices=range(1, 76), default=75, metavar="1..75")
     parser.add_argument("--consensus-retries", type=int, default=3)
     parser.add_argument("--dry-run", action="store_true")
@@ -772,9 +777,23 @@ def run_consensus_refresh(
         namespace = argparse.Namespace(
             market="us",
             symbols=getattr(args, "symbols", None),
-            us_consensus_sources=getattr(args, "us_consensus_sources", "alpha-vantage,yahoo"),
+            us_consensus_sources=getattr(
+                args,
+                "us_consensus_sources",
+                "finnworlds,fmp,alpha-vantage,yfinance",
+            ),
             consensus_snapshot_date=end_date,
-            force=True,
+            force=bool(getattr(args, "force_full", False)),
+            finnworlds_date_from=getattr(args, "finnworlds_date_from", "20000101"),
+            finnworlds_date_to=end_date,
+            finnworlds_max_calls_per_minute=getattr(
+                args,
+                "finnworlds_max_calls_per_minute",
+                120,
+            ),
+            finnworlds_retries=getattr(args, "finnworlds_retries", 3),
+            fmp_max_calls_per_minute=getattr(args, "fmp_max_calls_per_minute", 720),
+            fmp_retries=getattr(args, "fmp_retries", 3),
             alpha_max_calls_per_minute=getattr(args, "alpha_max_calls_per_minute", 75),
             consensus_retries=getattr(args, "consensus_retries", 3),
         )
@@ -933,6 +952,16 @@ def resume_signature(args: argparse.Namespace, end_date: str, targets: set[str])
             getattr(args, "complete_universe_ratio", 0.99)
         ),
         "consensus_sources": getattr(args, "consensus_sources", None),
+        "us_consensus_sources": getattr(args, "us_consensus_sources", None),
+        "finnworlds_date_from": getattr(args, "finnworlds_date_from", None),
+        "finnworlds_max_calls_per_minute": getattr(
+            args,
+            "finnworlds_max_calls_per_minute",
+            None,
+        ),
+        "finnworlds_retries": getattr(args, "finnworlds_retries", None),
+        "fmp_max_calls_per_minute": getattr(args, "fmp_max_calls_per_minute", None),
+        "fmp_retries": getattr(args, "fmp_retries", None),
     }
 
 
@@ -970,13 +999,13 @@ def expand_targets(target: str, *, market: str = "kr") -> set[str]:
             "market-data",
             "filings",
             "dividends",
+            "consensus",
             "benchmarks-wacc",
             "factors",
             "snapshots",
         }
     if market == "us" and target in {
         "business-info",
-        "consensus",
         "operating-metrics",
     }:
         raise ValueError(f"target={target} is not supported for market=us")

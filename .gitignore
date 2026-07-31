@@ -11,6 +11,9 @@ data-lake/meta/screener_strategies.sqlite3-*
 data-lake/meta/refresh_state/**
 data-lake/meta/refresh_locks/**
 data-lake/meta/refresh-manifests/**
+data-lake/meta/consensus/fmp_rate_limit.json
+data-lake/meta/consensus/finnworlds_rate_limit.json
+data-lake/meta/consensus/finnworlds_backfill_*.json
 data-lake/source-archive/**
 outputs/
 output/

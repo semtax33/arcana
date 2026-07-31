@@ -15,11 +15,18 @@ from engine.extractors._internal.html_consensus import (
 )
 from engine.extractors._internal.us_consensus import (
     ALPHA_VANTAGE_ENDPOINTS,
+    BRONZE_FINNWORLDS_CONSENSUS_DIR,
+    BRONZE_FMP_CONSENSUS_DIR,
     BRONZE_ALPHA_VANTAGE_CONSENSUS_DIR,
     BRONZE_US_CONSENSUS_DIR,
     BRONZE_YAHOO_CONSENSUS_DIR,
     DEFAULT_ALPHA_MAX_CALLS_PER_MINUTE,
+    DEFAULT_FINNWORLDS_MAX_CALLS_PER_MINUTE,
+    DEFAULT_FMP_MAX_CALLS_PER_MINUTE,
+    FinnworldsRollingRateLimiter,
+    FmpRollingRateLimiter,
     RollingRateLimiter,
+    US_CONSENSUS_SOURCE_PRIORITY,
     download_us_consensus,
 )
 
@@ -36,10 +43,17 @@ __all__ = [
     "parse_equity_consensus_html",
     "parse_valuefinder_consensus_html",
     "ALPHA_VANTAGE_ENDPOINTS",
+    "BRONZE_FINNWORLDS_CONSENSUS_DIR",
+    "BRONZE_FMP_CONSENSUS_DIR",
     "BRONZE_ALPHA_VANTAGE_CONSENSUS_DIR",
     "BRONZE_US_CONSENSUS_DIR",
     "BRONZE_YAHOO_CONSENSUS_DIR",
     "DEFAULT_ALPHA_MAX_CALLS_PER_MINUTE",
+    "DEFAULT_FINNWORLDS_MAX_CALLS_PER_MINUTE",
+    "DEFAULT_FMP_MAX_CALLS_PER_MINUTE",
+    "FinnworldsRollingRateLimiter",
+    "FmpRollingRateLimiter",
     "RollingRateLimiter",
+    "US_CONSENSUS_SOURCE_PRIORITY",
     "download_us_consensus",
 ]

@@ -217,34 +217,70 @@ Hankyung 목표주가는 정규화 과정에서
 보고서 날짜의 다음 거래일부터 반영됩니다. 목표주가 대비 시장가격의 자기강화적 선행을
 포착하기 위해 factor catalog에서는 `HIGHER_BETTER`로 등록됩니다.
 
-### 미국 컨센서스 (Alpha Vantage + Yahoo Finance)
+### 미국 컨센서스 (FMP + Alpha Vantage + Yahoo Finance)
 
-미국 컨센서스는 한국 컨센서스와 원본·정규화 테이블·팩터를 분리한다. Alpha Vantage는
-과거 이벤트 상대 리비전, 실적발표 결과 및 분할을 담당하고, Yahoo Finance/yfinance는
-현재 운용용 일별 컨센서스 스냅샷을 담당한다. `ALPHA_VANTAGE_API_KEY`는 고정 문자열이
-아닌 실행 환경변수 이름이며, 실제 키는 환경에서만 읽는다.
+미국 컨센서스는 한국 컨센서스와 원본·정규화 테이블·팩터를 분리한다. FMP는 현재
+재무 추정치와 목표주가를 우선 제공하고, Alpha Vantage는 과거 이벤트 상대 리비전,
+실적발표 결과 및 분할을 담당한다. Yahoo Finance/yfinance는 상위 공급자에 없는 현재
+리비전 breadth와 surprise를 보완한다. API 키는 소스나 CLI 인자가 아닌 실행 환경에서만
+읽는다.
 
 ```powershell
+$env:FINNWORLDS_API_KEY = "<YOUR_FINNWORLDS_KEY>"
+$env:FMP_API_KEY = "<YOUR_FMP_KEY>"
 $env:ALPHA_VANTAGE_API_KEY = "<YOUR_ALPHA_VANTAGE_KEY>"
 
-# 지정 종목의 Alpha Vantage 과거 데이터와 Yahoo 현재 스냅샷을 수집
-python -m engine.workflows.download --market us --symbols AAPL,MSFT consensus --us-consensus-sources alpha-vantage,yahoo
+# 전체 미국 개별주식 또는 지정 종목 수집
+python -m engine.workflows.download `
+  --market us `
+  --us-consensus-sources finnworlds `
+  --finnworlds-date-from 2000-01-01 `
+  --finnworlds-date-to 2026-07-31 `
+  --finnworlds-max-calls-per-minute 120 `
+  consensus
+python -m engine.workflows.download --market us --symbols AAPL,MSFT consensus
 
 # 각 공급자만 수집할 수도 있음
+python -m engine.workflows.download --market us --symbols AAPL consensus --us-consensus-sources finnworlds
+python -m engine.workflows.download --market us --symbols AAPL consensus --us-consensus-sources fmp
 python -m engine.workflows.download --market us --symbols AAPL consensus --us-consensus-sources alpha-vantage
-python -m engine.workflows.download --market us --symbols AAPL consensus --us-consensus-sources yahoo
+python -m engine.workflows.download --market us --symbols AAPL consensus --us-consensus-sources yfinance
 
 # Bronze -> Silver 정규화, Silver -> ClickHouse 적재
 python -m engine.workflows.normalize --market us --target consensus
 python -m engine.loaders.consensus --market us
 ```
 
-Alpha Vantage 요청은 `EARNINGS_ESTIMATES`, `EARNINGS`, `SPLITS` 세 엔드포인트를
+미국 컨센서스의 기본 공급자 순서는 `finnworlds,fmp,alpha-vantage,yfinance`다.
+Finnworlds Developer 멤버십에 맞춰 물리 요청을 rolling 60초당 최대 120회로 제한하고,
+`companyratings`의 과금 배수 10을 별도 집계한다. 전체 미국 보통주 5,315종목은 재시도를
+제외하면 약 45분, 과금 호출량 약 53,150회다. API 키는 `FINNWORLDS_API_KEY`
+환경변수에서만 읽으며 Bronze·체크포인트·로그에는 저장하지 않는다.
+
+Finnworlds 백필은 종목 단위로 자동 이어받는다. 기간·유니버스 해시·공급자·스키마
+버전으로 실행 서명을 만들고 `data-lake/meta/consensus/finnworlds_backfill_*.json`에
+진행 상태를 원자적으로 기록한다. 재시작할 때 체크포인트뿐 아니라 완료된 Bronze JSON의
+무결성도 재검증하므로 정상 파일은 건너뛰고 손상 파일과 실패 종목만 다시 요청한다.
+`--force`는 해당 실행의 캐시와 체크포인트를 무시하고 전 종목을 다시 받는다. rolling
+rate-limit 상태는 별도 `finnworlds_rate_limit.json`에 보존된다. `429`는
+`Retry-After`, 5xx와 네트워크 오류는 지수 백오프로 기본 3회 재시도한다.
+
+FMP는 `analyst-estimates`의 annual/quarter 전체 페이지와 `price-target-summary`를
+수집한다. rolling 60초 기본 720회(`--fmp-max-calls-per-minute`, 최대 750회)로 제한하며,
+요청 시각은 `data-lake/meta/consensus/fmp_rate_limit.json`에 보존한다. 키 누락·무효·
+만료 또는 인증/구독 권한 오류가 발생하면 FMP 호출을 중단하고 Alpha Vantage, yfinance
+순으로 전환한다. `429`는 공급자를 바꾸지 않고 `Retry-After`와 백오프를 적용한다.
+
+Alpha Vantage 요청은 `EARNINGS_ESTIMATES`, `EARNINGS`, `OVERVIEW`, `SPLITS` 엔드포인트를
 사용하며 API 키 전체에서 rolling 60초 최대 75회로 제한된다. 재시도도 호출 한 건으로
 차감하고, 제한 응답(`429`, `Note`, `Information`)은 최소 60초 후 지수 백오프로 재시도한다.
 최근 요청 시각은 `data-lake/meta/consensus/alpha_vantage_rate_limit.json`에 보존된다.
 
 ```text
+data-lake/bronze/consensus/finnworlds/company-ratings/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
+data-lake/bronze/consensus/fmp/analyst-estimates/period=annual/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
+data-lake/bronze/consensus/fmp/analyst-estimates/period=quarter/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
+data-lake/bronze/consensus/fmp/price-target-summary/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
 data-lake/bronze/consensus/alpha-vantage/earnings-estimates/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
 data-lake/bronze/consensus/alpha-vantage/earnings/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
 data-lake/bronze/consensus/alpha-vantage/splits/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
@@ -253,6 +289,8 @@ data-lake/bronze/consensus/yahoo/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
 data-lake/silver/consensus/us/us_consensus_observations.csv
 data-lake/silver/consensus/us/us_consensus_events.csv
 data-lake/silver/consensus/us/us_consensus_factors.csv
+data-lake/silver/consensus/us/us_target_price_ratings.csv
+data-lake/silver/consensus/us/us_target_price_consensus.csv
 ```
 
 Yahoo 스냅샷에는 `get_earnings_estimate()`, `get_revenue_estimate()`,
@@ -264,8 +302,10 @@ Yahoo 스냅샷에는 `get_earnings_estimate()`, `get_revenue_estimate()`,
 
 #### 미국 컨센서스 팩터 계산
 
-US Consensus Score는 Yahoo 운용 구간에서 FY1을 주 기준으로 계산하고 FQ1/FQ2/FY2
-원시 값도 Silver에 보관한다. Alpha Vantage가 제공하는 역사 추정치는 대부분 분기이므로,
+US Consensus Score는 현재 운용 구간에서 FY1을 주 기준으로 계산하고 FQ1/FQ2/FY2
+원시 값도 Silver에 보관한다. 동일한 최신 스냅샷에서는 팩터 필드별로 FMP, Alpha Vantage,
+yfinance 순으로 유효 값을 선택한다. FMP가 제공하지 않는 revision breadth와 surprise는
+yfinance로 보완한다. Alpha Vantage가 제공하는 역사 추정치는 대부분 분기이므로,
 과거 백테스트 구간은 FQ1 `ALPHA_VANTAGE_HISTORICAL` 팩터를 사용한다. 이 값은 해당
 `fiscal_period_end`의 `EARNINGS.reportedDate` 다음 미국 거래일부터 이용 가능한 이벤트
 상대 PIT 프록시다. 연결된 실적발표일이 없는 미래 Alpha 추정치는 역사 팩터로 만들지
@@ -273,6 +313,15 @@ US Consensus Score는 Yahoo 운용 구간에서 FY1을 주 기준으로 계산�
 `YAHOO_CURRENT`의 FY1 엄밀 스냅샷 PIT이며, 최초 Yahoo FY1 스냅샷 이후에는 Yahoo가
 Alpha 역사 FQ1을 대체한다. 모든 과거 EPS 빈티지는 관측일과 기준일 사이의 주식분할
 `split_factor` 누적곱으로 나누어 분할 후 기준으로 맞춘다.
+
+목표주가는 다른 컨센서스 필드와 분리해
+`FINNWORLDS → FMP → ALPHA_VANTAGE → YAHOO_FINANCE` 순으로 선택한다. Finnworlds
+공식 컨센서스 또는 애널리스트별 최신 목표가로 재구성한 `pit_120d` 상태가 120일 이내이고
+유효 애널리스트가 3명 이상이면 하위 공급자가 더 최신이어도 Finnworlds를 사용한다.
+공식값은 수집 스냅샷 다음 XNYS 거래일부터만 사용할 수 있고, 그 이전 구간은 개별 rating
+기반 PIT 평균을 사용한다. 결과에는 `us_target_price`, `us_target_price_analyst_count`,
+`us_target_price_provider`, `us_target_price_source_regime`을 남긴다.
+`us_price_to_target_price`는 기존과 같이 `close / us_target_price`다.
 
 ```text
 revision_30d_pct = 100 * (EPS_current - EPS_30d_ago) / max(abs(EPS_30d_ago), 0.1)
