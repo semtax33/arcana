@@ -1,9 +1,22 @@
 # Arcana
 
-Korean market statement parsing and ELT pipeline for DART 공시, KRX 시장 데이터,
-팩터, 배당, 벤치마크, 스타일 점수, ClickHouse 적재를 다룹니다.
+## API 키 및 토큰 설정
 
-## Environment
+API 키와 토큰은 저장소에 기록하지 않고 실행할 PowerShell 프로세스의 환경변수로 전달합니다.
+
+```powershell
+$env:DART_API_KEY = "<YOUR_DART_API_KEY>"
+$env:HANKYUNG_CONSENSUS_TOKEN = "<YOUR_HANKYUNG_TOKEN>"
+$env:ALPHA_VANTAGE_CSRF_TOKEN = "<YOUR_ALPHA_VANTAGE_CSRF_TOKEN>" # scripts/get_api_key.py 전용
+$env:CLICKHOUSE_PASSWORD = "<YOUR_CLICKHOUSE_PASSWORD>"
+```
+
+저장소에 이미 노출된 적이 있는 키와 토큰은 코드에서 제거한 뒤에도 Git 이력에 남아 있으므로 폐기하고 재발급해야 합니다. `.env` 파일과 `scripts/token_output.csv`는 Git에서 제외됩니다.
+
+DART 공시와 KRX 시장 데이터를 다루는 한국 시장 재무제표 파싱 및 ELT 파이프라인입니다.
+팩터, 배당, 벤치마크, 스타일 점수, ClickHouse 적재를 지원합니다.
+
+## 환경 설정
 
 PowerShell에서 저장소 루트로 이동한 뒤 가상환경을 활성화합니다.
 
@@ -85,7 +98,7 @@ python -m engine.loaders.factors --market us --financial-basis annual --start-da
 python -m engine.loaders.factor_snapshots --market us --financial-basis annual --start-date 2010-01-01 --end-date $EndDate --truncate
 ```
 
-## Engine Layout
+## 엔진 구조
 
 `engine`은 파이프라인 책임별 계층으로 나뉩니다. 리팩토링 이전 호환용 루트
 모듈인 `engine.statements`, `engine.factor_normalizer`, `engine.factor_elt`,
@@ -115,7 +128,7 @@ from engine.workflows.score import calculate_style_scores
 `engine.loaders._internal.clickhouse_factors` 대신 `engine.loaders.factors`처럼
 같은 계층의 public 모듈을 통해 import합니다.
 
-## Data Lake Layout
+## 데이터 레이크 구조
 
 기본 data lake 루트는 `data-lake/`입니다.
 
@@ -160,9 +173,9 @@ kr_normalized_benchmark_price.csv
 참조합니다.
 기존 `*_common.yaml` 파일은 호환 fallback으로 유지합니다.
 
-## ELT Flow
+## ELT 흐름
 
-### 1. Extract / Download
+### 1. 추출 / 다운로드
 
 ```powershell
 python -m engine.workflows.download prices
@@ -196,19 +209,20 @@ python -m engine.loaders.consensus --market kr --dry-run
 python -m engine.loaders.consensus --market kr
 ```
 
-`--start-date`, `--end-date` accepts `YYYYMMDD` or `YYYY-MM-DD` and limits the download range.
-`--start-year`, `--end-year` accepts `YYYY` and expands to full-year date ranges.
-DART statement/comment/business-info searches automatically split ranges longer than 10 years
-into multiple DART search requests, so older 20-30 year windows can be downloaded.
+`--start-date`, `--end-date`는 `YYYYMMDD` 또는 `YYYY-MM-DD` 형식을 허용하며 다운로드
+범위를 제한합니다. `--start-year`, `--end-year`는 `YYYY` 형식을 허용하며 연간 전체
+날짜 범위로 확장됩니다. DART 재무제표·주석·사업 정보 검색은 10년을 초과하는 범위를
+여러 DART 검색 요청으로 자동 분할하므로 과거 20~30년 구간도 다운로드할 수 있습니다.
 
-Hankyung consensus downloads save raw JSON files to `data-lake/bronze/consensus/hankyung/`.
-ValueFinder and EQUITY analyst opinion list HTML is parsed with BeautifulSoup and saved to
-`data-lake/bronze/consensus/valuefinder/` and `data-lake/bronze/consensus/equity/`.
-Pass cookies with `--valuefinder-cookie` / `--equity-cookie`, or set
-`VALUEFINDER_CONSENSUS_COOKIE` / `EQUITY_CONSENSUS_COOKIE`. HTML sources default to one
-page because EQUITY has a very large page count. Normalize writes silver CSV files to
-`data-lake/silver/consensus/hankyung/`, and the ClickHouse consensus loader reads only
-those silver CSV files.
+Hankyung 컨센서스 다운로드는 원본 JSON 파일을
+`data-lake/bronze/consensus/hankyung/`에 저장합니다. ValueFinder와 EQUITY의 애널리스트
+의견 목록 HTML은 BeautifulSoup으로 파싱하여 `data-lake/bronze/consensus/valuefinder/`와
+`data-lake/bronze/consensus/equity/`에 저장합니다. 쿠키는 `--valuefinder-cookie` /
+`--equity-cookie`로 전달하거나 `VALUEFINDER_CONSENSUS_COOKIE` /
+`EQUITY_CONSENSUS_COOKIE` 환경 변수로 설정합니다. EQUITY의 페이지 수가 매우 많으므로
+HTML 원천은 기본적으로 한 페이지만 가져옵니다. 정규화 과정은 silver CSV 파일을
+`data-lake/silver/consensus/hankyung/`에 저장하며 ClickHouse 컨센서스 로더는 이 silver
+CSV 파일만 읽습니다.
 
 Hankyung 목표주가는 정규화 과정에서
 `data-lake/silver/consensus/hankyung/kr_hankyung_target_price_consensus.csv`로
@@ -387,32 +401,33 @@ data-lake/bronze/sec/companyfacts/
 data-lake/bronze/sec/financial-statement-and-notes-data-set/
 ```
 
-`--market us statements` downloads SEC companyfacts JSON files to
-`data-lake/bronze/sec/companyfacts/`. Use `--symbols AAPL,MSFT` for a subset,
-or omit `--symbols` to download the SEC ticker map universe.
+`--market us statements`는 SEC companyfacts JSON 파일을
+`data-lake/bronze/sec/companyfacts/`에 다운로드합니다. 일부 종목만 받으려면
+`--symbols AAPL,MSFT`를 사용하고, SEC 티커 맵의 전체 종목을 받으려면 `--symbols`를
+생략합니다.
 
-US price downloads use NasdaqTrader symbol directories for the universe and yfinance
-`period=max` history files under `data-lake/bronze/yfinance/price/{TICKER}.csv`.
-On Windows, device-name tickers such as `CON` are stored with an internal safe
-prefix and restored to their original ticker during normalization. Each request
-uses a 15-second response timeout and retries twice with exponential backoff;
-use `--yfinance-repair` only when Yahoo price-repair processing is required.
-Install yfinance first if needed: `pip install yfinance`.
+미국 가격 다운로드는 NasdaqTrader 심볼 디렉터리에서 종목 유니버스를 가져오고,
+yfinance의 `period=max` 이력 파일을
+`data-lake/bronze/yfinance/price/{TICKER}.csv`에 저장합니다. Windows에서는 `CON`처럼
+장치 이름과 같은 티커에 내부 안전 접두사를 붙여 저장하고 정규화할 때 원래 티커로
+복원합니다. 각 요청의 응답 제한 시간은 15초이며 지수 백오프로 두 번 재시도합니다.
+Yahoo 가격 복구 처리가 필요한 경우에만 `--yfinance-repair`를 사용합니다. 필요한 경우
+먼저 `pip install yfinance`로 yfinance를 설치합니다.
 
-WACC input downloads:
+WACC 입력 다운로드:
 
 ```powershell
 python -m engine.workflows.download --market kr wacc-inputs
 python -m engine.workflows.download --market us wacc-inputs
 ```
 
-`wacc-inputs` downloads the shared Damodaran NYU country ERP workbook to
-`data-lake/bronze/damodaran/country_risk_premiums/ctryprem.xlsx` and FRED
-rates to `data-lake/bronze/fred/rates/`. For US WACC, it also downloads the
-S&P 500 benchmark to `data-lake/bronze/yfinance/benchmark/us_sp500.csv`.
-KR beta uses the existing KRX price and benchmark data already stored under
-`data-lake/bronze/krx/`; US beta uses existing
-`data-lake/bronze/yfinance/price/{TICKER}.csv` prices. Koscom data is not used.
+`wacc-inputs`는 공통으로 사용하는 Damodaran NYU 국가별 ERP 통합 문서를
+`data-lake/bronze/damodaran/country_risk_premiums/ctryprem.xlsx`에, FRED 금리를
+`data-lake/bronze/fred/rates/`에 다운로드합니다. 미국 WACC의 경우 S&P 500 벤치마크도
+`data-lake/bronze/yfinance/benchmark/us_sp500.csv`에 다운로드합니다. KR beta는
+`data-lake/bronze/krx/`에 이미 저장된 KRX 가격 및 벤치마크 데이터를 사용하고, US beta는
+기존 `data-lake/bronze/yfinance/price/{TICKER}.csv` 가격을 사용합니다. Koscom 데이터는
+사용하지 않습니다.
 
 #### K-Ratio / Equity Duration / RIM 원천 데이터
 
@@ -446,7 +461,7 @@ RIM에 사용되는 `forward_per`, `forward_roe`는 Hankyung의
 영업이익/순이익 관계로 유도한 영업이익 surprise를 사용합니다. 둘 다 없으면 US annual은
 최근 3개 연속 연간 ROE 평균, US TTM은 최근 12개 연속 분기(3년) TTM ROE 평균을 사용합니다.
 
-### 2. Transform / Normalize
+### 2. 변환 / 정규화
 
 ```powershell
 python -m engine.workflows.normalize
@@ -515,43 +530,42 @@ companyfacts/Notes 기반 정규화는 계속 진행합니다. US 가격과 주�
 
 KRX price/shares, dividend, benchmark 정규화는 아래 경로를 사용합니다.
 
-Normalize price/shares silver CSV만 갱신:
+가격/주식수 silver CSV만 정규화하여 갱신:
 
 ```powershell
 python -c "from engine.transformers.market_data import normalize_price, normalize_shares; normalize_price(r'data-lake\bronze\krx\price\*'); normalize_shares(r'data-lake\bronze\krx\shares\*')"
 ```
 
-Normalize dividend silver CSV만 갱신:
+배당 silver CSV만 정규화하여 갱신:
 
 ```powershell
 python -c "from engine.loaders.dividends import refresh_silver_dividend_files; refresh_silver_dividend_files()"
 ```
 
-US dividend bronze download and silver refresh:
+미국 배당 bronze 다운로드 및 silver 갱신:
 
 ```powershell
 $env:ALPHA_VANTAGE_API_KEY = "<YOUR_ALPHA_VANTAGE_KEY>"
 
-# KR dividend download remains the default
+# 기본값은 KR 배당 다운로드
 python -m engine.workflows.download dividend
 
-# US common-stock/ADR dividend history (all filtered US symbols)
+# 미국 보통주/ADR 배당 이력(필터링된 미국 심볼 전체)
 python -m engine.workflows.download --market us dividend
 
-# Selected US symbols only
+# 선택한 미국 심볼만 처리
 python -m engine.workflows.download --market us --symbols AAPL,MSFT dividend
 
-# Bronze -> US dividend event/daily CSV -> ClickHouse
+# Bronze -> 미국 배당 이벤트/일별 CSV -> ClickHouse
 python -m engine.workflows.normalize --market us --target dividend
 python -m engine.loaders.dividends --market us
 ```
 
-US dividend downloads use Alpha Vantage `DIVIDENDS` first and store each
-provider response as a dated bronze JSON snapshot.  The source fallback order
-is Alpha Vantage, the reserved edgartools `999.Ex` stub, then yfinance.  A
-lower source is called only when the higher-priority source has no usable event
-for the ticker.  `ALPHA_VANTAGE_API_KEY` is read only from the process
-environment.
+미국 배당 다운로드는 Alpha Vantage의 `DIVIDENDS`를 먼저 사용하며 각 공급자의 응답을
+날짜별 bronze JSON 스냅샷으로 저장합니다. 원천 fallback 순서는 Alpha Vantage, 예약된
+edgartools `999.Ex` 스텁, yfinance입니다. 우선순위가 더 높은 원천에 해당 티커의 유효한
+이벤트가 없을 때만 다음 원천을 호출합니다. `ALPHA_VANTAGE_API_KEY`는 프로세스 환경
+변수에서만 읽습니다.
 
 ```text
 data-lake/bronze/dividend/alpha-vantage/snapshot_date=YYYY-MM-DD/ticker=AAPL.json
@@ -582,14 +596,14 @@ payout_ratio_total_dividends_over_net_income
 보존하므로 지급일이 없는 행은 이벤트 CSV에는 남지만 daily/ClickHouse 행으로는
 변환하지 않습니다.
 
-Normalize benchmark silver CSV만 갱신:
+벤치마크 silver CSV만 정규화하여 갱신:
 
 ```powershell
 python -c "from engine.loaders.benchmarks import normalize_downloaded_benchmark_prices; normalize_downloaded_benchmark_prices(r'data-lake\bronze\krx\benchmark\*.csv')"
 python -c "from engine.loaders.benchmarks import normalize_downloaded_benchmark_prices; normalize_downloaded_benchmark_prices(market='us')"
 ```
 
-Normalize WACC silver input CSVs:
+WACC silver 입력 CSV 정규화:
 
 ```powershell
 python -c "from pathlib import Path; from engine.transformers.erp import normalize_country_erp, normalize_fred_risk_free_rates; normalize_country_erp(); paths=list(Path(r'data-lake\bronze\fred\rates').glob('*.csv')); normalize_fred_risk_free_rates(paths) if paths else None"
@@ -617,7 +631,7 @@ python -c "from engine.transformers.wacc import create_default_wacc_assumptions,
 KR beta는 KOSPI200을 우선 사용하고, 52개 이상의 겹치는 주간 수익률이 없을 때만
 `wacc_assumptions.csv`의 기본 beta로 대체됩니다.
 
-WACC silver outputs are written under `data-lake/silver/wacc/`:
+WACC silver 산출물은 `data-lake/silver/wacc/` 아래에 저장됩니다.
 
 ```text
 risk_free_rates.csv
@@ -627,17 +641,16 @@ benchmark_weekly_returns.csv
 wacc_assumptions.csv
 ```
 
-Damodaran ERP is used first. If the Damodaran workbook cannot be read, KR ERP
-falls back to the 2-year annualized KOSPI expected return minus the latest KR
-government bond rate. Weekly beta uses Friday week-end returns, `adj_close`
-when available and `close` otherwise. If at least 52 overlapping weekly returns
-are not available, WACC falls back to the market default beta in
-`wacc_assumptions.csv`.
+Damodaran ERP를 우선 사용합니다. Damodaran 통합 문서를 읽을 수 없으면 KR ERP는 KOSPI의
+2년 연환산 기대수익률에서 최신 한국 국채 금리를 뺀 값으로 대체합니다. 주간 beta는 금요일을
+주간 마감일로 한 수익률을 사용하며, `adj_close`가 있으면 이를 사용하고 없으면 `close`를 사용합니다.
+서로 겹치는 주간 수익률이 52개 미만이면 WACC는 `wacc_assumptions.csv`의 시장 기본
+beta를 사용합니다.
 
 아래 loader 명령들은 정규화된 silver 파일을 갱신한 뒤 ClickHouse 적재까지
 이어 수행합니다.
 
-### 3. Load Market Data
+### 3. 시장 데이터 적재
 
 ```powershell
 python -m engine.loaders.market_data
@@ -651,7 +664,7 @@ US `prices`/`all` 적재는 SEC/yfinance symbol universe 기반 `issuers`,
 `security_master`, `identifiers` 참조 데이터도 먼저 적재합니다. 가격만 다시
 적재하려면 `--skip-securities`를 사용합니다.
 
-### 4. Load Filings / Securities / Dividends
+### 4. 공시 / 증권 / 배당 적재
 
 ```powershell
 python -m engine.loaders.filings
@@ -695,12 +708,12 @@ CREATE TABLE IF NOT EXISTS arcana.stock_dividend
 `payout_ratio`와 `dividend_percent`는 nullable Float64, `updated_at`은
 Asia/Seoul 기준 loader 실행 시각으로 들어갑니다.
 
-### 5. Build / Load Operating Metrics and Estimates
+### 5. 운영 지표 및 추정치 생성 / 적재
 
 business-info silver CSV를 기반으로 제품/부문별 매출, 수량, 가격, ASP, 단위 원가,
 driver YoY, FY1 추정치와 consensus gold CSV를 생성합니다.
 
-Build gold CSV only:
+gold CSV만 생성:
 
 ```powershell
 python -m engine.transformers.operating_metrics --stock-codes 005930
@@ -710,7 +723,7 @@ python -m engine.transformers.operating_metrics --start-period 2023.12 --end-per
 python -m engine.workflows.operating_metrics --stock-codes 005930 --as-of-date 2026-06-28 --write-history
 ```
 
-Load gold CSV to ClickHouse:
+gold CSV를 ClickHouse에 적재:
 
 ```powershell
 python -m engine.loaders.operating_metrics --stock-codes 005930 --dry-run
@@ -771,23 +784,23 @@ GET /api/estimates/{stock_code}/consensus/history
 GET /api/estimates/{stock_code}/drivers
 ```
 
-### 6. Load Factors
+### 6. 팩터 적재
 
-Dry run:
+시험 실행:
 
 ```powershell
 python -m engine.loaders.factors --financial-basis annual --dry-run
 python -m engine.loaders.factors --market us --stock-codes AAPL --financial-basis annual --dry-run
 ```
 
-Insert:
+적재:
 
 ```powershell
 python -m engine.loaders.factors --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24
 python -m engine.loaders.factors --market us --stock-codes AAPL --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24
 ```
 
-Load factors with WACC inputs:
+WACC 입력을 포함한 팩터 적재:
 
 ```powershell
 python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24 --dry-run
@@ -796,21 +809,20 @@ python -m engine.loaders.factors --market us --stock-codes AAPL,MSFT --financial
 python -m engine.loaders.factors --market us --stock-codes AAPL,MSFT --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24
 ```
 
-Online WACC backfill can be enabled when the local bronze/silver WACC inputs are
-missing or stale:
+로컬 bronze/silver WACC 입력이 없거나 오래된 경우 온라인 WACC 백필을 활성화할 수
+있습니다.
 
 ```powershell
 python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24 --wacc-online-backfill --dry-run
 python -m engine.loaders.factors --market us --stock-codes AAPL --financial-basis annual --start-date 2026-01-01 --end-date 2026-05-24 --wacc-online-backfill --dry-run
 ```
 
-Without `--wacc-online-backfill`, the loader only reads local bronze/silver
-files. With it, the loader refreshes Damodaran ERP, FRED rates, default WACC
-assumptions, and the available market benchmark weekly returns before preparing rows.
-KR benchmark bronze files must be downloaded separately with
-`engine.workflows.download --market kr benchmarks`. Prepared WACC
-factor rows are inserted into the existing ClickHouse `fact_daily_factors`
-table together with the other daily factors.
+`--wacc-online-backfill`을 사용하지 않으면 로더는 로컬 bronze/silver 파일만 읽습니다.
+이 옵션을 사용하면 행을 준비하기 전에 Damodaran ERP, FRED 금리, 기본 WACC 가정 및
+사용 가능한 시장 벤치마크 주간 수익률을 갱신합니다. KR 벤치마크 bronze 파일은
+`engine.workflows.download --market kr benchmarks`로 별도 다운로드해야 합니다. 준비된
+WACC 팩터 행은 다른 일별 팩터와 함께 기존 ClickHouse `fact_daily_factors` 테이블에
+삽입됩니다.
 
 주요 옵션:
 
@@ -836,7 +848,7 @@ table together with the other daily factors.
 --rim-decay-factor 0.8
 ```
 
-Load only selected factor ids:
+선택한 팩터 ID만 적재:
 
 ```powershell
 python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2020-01-01 --end-date 2026-06-26 --factor-ids roe,per,pbr
@@ -844,10 +856,9 @@ python -m engine.loaders.factors --market kr --financial-basis annual --start-da
 python -m engine.loaders.factors --market kr --financial-basis annual --start-date 2020-01-01 --end-date 2026-06-26 --wacc-online-backfill --factor-ids wacc_bundle
 ```
 
-`--factor-ids` and `--only-factor-ids` are aliases. They accept comma-separated
-factor ids and only those ids are prepared for ClickHouse insertion. Unknown
-factor ids fail fast instead of producing an empty load. `wacc_bundle` expands
-to every WACC-related factor id.
+`--factor-ids`와 `--only-factor-ids`는 별칭입니다. 쉼표로 구분한 팩터 ID를 입력받으며,
+해당 ID만 ClickHouse 적재 대상으로 준비합니다. 알 수 없는 팩터 ID가 있으면 빈 적재를
+생성하지 않고 즉시 실패합니다. `wacc_bundle`은 WACC 관련 모든 팩터 ID로 확장됩니다.
 
 #### K-Ratio / Equity Duration / RIM 팩터 적재
 
@@ -885,7 +896,7 @@ python -m engine.loaders.factors --market kr --financial-basis annual --start-da
 - `--rim-decay-factor`는 `0 <= value < 1`이어야 합니다. 값을 변경하면 동일
   factor_id의 전 기간 raw factor와 snapshot을 다시 생성해야 합니다.
 
-Build the fast factor snapshot table used by screening and backtests:
+스크리닝과 백테스트에 사용하는 고속 팩터 스냅샷 테이블 생성:
 
 ```powershell
 python -m engine.loaders.factor_snapshots --create-only
@@ -914,24 +925,21 @@ factor score`입니다. 신규 팩터는 generic screening/backtest API에서 �
 가장 최신 거래일을 자동 선택합니다. 이 기준으로 일부 종목만 수집된 당일 가격이
 스크리닝 팩터 기준일로 사용되는 것을 방지합니다.
 
-The APIs automatically use `fact_daily_factor_snapshot` when it has rows for
-the requested factor ids and financial basis. If the snapshot table is absent
-or empty for the request, they fall back to `fact_daily_factors`.
-The snapshot loader builds carry-forward daily rows incrementally by default:
-the first date is seeded from raw history, then each following date copies the
-previous snapshot and overwrites keys that have raw rows on that date. Use
-`--full-asof` only when you need to rebuild every snapshot date directly from
-raw history, and use `--copy-raw-only` only when you explicitly want a direct
-copy of raw factor rows.
-Factor screens resolve a ready snapshot from the latest 14 calendar days and
-then query that exact date. Override the candidate window with
-`ARCANA_FACTOR_SNAPSHOT_CANDIDATE_DAYS` when a market needs a longer closure or
-data-delay allowance.
-Raw-table fallback queries are limited to the last 540 days by default. Override
-that window with `ARCANA_FACTOR_RAW_LOOKBACK_DAYS`, or set it to `0` to disable
-the fallback date window.
+요청한 팩터 ID와 재무 기준에 해당하는 행이 `fact_daily_factor_snapshot`에 있으면 API가
+이 테이블을 자동으로 사용합니다. 스냅샷 테이블이 없거나 요청에 해당하는 행이 비어 있으면
+`fact_daily_factors`로 대체합니다. 스냅샷 로더는 기본적으로 값을 이월한 일별 행을 증분
+생성합니다. 첫 날짜는 raw 이력에서 초기화하고, 이후 각 날짜는 이전 스냅샷을 복사한 뒤
+그 날짜에 raw 행이 있는 키를 덮어씁니다. 모든 스냅샷 날짜를 raw 이력에서 직접 다시
+만들어야 할 때만 `--full-asof`를 사용하고, raw 팩터 행을 그대로 복사하려는 경우에만
+`--copy-raw-only`를 사용합니다.
 
-WACC factor ids loaded to ClickHouse:
+팩터 스크리닝은 최근 14일 안에서 준비된 스냅샷을 찾아 해당 날짜를 정확히 조회합니다.
+시장의 장기 휴장이나 데이터 지연을 고려해 후보 기간을 늘려야 하면
+`ARCANA_FACTOR_SNAPSHOT_CANDIDATE_DAYS`로 변경합니다. raw 테이블 fallback 조회는
+기본적으로 최근 540일로 제한됩니다. 이 기간은 `ARCANA_FACTOR_RAW_LOOKBACK_DAYS`로
+변경하며, fallback 날짜 제한을 비활성화하려면 `0`으로 설정합니다.
+
+ClickHouse에 적재되는 WACC 팩터 ID:
 
 ```text
 wacc
@@ -948,7 +956,7 @@ US 팩터 적재는 `data-lake/silver/sec/normalized/` 재무 CSV와
 rows를 생성합니다. `data-lake/silver/us/shares/us_normalized_shares.csv`가
 있으면 shares/market cap 기반 팩터까지 함께 계산합니다.
 
-### 7. Load Benchmarks
+### 7. 벤치마크 적재
 
 ```powershell
 python -m engine.loaders.benchmarks --benchmark-ids KOSPI200,KOSDAQ --start-date 2010-01-01 --dry-run
@@ -957,8 +965,8 @@ python -m engine.loaders.benchmarks --market us --benchmark-ids S&P500,NASDAQ --
 python -m engine.loaders.benchmarks --market us --benchmark-ids S&P500,NASDAQ --start-date 2010-01-01
 ```
 
-For `--market us`, the default provider is yfinance. `S&P500` and `NASDAQ` are
-normalized to `US_SP500` (`^GSPC`) and `US_NASDAQ` (`^IXIC`) respectively.
+`--market us`의 기본 공급자는 yfinance입니다. `S&P500`과 `NASDAQ`은 각각
+`US_SP500`(`^GSPC`)과 `US_NASDAQ`(`^IXIC`)으로 정규화됩니다.
 
 Bronze CSV에서 읽을 때:
 
@@ -967,7 +975,7 @@ python -m engine.loaders.benchmarks --source bronze --bronze-path data-lake\bron
 python -m engine.loaders.benchmarks --market us --source bronze --dry-run
 ```
 
-### 8. Build Style Scores
+### 8. 스타일 점수 생성
 
 ```powershell
 python -m engine.workflows.score_cli build-factor-scores --trade-date 2026-06-23 --factor-asof-mode asof --include-financials
@@ -977,19 +985,19 @@ python -m engine.workflows.score_cli validate-style-scores --trade-date 2026-06-
 python -m engine.workflows.score_cli debug-single-security-score --trade-date 2026-06-23 --security-id SEC_KR_005930
 ```
 
-### 9. Debug KR Mapping and Factor Coverage
+### 9. KR 매핑 및 팩터 커버리지 디버깅
 
-KR statement normalization writes sibling `*.debug.csv` files by default. Do not
-pass `--no-debug` when the output will be used by the normalization validator.
-KR statement workers are configured through `NORMALIZE_MAX_WORKERS`.
+KR 재무제표 정규화는 기본적으로 같은 위치에 `*.debug.csv` 파일을 생성합니다. 산출물을
+정규화 검증기에 사용할 때는 `--no-debug`를 지정하지 마십시오. KR 재무제표 worker 수는
+`NORMALIZE_MAX_WORKERS`로 설정합니다.
 
 ```powershell
 $env:NORMALIZE_MAX_WORKERS = "4"
 python -m engine.workflows.normalize --market kr --target statements
 ```
 
-The normalized statement and debug outputs are written to both the per-period
-snapshot directory and the consolidated per-stock directory:
+정규화된 재무제표와 디버그 산출물은 기간별 스냅샷 디렉터리와 종목별 통합 디렉터리에
+모두 저장됩니다.
 
 ```text
 data-lake\silver\dart\normalized-snapshots\kr_normalized_005930_2025.12.csv
@@ -998,14 +1006,13 @@ data-lake\silver\dart\normalized\kr_normalized_005930.csv
 data-lake\silver\dart\normalized\kr_normalized_005930.debug.csv
 ```
 
-The current KR `statements` workflow normalizes the full KOSPI/KOSDAQ universe.
-`--start-year` and `--end-year` restrict it to the inclusive fiscal-year range;
-when omitted, it retains the built-in recent completed-year window. `--symbols`
-and `--workers` are not applied to this KR statements path; use
-`NORMALIZE_MAX_WORKERS` for its process count. The validator commands below can
-still be restricted to selected stocks and years.
+현재 KR `statements` workflow는 KOSPI/KOSDAQ 전체 종목을 정규화합니다.
+`--start-year`와 `--end-year`는 양 끝 회계연도를 포함하는 범위로 제한하며, 생략하면
+내장된 최근 결산연도 범위를 유지합니다. 이 KR 재무제표 경로에는 `--symbols`와
+`--workers`가 적용되지 않으므로 프로세스 수는 `NORMALIZE_MAX_WORKERS`로 설정합니다.
+아래 검증 명령은 선택한 종목과 연도로 제한할 수 있습니다.
 
-Validate one stock-period pair and write detailed JSON and Markdown reports:
+단일 종목-기간 쌍을 검증하고 상세 JSON 및 Markdown 보고서 생성:
 
 ```powershell
 python -m engine.normalization_validator one `
@@ -1016,9 +1023,8 @@ python -m engine.normalization_validator one `
   --zai-mode none
 ```
 
-Validate a stock across multiple years. This writes year-level validation
-reports, a stock-level report, and a `*.stock.factor_trend.csv` file containing
-yearly mapping and factor-coverage diagnostics.
+한 종목의 여러 연도를 검증합니다. 연도별 검증 보고서와 종목 단위 보고서, 연도별 매핑
+및 팩터 커버리지 진단이 담긴 `*.stock.factor_trend.csv` 파일을 생성합니다.
 
 ```powershell
 python -m engine.normalization_validator stock `
@@ -1032,9 +1038,9 @@ python -m engine.normalization_validator stock `
   --zai-mode none
 ```
 
-Validate selected stocks in parallel. Values passed to `--stock-codes` are
-space-separated. Omit `--stock-codes` for the full KR universe, and add
-`--resume` to skip completed stock reports when restarting a run.
+선택한 종목을 병렬로 검증합니다. `--stock-codes` 값은 공백으로 구분합니다. KR 전체
+종목을 처리하려면 `--stock-codes`를 생략하고, 실행을 재시작할 때 완료된 종목 보고서를
+건너뛰려면 `--resume`을 추가합니다.
 
 ```powershell
 python -m engine.normalization_validator stock-batch `
@@ -1051,7 +1057,7 @@ python -m engine.normalization_validator stock-batch `
   --zai-mode none
 ```
 
-Cluster repeated validation failures and UNMAPPED candidates after a batch run:
+일괄 실행 후 반복되는 검증 실패와 `UNMAPPED` 후보를 클러스터링:
 
 ```powershell
 python -m engine.normalization_validator cluster-failures `
@@ -1059,11 +1065,11 @@ python -m engine.normalization_validator cluster-failures `
   --out-dir data-lake\silver\dart\validation_clusters
 ```
 
-This writes `all_validation_failure_cases.csv` and
-`all_validation_failure_clusters.csv`.
+이 명령은 `all_validation_failure_cases.csv`와
+`all_validation_failure_clusters.csv`를 생성합니다.
 
-Calculate full-universe KR factor coverage. Set `FACTOR_COVERAGE_TODAY` to keep
-the cutoff reproducible; omit it to use the current date in Asia/Seoul.
+KR 전체 종목의 팩터 커버리지를 계산합니다. 기준일을 재현 가능하게 유지하려면
+`FACTOR_COVERAGE_TODAY`를 설정하고, Asia/Seoul의 현재 날짜를 사용하려면 생략합니다.
 
 ```powershell
 $env:FACTOR_COVERAGE_TODAY = "2026-07-18"
@@ -1071,12 +1077,12 @@ node scripts\calculate_factor_coverage.js 2>&1 |
   Tee-Object -FilePath data-lake\gold\factor_coverage\kr_factor_coverage_run.log
 ```
 
-The command writes `kr_factor_coverage_all_stocks.csv`,
-`factor_coverage_summary.json`, and the optional run log shown above. Coverage
-counts only finite numeric values; zero is a covered value.
+이 명령은 `kr_factor_coverage_all_stocks.csv`, `factor_coverage_summary.json` 및 위에 표시된
+선택적 실행 로그를 생성합니다. 커버리지는 유한한 숫자 값만 집계하며 0도 값이 있는 것으로
+간주합니다.
 
-For focused EBITDA and EV/EBITDA debugging, start with a small symbol set and
-optionally compare it with an earlier factor coverage CSV:
+EBITDA와 EV/EBITDA를 집중적으로 디버깅하려면 소수의 심볼로 시작하고, 필요하면 이전
+팩터 커버리지 CSV와 비교합니다.
 
 ```powershell
 python scripts\ebitda_ev_coverage.py `
@@ -1089,28 +1095,27 @@ python scripts\ebitda_ev_coverage.py `
   --out-dir data-lake\gold\factor_coverage\ebitda_debug
 ```
 
-Remove `--symbols` to process the full supported KR universe. The focused run
-writes `kr_ebitda_ev_coverage.csv` and
-`kr_ebitda_ev_coverage_summary.json`.
+지원되는 KR 전체 종목을 처리하려면 `--symbols`를 제거합니다. 집중 실행은
+`kr_ebitda_ev_coverage.csv`와 `kr_ebitda_ev_coverage_summary.json`을 생성합니다.
 
-Recommended debugging order:
+권장 디버깅 순서:
 
 ```text
-normalize statements
-  -> normalization_validator stock or stock-batch
+재무제표 정규화
+  -> normalization_validator stock 또는 stock-batch
   -> normalization_validator cluster-failures
   -> calculate_factor_coverage.js
   -> ebitda_ev_coverage.py
 ```
 
-The historical `data-lake/gold/kr_coverage/kr_canonical_account_coverage.*`
-artifacts do not have a committed dedicated KR generator. Use the stock-batch
-summary, stock-level validation reports, factor trend CSVs, and clustered
-failures as the supported reproducible mapping-coverage diagnostics.
+과거 `data-lake/gold/kr_coverage/kr_canonical_account_coverage.*` 산출물에는 저장소에
+커밋된 전용 KR 생성기가 없습니다. 지원되는 재현 가능한 매핑 커버리지 진단으로는
+stock-batch 요약, 종목 단위 검증 보고서, 팩터 추세 CSV 및 클러스터링된 실패를
+사용합니다.
 
-## Tests
+## 테스트
 
-US mapping coverage validator:
+US 매핑 커버리지 검증기:
 
 ```powershell
 python -m engine.us_mapping_coverage_validator --input-dir data-lake\silver\sec\normalized --rules data-lake\meta\rules\us_mapping.yaml --out-dir data-lake\silver\sec\mapping_coverage --start-year 2020 --end-year 2025

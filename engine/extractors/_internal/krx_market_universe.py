@@ -1,4 +1,5 @@
 import io
+import os
 from pathlib import Path
 from typing import Any
 import zipfile
@@ -8,13 +9,17 @@ import requests
 
 from pykrx import stock
 
-DART_API_KEY = "93bf0b5b166e7f5d12b626724d4983526aa71249"
+DART_API_KEY_ENV = "DART_API_KEY"
 
 
 def fetch_corp_list():
+    api_key = os.getenv(DART_API_KEY_ENV, "").strip()
+    if not api_key:
+        raise ValueError(f"{DART_API_KEY_ENV} environment variable is required")
+
     url = "https://opendart.fss.or.kr/api/corpCode.xml"
     params = {
-        "crtfc_key": DART_API_KEY
+        "crtfc_key": api_key
     }
 
     r = requests.get(url, params=params, timeout=10)

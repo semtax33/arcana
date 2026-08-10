@@ -8,7 +8,7 @@ DEFAULT_CLICKHOUSE_CONFIG = {
     "host": "127.0.0.1",
     "port": 8123,
     "username": "default",
-    "password": "default",
+    "password": "",
     "database": "arcana",
 }
 
@@ -25,4 +25,3 @@ def get_clickhouse_client(**overrides: Any) -> Any:
     }
     config.update(overrides)
     return clickhouse_connect.get_client(**config)
-

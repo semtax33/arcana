@@ -16,7 +16,6 @@ from engine.core.source_storage import json_source_validator, write_source_text
 
 HANKYUNG_CONSENSUS_BASE_URL = "https://markets.hankyung.com/api/v2/consensus/search/report"
 BRONZE_HANKYUNG_CONSENSUS_DIR = DATA_LAKE.bronze("consensus", "hankyung")
-DEFAULT_HANKYUNG_CONSENSUS_TOKEN = "0ZdNlr7LrQoawewqweq78k6usasBsqhqSIaUarSTf8mxnHuQVh9CvKAfpUy94LhBmZMg"
 DEFAULT_START_DATE = date(2001, 1, 1)
 DEFAULT_PAGE_SLEEP_MIN_SECONDS = 2.0
 DEFAULT_PAGE_SLEEP_MAX_SECONDS = 3.0
@@ -178,7 +177,7 @@ def _stock_code(value: Any) -> str:
 
 
 def _resolve_token(token: str | None) -> str:
-    resolved = (token or os.getenv("HANKYUNG_CONSENSUS_TOKEN") or DEFAULT_HANKYUNG_CONSENSUS_TOKEN).strip()
+    resolved = (token or "").strip() or os.getenv("HANKYUNG_CONSENSUS_TOKEN", "").strip()
     if not resolved:
         raise ValueError("HANKYUNG_CONSENSUS_TOKEN or --hankyung-token is required")
     return resolved

@@ -1,5 +1,8 @@
 ﻿.venv-llama
 models
+.env
+.env.*
+!.env.example
 __pycache__
 temp
 normalized
@@ -18,3 +21,4 @@ data-lake/source-archive/**
 outputs/
 output/
 tmp/
+scripts/token_output.csv
