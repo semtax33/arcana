@@ -998,7 +998,10 @@ def _row_date(rows: list[dict[str, Any]], key: str) -> date | None:
     if not rows:
         return None
     value = rows[0].get(key)
-    return _as_date(value) if value is not None else None
+    if value is None or str(value).strip().lower() in {"", "nat", "nan", "none"}:
+        return None
+    parsed = _as_date(value)
+    return None if str(parsed).strip().lower() == "nat" else parsed
 
 
 def _as_date(value: Any) -> date:

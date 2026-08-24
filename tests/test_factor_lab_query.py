@@ -148,6 +148,14 @@ class FactorLabQueryTest(unittest.TestCase):
 
         self.assertEqual(result.parameters["trade_dates"], ["2026-03-31", "2026-06-30"])
         self.assertEqual(result.query.count("f.trade_date IN {trade_dates:Array(Date)}"), 3)
+        self.assertEqual(
+            result.query.count("argMax(tuple(f.factor_value), f.updated_at)"),
+            3,
+        )
+        self.assertEqual(
+            result.query.count("GROUP BY f.trade_date, f.security_id"),
+            3,
+        )
 
     def test_zscore_and_winsorize_compile_invalid_value_policy(self):
         graph = nested_graph()
@@ -413,6 +421,7 @@ class FactorLabQueryTest(unittest.TestCase):
         )
 
         self.assertIn("FROM factor_lab_values AS f", result.query)
+        self.assertIn("argMax(tuple(f.factor_value), f.updated_at)", result.query)
         self.assertIn("f.is_valid AND f.factor_value IS NOT NULL", result.query)
         self.assertEqual(result.parameters["node_materialized_financial_basis"], "lab")
         self.assertNotIn("FROM fact_daily_factors AS f", result.query)

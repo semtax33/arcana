@@ -1093,12 +1093,25 @@ SELECT
         NOT isFinite(toFloat64(f.factor_value)), 'source_non_finite',
         ''
     ) AS invalid_reason
-FROM {factor_lab_table} AS f
+FROM (
+    SELECT
+        f.trade_date AS trade_date,
+        f.security_id AS security_id,
+        tupleElement(
+            argMax(tuple(f.factor_value), f.updated_at),
+            1
+        ) AS factor_value,
+        argMax(f.is_valid, f.updated_at) AS is_valid,
+        argMax(f.invalid_reason, f.updated_at) AS invalid_reason
+    FROM {factor_lab_table} AS f
+    WHERE f.factor_id = {{{param_prefix}_factor_id:String}}
+        AND f.financial_basis = {{{param_prefix}_financial_basis:String}}
+        AND {date_filter}
+    GROUP BY f.trade_date, f.security_id
+) AS f
 INNER JOIN security_universe AS u
     ON u.security_id = f.security_id
-WHERE f.factor_id = {{{param_prefix}_factor_id:String}}
-    AND f.financial_basis = {{{param_prefix}_financial_basis:String}}
-    AND {date_filter}""".strip()
+""".strip()
     else:
         source_select = f"""
 SELECT
@@ -1111,12 +1124,23 @@ SELECT
         NOT isFinite(toFloat64(f.factor_value)), 'source_non_finite',
         ''
     ) AS invalid_reason
-FROM {factor_table} AS f
+FROM (
+    SELECT
+        f.trade_date AS trade_date,
+        f.security_id AS security_id,
+        tupleElement(
+            argMax(tuple(f.factor_value), f.updated_at),
+            1
+        ) AS factor_value
+    FROM {factor_table} AS f
+    WHERE f.factor_id = {{{param_prefix}_factor_id:String}}
+        AND f.financial_basis = {{{param_prefix}_financial_basis:String}}
+        AND {date_filter}
+    GROUP BY f.trade_date, f.security_id
+) AS f
 INNER JOIN security_universe AS u
     ON u.security_id = f.security_id
-WHERE f.factor_id = {{{param_prefix}_factor_id:String}}
-    AND f.financial_basis = {{{param_prefix}_financial_basis:String}}
-    AND {date_filter}""".strip()
+""".strip()
     row_limit_sql = ""
     if history_row_limit is not None:
         params[f"{param_prefix}_history_row_limit"] = history_row_limit
