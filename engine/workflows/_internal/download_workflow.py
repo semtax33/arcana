@@ -36,6 +36,7 @@ def _stock_codes() -> list[str]:
 
 
 DEFAULT_MARKET_START_DATE = "20100101"
+DEFAULT_KR_PRICE_START_DATE = "19950502"
 
 
 def download_all_statements(args: argparse.Namespace) -> None:
@@ -88,11 +89,18 @@ def download_all_report_metadata(args: argparse.Namespace) -> None:
 
 
 def download_all_prices(args: argparse.Namespace) -> None:
-    fetch_all_prices(
-        _stock_codes(),
+    result = fetch_all_prices(
+        None,
         args.offset,
-        args.start_date or DEFAULT_MARKET_START_DATE,
+        args.start_date or DEFAULT_KR_PRICE_START_DATE,
         args.end_date or date.today().strftime("%Y%m%d"),
+    )
+    print(
+        "[DONE] KR price download "
+        f"provider={result.get('provider', '-')} rows={result.get('rows', 0):,} "
+        f"files={result.get('files', 0):,} "
+        f"range={result.get('min_date') or '-'}..{result.get('max_date') or '-'}",
+        flush=True,
     )
 
 

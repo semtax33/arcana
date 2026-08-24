@@ -350,6 +350,16 @@ def first_value_frame(df, *columns):
     return result
 
 
+def first_positive_value_frame(df, *columns):
+    result = pd.Series(math.nan, index=df.index, dtype="float64")
+    for column in columns:
+        if column not in df.columns:
+            continue
+        values = pd.to_numeric(df[column], errors="coerce").abs()
+        result = result.fillna(values.where(values > 0))
+    return result
+
+
 def bound_by_reference(series, reference, max_abs_multiple):
     values = pd.to_numeric(series, errors="coerce")
     bounds = pd.to_numeric(reference, errors="coerce").abs() * max_abs_multiple
@@ -1255,13 +1265,15 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
         numeric_column(df, "RND"),
         df,
     )
-    df["xint"] = first_value_frame(
+    df["xint"] = first_positive_value_frame(
         df,
+        "INTEREST_EXPENSE",
         "INTEREST_EXPENSE_FALLBACK",
         "INT_PAID",
         "INTEREST_PAID_FALLBACK",
         "FINANCE_COST_FALLBACK",
     )
+    interest_expense_denominator = positive_denominator(df["xint"])
     df["tax_expense"] = numeric_column(df, "TAX_EXPENSE")
     df["pbt"] = numeric_column(df, "PBT")
 
@@ -1505,8 +1517,8 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
             "ffo_yoy_pct": yoy_pct(df["ffo"], periods=lag),
             "net_debt_to_ebitda": df["net_debt"] / positive_denominator(df["oibdp"]),
             "fc_to_ndr": df["fcf"] / df["net_debt"],
-            "icr_times": df["oancf"] / df["xint"].abs(),
-            "interest_coverage": df["oiadp"] / df["xint"].abs(),
+            "icr_times": df["oancf"] / interest_expense_denominator,
+            "interest_coverage": df["oiadp"] / interest_expense_denominator,
             "current_ratio": df["act"] / df["lct"],
             "debt_to_equity": df["debt"] / df["seq"],
             "cash_to_debt": df["che"] / df["debt"],

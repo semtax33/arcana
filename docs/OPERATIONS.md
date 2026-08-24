@@ -191,6 +191,7 @@ python -m engine.workflows.download business-info
 python -m engine.workflows.download metadata
 python -m engine.workflows.download dividend
 python -m engine.workflows.download --start-date 2024-01-01 --end-date 2024-03-31 prices
+python -m engine.workflows.download --start-year 1996 --end-year 2026 prices
 python -m engine.workflows.download --start-date 20240101 --end-date 20240331 statements
 python -m engine.workflows.download --start-year 2000 --end-year 2025 statements
 python -m engine.workflows.download --start-year 2000 --end-year 2025 comments
@@ -382,8 +383,14 @@ python -m engine.loaders.factors --market us --stock-codes AAPL,MSFT --financial
   --factor-ids us_eps_revision_30d_pct,us_eps_revision_breadth_30d_pct,us_eps_revision_acceleration_30d_pct,us_eps_dispersion_pct,us_revenue_dispersion_pct,us_eps_surprise_pct,eps_implied_operating_income_surprise_pct
 ```
 
-`prices`와 `shares`는 KRX bronze CSV를 `data-lake/bronze/krx/...` 아래에
-저장합니다. DART 재무제표, 주석, 메타데이터, 배당 공시는
+한국 `prices`는 `marcap` 연도별 전 종목 데이터를 우선 사용하며, 개별 종목의
+누락 또는 조회 실패는 FinanceDataReader로 보완합니다. 가격 수집 경로에서는
+`pykrx`를 사용하지 않습니다. 원본 marcap parquet 캐시는
+`data-lake/bronze/marcap/data/`, 종목별 bronze CSV는
+`data-lake/bronze/krx/price/`에 저장됩니다. 전체 시장 수집은 과거 상장폐지
+종목도 포함합니다. `shares`는 기존 KRX bronze CSV를
+`data-lake/bronze/krx/shares/` 아래에 저장합니다. DART 재무제표, 주석,
+메타데이터, 배당 공시는
 `data-lake/bronze/dart/...` 아래에 저장합니다.
 `business-info`는 DART main page의 `function makeToc()` JavaScript 목차에서
 `사업의 내용` 계열 섹션 위치를 찾아 `viewer.do`로 해당 HTML만 다운로드합니다.

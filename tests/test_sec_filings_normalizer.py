@@ -59,6 +59,15 @@ CANONICAL_ROWS = [
         "description": "",
         "鍮꾧퀬": "",
     },
+    {
+        "canonical_id": "INTEREST_EXPENSE",
+        "canonical_nm": "Interest expense",
+        "fs_type": "IS",
+        "is_derived": "FALSE",
+        "formula": "",
+        "description": "",
+        "鍮꾧퀬": "",
+    },
 ]
 
 
@@ -123,6 +132,86 @@ def fact(label: str, value: float, tag: str) -> dict:
 
 
 class SecFilingsNormalizerTest(unittest.TestCase):
+    def test_companyfacts_uses_current_period_instead_of_later_filed_comparative(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companyfacts = root / "companyfacts"
+            output = root / "out"
+            companyfacts.mkdir()
+            canonical = root / "canonical.csv"
+            ticker_map = root / "tickers.csv"
+            metadata = root / "metadata.csv"
+            write_canonical(canonical)
+            write_ticker_map(ticker_map)
+            accession = "0000320193-26-000001"
+            write_companyfacts(
+                companyfacts / "CIK0000320193.json",
+                {
+                    "Revenues": {
+                        "label": "Revenue",
+                        "description": "Revenue",
+                        "units": {
+                            "USD": [
+                                {
+                                    "start": "2023-01-01",
+                                    "end": "2023-12-31",
+                                    "val": 900,
+                                    "accn": accession,
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2026-04-13",
+                                    "frame": "CY2023",
+                                },
+                                {
+                                    "start": "2024-01-01",
+                                    "end": "2024-12-31",
+                                    "val": 700,
+                                    "accn": accession,
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2026-04-13",
+                                    "frame": "CY2024",
+                                },
+                                {
+                                    "start": "2025-01-01",
+                                    "end": "2025-12-31",
+                                    "val": 400,
+                                    "accn": accession,
+                                    "fy": 2025,
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2026-04-13",
+                                    "frame": "CY2025",
+                                },
+                            ]
+                        },
+                    }
+                },
+            )
+
+            normalize_us_sec_filings(
+                symbols=["AAPL"],
+                start_year=2025,
+                end_year=2025,
+                companyfacts_dir=companyfacts,
+                notes_root=root / "missing-notes",
+                output_dir=output,
+                ticker_map_path=ticker_map,
+                canonical_csv_path=canonical,
+                report_metadata_path=metadata,
+                use_edgartools=False,
+            )
+
+            df = pd.read_csv(output / "us_normalized_AAPL.csv")
+            debug = pd.read_csv(output / "us_normalized_AAPL.debug.csv")
+            revenue = df.loc[df["canonical_account_id"].eq("REVENUE")].iloc[0]
+            revenue_debug = debug.loc[debug["canonical_account_id"].eq("REVENUE")].iloc[0]
+
+            self.assertEqual(float(revenue["normalized_amount"]), 400)
+            self.assertEqual(revenue_debug["period_end"], "2025-12-31")
+
     def test_share_rules_only_accept_share_units(self):
         fact = {
             "units": {

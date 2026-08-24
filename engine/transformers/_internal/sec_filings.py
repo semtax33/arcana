@@ -385,6 +385,69 @@ def _candidate_from_companyfacts_unit(
     )
 
 
+def _select_current_companyfacts_unit_rows(
+    unit_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep the current-period fact from each SEC filing accession.
+
+    SEC Company Facts repeats comparative periods under the fiscal year and
+    fiscal-period labels of the filing that contains them.  For example, a
+    2025 10-K can expose 2023, 2024, and 2025 values with ``fy=2025`` and
+    ``fp=FY`` on every row.  Treating those labels as the fact period lets a
+    later-filed comparative value overwrite the actual 2025 observation.
+
+    Within one accession the current reporting period is the latest ``end``
+    date.  When both quarter-only and year-to-date duration facts end on that
+    date, keep the longest duration because downstream quarterly conversion
+    expects cumulative statement values.
+    """
+
+    grouped: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = {}
+    for row in unit_rows:
+        key = (
+            safe_str(row.get("accn")),
+            safe_str(row.get("form")).upper(),
+            safe_str(row.get("fy")),
+            safe_str(row.get("fp")).upper(),
+            safe_str(row.get("filed")),
+        )
+        grouped.setdefault(key, []).append(row)
+
+    selected: list[dict[str, Any]] = []
+    for rows in grouped.values():
+        ends = pd.Series(
+            [row.get("end") or row.get("ddate") for row in rows],
+            dtype="object",
+        )
+        parsed_ends = pd.to_datetime(ends, errors="coerce")
+        if parsed_ends.notna().any():
+            latest_end = parsed_ends.max()
+            rows = [
+                row
+                for row, parsed_end in zip(rows, parsed_ends, strict=True)
+                if pd.notna(parsed_end) and parsed_end == latest_end
+            ]
+
+        if len(rows) > 1:
+            durations: list[pd.Timedelta | None] = []
+            for row in rows:
+                start = pd.to_datetime(row.get("start"), errors="coerce")
+                end = pd.to_datetime(row.get("end") or row.get("ddate"), errors="coerce")
+                durations.append(end - start if pd.notna(start) and pd.notna(end) else None)
+            valid_durations = [duration for duration in durations if duration is not None]
+            if valid_durations:
+                longest = max(valid_durations)
+                rows = [
+                    row
+                    for row, duration in zip(rows, durations, strict=True)
+                    if duration == longest
+                ]
+
+        selected.extend(rows)
+
+    return selected
+
+
 def extract_companyfacts_candidates(
     companyfacts_path: str | Path,
     *,
@@ -440,7 +503,7 @@ def extract_companyfacts_candidates_from_data(
 
             for namespace, tag, fact in matched_facts:
                 for _, unit_rows in _fact_units_for_rule(fact, safe_str(rule.get("canonical_id"))):
-                    for unit_row in unit_rows:
+                    for unit_row in _select_current_companyfacts_unit_rows(unit_rows):
                         candidate = _candidate_from_companyfacts_unit(
                             symbol=symbol,
                             cik=cik,

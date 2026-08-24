@@ -605,6 +605,20 @@ companyfacts_rules:
     cash_direction: outflow
     label_patterns:
       - (?i)\binterest\s+paid\b
+  - canonical_id: INTEREST_EXPENSE
+    fs_type: IS
+    primary_tags:
+      - us-gaap:InterestExpenseNonoperating
+      - us-gaap:InterestExpenseNonOperating
+    alternate_tags:
+      - us-gaap:InterestAndDebtExpense
+      - us-gaap:InterestExpenseDebtExcludingAmortization
+      - us-gaap:InterestExpense
+    amount_policy: abs
+    label_patterns:
+      - (?i)\binterest(?:\s+and\s+debt)?\s+expense\b
+    label_exclude_patterns:
+      - (?i)\binterest\s+paid\b
   - canonical_id: TAX_PAID
     fs_type: CF
     primary_tags: [us-gaap:IncomeTaxesPaidNet]

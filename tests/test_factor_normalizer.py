@@ -833,6 +833,65 @@ class FactorNormalizerTest(unittest.TestCase):
                     expected_capex / 100 * 100,
                 )
 
+    def test_interest_coverage_prefers_interest_expense_and_preserves_negative_ebit(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "OPERATING_INCOME": -1_120_414_000,
+                    "INTEREST_EXPENSE": 777_845_000,
+                    "INT_PAID": 352_242_000,
+                    "CFO": 100_000_000,
+                }
+            ]
+        )
+
+        latest = add_annual_financial_factors(financial_df).iloc[-1]
+
+        self.assertAlmostEqual(
+            latest["interest_coverage"],
+            -1_120_414_000 / 777_845_000,
+        )
+        self.assertAlmostEqual(latest["icr_times"], 100_000_000 / 777_845_000)
+
+    def test_interest_coverage_rejects_zero_interest_denominator(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "OPERATING_INCOME": 100,
+                    "INTEREST_EXPENSE": 0,
+                    "CFO": 100,
+                }
+            ]
+        )
+
+        latest = add_annual_financial_factors(financial_df).iloc[-1]
+
+        self.assertTrue(pd.isna(latest["interest_coverage"]))
+        self.assertTrue(pd.isna(latest["icr_times"]))
+
+    def test_interest_coverage_falls_back_when_reported_interest_expense_is_zero(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2026,
+                    "financial_period": "2026-01-31",
+                    "OPERATING_INCOME": -6_713_000,
+                    "INTEREST_EXPENSE": 0,
+                    "INT_PAID": 42_880_000,
+                    "CFO": 10_000_000,
+                }
+            ]
+        )
+
+        latest = add_annual_financial_factors(financial_df).iloc[-1]
+
+        self.assertAlmostEqual(latest["interest_coverage"], -6_713_000 / 42_880_000)
+        self.assertAlmostEqual(latest["icr_times"], 10_000_000 / 42_880_000)
+
     def test_rnd_to_market_cap_factor_is_percent_of_market_cap(self):
         daily_df = pd.DataFrame(
             {
