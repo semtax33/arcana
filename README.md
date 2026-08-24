@@ -11,7 +11,7 @@ Arcana는 DART와 SEC EDGAR 공시를 **Point-in-Time 금융 데이터**로 정�
 
 ```mermaid
 flowchart TB
-    DART["DART"] --> Bronze["Immutable Bronze"]
+    DART["DART"] --> Bronze["Bronze + Immutable Source Archive"]
     SEC["SEC EDGAR"] --> Bronze
     Market["KRX / Yahoo Finance"] --> Bronze
     External["Consensus / FRED / Damodaran"] --> Bronze
@@ -28,7 +28,7 @@ flowchart TB
     ClickHouse --> Factors["Factor Lab"]
     ClickHouse --> Screening["Screening & Valuation"]
     ClickHouse --> Backtest["Backtest"]
-    ClickHouse --> API["FastAPI / MCP"]
+    ClickHouse --> API["FastAPI"]
 ```
 
 ## Why Arcana
@@ -51,7 +51,7 @@ Arcana는 서로 다른 시장과 공시 체계를 공통 금융 모델로 변�
 | **Point-in-Time** | DART 접수일과 SEC 공시일 등 `report_date`를 정보 이용 가능 시점으로 사용해 미래 공시가 과거 스냅샷에 섞이지 않도록 합니다. |
 | **Canonicalization** | 계정명뿐 아니라 statement section, context, parent path와 시장별 YAML 규칙을 이용해 DART·SEC의 표현을 공통 canonical account로 변환합니다. |
 | **Data Quality** | `Assets = Liabilities + Equity` 등의 회계 invariant, 필수 계정, 중복, mapping coverage를 검증하고 낮은 신뢰도의 행을 진단 대상으로 분리합니다. |
-| **Reproducibility** | 원문, 접수번호, URL, SHA-256, 실행 manifest와 규칙 파일을 보존해 파생 결과에서 source까지 역추적할 수 있게 합니다. |
+| **Reproducibility** | 원문, 접수번호, URL, SHA-256, 실행 manifest와 버전 관리되는 규칙 파일을 연결해 파생 결과에서 source까지 역추적할 수 있게 합니다. |
 
 ## What it does
 
@@ -77,7 +77,6 @@ Arcana는 서로 다른 시장과 공시 체계를 공통 금융 모델로 변�
 - 범용 factor screening, style score, sector/leader 분석
 - factor graph 실험, multiple valuation band, factor backtest
 - 재무제표·팩터·컨센서스·밸류에이션용 FastAPI
-- 같은 API 기능을 노출하는 HTTP MCP transport
 
 ## Built for recoverable operations
 
@@ -130,7 +129,7 @@ python -m pytest tests -q
 ## Tech stack
 
 - **Data & modeling:** Python, pandas, NumPy, YAML rule sets
-- **API:** FastAPI, Pydantic, HTTP MCP transport
+- **API:** FastAPI, Pydantic
 - **Storage:** file-based Bronze/Silver/Gold data lake, ClickHouse
 - **Sources:** DART, SEC EDGAR, KRX, Yahoo Finance, FRED, Damodaran 및 consensus providers
 - **Operations:** PowerShell workflows, atomic file replacement, checkpoints, pytest
