@@ -479,6 +479,159 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(latest["operating_income_growth_3y"], 100.0)
         self.assertAlmostEqual(latest["operating_income_growth_5y"], 500.0)
 
+    def test_open_asset_pricing_accounting_factors_are_calculated(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2023,
+                    "financial_period": "2023-12-31",
+                    "TOTAL_ASSETS": 900,
+                    "TOTAL_EQUITY": 400,
+                    "CURRENT_ASSETS": 350,
+                    "CASH_AND_EQUIVALENTS": 80,
+                    "PPE": 400,
+                    "CAPEX_PPE": 30,
+                    "REVENUE": 1_000,
+                    "COGS": 700,
+                    "NET_INCOME": 80,
+                    "CFO": 90,
+                    "CFI": -50,
+                    "CFF": 10,
+                    "INVENTORIES": 80,
+                    "EQ_ISSUE": 30,
+                    "BUYBACK": 5,
+                    "DIV_PAID": 4,
+                    "DEBT_ISSUE": 15,
+                    "DEBT_REPAY": 5,
+                },
+                {
+                    "fiscal_year": 2024,
+                    "financial_period": "2024-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 500,
+                    "CURRENT_ASSETS": 400,
+                    "CASH_AND_EQUIVALENTS": 100,
+                    "PPE": 450,
+                    "CAPEX_PPE": 45,
+                    "REVENUE": 1_200,
+                    "COGS": 800,
+                    "NET_INCOME": 90,
+                    "CFO": 110,
+                    "CFI": -70,
+                    "CFF": 15,
+                    "INVENTORIES": 100,
+                    "EQ_ISSUE": 40,
+                    "BUYBACK": 10,
+                    "DIV_PAID": 5,
+                    "DEBT_ISSUE": 20,
+                    "DEBT_REPAY": 10,
+                },
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "TOTAL_ASSETS": 1_200,
+                    "TOTAL_EQUITY": 550,
+                    "CURRENT_ASSETS": 500,
+                    "CASH_AND_EQUIVALENTS": 120,
+                    "PPE": 520,
+                    "CAPEX_PPE": 60,
+                    "REVENUE": 1_500,
+                    "COGS": 900,
+                    "NET_INCOME": 100,
+                    "CFO": 120,
+                    "CFI": -80,
+                    "CFF": 20,
+                    "INVENTORIES": 150,
+                    "EQ_ISSUE": 120,
+                    "BUYBACK": 30,
+                    "DIV_PAID": 10,
+                    "DEBT_ISSUE": 50,
+                    "DEBT_REPAY": 20,
+                },
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+        latest = result.iloc[-1]
+
+        self.assertAlmostEqual(latest["gross_profitability_pct"], 50.0)
+        self.assertAlmostEqual(latest["percent_total_accruals_pct"], 120.0)
+        self.assertAlmostEqual(latest["book_equity_growth_1y_pct"], 10.0)
+        self.assertAlmostEqual(
+            latest["current_operating_assets_change_pct"],
+            ((500 - 120) - (400 - 100)) / ((1_200 + 1_000) / 2) * 100,
+        )
+        self.assertAlmostEqual(latest["capex_growth_2y_pct"], 100.0)
+        self.assertAlmostEqual(
+            latest["net_debt_financing_pct"],
+            (50 - 20) / ((1_200 + 1_000) / 2) * 100,
+        )
+        self.assertAlmostEqual(latest["asset_yoy_pct"], 20.0)
+        self.assertAlmostEqual(latest["inventory_growth_1y_pct"], 50.0)
+        self.assertAlmostEqual(
+            latest["net_external_financing_pct"],
+            (120 - 10 - 30 + 50 - 20) / 1_200 * 100,
+        )
+        self.assertTrue(pd.isna(result["inventory_growth_1y_pct"].iat[0]))
+
+    def test_open_asset_pricing_factors_reject_invalid_denominators(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2024,
+                    "financial_period": "2024-12-31",
+                    "TOTAL_ASSETS": 0,
+                    "REVENUE": 100,
+                    "COGS": 50,
+                    "INVENTORIES": 0,
+                    "EQ_ISSUE": 10,
+                    "BUYBACK": 1,
+                    "DIV_PAID": 1,
+                    "DEBT_NET_BORROWING": 2,
+                },
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "TOTAL_ASSETS": 100,
+                    "REVENUE": 120,
+                    "COGS": 60,
+                    "INVENTORIES": 10,
+                },
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+
+        self.assertTrue(pd.isna(result["gross_profitability_pct"].iat[0]))
+        self.assertTrue(pd.isna(result["percent_total_accruals_pct"].iat[1]))
+        self.assertTrue(pd.isna(result["book_equity_growth_1y_pct"].iat[1]))
+        self.assertTrue(pd.isna(result["current_operating_assets_change_pct"].iat[1]))
+        self.assertTrue(pd.isna(result["capex_growth_2y_pct"].iat[1]))
+        self.assertTrue(pd.isna(result["net_debt_financing_pct"].iat[1]))
+        self.assertTrue(pd.isna(result["asset_yoy_pct"].iat[1]))
+        self.assertTrue(pd.isna(result["inventory_growth_1y_pct"].iat[1]))
+        self.assertTrue(pd.isna(result["net_external_financing_pct"].iat[1]))
+
+    def test_oap_capex_fallback_and_net_debt_outlier_filter_are_applied(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2022 + index,
+                    "financial_period": f"{2022 + index}-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "PPE": ppe,
+                    "DEBT_NET_BORROWING": 1_500 if index == 3 else 10,
+                }
+                for index, ppe in enumerate([100, 120, 150, 210])
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df)
+
+        # 2025 proxy capex is 210 - 150 = 60; the t-2 proxy is 120 - 100 = 20.
+        self.assertAlmostEqual(result["capex_growth_2y_pct"].iat[-1], 200.0)
+        self.assertTrue(pd.isna(result["net_debt_financing_pct"].iat[-1]))
+
     def test_net_income_growth_uses_parent_income_instead_of_total_income(self):
         financial_df = pd.DataFrame(
             [

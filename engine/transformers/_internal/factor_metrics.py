@@ -1214,12 +1214,17 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     )
     df["dltt"] = first_value_frame(df, "LONG_TERM_DEBT", "LONG_TERM_DEBT_FALLBACK")
     df["dlc"] = numeric_column(df, "SHORT_TERM_DEBT")
+    cash_and_equivalents = numeric_column(df, "CASH_AND_EQUIVALENTS")
+    short_term_financial_assets = numeric_column(df, "SHORT_TERM_FINANCIAL_ASSETS")
+    disclosed_cash_assets = (
+        cash_and_equivalents.fillna(0) + short_term_financial_assets.fillna(0)
+    ).where(cash_and_equivalents.notna() | short_term_financial_assets.notna())
     df["che"] = bound_by_reference(
-        numeric_column(df, "CASH_AND_EQUIVALENTS", 0).fillna(0)
-        + numeric_column(df, "SHORT_TERM_FINANCIAL_ASSETS", 0).fillna(0),
+        disclosed_cash_assets.fillna(0),
         df["at"],
         1.5,
     )
+    disclosed_cash_assets = bound_by_reference(disclosed_cash_assets, df["at"], 1.5)
 
     df["sale"] = numeric_column(df, "REVENUE")
     df["ni"] = numeric_column(df, "NET_INCOME")
@@ -1270,6 +1275,8 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["oibdp"] = df["oibdp"].fillna(df["oiadp"] + df["dp"])
 
     df["oancf"] = numeric_column(df, "CFO")
+    df["ivncf"] = numeric_column(df, "CFI")
+    df["fincf"] = numeric_column(df, "CFF")
     capex_ppe = numeric_column(df, "CAPEX_PPE").abs()
     capex_intang = numeric_column(df, "CAPEX_INTANG").abs()
     df["capx"] = (capex_ppe.fillna(0) + capex_intang.fillna(0)).where(
@@ -1282,7 +1289,12 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["div_paid"] = numeric_column(df, "DIV_PAID").abs()
     df["debt_issue"] = numeric_column(df, "DEBT_ISSUE")
     df["debt_repay"] = numeric_column(df, "DEBT_REPAY")
-    df["net_borrowing"] = first_value_frame(df, "DEBT_NET_BORROWING")
+    reported_net_borrowing = first_value_frame(df, "DEBT_NET_BORROWING")
+    derived_net_borrowing = (
+        df["debt_issue"].fillna(0) - df["debt_repay"].fillna(0)
+    ).where(df["debt_issue"].notna() | df["debt_repay"].notna())
+    strict_net_borrowing = reported_net_borrowing.fillna(derived_net_borrowing)
+    df["net_borrowing"] = reported_net_borrowing
     df["net_borrowing"] = df["net_borrowing"].fillna(
         df["debt_issue"].fillna(0) - df["debt_repay"].fillna(0)
     )
@@ -1322,6 +1334,57 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["roe_growth_5y"] = growth_pct(df["roe"], periods=lag * 5)
     df["roa"] = df["ni"] / df["avg_assets"]
     df["accrual_ratio"] = (df["ni"] - df["oancf"]) / df["avg_assets"]
+
+    # OAP ``PctTotAcc`` (Hafzalla, Lundholm and Van Winkle, 2011).
+    # Requiring every cash-flow component prevents absent disclosures from
+    # being silently interpreted as zero.
+    total_accrual_cash_flow = (
+        df["prstkc"]
+        - df["sstk"]
+        + df["div_paid"]
+        + df["oancf"]
+        + df["fincf"]
+        + df["ivncf"]
+    )
+    absolute_net_income = df["ni"].abs().where(df["ni"].abs() > 0)
+    df["percent_total_accruals_pct"] = (
+        (df["ni"] - total_accrual_cash_flow) / absolute_net_income * 100
+    )
+
+    # OAP ``ChEQ``.  The source signal is current / lagged book equity;
+    # expressing it as percentage growth is a monotonic, easier-to-read form.
+    lagged_book_equity = df["ceq"].shift(lag)
+    df["book_equity_growth_1y_pct"] = (
+        (df["ceq"] / lagged_book_equity - 1) * 100
+    ).where((df["ceq"] > 0) & (lagged_book_equity > 0))
+
+    # OAP ``DelCOA``: annual investment in non-cash current operating assets,
+    # scaled by average total assets.
+    current_operating_assets = df["act"] - disclosed_cash_assets
+    df["current_operating_assets_change_pct"] = (
+        (current_operating_assets - current_operating_assets.shift(lag))
+        / positive_denominator(df["avg_assets"])
+        * 100
+    )
+
+    # OAP ``grcapx``.  Use reported PPE capex when available and the annual
+    # change in net PPE as the documented fallback, then compare with t-2.
+    annual_ppent_change = df["ppent"] - df["ppent"].shift(lag)
+    comparable_capex = capex_ppe.fillna(annual_ppent_change)
+    capex_two_years_ago = comparable_capex.shift(lag * 2)
+    df["capex_growth_2y_pct"] = (
+        (comparable_capex / capex_two_years_ago - 1) * 100
+    ).where((comparable_capex >= 0) & (capex_two_years_ago > 0))
+
+    # OAP ``NetDebtFinance``.  The original implementation drops observations
+    # whose absolute net debt financing exceeds average total assets.
+    df["net_debt_financing_pct"] = (
+        strict_net_borrowing / positive_denominator(df["avg_assets"]) * 100
+    )
+    df["net_debt_financing_pct"] = df["net_debt_financing_pct"].where(
+        df["net_debt_financing_pct"].abs() <= 100
+    )
+
     # OAP ``InvGrowth``.  Inventory is a non-negative stock variable, so a
     # zero or negative lag is not a meaningful percentage-growth base.
     lagged_inventory = df["invt"].shift(lag)
@@ -3802,6 +3865,11 @@ def preferred_factor_columns():
         "wacc",
         "rnd_to_market_cap",
         "gross_profitability_pct",
+        "percent_total_accruals_pct",
+        "book_equity_growth_1y_pct",
+        "current_operating_assets_change_pct",
+        "capex_growth_2y_pct",
+        "net_debt_financing_pct",
         "gpm",
         "opm",
         "operating_profit_margin",

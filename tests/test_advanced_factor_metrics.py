@@ -354,6 +354,11 @@ class AdvancedFactorMetricsTest(unittest.TestCase):
                 "rim_upside_potential",
                 "us_price_to_target_price",
                 "gross_profitability_pct",
+                "percent_total_accruals_pct",
+                "book_equity_growth_1y_pct",
+                "current_operating_assets_change_pct",
+                "capex_growth_2y_pct",
+                "net_debt_financing_pct",
                 "asset_yoy_pct",
                 "inventory_growth_1y_pct",
                 "net_external_financing_pct",
@@ -377,6 +382,27 @@ class AdvancedFactorMetricsTest(unittest.TestCase):
         self.assertEqual(catalog.loc["gross_profitability_pct", "factor_group"], "profitability")
         self.assertEqual(catalog.loc["gross_profitability_pct", "unit"], "percent")
         self.assertEqual(catalog.loc["gross_profitability_pct", "value_direction"], "HIGHER_BETTER")
+        self.assertEqual(catalog.loc["percent_total_accruals_pct", "factor_type"], "quality")
+        self.assertEqual(catalog.loc["percent_total_accruals_pct", "factor_group"], "accruals")
+        self.assertEqual(catalog.loc["percent_total_accruals_pct", "value_direction"], "LOWER_BETTER")
+        self.assertEqual(catalog.loc["book_equity_growth_1y_pct", "factor_group"], "investment")
+        self.assertEqual(catalog.loc["current_operating_assets_change_pct", "factor_group"], "investment")
+        self.assertEqual(catalog.loc["capex_growth_2y_pct", "factor_group"], "investment")
+        self.assertEqual(catalog.loc["net_debt_financing_pct", "factor_group"], "external_financing")
+        self.assertTrue(
+            (
+                catalog.loc[
+                    [
+                        "book_equity_growth_1y_pct",
+                        "current_operating_assets_change_pct",
+                        "capex_growth_2y_pct",
+                        "net_debt_financing_pct",
+                    ],
+                    "value_direction",
+                ]
+                == "LOWER_BETTER"
+            ).all()
+        )
         self.assertEqual(catalog.loc["asset_yoy_pct", "factor_group"], "investment")
         self.assertEqual(catalog.loc["asset_yoy_pct", "value_direction"], "LOWER_BETTER")
         self.assertEqual(catalog.loc["inventory_growth_1y_pct", "factor_group"], "investment")
@@ -391,6 +417,11 @@ class AdvancedFactorMetricsTest(unittest.TestCase):
             "equity_duration_20y",
             "rim_upside_potential",
             "gross_profitability_pct",
+            "percent_total_accruals_pct",
+            "book_equity_growth_1y_pct",
+            "current_operating_assets_change_pct",
+            "capex_growth_2y_pct",
+            "net_debt_financing_pct",
             "asset_yoy_pct",
             "inventory_growth_1y_pct",
             "net_external_financing_pct",
@@ -405,6 +436,11 @@ class AdvancedFactorMetricsTest(unittest.TestCase):
                     "equity_duration_20y": 8.5,
                     "rim_upside_potential": 0.3,
                     "gross_profitability_pct": 42.0,
+                    "percent_total_accruals_pct": -8.0,
+                    "book_equity_growth_1y_pct": 3.0,
+                    "current_operating_assets_change_pct": -1.0,
+                    "capex_growth_2y_pct": 6.0,
+                    "net_debt_financing_pct": -2.5,
                     "asset_yoy_pct": 5.0,
                     "inventory_growth_1y_pct": -2.0,
                     "net_external_financing_pct": -1.5,

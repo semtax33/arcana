@@ -128,6 +128,7 @@ VALUATION_FACTORS = {
 
 QUALITY_FACTORS = {
     "gross_profitability_pct",
+    "percent_total_accruals_pct",
     "fcf_margin",
     "fcf_dividend_coverage",
     "fcf_after_dividends",
@@ -211,6 +212,9 @@ GROWTH_FACTORS = {
     "us_eps_surprise_pct",
     "eps_implied_operating_income_surprise_pct",
     "asset_yoy_pct",
+    "book_equity_growth_1y_pct",
+    "current_operating_assets_change_pct",
+    "capex_growth_2y_pct",
     "inventory_growth_1y_pct",
     "cfo_yoy_pct",
     "fcf_yoy_pct",
@@ -320,6 +324,11 @@ FUNDAMENTAL_AMOUNT_FACTORS = {
 
 FACTOR_NAME_OVERRIDES = {
     "gross_profitability_pct": "Gross Profitability",
+    "percent_total_accruals_pct": "Percent Total Accruals",
+    "book_equity_growth_1y_pct": "Book Equity Growth 1Y",
+    "current_operating_assets_change_pct": "Current Operating Assets Change",
+    "capex_growth_2y_pct": "Capex Growth 2Y",
+    "net_debt_financing_pct": "Net Debt Financing",
     "asset_yoy_pct": "Asset Growth 1Y",
     "inventory_growth_1y_pct": "Inventory Growth 1Y",
     "net_external_financing_pct": "Net External Financing",
@@ -403,6 +412,28 @@ FACTOR_DESCRIPTION_OVERRIDES = {
         "Open Asset Pricing GP: 공시 시점의 매출총이익을 같은 기간 총자산으로 나눈 값. "
         "높을수록 자산이 만드는 영업 잉여가 큽니다."
     ),
+    "percent_total_accruals_pct": (
+        "Open Asset Pricing PctTotAcc: 순이익에서 자금조달·투자·영업 현금흐름을 "
+        "조정한 총발생액을 순이익 절댓값으로 나눈 값. 현금으로 뒷받침되지 않는 "
+        "이익의 비중이 작을수록 우수합니다."
+    ),
+    "book_equity_growth_1y_pct": (
+        "Open Asset Pricing ChEQ의 단조 변환: 보통주 장부가치의 전년 대비 증가율. "
+        "급격한 자기자본 팽창은 과잉투자나 고평가 시점의 자금조달 가능성을 "
+        "반영하므로 낮을수록 우수합니다."
+    ),
+    "current_operating_assets_change_pct": (
+        "Open Asset Pricing DelCOA: 현금을 제외한 유동영업자산의 전년 변화액을 "
+        "평균 총자산으로 나눈 값. 단기 영업자산에 묶이는 투자가 작을수록 우수합니다."
+    ),
+    "capex_growth_2y_pct": (
+        "Open Asset Pricing grcapx: 설비투자의 2년 전 대비 증가율. 설비투자가 없으면 "
+        "유형자산의 연간 변화액을 사용하며, 투자 급증이 작을수록 우수합니다."
+    ),
+    "net_debt_financing_pct": (
+        "Open Asset Pricing NetDebtFinance: 순차입을 평균 총자산으로 나눈 값. "
+        "부채성 외부자금 조달 의존도가 낮을수록 우수하며 절댓값 100% 초과치는 제외합니다."
+    ),
     "asset_yoy_pct": (
         "Open Asset Pricing AssetGrowth: 총자산의 전년 대비 증가율. "
         "과도한 자산 팽창은 투자 과잉과 이후 수익성 저하 위험을 나타내므로 낮을수록 우수합니다."
@@ -467,6 +498,11 @@ WACC_FACTOR_IDS = [
 
 LOWER_IS_BETTER = {
     "asset_yoy_pct",
+    "percent_total_accruals_pct",
+    "book_equity_growth_1y_pct",
+    "current_operating_assets_change_pct",
+    "capex_growth_2y_pct",
+    "net_debt_financing_pct",
     "inventory_growth_1y_pct",
     "net_external_financing_pct",
     "per",
@@ -1041,9 +1077,17 @@ def infer_factor_group(factor_id: str) -> str:
     factor_type = infer_factor_type(factor_id)
     if factor_id == "gross_profitability_pct":
         return "profitability"
-    if factor_id in {"asset_yoy_pct", "inventory_growth_1y_pct"}:
+    if factor_id == "percent_total_accruals_pct":
+        return "accruals"
+    if factor_id in {
+        "asset_yoy_pct",
+        "book_equity_growth_1y_pct",
+        "current_operating_assets_change_pct",
+        "capex_growth_2y_pct",
+        "inventory_growth_1y_pct",
+    }:
         return "investment"
-    if factor_id == "net_external_financing_pct":
+    if factor_id in {"net_external_financing_pct", "net_debt_financing_pct"}:
         return "external_financing"
     if factor_id == "equity_duration_20y":
         return "duration"
