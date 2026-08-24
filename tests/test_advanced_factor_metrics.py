@@ -353,6 +353,10 @@ class AdvancedFactorMetricsTest(unittest.TestCase):
                 "equity_duration_20y",
                 "rim_upside_potential",
                 "us_price_to_target_price",
+                "gross_profitability_pct",
+                "asset_yoy_pct",
+                "inventory_growth_1y_pct",
+                "net_external_financing_pct",
             ]
         ).set_index("factor_id")
 
@@ -369,6 +373,16 @@ class AdvancedFactorMetricsTest(unittest.TestCase):
         self.assertEqual(catalog.loc["us_price_to_target_price", "factor_type"], "valuation")
         self.assertEqual(catalog.loc["us_price_to_target_price", "unit"], "ratio")
         self.assertEqual(catalog.loc["us_price_to_target_price", "value_direction"], "HIGHER_BETTER")
+        self.assertEqual(catalog.loc["gross_profitability_pct", "factor_type"], "quality")
+        self.assertEqual(catalog.loc["gross_profitability_pct", "factor_group"], "profitability")
+        self.assertEqual(catalog.loc["gross_profitability_pct", "unit"], "percent")
+        self.assertEqual(catalog.loc["gross_profitability_pct", "value_direction"], "HIGHER_BETTER")
+        self.assertEqual(catalog.loc["asset_yoy_pct", "factor_group"], "investment")
+        self.assertEqual(catalog.loc["asset_yoy_pct", "value_direction"], "LOWER_BETTER")
+        self.assertEqual(catalog.loc["inventory_growth_1y_pct", "factor_group"], "investment")
+        self.assertEqual(catalog.loc["inventory_growth_1y_pct", "value_direction"], "LOWER_BETTER")
+        self.assertEqual(catalog.loc["net_external_financing_pct", "factor_group"], "external_financing")
+        self.assertEqual(catalog.loc["net_external_financing_pct", "value_direction"], "LOWER_BETTER")
         self.assertTrue(catalog["description"].str.len().gt(0).all())
 
     def test_advanced_factors_use_existing_long_format_loader(self):
@@ -376,6 +390,10 @@ class AdvancedFactorMetricsTest(unittest.TestCase):
             "k_ratio_3y",
             "equity_duration_20y",
             "rim_upside_potential",
+            "gross_profitability_pct",
+            "asset_yoy_pct",
+            "inventory_growth_1y_pct",
+            "net_external_financing_pct",
         ]
         wide = pd.DataFrame(
             [
@@ -386,6 +404,10 @@ class AdvancedFactorMetricsTest(unittest.TestCase):
                     "k_ratio_3y": 0.025,
                     "equity_duration_20y": 8.5,
                     "rim_upside_potential": 0.3,
+                    "gross_profitability_pct": 42.0,
+                    "asset_yoy_pct": 5.0,
+                    "inventory_growth_1y_pct": -2.0,
+                    "net_external_financing_pct": -1.5,
                 }
             ]
         )

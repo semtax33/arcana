@@ -127,6 +127,7 @@ VALUATION_FACTORS = {
 }
 
 QUALITY_FACTORS = {
+    "gross_profitability_pct",
     "fcf_margin",
     "fcf_dividend_coverage",
     "fcf_after_dividends",
@@ -210,6 +211,7 @@ GROWTH_FACTORS = {
     "us_eps_surprise_pct",
     "eps_implied_operating_income_surprise_pct",
     "asset_yoy_pct",
+    "inventory_growth_1y_pct",
     "cfo_yoy_pct",
     "fcf_yoy_pct",
     "ffo_yoy_pct",
@@ -317,6 +319,10 @@ FUNDAMENTAL_AMOUNT_FACTORS = {
 }
 
 FACTOR_NAME_OVERRIDES = {
+    "gross_profitability_pct": "Gross Profitability",
+    "asset_yoy_pct": "Asset Growth 1Y",
+    "inventory_growth_1y_pct": "Inventory Growth 1Y",
+    "net_external_financing_pct": "Net External Financing",
     "rnd_margin": "R&D Margin",
     "fcf_margin": "FCF Margin",
     "fcf_payout_ratio": "FCF Payout Ratio",
@@ -393,6 +399,22 @@ FACTOR_NAME_OVERRIDES = {
 }
 
 FACTOR_DESCRIPTION_OVERRIDES = {
+    "gross_profitability_pct": (
+        "Open Asset Pricing GP: 공시 시점의 매출총이익을 같은 기간 총자산으로 나눈 값. "
+        "높을수록 자산이 만드는 영업 잉여가 큽니다."
+    ),
+    "asset_yoy_pct": (
+        "Open Asset Pricing AssetGrowth: 총자산의 전년 대비 증가율. "
+        "과도한 자산 팽창은 투자 과잉과 이후 수익성 저하 위험을 나타내므로 낮을수록 우수합니다."
+    ),
+    "inventory_growth_1y_pct": (
+        "Open Asset Pricing InvGrowth: 재고자산의 전년 대비 증가율. "
+        "재고가 빠르게 쌓이면 수요 둔화·평가손실 위험이 커질 수 있어 낮을수록 우수합니다."
+    ),
+    "net_external_financing_pct": (
+        "Open Asset Pricing XFIN: (주식발행-배당-자사주매입+순차입)을 총자산으로 나눈 값. "
+        "외부자금 의존과 경영진의 고평가 시점 자금조달 가능성을 반영하므로 낮을수록 우수합니다."
+    ),
     "k_ratio_3y": (
         "756거래일 log VAMI 회귀선의 기울기를 관측치 수와 기울기 표준오차로 "
         "나눈 K-Ratio. 최소 504개 관측치가 필요합니다."
@@ -444,6 +466,9 @@ WACC_FACTOR_IDS = [
 ]
 
 LOWER_IS_BETTER = {
+    "asset_yoy_pct",
+    "inventory_growth_1y_pct",
+    "net_external_financing_pct",
     "per",
     "pbr",
     "pcr",
@@ -1014,6 +1039,12 @@ def infer_factor_type(factor_id: str) -> str:
 
 def infer_factor_group(factor_id: str) -> str:
     factor_type = infer_factor_type(factor_id)
+    if factor_id == "gross_profitability_pct":
+        return "profitability"
+    if factor_id in {"asset_yoy_pct", "inventory_growth_1y_pct"}:
+        return "investment"
+    if factor_id == "net_external_financing_pct":
+        return "external_financing"
     if factor_id == "equity_duration_20y":
         return "duration"
     if factor_id == "k_ratio_3y":

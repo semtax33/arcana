@@ -1294,6 +1294,11 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["avg_payables"] = (df["ap"] + df["ap"].shift(lag)) / 2
 
     df["gpm"] = df["gross_profit"] / df["sale"]
+    # Open Source Asset Pricing ``GP`` (Novy-Marx, 2013).  Keep the
+    # point-in-time denominator from the same disclosed financial period.
+    df["gross_profitability_pct"] = (
+        df["gross_profit"] / positive_denominator(df["at"]) * 100
+    )
     df["opm"] = df["oiadp"] / df["sale"]
     df["operating_profit_margin"] = df["opm"]
     df["operating_margin_growth_1y"] = growth_pct(df["opm"], periods=lag)
@@ -1317,6 +1322,27 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["roe_growth_5y"] = growth_pct(df["roe"], periods=lag * 5)
     df["roa"] = df["ni"] / df["avg_assets"]
     df["accrual_ratio"] = (df["ni"] - df["oancf"]) / df["avg_assets"]
+    # OAP ``InvGrowth``.  Inventory is a non-negative stock variable, so a
+    # zero or negative lag is not a meaningful percentage-growth base.
+    lagged_inventory = df["invt"].shift(lag)
+    df["inventory_growth_1y_pct"] = (
+        (df["invt"] / lagged_inventory - 1) * 100
+    ).where((df["invt"] >= 0) & (lagged_inventory > 0))
+
+    # OAP ``XFIN`` (Bradshaw, Richardson and Sloan, 2006): net equity plus
+    # net debt financing, scaled by contemporaneous total assets.  Missing
+    # equity-financing disclosures remain missing rather than being treated
+    # as zero.
+    df["net_external_financing_pct"] = (
+        (
+            df["sstk"]
+            - df["div_paid"]
+            - df["prstkc"]
+            + df["net_borrowing"]
+        )
+        / positive_denominator(df["at"])
+        * 100
+    )
     df["iroe"] = (
         df["ni_parent"] + df["xrd"].fillna(0) * (1 - nopat_tax_rate.fillna(0))
     ) / df["avg_parent_equity"]
@@ -1408,7 +1434,9 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
             "rdsr_pct": df["xrd"] / df["sale"] * 100,
             "eps": eps,
             "eps_yoy_pct": yoy_pct(eps, periods=lag),
-            "asset_yoy_pct": yoy_pct(df["at"], periods=lag),
+            "asset_yoy_pct": yoy_pct(df["at"], periods=lag).where(
+                (df["at"] > 0) & (df["at"].shift(lag) > 0)
+            ),
             "cfo_yoy_pct": yoy_pct(df["oancf"], periods=lag),
             "fcf_yoy_pct": yoy_pct(df["fcf"], periods=lag),
             "ffo_yoy_pct": yoy_pct(df["ffo"], periods=lag),
@@ -3773,6 +3801,7 @@ def preferred_factor_columns():
         "wacc_debt_weight",
         "wacc",
         "rnd_to_market_cap",
+        "gross_profitability_pct",
         "gpm",
         "opm",
         "operating_profit_margin",
@@ -3812,6 +3841,8 @@ def preferred_factor_columns():
         "roe_growth_5y",
         "roa",
         "accrual_ratio",
+        "inventory_growth_1y_pct",
+        "net_external_financing_pct",
         "iroe",
         "roic_financial",
         "roic_operational",
