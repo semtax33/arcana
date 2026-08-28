@@ -24,7 +24,10 @@ from api.service.dto import (
     FactorLabRunRequestDto,
 )
 from api.service.factor_lab_service import FactorLabService
-from scripts.factor_lab_research_diagnostics import newey_west_mean_test
+from scripts.factor_lab_research_diagnostics import (
+    load_and_run_factor_model,
+    newey_west_mean_test,
+)
 
 
 PVGO_SOURCE_NAME = "Arcana_US_PVGO_ExpectationsAlpha_Quarterly_20260829"
@@ -380,6 +383,7 @@ def _backtest(
         },
         "annual_returns": [asdict(item) for item in result.annual_returns],
         "inference": newey_west_mean_test(daily_returns),
+        "ff5_momentum_regression": load_and_run_factor_model(daily_returns),
         "warnings": result.warnings,
     }
 
