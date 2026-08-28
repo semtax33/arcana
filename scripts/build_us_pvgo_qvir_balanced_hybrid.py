@@ -15,6 +15,8 @@ import json
 from statistics import median
 from typing import Any
 
+import pandas as pd
+
 from api.service.dto import (
     FactorLabBacktestRequestDto,
     FactorLabExperimentSaveRequestDto,
@@ -22,6 +24,7 @@ from api.service.dto import (
     FactorLabRunRequestDto,
 )
 from api.service.factor_lab_service import FactorLabService
+from scripts.factor_lab_research_diagnostics import newey_west_mean_test
 
 
 PVGO_SOURCE_NAME = "Arcana_US_PVGO_ExpectationsAlpha_Quarterly_20260829"
@@ -354,6 +357,12 @@ def _backtest(
         max((position.weight for position in item.positions), default=0.0)
         for item in result.rebalance_history
     ]
+    nav = pd.Series(
+        [point.strategy_nav for point in result.equity_curve],
+        index=pd.to_datetime([point.trade_date for point in result.equity_curve]),
+        dtype="float64",
+    ).sort_index()
+    daily_returns = nav.pct_change(fill_method=None).dropna()
     return {
         "parameters": {
             "start_date": start_date,
@@ -370,6 +379,7 @@ def _backtest(
             "max_single_name_weight": max(maximum_weights, default=0.0),
         },
         "annual_returns": [asdict(item) for item in result.annual_returns],
+        "inference": newey_west_mean_test(daily_returns),
         "warnings": result.warnings,
     }
 

@@ -23,6 +23,10 @@ from api.service.dto import (
     FactorLabRunRequestDto,
 )
 from api.service.factor_lab_service import FactorLabService
+from scripts.build_us_intangible_adjusted_pvgo import (
+    MIN_MARKET_CAP_USD_MILLIONS,
+    OPERATING_COMPANY_GICS_SECTORS,
+)
 from scripts.build_us_pvgo_qvir_balanced_hybrid import (
     END_DATE,
     MAX_POSITIONS,
@@ -32,7 +36,7 @@ from scripts.build_us_pvgo_qvir_balanced_hybrid import (
     TOP_PERCENT,
     TRANSACTION_COST_BPS,
     _backtest,
-    build_graph,
+    build_graph as build_base_hybrid_graph,
     build_qvir_core_graph,
 )
 
@@ -44,6 +48,61 @@ MODEL_NAME = (
     "Arcana_US_IntangibleAdjustedPVGO_QVIR_BalancedHybrid_Quarterly_20260829"
 )
 SLEEVE_WEIGHTS = {"intangible_adjusted_pvgo": 0.50, "qvir_core": 0.50}
+
+
+def build_graph(
+    service: FactorLabService,
+    *,
+    pvgo_history_run_id: str,
+    qvir_history_run_id: str,
+    pvgo_screen_run_id: str | None = None,
+    qvir_screen_run_id: str | None = None,
+    qvir_output_node: str = "composite_score",
+    model_name: str = MODEL_NAME,
+) -> tuple[FactorLabGraphDto, dict[str, str]]:
+    """Build the target hybrid while preserving the audited PVGO universe.
+
+    The generic hybrid builder also supports legacy models that include REITs.
+    This target deliberately inherits the adjusted sleeve's operating-company,
+    positive-NOPAT, and USD 1bn eligibility because missing PVGO rows are not
+    renormalized at the final sleeve combination.
+    """
+
+    graph, source_runs = build_base_hybrid_graph(
+        service,
+        pvgo_history_run_id=pvgo_history_run_id,
+        qvir_history_run_id=qvir_history_run_id,
+        pvgo_screen_run_id=pvgo_screen_run_id,
+        qvir_screen_run_id=qvir_screen_run_id,
+        pvgo_source_name=ADJUSTED_PVGO_SOURCE_NAME,
+        qvir_source_name=QVIR_SOURCE_NAME,
+        model_name=model_name,
+    )
+    payload = graph.model_dump(mode="json")
+    payload["experiment"]["universe"]["sector_codes"] = (
+        OPERATING_COMPANY_GICS_SECTORS
+    )
+    payload["experiment"]["snapshot_coverage_policy"] = "strict"
+    for node in payload["nodes"]:
+        if node["id"] == "balanced_hybrid_score":
+            node["config"]["research_design"] = (
+                "equal-weight stock-selection sleeves; both required; adjusted "
+                "PVGO source supplies positive-NOPAT and USD 1bn eligibility"
+            )
+        elif node["id"] == "final_rank_score":
+            node["config"]["semantic_label"] = (
+                "cross_sectional_rank_not_probability"
+            )
+        elif node["id"] in {
+            "qvir_source_score",
+            "qvir_history_score",
+            "qvir_current_score",
+        }:
+            node["config"]["source_output_node"] = qvir_output_node
+            node["config"]["hard_gate_policy"] = (
+                "enforced" if qvir_output_node != "composite_score" else "diagnostic_only"
+            )
+    return FactorLabGraphDto(**payload), source_runs
 
 
 def _run_history(
@@ -138,9 +197,6 @@ def run() -> dict[str, Any]:
         qvir_history_run_id=qvir_core_history.run_id,
         pvgo_screen_run_id=adjusted_screen.run_id,
         qvir_screen_run_id=qvir_core_screen.run_id,
-        pvgo_source_name=ADJUSTED_PVGO_SOURCE_NAME,
-        qvir_source_name=QVIR_SOURCE_NAME,
-        model_name=MODEL_NAME,
     )
     validation = service.validate_graph(graph)
     if not validation.valid:
@@ -153,6 +209,23 @@ def run() -> dict[str, Any]:
     )
     history = _run_history(service, experiment_id=experiment.experiment_id)
     screen = _run_screen(service, experiment_id=experiment.experiment_id)
+
+    gated_graph, gated_source_runs = build_graph(
+        service,
+        pvgo_history_run_id=adjusted_history.run_id,
+        qvir_history_run_id=qvir_gated_history.run_id,
+        qvir_output_node=qvir_gated_graph.outputs.final_node_id,
+        model_name=f"{MODEL_NAME}__MinerviniRiskGatedDiagnostic",
+    )
+    gated_validation = service.validate_graph(gated_graph)
+    if not gated_validation.valid:
+        raise RuntimeError(
+            [
+                issue.model_dump(mode="json")
+                for issue in gated_validation.errors
+            ]
+        )
+    gated_history = _run_source_graph_history(service, graph=gated_graph)
 
     primary = _backtest(
         service,
@@ -220,6 +293,29 @@ def run() -> dict[str, Any]:
             max_positions=MAX_POSITIONS,
             transaction_cost_bps=50.0,
         ),
+        "cost_100bps": _backtest(
+            service,
+            run_id=history.run_id,
+            start_date=START_DATE,
+            end_date=END_DATE,
+            top_percent=TOP_PERCENT,
+            max_positions=MAX_POSITIONS,
+            transaction_cost_bps=100.0,
+        ),
+        "minervini_risk_gated_intersection": {
+            "source_runs": gated_source_runs,
+            "history_run_id": gated_history.run_id,
+            "history_quality": gated_history.quality.model_dump(mode="json"),
+            "backtest": _backtest(
+                service,
+                run_id=gated_history.run_id,
+                start_date=START_DATE,
+                end_date=END_DATE,
+                top_percent=TOP_PERCENT,
+                max_positions=MAX_POSITIONS,
+                transaction_cost_bps=TRANSACTION_COST_BPS,
+            ),
+        },
         "pre_2022": _backtest(
             service,
             run_id=history.run_id,
@@ -269,6 +365,12 @@ def run() -> dict[str, Any]:
             "qvir_output": "composite_score before hard trend/risk gate",
             "standardization": "cross-sectional population z-score, clipped at +/-3",
             "missing_policy": "require both sleeves; no weight renormalization",
+            "eligibility_inherited_from_pvgo": {
+                "minimum_market_cap_usd_millions": MIN_MARKET_CAP_USD_MILLIONS,
+                "positive_normalized_nopat": True,
+                "excluded_gics_sectors": ["40", "60"],
+            },
+            "score_semantics": "0-100 cross-sectional rank, not a success probability",
         },
         "portfolio_rule": {
             "top_percent": TOP_PERCENT,
