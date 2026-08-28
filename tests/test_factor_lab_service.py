@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 import uuid
 from datetime import date
@@ -13,7 +14,12 @@ from api.service.dto import (
     FactorLabGraphDto,
     FactorLabRunRequestDto,
 )
-from api.service.factor_lab_service import FactorLabService, _resolve_screening_factor_date
+from api.service.factor_lab_service import (
+    FactorLabService,
+    _resolve_screening_factor_date,
+    _row_date,
+    _screening_candidate_days,
+)
 
 
 def service_graph():
@@ -167,6 +173,9 @@ class FakeFactorLabClient:
 
 
 class FactorLabServiceTest(unittest.TestCase):
+    def test_row_date_treats_pandas_nat_as_missing(self):
+        self.assertIsNone(_row_date([{"effective_trade_date": pd.NaT}], "effective_trade_date"))
+
     def test_app_registers_factor_lab_routes(self):
         from api.main import app
 
@@ -228,6 +237,84 @@ class FactorLabServiceTest(unittest.TestCase):
 
         self.assertEqual(factor_table, "fact_daily_factors")
         self.assertEqual(effective_date, date(2026, 12, 30))
+
+    def test_quarterly_lab_only_screen_carries_latest_signal_forward(self):
+        client = FakeFactorLabClient()
+        original_query_df = client.query_df
+
+        def query_df(query, parameters=None):
+            if "FROM factor_lab_values" in query:
+                self.assertIn("2026-09-30", parameters["candidate_dates"])
+                return pd.DataFrame({"trade_date": [pd.Timestamp("2026-09-30").date()]})
+            return original_query_df(query, parameters)
+
+        client.query_df = query_df
+        graph = service_graph()
+        graph["nodes"] = [
+            {
+                "id": "module_a",
+                "type": "factor_input",
+                "config": {"factor_id": "lab_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+            },
+            {
+                "id": "module_b",
+                "type": "factor_input",
+                "config": {"factor_id": "lab_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+            },
+        ]
+        graph["edges"] = []
+        graph["outputs"] = {"final_node_id": "module_a"}
+
+        with patch.dict(os.environ, {"ARCANA_FACTOR_SNAPSHOT_CANDIDATE_DAYS": "14"}):
+            factor_table, effective_date = _resolve_screening_factor_date(client, graph)
+
+        self.assertEqual(factor_table, "fact_daily_factors")
+        self.assertEqual(effective_date, date(2026, 9, 30))
+
+    def test_lab_screen_allows_partial_source_dates_when_policy_allows_missing_inputs(self):
+        client = FakeFactorLabClient()
+        original_query_df = client.query_df
+
+        def query_df(query, parameters=None):
+            if "FROM factor_lab_values" in query:
+                self.assertIn("HAVING count() > 0", query)
+                return pd.DataFrame({"trade_date": [pd.Timestamp("2026-12-30").date()]})
+            return original_query_df(query, parameters)
+
+        client.query_df = query_df
+        graph = service_graph()
+        graph["experiment"]["snapshot_coverage_policy"] = "allow_missing_inputs"
+        graph["nodes"] = [
+            {
+                "id": "history_module",
+                "type": "factor_input",
+                "config": {"factor_id": "lab_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+            },
+            {
+                "id": "current_module",
+                "type": "factor_input",
+                "config": {"factor_id": "lab_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+            },
+        ]
+        graph["edges"] = []
+        graph["outputs"] = {"final_node_id": "current_module"}
+
+        factor_table, effective_date = _resolve_screening_factor_date(client, graph)
+
+        self.assertEqual(factor_table, "fact_daily_factors")
+        self.assertEqual(effective_date, date(2026, 12, 30))
+
+    def test_screening_candidate_days_does_not_age_raw_factors_by_rebalance_frequency(self):
+        experiment = {"rebalance": {"frequency": "quarterly"}}
+        with patch.dict(os.environ, {"ARCANA_FACTOR_SNAPSHOT_CANDIDATE_DAYS": "14"}):
+            self.assertEqual(
+                _screening_candidate_days(experiment=experiment, lab_only=True),
+                120,
+            )
+            self.assertEqual(
+                _screening_candidate_days(experiment=experiment, lab_only=False),
+                14,
+            )
 
     def test_run_graph_creates_tables_registers_factor_and_loads_quality(self):
         client = FakeFactorLabClient()
@@ -358,6 +445,18 @@ class FactorLabServiceTest(unittest.TestCase):
             if "INSERT INTO factor_lab_values" in query
         )
         self.assertIn("FROM fact_daily_factor_snapshot AS f", factor_insert_query)
+
+    def test_factor_lab_graph_preserves_snapshot_coverage_policy(self):
+        graph_data = service_graph()
+        graph_data["experiment"]["factor_data_mode"] = "point_in_time_snapshot"
+        graph_data["experiment"]["snapshot_coverage_policy"] = "allow_missing_inputs"
+
+        graph = FactorLabGraphDto(**graph_data)
+
+        self.assertEqual(
+            "allow_missing_inputs",
+            graph.model_dump(mode="json")["experiment"]["snapshot_coverage_policy"],
+        )
 
     def test_update_experiment_writes_new_version_with_same_id(self):
         client = FakeFactorLabClient()

@@ -22,3 +22,6 @@ outputs/
 output/
 tmp/
 scripts/token_output.csv
+.codex-tmp
+.codex-work/
+_workspace/

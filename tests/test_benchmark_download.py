@@ -45,6 +45,37 @@ class BenchmarkDownloadTest(unittest.TestCase):
         for call in fetch.call_args_list:
             self.assertFalse(call.kwargs["normalize_ticker"])
 
+    def test_fetch_yfinance_benchmark_prices_supports_qqq(self):
+        raw = pd.DataFrame(
+            {
+                "Date": ["2026-01-02"],
+                "Open": [600.0],
+                "High": [605.0],
+                "Low": [595.0],
+                "Close": [603.0],
+                "Volume": [10_000],
+            }
+        )
+
+        with TemporaryDirectory() as temp_dir:
+            with patch(
+                "engine.extractors._internal.yfinance_market_prices.fetch_yfinance_price",
+                return_value=raw,
+            ) as fetch:
+                result = fetch_yfinance_benchmark_prices(
+                    "20260101",
+                    "20260105",
+                    benchmark_ids=["QQQ"],
+                    output_dir=temp_dir,
+                )
+
+            self.assertTrue((Path(temp_dir) / "us_qqq.csv").exists())
+
+        self.assertEqual(result["benchmark_id"].tolist(), ["US_QQQ"])
+        fetch.assert_called_once()
+        self.assertEqual(fetch.call_args.args[0], "QQQ")
+        self.assertFalse(fetch.call_args.kwargs["normalize_ticker"])
+
     def test_download_workflow_routes_us_benchmarks(self):
         frame = pd.DataFrame({"benchmark_id": ["US_SP500"], "trade_date": ["2026-01-02"]})
 

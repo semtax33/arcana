@@ -62,6 +62,10 @@ SHARES_PATH = DATA_LAKE.silver("krx", "shares", market_csv_name("normalized_shar
 LEGACY_SHARES_PATHS = (DATA_LAKE.silver("krx", "shares", "normalized_shares.csv"),)
 ANNUAL_MONTH = 12
 DEFAULT_NOPAT_TAX_RATE = 0.21
+INTANGIBLE_INITIAL_GROWTH_RATE = 0.10
+KNOWLEDGE_CAPITAL_DEPRECIATION_RATE = 0.15
+ORGANIZATION_CAPITAL_INVESTMENT_SHARE = 0.30
+ORGANIZATION_CAPITAL_DEPRECIATION_RATE = 0.20
 RND_INTENSIVE_SECTOR_CODES = {"35", "45", "50", "HEALTH_CARE", "INFORMATION_TECHNOLOGY", "COMMUNICATION_SERVICES"}
 RND_ZERO_IMPUTE_ALLOWED_SECTOR_CODES = {
     "10",
@@ -116,6 +120,7 @@ PERCENT_RATIO_FACTOR_COLUMNS = {
     "fcfe_payout_ratio",
     "gpm",
     "net_margin",
+    "normalized_operating_margin_5y",
     "opm",
     "operating_profit_margin",
     "ebitda_margin",
@@ -202,6 +207,11 @@ RIM_HISTORICAL_ROE_YEARS = 3
 K_RATIO_3Y_WINDOW = 252 * 3
 K_RATIO_3Y_MIN_PERIODS = 252 * 2
 EQUITY_DURATION_HORIZON_YEARS = 20
+PVGO_NORMALIZATION_YEARS = 5
+PVGO_MIN_NORMALIZATION_YEARS = 3
+PVGO_GROWTH_LOOKBACK_YEARS = 3
+PVGO_CAP_YEARS = 10
+PVGO_MAX_GROWTH_RATE = 0.25
 
 CONSENSUS_METRIC_SPECS = {
     "basic_eps": {
@@ -401,6 +411,74 @@ def tax_rate_for_nopat(actual_tax_rate, operating_income, default_rate=DEFAULT_N
     no_history_fallback = no_history_fallback.where(operating_income >= 0, 0.0)
     fallback = historical_median.fillna(no_history_fallback)
     return valid_actual.fillna(fallback).where(operating_income.notna())
+
+
+def perpetual_intangible_capital(
+    investment,
+    *,
+    annual_depreciation_rate,
+    periods_per_year=1,
+    annualized_flows=False,
+    initial_growth_rate=INTANGIBLE_INITIAL_GROWTH_RATE,
+):
+    """Return point-in-time intangible capital and matching-period amortization.
+
+    The stock follows the perpetual-inventory method. The first observable
+    stock is initialized as investment / (growth + depreciation), following
+    the standard empirical intangible-capital convention. TTM observations
+    arrive quarterly but contain annualized flows, so only one quarter of the
+    reported investment enters each quarterly stock update while amortization
+    is returned on a TTM-comparable annual basis.
+
+    Missing investment resets the state instead of silently assuming zero.
+    This matters for R&D-intensive issuers where an absent disclosure is not
+    evidence of no R&D.
+    """
+
+    periods = max(int(periods_per_year), 1)
+    depreciation = float(annual_depreciation_rate)
+    growth = float(initial_growth_rate)
+    if not 0 < depreciation < 1:
+        raise ValueError("annual_depreciation_rate must satisfy 0 < value < 1")
+    if growth < 0:
+        raise ValueError("initial_growth_rate must be non-negative")
+
+    values = pd.to_numeric(investment, errors="coerce")
+    values = values.where(values >= 0)
+    period_depreciation = 1 - (1 - depreciation) ** (1 / periods)
+    capital = pd.Series(math.nan, index=values.index, dtype="float64")
+    amortization = pd.Series(math.nan, index=values.index, dtype="float64")
+    previous_capital = math.nan
+
+    for position, raw_investment in enumerate(values.to_numpy()):
+        if pd.isna(raw_investment):
+            previous_capital = math.nan
+            continue
+
+        annual_investment = (
+            float(raw_investment)
+            if annualized_flows or periods == 1
+            else float(raw_investment) * periods
+        )
+        period_investment = (
+            float(raw_investment) / periods
+            if annualized_flows
+            else float(raw_investment)
+        )
+        if not math.isfinite(previous_capital):
+            previous_capital = annual_investment / (growth + depreciation)
+
+        current_amortization = previous_capital * (
+            depreciation if annualized_flows else period_depreciation
+        )
+        current_capital = (
+            previous_capital * (1 - period_depreciation) + period_investment
+        )
+        capital.iloc[position] = current_capital
+        amortization.iloc[position] = current_amortization
+        previous_capital = current_capital
+
+    return capital, amortization
 
 
 def sanitize_temporal_amount_outliers(df, max_neighbor_multiple=100):
@@ -1131,7 +1209,11 @@ def read_ttm_financials(
         )
     if financial_df.empty:
         return financial_df
-    return add_annual_financial_factors(financial_df, periods_per_year=4)
+    return add_annual_financial_factors(
+        financial_df,
+        periods_per_year=4,
+        annualized_flows=True,
+    )
 
 
 def read_quarterly_financials(
@@ -1166,7 +1248,11 @@ def read_quarterly_financials(
         )
     if financial_df.empty:
         return financial_df
-    return add_annual_financial_factors(financial_df, periods_per_year=4)
+    return add_annual_financial_factors(
+        financial_df,
+        periods_per_year=4,
+        annualized_flows=False,
+    )
 
 
 def yoy_pct(series, periods=1):
@@ -1195,7 +1281,12 @@ def cagr_pct(series, years, periods_per_year=1):
     return result.where((current > 0) & (previous > 0))
 
 
-def add_annual_financial_factors(financial_df, periods_per_year=1):
+def add_annual_financial_factors(
+    financial_df,
+    periods_per_year=1,
+    *,
+    annualized_flows=False,
+):
     df = sanitize_temporal_amount_outliers(financial_df)
     lag = max(int(periods_per_year), 1)
 
@@ -1339,6 +1430,66 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["nopat"] = df["oiadp"] * (1 - nopat_tax_rate)
     df["nopat_quality_flag"] = df["operating_income_source"]
 
+    # Internally generated knowledge and organization capital are expensed by
+    # GAAP even though their benefits extend beyond the current period. Build
+    # after-tax capital stocks with a perpetual-inventory model, then replace
+    # current intangible investment in reported earnings with the economic
+    # amortization of the existing stock. The amortization term is therefore
+    # the observable maintenance-investment proxy; only net investment is
+    # added back to current earning power.
+    intangible_tax_rate = tax_rate_for_nopat(df["tax_rate"], df["oiadp"])
+    after_tax_multiplier = 1 - intangible_tax_rate
+    knowledge_investment = df["xrd"].where(df["xrd"] >= 0) * after_tax_multiplier
+    sgna = numeric_column(df, "SGNA")
+    sgna = sgna.where(sgna >= 0)
+    organization_investment = (
+        sgna
+        * ORGANIZATION_CAPITAL_INVESTMENT_SHARE
+        * after_tax_multiplier
+    )
+    knowledge_capital, knowledge_amortization = perpetual_intangible_capital(
+        knowledge_investment,
+        annual_depreciation_rate=KNOWLEDGE_CAPITAL_DEPRECIATION_RATE,
+        periods_per_year=lag,
+        annualized_flows=annualized_flows,
+    )
+    organization_capital, organization_amortization = perpetual_intangible_capital(
+        organization_investment,
+        annual_depreciation_rate=ORGANIZATION_CAPITAL_DEPRECIATION_RATE,
+        periods_per_year=lag,
+        annualized_flows=annualized_flows,
+    )
+    # R&D is the required anchor. Missing SG&A leaves an R&D-only adjustment;
+    # missing R&D in an intensive sector does not get silently treated as zero.
+    has_knowledge_disclosure = knowledge_investment.notna()
+    df["knowledge_capital"] = knowledge_capital
+    df["organization_capital"] = organization_capital
+    df["intangible_capital"] = (
+        knowledge_capital + organization_capital.fillna(0)
+    ).where(has_knowledge_disclosure)
+    df["intangible_investment"] = (
+        knowledge_investment + organization_investment.fillna(0)
+    ).where(has_knowledge_disclosure)
+    df["intangible_amortization"] = (
+        knowledge_amortization + organization_amortization.fillna(0)
+    ).where(has_knowledge_disclosure)
+    df["net_intangible_investment"] = (
+        df["intangible_investment"] - df["intangible_amortization"]
+    )
+    df["intangible_adjusted_net_income"] = (
+        df["ni_parent"] + df["net_intangible_investment"]
+    )
+    intangible_normalization_window = lag * PVGO_NORMALIZATION_YEARS
+    intangible_normalization_min_periods = lag * PVGO_MIN_NORMALIZATION_YEARS
+    df["normalized_intangible_adjusted_earnings_5y"] = (
+        df["intangible_adjusted_net_income"]
+        .rolling(
+            intangible_normalization_window,
+            min_periods=intangible_normalization_min_periods,
+        )
+        .mean()
+    )
+
     df["avg_parent_equity"] = (df["ceq"] + df["ceq"].shift(lag)) / 2
     df["roe"] = df["ni_parent"] / df["avg_parent_equity"]
     df["roe_growth_1y"] = growth_pct(df["roe"], periods=lag)
@@ -1418,9 +1569,20 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
         / positive_denominator(df["at"])
         * 100
     )
-    df["iroe"] = (
-        df["ni_parent"] + df["xrd"].fillna(0) * (1 - nopat_tax_rate.fillna(0))
-    ) / df["avg_parent_equity"]
+    df["intangible_adjusted_equity"] = df["ceq"] + df["intangible_capital"]
+    df["avg_intangible_adjusted_equity"] = (
+        df["intangible_adjusted_equity"]
+        + df["intangible_adjusted_equity"].shift(lag)
+    ) / 2
+    positive_adjusted_equity = positive_denominator(
+        df["avg_intangible_adjusted_equity"]
+    )
+    df["intangible_adjusted_roe_pct"] = (
+        df["intangible_adjusted_net_income"] / positive_adjusted_equity * 100
+    )
+    # Keep the established IROE factor id, but correct its former one-period
+    # R&D add-back so existing graphs receive the audited adjusted definition.
+    df["iroe"] = df["intangible_adjusted_roe_pct"]
     df["debt"] = df["dltt"].fillna(0) + df["dlc"].fillna(0)
     df["avg_debt"] = ((df["debt"] + df["debt"].shift(lag)) / 2).fillna(df["debt"])
     df["net_debt"] = df["debt"] - df["che"].fillna(0)
@@ -1441,6 +1603,56 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     df["roic_financial"] = df["nopat"] / df["avg_ic_financial"]
     df["roic_operational"] = df["nopat"] / df["avg_ic_operational"]
     df["roic_operational_growth_1y"] = growth_pct(df["roic_operational"], periods=lag)
+
+    # PVGO inputs follow Arcana's P/Q/C/I separation. For the U.S. filing
+    # universe P and Q are observable only as combined reported revenue
+    # growth. C is represented by a cycle-normalized operating margin, and I
+    # by incremental invested capital per incremental revenue. Calculate at
+    # the financial-period level so daily forward-filled rows are not
+    # overweighted in the normalization window.
+    normalization_window = lag * PVGO_NORMALIZATION_YEARS
+    normalization_min_periods = lag * PVGO_MIN_NORMALIZATION_YEARS
+    normalized_operating_margin = df["opm"].rolling(
+        normalization_window,
+        min_periods=normalization_min_periods,
+    ).mean()
+    df["normalized_operating_margin_5y"] = normalized_operating_margin
+    normalized_nopat_margin = (df["nopat"] / positive_denominator(df["sale"])).rolling(
+        normalization_window,
+        min_periods=normalization_min_periods,
+    ).mean()
+    df["normalized_nopat_5y"] = df["sale"] * normalized_nopat_margin
+    df["normalized_earnings_5y"] = df["ni_parent"].rolling(
+        normalization_window,
+        min_periods=normalization_min_periods,
+    ).mean()
+    df["normalized_nopat_growth_3y_pct"] = cagr_pct(
+        df["normalized_nopat_5y"],
+        years=PVGO_GROWTH_LOOKBACK_YEARS,
+        periods_per_year=lag,
+    )
+
+    incremental_sales = df["sale"] - df["sale"].shift(lag)
+    incremental_invested_capital = (
+        df["invested_capital_operational"]
+        - df["invested_capital_operational"].shift(lag)
+    )
+    prior_invested_capital = positive_denominator(
+        df["invested_capital_operational"].shift(lag).abs()
+    )
+    material_incremental_capital = incremental_invested_capital.where(
+        incremental_invested_capital.abs() >= prior_invested_capital * 0.01
+    )
+    df["incremental_investment_rate_pct"] = (
+        material_incremental_capital
+        / positive_denominator(incremental_sales)
+        * 100
+    )
+    df["roiic_pct"] = (
+        (df["nopat"] - df["nopat"].shift(lag))
+        / material_incremental_capital
+        * 100
+    )
 
     df["asset_turnover"] = df["sale"] / df["avg_assets"]
     df["total_asset_turnover"] = df["asset_turnover"]
@@ -1465,6 +1677,19 @@ def add_annual_financial_factors(financial_df, periods_per_year=1):
     )
     positive_shareholder_return = shareholder_return_amount.where(shareholder_return_amount > 0)
     fcf_after_dividends = df["fcf"] - df["div_paid"].fillna(0)
+    diluted_shares = first_positive_value_frame(
+        df,
+        "DILUTED_SHARES",
+        "BASIC_SHARES",
+        "COMMON_SHARES_OUTSTANDING",
+        "shares",
+    )
+    df["intangible_adjusted_eps"] = (
+        df["intangible_adjusted_net_income"] / diluted_shares
+    )
+    df["normalized_intangible_adjusted_eps"] = (
+        df["normalized_intangible_adjusted_earnings_5y"] / diluted_shares
+    )
     eps = first_value_frame(df, "BASIC_EPS", "DILUTED_EPS")
     eps = eps.fillna(df["ni_parent"] / numeric_column(df, "shares"))
     retained_earnings = first_value_frame(
@@ -1823,29 +2048,27 @@ def add_us_dividend_factors(daily_df, stock_code, market_data_cache=None):
 
     events["dividend"] = pd.to_numeric(events["dividend"], errors="coerce")
     events = events.sort_values("trade_date")
-    event_series = (
-        events.groupby("trade_date")["dividend"]
-        .sum()
-        .reindex(df["trade_date"])
-        .fillna(0)
-    )
+    trade_dates = pd.DatetimeIndex(df["trade_date"])
+    dividend_events = events.groupby("trade_date")["dividend"].sum()
+    event_index = dividend_events.index.union(trade_dates).sort_values()
+    event_series = dividend_events.reindex(event_index).fillna(0)
     payout_ratio = (
         pd.to_numeric(events["payout_ratio"], errors="coerce")
         if "payout_ratio" in events.columns
         else pd.Series([math.nan] * len(events), index=events.index)
     )
     if payout_ratio.notna().any():
-        payout_series = (
+        payout_events = (
             events.assign(_payout_ratio=payout_ratio)
             .dropna(subset=["_payout_ratio"])
             .groupby("trade_date")["_payout_ratio"]
             .last()
-            .reindex(df["trade_date"])
-            .ffill()
         )
+        payout_index = payout_events.index.union(trade_dates).sort_values()
+        payout_series = payout_events.reindex(payout_index).ffill().reindex(trade_dates)
     else:
         payout_series = pd.Series([math.nan] * len(df), index=df.index)
-    rolling_dps = event_series.rolling("365D", min_periods=1).sum()
+    rolling_dps = event_series.rolling("365D", min_periods=1).sum().reindex(trade_dates)
     df["dvpsx"] = rolling_dps.to_numpy()
     df.loc[df["dvpsx"] <= 0, "dvpsx"] = math.nan
     df["dvpsp"] = math.nan
@@ -3359,6 +3582,145 @@ def add_wacc_factors(
     return df
 
 
+def add_pvgo_factors(
+    daily_df,
+    *,
+    cap_years=PVGO_CAP_YEARS,
+    max_growth_rate=PVGO_MAX_GROWTH_RATE,
+):
+    """Add market-implied and P/Q/C/I-justified PVGO factors.
+
+    ``pvgo_pct`` reproduces the enterprise-value method used in the attached
+    Mauboussin/Callahan paper. ``equity_pvgo_pct`` is the separate equity
+    formulation intended for financial companies. ``pvgo_gap_pct`` compares
+    market PVGO with a finite-CAP value of future investments derived from the
+    Arcana P/Q/C/I inputs.
+    """
+
+    cap_years = int(cap_years)
+    if cap_years < 1:
+        raise ValueError("cap_years must be at least 1")
+    max_growth_rate = float(max_growth_rate)
+    if not 0 < max_growth_rate < 1:
+        raise ValueError("max_growth_rate must satisfy 0 < value < 1")
+
+    df = daily_df.copy()
+    market_cap = positive_denominator(numeric_column(df, "market_cap"))
+    enterprise_value = positive_denominator(numeric_column(df, "enterprise_value"))
+    nopat = numeric_column(df, "nopat")
+    normalized_nopat = numeric_column(df, "normalized_nopat_5y")
+    normalized_earnings = numeric_column(df, "normalized_earnings_5y")
+    sales = positive_denominator(numeric_column(df, "sale"))
+    wacc = numeric_column(df, "wacc") / 100
+    cost_of_equity = numeric_column(df, "cost_of_equity") / 100
+    valid_wacc = wacc.where((wacc > 0) & (wacc < 1))
+    valid_cost_of_equity = cost_of_equity.where(
+        (cost_of_equity > 0) & (cost_of_equity < 1)
+    )
+    net_debt = numeric_column(df, "net_debt").fillna(
+        enterprise_value - market_cap
+    )
+
+    steady_state_ev = nopat / valid_wacc
+    steady_state_equity = steady_state_ev - net_debt
+    market_pvgo = market_cap - steady_state_equity
+    df["pvgo_pct"] = market_pvgo / market_cap * 100
+    df["pvgo_ev_pct"] = (enterprise_value - steady_state_ev) / enterprise_value * 100
+    df["pvgo_expectation_factor"] = -df["pvgo_pct"]
+
+    normalized_steady_state_ev = normalized_nopat / valid_wacc
+    normalized_steady_state_equity = normalized_steady_state_ev - net_debt
+    normalized_market_pvgo = market_cap - normalized_steady_state_equity
+    df["normalized_pvgo_pct"] = normalized_market_pvgo / market_cap * 100
+
+    # Debt is an operating input rather than ordinary financing for banks and
+    # similar firms. Keep the equity formulation separate so the FactorLab
+    # graph can route or exclude Financials explicitly.
+    steady_state_financial_equity = normalized_earnings / valid_cost_of_equity
+    df["equity_pvgo_pct"] = (
+        (market_cap - steady_state_financial_equity) / market_cap * 100
+    )
+
+    roiic = numeric_column(df, "roiic_pct") / 100
+    df["roiic_wacc_spread"] = numeric_column(df, "roiic_pct") - numeric_column(
+        df,
+        "wacc",
+    )
+    growth_rate = (
+        numeric_column(df, "normalized_nopat_growth_3y_pct") / 100
+    ).clip(lower=0, upper=max_growth_rate)
+    investment_rate = (
+        numeric_column(df, "incremental_investment_rate_pct") / 100
+    ).clip(lower=0, upper=5)
+    justified_pvgo = pd.Series(0.0, index=df.index, dtype="float64")
+    valid_justified = (
+        normalized_nopat.gt(0)
+        & sales.gt(0)
+        & growth_rate.gt(0)
+        & investment_rate.notna()
+        & roiic.gt(valid_wacc)
+    )
+    for year in range(1, cap_years + 1):
+        growth_multiplier = (1 + growth_rate).pow(year - 1)
+        incremental_nopat = normalized_nopat * growth_multiplier * growth_rate
+        incremental_sales = sales * growth_multiplier * growth_rate
+        required_investment = incremental_sales * investment_rate
+        opportunity_npv = incremental_nopat / valid_wacc - required_investment
+        justified_pvgo = justified_pvgo + opportunity_npv.clip(lower=0) / (
+            1 + valid_wacc
+        ).pow(year)
+    justified_pvgo = justified_pvgo.where(valid_justified)
+    df["justified_pvgo_pct"] = justified_pvgo / market_cap * 100
+    df["pvgo_gap_pct"] = df["justified_pvgo_pct"] - df["pvgo_pct"]
+
+    positive_steady_state_ev = steady_state_ev.where(steady_state_ev > 0)
+    steady_state_growth = growth_pct(positive_steady_state_ev, periods=252)
+    market_cap_growth = growth_pct(market_cap, periods=252)
+    df["pvgo_compression_pct"] = steady_state_growth - market_cap_growth
+    df["pvgo_change_1y_pctp"] = df["pvgo_pct"] - df["pvgo_pct"].shift(252)
+
+    # Equity PVGO based on intangible-adjusted EPS. At the aggregate level
+    # P - EPS/r is exactly market_cap - adjusted_net_income/r, while avoiding
+    # split and diluted-versus-outstanding share-count mismatches.
+    adjusted_earnings = numeric_column(df, "intangible_adjusted_net_income")
+    normalized_adjusted_earnings = numeric_column(
+        df,
+        "normalized_intangible_adjusted_earnings_5y",
+    )
+    adjusted_steady_state_equity = adjusted_earnings / valid_cost_of_equity
+    normalized_adjusted_steady_state_equity = (
+        normalized_adjusted_earnings / valid_cost_of_equity
+    )
+    df["intangible_adjusted_pvgo_pct"] = (
+        (market_cap - adjusted_steady_state_equity) / market_cap * 100
+    )
+    df["normalized_intangible_adjusted_pvgo_pct"] = (
+        (market_cap - normalized_adjusted_steady_state_equity) / market_cap * 100
+    )
+    df["intangible_adjusted_roe_spread_pct"] = (
+        numeric_column(df, "intangible_adjusted_roe_pct")
+        - numeric_column(df, "cost_of_equity")
+    )
+    df["intangible_adjusted_pvgo_gap_pct"] = (
+        df["justified_pvgo_pct"]
+        - df["normalized_intangible_adjusted_pvgo_pct"]
+    )
+    positive_adjusted_steady_state_equity = (
+        normalized_adjusted_steady_state_equity.where(
+            normalized_adjusted_steady_state_equity > 0
+        )
+    )
+    df["intangible_adjusted_pvgo_compression_pct"] = (
+        growth_pct(positive_adjusted_steady_state_equity, periods=252)
+        - market_cap_growth
+    )
+    df["intangible_adjusted_pvgo_change_1y_pctp"] = (
+        df["normalized_intangible_adjusted_pvgo_pct"]
+        - df["normalized_intangible_adjusted_pvgo_pct"].shift(252)
+    )
+    return df
+
+
 def add_equity_valuation_factors(
     daily_df,
     *,
@@ -3806,6 +4168,7 @@ def create_stock_factor_dataframe(
         wacc_assumptions_path=wacc_assumptions_path,
         wacc_benchmark_path=wacc_benchmark_path,
     )
+    daily_df = add_pvgo_factors(daily_df)
     daily_df = add_equity_valuation_factors(
         daily_df,
         rim_decay_factor=rim_decay_factor,
@@ -3847,6 +4210,13 @@ def preferred_factor_columns():
         "cogs",
         "dp",
         "xrd",
+        "knowledge_capital",
+        "organization_capital",
+        "intangible_capital",
+        "intangible_investment",
+        "intangible_amortization",
+        "net_intangible_investment",
+        "intangible_adjusted_net_income",
         "xint",
         "oancf",
         "capx",
@@ -3914,6 +4284,11 @@ def preferred_factor_columns():
         "rnd_margin",
         "tax_rate",
         "nopat",
+        "normalized_operating_margin_5y",
+        "normalized_nopat_5y",
+        "normalized_earnings_5y",
+        "normalized_intangible_adjusted_earnings_5y",
+        "normalized_nopat_growth_3y_pct",
         "roe",
         "avg_parent_equity",
         "roe_growth_1y",
@@ -3924,9 +4299,16 @@ def preferred_factor_columns():
         "inventory_growth_1y_pct",
         "net_external_financing_pct",
         "iroe",
+        "intangible_adjusted_equity",
+        "avg_intangible_adjusted_equity",
+        "intangible_adjusted_roe_pct",
+        "intangible_adjusted_roe_spread_pct",
         "roic_financial",
         "roic_operational",
         "roic_operational_growth_1y",
+        "incremental_investment_rate_pct",
+        "roiic_pct",
+        "roiic_wacc_spread",
         "roic_wacc_spread",
         "economic_profit",
         "economic_profit_yield",
@@ -4009,6 +4391,22 @@ def preferred_factor_columns():
         "ebitda_to_ev",
         "ev_to_ebitda",
         "ev_to_nopat",
+        "pvgo_pct",
+        "pvgo_ev_pct",
+        "pvgo_expectation_factor",
+        "normalized_pvgo_pct",
+        "equity_pvgo_pct",
+        "justified_pvgo_pct",
+        "pvgo_gap_pct",
+        "pvgo_compression_pct",
+        "pvgo_change_1y_pctp",
+        "intangible_adjusted_eps",
+        "normalized_intangible_adjusted_eps",
+        "intangible_adjusted_pvgo_pct",
+        "normalized_intangible_adjusted_pvgo_pct",
+        "intangible_adjusted_pvgo_gap_pct",
+        "intangible_adjusted_pvgo_compression_pct",
+        "intangible_adjusted_pvgo_change_1y_pctp",
         "na_5",
         "na_20",
         "na_50",

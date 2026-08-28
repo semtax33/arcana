@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import contextlib
+import functools
 import io
 import json
 import math
@@ -308,18 +309,45 @@ def _find_company_facts_by_label(
     facts: dict[str, Any],
     rule: dict[str, Any],
 ) -> list[tuple[str, str, dict[str, Any]]]:
+    label_patterns = _compile_patterns(rule.get("label_patterns", []))
+    if not label_patterns:
+        return []
+    exclude_patterns = _compile_patterns(rule.get("label_exclude_patterns", []))
+    excluded_namespaces = {
+        safe_str(item).strip()
+        for item in (rule.get("label_exclude_namespaces") or DEFAULT_LABEL_EXCLUDE_NAMESPACES)
+        if safe_str(item).strip()
+    }
+    configured_namespaces = rule.get("label_namespaces")
+    allowed_namespaces = (
+        {
+            safe_str(item).strip()
+            for item in configured_namespaces
+            if safe_str(item).strip()
+        }
+        if configured_namespaces
+        else None
+    )
+
     matches: list[tuple[str, str, dict[str, Any]]] = []
     for namespace, ns_facts in facts.items():
-        if not isinstance(ns_facts, dict):
+        namespace_text = safe_str(namespace)
+        if (
+            not isinstance(ns_facts, dict)
+            or namespace_text in excluded_namespaces
+            or (allowed_namespaces is not None and namespace_text not in allowed_namespaces)
+        ):
             continue
         for tag, fact in ns_facts.items():
-            if isinstance(fact, dict) and _fact_matches_label_rule(
-                namespace=safe_str(namespace),
-                tag=safe_str(tag),
-                fact=fact,
-                rule=rule,
-            ):
-                matches.append((safe_str(namespace), safe_str(tag), fact))
+            if not isinstance(fact, dict):
+                continue
+            tag_text = safe_str(tag)
+            label_text = _label_text_for_fact(namespace_text, tag_text, fact)
+            if not any(pattern.search(label_text) for pattern in label_patterns):
+                continue
+            if any(pattern.search(label_text) for pattern in exclude_patterns):
+                continue
+            matches.append((namespace_text, tag_text, fact))
     return matches
 
 
@@ -503,7 +531,16 @@ def extract_companyfacts_candidates_from_data(
 
             for namespace, tag, fact in matched_facts:
                 for _, unit_rows in _fact_units_for_rule(fact, safe_str(rule.get("canonical_id"))):
-                    for unit_row in _select_current_companyfacts_unit_rows(unit_rows):
+                    ranged_unit_rows = [
+                        unit_row
+                        for unit_row in unit_rows
+                        if _companyfacts_unit_in_year_range(
+                            unit_row,
+                            start_year=start_year,
+                            end_year=end_year,
+                        )
+                    ]
+                    for unit_row in _select_current_companyfacts_unit_rows(ranged_unit_rows):
                         candidate = _candidate_from_companyfacts_unit(
                             symbol=symbol,
                             cik=cik,
@@ -522,6 +559,21 @@ def extract_companyfacts_candidates_from_data(
                             candidates.append(candidate)
 
     return candidates
+
+
+def _companyfacts_unit_in_year_range(
+    unit_row: dict[str, Any],
+    *,
+    start_year: int,
+    end_year: int,
+) -> bool:
+    if safe_str(unit_row.get("form")).strip().upper() not in ALLOWED_SEC_FORMS:
+        return False
+    try:
+        fiscal_year = int(unit_row.get("fy"))
+    except Exception:
+        return False
+    return start_year <= fiscal_year <= end_year
 
 
 def companyfacts_data_has_usable_facts(data: dict[str, Any]) -> bool:
@@ -747,9 +799,19 @@ def extract_companyfacts_files(
     return results
 
 
+@functools.lru_cache(maxsize=4096)
+def _compile_pattern_tuple(values: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
+    return tuple(re.compile(value) for value in values)
+
+
 def _compile_patterns(values: Any) -> list[re.Pattern[str]]:
     raw_values = values if isinstance(values, list) else [values]
-    return [re.compile(safe_str(value)) for value in raw_values if safe_str(value).strip()]
+    normalized = tuple(
+        safe_str(value)
+        for value in raw_values
+        if safe_str(value).strip()
+    )
+    return list(_compile_pattern_tuple(normalized))
 
 
 def _notes_rule_tag_patterns(rule: dict[str, Any]) -> list[re.Pattern[str]]:
@@ -881,6 +943,20 @@ def extract_notes_candidates(
         return []
 
     candidates: list[SecFactCandidate] = []
+    pattern_tag_match_cache: dict[str, bool] = {}
+
+    def matches_any_pattern_rule(tag: str) -> bool:
+        cached = pattern_tag_match_cache.get(tag)
+        if cached is not None:
+            return cached
+        matched = any(
+            pattern.search(tag)
+            for _, tag_patterns in pattern_rules
+            for pattern in tag_patterns
+        )
+        pattern_tag_match_cache[tag] = matched
+        return matched
+
     for notes_dir in sorted([path for path in root.iterdir() if path.is_dir()]):
         sub = _load_notes_submissions(notes_dir, ciks=ciks, start_year=start_year, end_year=end_year)
         if sub.empty:
@@ -904,12 +980,7 @@ def extract_notes_candidates(
             tag_series = chunk["tag"].map(normalize_tag_name)
             tag_mask = tag_series.isin(needed_tags)
             if pattern_rules:
-                pattern_mask = pd.Series(False, index=chunk.index)
-                for _, tag_patterns in pattern_rules:
-                    pattern_mask |= tag_series.map(
-                        lambda value: any(pattern.search(value) for pattern in tag_patterns)
-                    )
-                tag_mask |= pattern_mask
+                tag_mask |= tag_series.map(matches_any_pattern_rule)
 
             part = chunk.loc[
                 chunk["adsh"].isin(needed_adsh)
@@ -1495,8 +1566,8 @@ def write_report_metadata(candidates: list[SecFactCandidate], path: str | Path =
                 "filing_system": "SEC",
                 "fiscal_year": candidate.fiscal_year,
                 "fiscal_month": candidate.fiscal_month,
-                "period_end_date": candidate.period_end,
-                "report_date": candidate.filed or candidate.period_end,
+                "period_end_date": normalize_sec_date(candidate.period_end),
+                "report_date": normalize_sec_date(candidate.filed or candidate.period_end),
                 "rcept_no": candidate.accn,
                 "report_name": candidate.form,
                 "source_type": "statement",
@@ -1507,6 +1578,18 @@ def write_report_metadata(candidates: list[SecFactCandidate], path: str | Path =
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(path, index=False, encoding="utf-8-sig", quoting=csv.QUOTE_ALL)
+
+
+def normalize_sec_date(value: Any) -> str:
+    text = safe_str(value).strip()
+    if not text:
+        return ""
+    if re.fullmatch(r"\d{8}", text):
+        text = f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+    parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return ""
+    return parsed.date().isoformat()
 
 
 def resolve_companyfacts_files(

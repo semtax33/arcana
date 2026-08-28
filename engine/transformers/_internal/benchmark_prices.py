@@ -42,10 +42,12 @@ DEFAULT_BENCHMARK_INDEX_CODES = {
 }
 DEFAULT_YFINANCE_BENCHMARK_TICKERS = {
     "US_NASDAQ": "^IXIC",
+    "US_QQQ": "QQQ",
     "US_SP500": "^GSPC",
 }
 YFINANCE_BENCHMARK_OUTPUT_NAMES = {
     "US_NASDAQ": "us_nasdaq.csv",
+    "US_QQQ": "us_qqq.csv",
     "US_SP500": "us_sp500.csv",
 }
 
@@ -57,6 +59,8 @@ BENCHMARK_ID_ALIASES = {
     "NASDAQ": "US_NASDAQ",
     "NASDAQCOMPOSITE": "US_NASDAQ",
     "USNASDAQ": "US_NASDAQ",
+    "QQQ": "US_QQQ",
+    "USQQQ": "US_QQQ",
 }
 
 BENCHMARK_METADATA = {
@@ -76,6 +80,12 @@ BENCHMARK_METADATA = {
         "country": "US",
         "market_mic": "XNAS",
         "benchmark_family": "NASDAQ",
+        "currency": "USD",
+    },
+    "US_QQQ": {
+        "country": "US",
+        "market_mic": "XNAS",
+        "benchmark_family": "QQQ",
         "currency": "USD",
     },
     "US_SP500": {

@@ -94,6 +94,12 @@ const FACTORS = [
   "csho",
   "mcap_mil",
   "enterprise_value",
+  "gross_profitability_pct",
+  "percent_total_accruals_pct",
+  "book_equity_growth_1y_pct",
+  "current_operating_assets_change_pct",
+  "capex_growth_2y_pct",
+  "net_debt_financing_pct",
   "gpm",
   "opm",
   "ebitda_margin",
@@ -123,6 +129,8 @@ const FACTORS = [
   "rdsr_pct",
   "eps_yoy_pct",
   "asset_yoy_pct",
+  "inventory_growth_1y_pct",
+  "net_external_financing_pct",
   "cfo_yoy_pct",
   "fcf_yoy_pct",
   "ffo_yoy_pct",
@@ -300,6 +308,15 @@ function first(row, ...cols) {
   return null;
 }
 
+function firstPositiveMagnitude(row, ...cols) {
+  for (const col of cols) {
+    if (isCovered(row[col]) && Math.abs(row[col]) > 0) {
+      return Math.abs(row[col]);
+    }
+  }
+  return null;
+}
+
 function fill0(value) {
   return isCovered(value) ? value : 0;
 }
@@ -419,6 +436,7 @@ function addAnnualFinancialFactors(rows) {
   for (let i = 0; i < rows.length; i++) {
     const source = rows[i];
     const prev = i > 0 ? result[i - 1] : {};
+    const prev2 = i > 1 ? result[i - 2] : {};
     const r = { ...source };
     r.at = source.TOTAL_ASSETS ?? null;
     r.seq = source.TOTAL_EQUITY ?? null;
@@ -441,17 +459,23 @@ function addAnnualFinancialFactors(rows) {
     );
     r.dltt = first(source, "LONG_TERM_DEBT", "LONG_TERM_DEBT_FALLBACK");
     r.dlc = source.SHORT_TERM_DEBT ?? null;
-    r.che =
-      fill0(source.CASH_AND_EQUIVALENTS) +
-      fill0(source.SHORT_TERM_FINANCIAL_ASSETS);
+    const hasDisclosedCashAssets =
+      isCovered(source.CASH_AND_EQUIVALENTS) ||
+      isCovered(source.SHORT_TERM_FINANCIAL_ASSETS);
+    const disclosedCashAssets = hasDisclosedCashAssets
+      ? fill0(source.CASH_AND_EQUIVALENTS) +
+        fill0(source.SHORT_TERM_FINANCIAL_ASSETS)
+      : null;
+    r.che = isCovered(disclosedCashAssets) ? disclosedCashAssets : 0;
     r.sale = source.REVENUE ?? null;
     r.ni = source.NET_INCOME ?? null;
     r.ni_parent = first(source, "NET_INCOME_PARENT", "NET_INCOME");
     r.oiadp = source.OPERATING_INCOME ?? null;
     r.cogs = source.COGS ?? null;
     r.xrd = source.RND ?? null;
-    r.xint = first(
+    r.xint = firstPositiveMagnitude(
       source,
+      "INTEREST_EXPENSE",
       "INTEREST_EXPENSE_FALLBACK",
       "INT_PAID",
       "INTEREST_PAID_FALLBACK",
@@ -470,6 +494,8 @@ function addAnnualFinancialFactors(rows) {
     r.oibdp = first(source, "EBITDA");
     if (!isCovered(r.oibdp)) r.oibdp = add(r.oiadp, r.dp);
     r.oancf = source.CFO ?? null;
+    r.ivncf = source.CFI ?? null;
+    r.fincf = source.CFF ?? null;
     const capexPpe = isCovered(source.CAPEX_PPE)
       ? Math.abs(source.CAPEX_PPE)
       : null;
@@ -484,8 +510,22 @@ function addAnnualFinancialFactors(rows) {
     r.ffo = add(r.ni, fill0(r.dp));
     r.sstk = source.EQ_ISSUE ?? null;
     r.prstkc = source.BUYBACK ?? null;
+    r.div_paid = isCovered(source.DIV_PAID)
+      ? Math.abs(source.DIV_PAID)
+      : null;
     r.debt_issue = source.DEBT_ISSUE ?? null;
     r.debt_repay = source.DEBT_REPAY ?? null;
+    r.net_borrowing = first(source, "DEBT_NET_BORROWING");
+    const hasDerivedNetBorrowing =
+      isCovered(r.debt_issue) || isCovered(r.debt_repay);
+    const strictNetBorrowing = isCovered(r.net_borrowing)
+      ? r.net_borrowing
+      : hasDerivedNetBorrowing
+        ? fill0(r.debt_issue) - fill0(r.debt_repay)
+        : null;
+    if (!isCovered(r.net_borrowing)) {
+      r.net_borrowing = fill0(r.debt_issue) - fill0(r.debt_repay);
+    }
 
     r.avg_assets =
       isCovered(r.at) && isCovered(prev.at) ? (r.at + prev.at) / 2 : null;
@@ -503,6 +543,7 @@ function addAnnualFinancialFactors(rows) {
       isCovered(r.ap) && isCovered(prev.ap) ? (r.ap + prev.ap) / 2 : null;
 
     r.gpm = div(r.gross_profit, r.sale);
+    r.gross_profitability_pct = mul(div(r.gross_profit, r.at), 100);
     r.opm = div(r.oiadp, r.sale);
     r.ebitda_margin = div(r.oibdp, r.sale);
     r.npm = div(r.ni, r.sale);
@@ -524,6 +565,53 @@ function addAnnualFinancialFactors(rows) {
       isCovered(r.ceq) && isCovered(prev.ceq) ? (r.ceq + prev.ceq) / 2 : null;
     r.roe = div(r.ni_parent, r.avg_parent_equity);
     r.roa = div(r.ni, r.avg_assets);
+    const totalAccrualCashFlow = add(
+      add(add(sub(r.prstkc, r.sstk), r.div_paid), r.oancf),
+      add(r.fincf, r.ivncf),
+    );
+    r.percent_total_accruals_pct =
+      isCovered(r.ni) && Math.abs(r.ni) > 0
+        ? mul(div(sub(r.ni, totalAccrualCashFlow), Math.abs(r.ni)), 100)
+        : null;
+    r.book_equity_growth_1y_pct =
+      isCovered(r.ceq) && r.ceq > 0 && isCovered(prev.ceq) && prev.ceq > 0
+        ? pctYoy(r.ceq, prev.ceq)
+        : null;
+    r.current_operating_assets = sub(r.act, disclosedCashAssets);
+    r.current_operating_assets_change_pct =
+      isCovered(r.current_operating_assets) &&
+      isCovered(prev.current_operating_assets) &&
+      isCovered(r.avg_assets) &&
+      r.avg_assets > 0
+        ? mul(
+            div(
+              r.current_operating_assets - prev.current_operating_assets,
+              r.avg_assets,
+            ),
+            100,
+          )
+        : null;
+    const annualPpeChange = sub(r.ppent, prev.ppent);
+    r.oap_capex = isCovered(capexPpe) ? capexPpe : annualPpeChange;
+    r.capex_growth_2y_pct =
+      isCovered(r.oap_capex) &&
+      r.oap_capex >= 0 &&
+      isCovered(prev2.oap_capex) &&
+      prev2.oap_capex > 0
+        ? pctYoy(r.oap_capex, prev2.oap_capex)
+        : null;
+    r.net_debt_financing_pct =
+      isCovered(strictNetBorrowing) &&
+      isCovered(r.avg_assets) &&
+      r.avg_assets > 0
+        ? mul(div(strictNetBorrowing, r.avg_assets), 100)
+        : null;
+    if (
+      isCovered(r.net_debt_financing_pct) &&
+      Math.abs(r.net_debt_financing_pct) > 100
+    ) {
+      r.net_debt_financing_pct = null;
+    }
     r.iroe = div(
       add(r.ni_parent, fill0(r.xrd) * (1 - fill0(nopatTaxRate))),
       r.avg_parent_equity,
@@ -593,17 +681,31 @@ function addAnnualFinancialFactors(rows) {
     r.eps = first(source, "BASIC_EPS", "DILUTED_EPS");
     if (!isCovered(r.eps)) r.eps = div(r.ni_parent, source.shares ?? null);
     r.eps_yoy_pct = pctYoy(r.eps, prev.eps);
-    r.asset_yoy_pct = pctYoy(r.at, prev.at);
+    r.asset_yoy_pct =
+      isCovered(r.at) && r.at > 0 && isCovered(prev.at) && prev.at > 0
+        ? pctYoy(r.at, prev.at)
+        : null;
+    r.inventory_growth_1y_pct =
+      isCovered(r.invt) &&
+      r.invt >= 0 &&
+      isCovered(prev.invt) &&
+      prev.invt > 0
+        ? pctYoy(r.invt, prev.invt)
+        : null;
+    r.net_external_financing_pct = mul(
+      div(
+        add(sub(sub(r.sstk, r.div_paid), r.prstkc), r.net_borrowing),
+        r.at,
+      ),
+      100,
+    );
     r.cfo_yoy_pct = pctYoy(r.oancf, prev.oancf);
     r.fcf_yoy_pct = pctYoy(r.fcf, prev.fcf);
     r.ffo_yoy_pct = pctYoy(r.ffo, prev.ffo);
     r.net_debt_to_ebitda = div(r.net_debt, r.oibdp);
     r.fc_to_ndr = div(r.fcf, r.net_debt);
-    r.icr_times = div(r.oancf, isCovered(r.xint) ? Math.abs(r.xint) : null);
-    r.interest_coverage = div(
-      r.oiadp,
-      isCovered(r.xint) ? Math.abs(r.xint) : null,
-    );
+    r.icr_times = div(r.oancf, r.xint);
+    r.interest_coverage = div(r.oiadp, r.xint);
     r.current_ratio = div(r.act, r.lct);
     r.debt_to_equity = div(r.debt, r.seq);
     r.cash_to_debt = div(r.che, r.debt);

@@ -124,6 +124,16 @@ VALUATION_FACTORS = {
     "rim_upside_potential",
     "kr_price_to_target_price",
     "us_price_to_target_price",
+    "pvgo_pct",
+    "pvgo_ev_pct",
+    "pvgo_expectation_factor",
+    "normalized_pvgo_pct",
+    "equity_pvgo_pct",
+    "justified_pvgo_pct",
+    "pvgo_gap_pct",
+    "intangible_adjusted_pvgo_pct",
+    "normalized_intangible_adjusted_pvgo_pct",
+    "intangible_adjusted_pvgo_gap_pct",
 }
 
 QUALITY_FACTORS = {
@@ -149,9 +159,14 @@ QUALITY_FACTORS = {
     "roa",
     "accrual_ratio",
     "iroe",
+    "intangible_adjusted_roe_pct",
+    "intangible_adjusted_roe_spread_pct",
     "roic_financial",
     "roic_operational",
     "roic_wacc_spread",
+    "normalized_operating_margin_5y",
+    "roiic_pct",
+    "roiic_wacc_spread",
     "economic_profit",
     "asset_turnover",
     "total_asset_turnover",
@@ -178,6 +193,12 @@ GROWTH_FACTORS = {
     "fcf_margin_growth_1y",
     "delta_economic_profit",
     "roic_wacc_spread_growth_1y",
+    "normalized_nopat_growth_3y_pct",
+    "incremental_investment_rate_pct",
+    "pvgo_compression_pct",
+    "pvgo_change_1y_pctp",
+    "intangible_adjusted_pvgo_compression_pct",
+    "intangible_adjusted_pvgo_change_1y_pctp",
     "net_income_growth_1y",
     "net_income_growth_3y",
     "net_income_growth_5y",
@@ -319,10 +340,57 @@ FUNDAMENTAL_AMOUNT_FACTORS = {
     "prstkc",
     "net_borrowing",
     "nopat",
+    "normalized_nopat_5y",
+    "normalized_earnings_5y",
+    "knowledge_capital",
+    "organization_capital",
+    "intangible_capital",
+    "intangible_investment",
+    "intangible_amortization",
+    "net_intangible_investment",
+    "intangible_adjusted_net_income",
+    "normalized_intangible_adjusted_earnings_5y",
+    "intangible_adjusted_equity",
+    "avg_intangible_adjusted_equity",
     "working_capital",
 }
 
 FACTOR_NAME_OVERRIDES = {
+    "normalized_operating_margin_5y": "Normalized Operating Margin 5Y",
+    "normalized_nopat_5y": "Normalized NOPAT 5Y",
+    "normalized_earnings_5y": "Normalized Earnings 5Y",
+    "normalized_nopat_growth_3y_pct": "Normalized NOPAT Growth 3Y",
+    "incremental_investment_rate_pct": "Incremental Investment Rate",
+    "roiic_pct": "ROIIC",
+    "roiic_wacc_spread": "ROIIC - WACC Spread",
+    "pvgo_pct": "PVGO / Market Cap",
+    "pvgo_ev_pct": "PVGO / Enterprise Value",
+    "pvgo_expectation_factor": "PVGO Expectation Factor",
+    "normalized_pvgo_pct": "Normalized PVGO / Market Cap",
+    "equity_pvgo_pct": "Equity PVGO / Market Cap",
+    "justified_pvgo_pct": "Justified PVGO / Market Cap",
+    "pvgo_gap_pct": "PVGO Gap",
+    "pvgo_compression_pct": "PVGO Compression 1Y",
+    "pvgo_change_1y_pctp": "PVGO Change 1Y",
+    "knowledge_capital": "Capitalized Knowledge Capital",
+    "organization_capital": "Capitalized Organization Capital",
+    "intangible_capital": "Capitalized Intangible Capital",
+    "intangible_investment": "After-tax Intangible Investment",
+    "intangible_amortization": "Intangible Amortization",
+    "net_intangible_investment": "Net Intangible Investment",
+    "intangible_adjusted_net_income": "Intangible-adjusted Net Income",
+    "normalized_intangible_adjusted_earnings_5y": "Normalized Intangible-adjusted Earnings 5Y",
+    "intangible_adjusted_eps": "Intangible-adjusted EPS",
+    "normalized_intangible_adjusted_eps": "Normalized Intangible-adjusted EPS",
+    "intangible_adjusted_equity": "Intangible-adjusted Equity",
+    "avg_intangible_adjusted_equity": "Average Intangible-adjusted Equity",
+    "intangible_adjusted_roe_pct": "Intangible-adjusted ROE",
+    "intangible_adjusted_roe_spread_pct": "Intangible-adjusted ROE - Cost of Equity",
+    "intangible_adjusted_pvgo_pct": "Intangible-adjusted PVGO / Market Cap",
+    "normalized_intangible_adjusted_pvgo_pct": "Normalized Intangible-adjusted PVGO / Market Cap",
+    "intangible_adjusted_pvgo_gap_pct": "Intangible-adjusted PVGO Gap",
+    "intangible_adjusted_pvgo_compression_pct": "Intangible-adjusted PVGO Compression 1Y",
+    "intangible_adjusted_pvgo_change_1y_pctp": "Intangible-adjusted PVGO Change 1Y",
     "gross_profitability_pct": "Gross Profitability",
     "percent_total_accruals_pct": "Percent Total Accruals",
     "book_equity_growth_1y_pct": "Book Equity Growth 1Y",
@@ -408,6 +476,50 @@ FACTOR_NAME_OVERRIDES = {
 }
 
 FACTOR_DESCRIPTION_OVERRIDES = {
+    "pvgo_pct": (
+        "시가총액에서 NOPAT/WACC의 정상상태 기업가치와 순부채로 환산한 정상상태 "
+        "자기자본가치를 차감한 시장 내재 성장기회 가치의 시가총액 대비 비율."
+    ),
+    "equity_pvgo_pct": (
+        "금융주용 별도 산식. 시가총액에서 5년 정상화 순이익/자기자본비용으로 계산한 "
+        "정상상태 자기자본가치를 차감한 비율."
+    ),
+    "justified_pvgo_pct": (
+        "보고 매출 성장(P+Q), 5년 정상화 마진(C), 증분투자율(I), ROIIC와 WACC를 "
+        "사용해 10년 경쟁우위기간 동안 정당화되는 성장기회 가치의 시가총액 대비 비율."
+    ),
+    "pvgo_gap_pct": (
+        "정당화 PVGO에서 시장 내재 PVGO를 차감한 값. 높을수록 자체 전망 대비 "
+        "시장의 성장 기대가 낮게 반영된 상태입니다."
+    ),
+    "pvgo_compression_pct": (
+        "최근 1년 정상상태 기업가치 증가율에서 시가총액 증가율을 차감한 값. "
+        "높을수록 가격보다 정상상태 가치가 빠르게 개선됐습니다."
+    ),
+    "intangible_adjusted_pvgo_pct": (
+        "순이익에 세후 R&D와 SG&A 30%의 순무형투자(투자-상각)를 반영한 조정 EPS로 "
+        "계산한 PVGO의 시가총액 대비 비율. 낮을수록 현재 earning power 대비 시장의 "
+        "미래 성장 기대 부담이 작습니다."
+    ),
+    "normalized_intangible_adjusted_pvgo_pct": (
+        "5년 정상화 무형자산 조정 순이익과 자기자본비용으로 계산한 PVGO 비율. "
+        "단일 연도의 R&D 및 이익 변동을 완화합니다."
+    ),
+    "intangible_adjusted_pvgo_gap_pct": (
+        "P/Q/C/I 기반 정당화 PVGO에서 5년 정상화 무형자산 조정 PVGO를 차감한 값. "
+        "높을수록 자체 전망 대비 시장 기대가 낮게 반영됐습니다."
+    ),
+    "intangible_adjusted_pvgo_compression_pct": (
+        "최근 1년 무형자산 조정 정상상태 자기자본가치 증가율에서 시가총액 증가율을 "
+        "차감한 값. 높을수록 조정 earning power가 가격보다 빠르게 개선됐습니다."
+    ),
+    "intangible_adjusted_roe_pct": (
+        "세후 R&D와 SG&A 30%를 자본화하고 경제적 상각을 유지비용으로 반영한 "
+        "조정 순이익을 평균 조정 자기자본으로 나눈 혁신·무형자산 조정 ROE."
+    ),
+    "intangible_adjusted_roe_spread_pct": (
+        "혁신·무형자산 조정 ROE에서 자기자본비용을 차감한 초과 수익성."
+    ),
     "gross_profitability_pct": (
         "Open Asset Pricing GP: 공시 시점의 매출총이익을 같은 기간 총자산으로 나눈 값. "
         "높을수록 자산이 만드는 영업 잉여가 큽니다."
@@ -479,6 +591,28 @@ NEUTRAL_FACTORS = {
     "beta",
     "wacc_equity_weight",
     "wacc_debt_weight",
+    "normalized_operating_margin_5y",
+    "normalized_nopat_5y",
+    "normalized_earnings_5y",
+    "incremental_investment_rate_pct",
+    "pvgo_ev_pct",
+    "normalized_pvgo_pct",
+    "equity_pvgo_pct",
+    "justified_pvgo_pct",
+    "pvgo_change_1y_pctp",
+    "knowledge_capital",
+    "organization_capital",
+    "intangible_capital",
+    "intangible_investment",
+    "intangible_amortization",
+    "net_intangible_investment",
+    "intangible_adjusted_net_income",
+    "normalized_intangible_adjusted_earnings_5y",
+    "intangible_adjusted_eps",
+    "normalized_intangible_adjusted_eps",
+    "intangible_adjusted_equity",
+    "avg_intangible_adjusted_equity",
+    "intangible_adjusted_pvgo_change_1y_pctp",
 }
 
 WACC_FACTOR_IDS = [
@@ -548,6 +682,9 @@ LOWER_IS_BETTER = {
     "cost_of_debt_pre_tax",
     "cost_of_debt_after_tax",
     "equity_duration_20y",
+    "pvgo_pct",
+    "intangible_adjusted_pvgo_pct",
+    "normalized_intangible_adjusted_pvgo_pct",
 }
 
 HIGHER_IS_BETTER = (
@@ -1190,6 +1327,9 @@ def infer_factor_unit(factor_id: str) -> str:
         "cost_of_debt_after_tax",
         "wacc_equity_weight",
         "wacc_debt_weight",
+        "normalized_operating_margin_5y",
+        "pvgo_change_1y_pctp",
+        "intangible_adjusted_pvgo_change_1y_pctp",
     }:
         return "percent"
     if factor_id == "ati":
@@ -1230,6 +1370,8 @@ def infer_factor_unit(factor_id: str) -> str:
         return "krw"
     if factor_id.startswith(("na_", "ma_")) or factor_id in FUNDAMENTAL_AMOUNT_FACTORS or factor_id in {
         "eps",
+        "intangible_adjusted_eps",
+        "normalized_intangible_adjusted_eps",
         "bps",
         "sps",
         "cps",

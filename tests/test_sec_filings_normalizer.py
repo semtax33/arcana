@@ -18,6 +18,7 @@ from engine.transformers._internal.sec_filings import (
     _notes_rule_matches_tag,
     add_formula_derived_candidates,
     dedupe_candidates,
+    normalize_sec_date,
 )
 from engine.workflows._internal.normalize_workflow import MAPPING_RULE_PATH
 
@@ -132,6 +133,11 @@ def fact(label: str, value: float, tag: str) -> dict:
 
 
 class SecFilingsNormalizerTest(unittest.TestCase):
+    def test_normalize_sec_date_accepts_companyfacts_and_notes_formats(self):
+        self.assertEqual(normalize_sec_date("2018-06-29"), "2018-06-29")
+        self.assertEqual(normalize_sec_date("20180629"), "2018-06-29")
+        self.assertEqual(normalize_sec_date(""), "")
+
     def test_companyfacts_uses_current_period_instead_of_later_filed_comparative(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

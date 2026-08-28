@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -67,11 +68,14 @@ def period_end_date(year: int, month: int) -> pd.Timestamp:
     return pd.Timestamp(year=int(year), month=int(month), day=1) + pd.offsets.MonthEnd(0)
 
 
-def load_report_metadata(path: str | Path = REPORT_METADATA_PATH, source_type: str = "statement") -> pd.DataFrame:
-    path = first_existing_path(REPORT_METADATA_PATH, LEGACY_REPORT_METADATA_PATH) if path == REPORT_METADATA_PATH else Path(path)
-    if not path.exists():
-        return pd.DataFrame()
-
+@lru_cache(maxsize=8)
+def _load_report_metadata_cached(
+    path_text: str,
+    source_type: str,
+    modified_time_ns: int,
+) -> pd.DataFrame:
+    del modified_time_ns
+    path = Path(path_text)
     df = pd.read_csv(path, dtype={"stock_code": str, "rcept_no": str, "source_type": str})
     if df.empty:
         return df
@@ -86,6 +90,18 @@ def load_report_metadata(path: str | Path = REPORT_METADATA_PATH, source_type: s
         df = df.loc[df.get("source_type", "").astype(str).eq(source_type)].copy()
 
     return df.dropna(subset=["stock_code", "fiscal_year", "fiscal_month", "report_date"])
+
+
+def load_report_metadata(path: str | Path = REPORT_METADATA_PATH, source_type: str = "statement") -> pd.DataFrame:
+    path = first_existing_path(REPORT_METADATA_PATH, LEGACY_REPORT_METADATA_PATH) if path == REPORT_METADATA_PATH else Path(path)
+    if not path.exists():
+        return pd.DataFrame()
+    resolved = path.resolve()
+    return _load_report_metadata_cached(
+        str(resolved),
+        str(source_type or ""),
+        resolved.stat().st_mtime_ns,
+    )
 
 
 def attach_report_metadata(
