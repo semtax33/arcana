@@ -1015,13 +1015,28 @@ def _compile_security_universe_cte(
 security_universe AS (
     SELECT
         sm.security_id AS security_id,
-        any(sm.country) AS market,
-        any(iss.sector_code) AS sector_code,
-        any(iss.industry_group_code) AS industry_group_code
-    FROM {security_table} AS sm
-    LEFT JOIN {issuer_table} AS iss
+        sm.country AS market,
+        iss.sector_code AS sector_code,
+        iss.industry_group_code AS industry_group_code
+    FROM
+    (
+        SELECT
+            security_id,
+            argMax(issuer_id, updated_at) AS issuer_id,
+            argMax(country, updated_at) AS country
+        FROM {security_table}
+        GROUP BY security_id
+    ) AS sm
+    LEFT JOIN
+    (
+        SELECT
+            issuer_id,
+            argMax(sector_code, updated_at) AS sector_code,
+            argMax(industry_group_code, updated_at) AS industry_group_code
+        FROM {issuer_table}
+        GROUP BY issuer_id
+    ) AS iss
         ON iss.issuer_id = sm.issuer_id{where_clause}
-    GROUP BY sm.security_id
 )""".strip()
 
 

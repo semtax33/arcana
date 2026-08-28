@@ -664,10 +664,6 @@ def _resolve_screening_factor_date(
 ) -> tuple[str, date]:
     experiment = graph.get("experiment") or {}
     requested_date = _as_date(experiment.get("end_date"))
-    candidate_dates = [
-        (requested_date - timedelta(days=offset)).isoformat()
-        for offset in range(_screening_candidate_days() + 1)
-    ]
     market = str(experiment.get("market") or "").strip().upper()
     factor_pairs = sorted(
         {
@@ -689,6 +685,14 @@ def _resolve_screening_factor_date(
         (factor_id, financial_basis)
         for factor_id, financial_basis in factor_pairs
         if not _is_lab_factor_id(factor_id)
+    ]
+    candidate_day_count = _screening_candidate_days(
+        experiment=experiment,
+        lab_only=bool(lab_factor_ids) and not raw_factor_pairs,
+    )
+    candidate_dates = [
+        (requested_date - timedelta(days=offset)).isoformat()
+        for offset in range(candidate_day_count + 1)
     ]
     params: dict[str, Any] = {
         "as_of_date": requested_date.isoformat(),
@@ -716,7 +720,7 @@ WHERE true{market_filter}
             return DEFAULT_FACTOR_TABLE, effective_date
         raise ValueError(
             f"no market date found on or before {requested_date.isoformat()} "
-            f"within {_screening_candidate_days()} days"
+            f"within {candidate_day_count} days"
         )
 
     if lab_factor_ids:
@@ -724,12 +728,19 @@ WHERE true{market_filter}
             raise ValueError(
                 "point_in_time_snapshot mode does not support derived lab_* factor inputs"
             )
+        allow_missing_inputs = (
+            str(experiment.get("snapshot_coverage_policy") or "strict")
+            .strip()
+            .lower()
+            == "allow_missing_inputs"
+        )
         lab_dates = _eligible_lab_factor_dates(
             client,
             factor_ids=lab_factor_ids,
             candidate_dates=candidate_dates,
             market_filter=market_filter,
             params=params,
+            require_all=not allow_missing_inputs,
         )
         if raw_factor_pairs:
             raw_dates = _eligible_raw_factor_dates(
@@ -747,7 +758,7 @@ WHERE true{market_filter}
             return DEFAULT_FACTOR_TABLE, max(common_dates)
         raise ValueError(
             "no common raw/lab factor date found on or before "
-            f"{requested_date.isoformat()} within {_screening_candidate_days()} days"
+            f"{requested_date.isoformat()} within {candidate_day_count} days"
         )
 
     params["factor_pair_count"] = len(factor_pairs)
@@ -816,7 +827,7 @@ LIMIT 1
         return DEFAULT_FACTOR_TABLE, effective_date
     raise ValueError(
         f"no common factor date found on or before {requested_date.isoformat()} "
-        f"within {_screening_candidate_days()} days"
+        f"within {candidate_day_count} days"
     )
 
 
@@ -827,12 +838,18 @@ def _eligible_lab_factor_dates(
     candidate_dates: list[str],
     market_filter: str,
     params: dict[str, Any],
+    require_all: bool = True,
 ) -> list[date]:
     query_params = {
         **params,
         "lab_factor_ids": factor_ids,
         "lab_factor_count": len(factor_ids),
     }
+    coverage_having = (
+        "uniqExact(factor_id) >= {lab_factor_count:UInt64}"
+        if require_all
+        else "count() > 0"
+    )
     rows = _records(
         client.query_df(
             f"""
@@ -842,7 +859,7 @@ PREWHERE trade_date IN {{candidate_dates:Array(Date)}}
 WHERE has({{lab_factor_ids:Array(String)}}, factor_id)
     AND is_valid{market_filter}
 GROUP BY trade_date
-HAVING uniqExact(factor_id) >= {{lab_factor_count:UInt64}}
+HAVING {coverage_having}
 ORDER BY trade_date DESC
 """.strip(),
             parameters=query_params,
@@ -926,8 +943,11 @@ def _require_history_snapshot_coverage(
 
     Falling back to the mutable raw factor table makes a history run appear
     point-in-time even when a factor was revised after the signal date.  The
-    strict mode therefore fails closed: users must either refresh snapshots
-    or explicitly choose ``raw`` research mode.
+    default strict mode therefore fails closed.  Experiments that explicitly
+    opt into ``allow_missing_inputs`` may omit factor pairs that genuinely did
+    not exist on an old signal date; graph-level missing-value and weighted
+    score renormalization rules remain responsible for those inputs.  At least
+    one requested PIT factor must still exist on every signal date.
     """
     factor_pairs = sorted(
         {
@@ -947,11 +967,34 @@ def _require_history_snapshot_coverage(
     if not factor_pairs:
         raise ValueError("point_in_time_snapshot mode requires factor_input nodes")
     requested_dates = sorted(set(trade_dates))
+    market = str(
+        (graph_dict.get("experiment") or {}).get("market") or ""
+    ).strip().upper()
+    coverage_policy = str(
+        (graph_dict.get("experiment") or {}).get("snapshot_coverage_policy")
+        or "strict"
+    ).strip().lower()
+    if coverage_policy not in {"strict", "allow_missing_inputs"}:
+        raise ValueError(
+            "snapshot_coverage_policy must be strict or allow_missing_inputs"
+        )
     params: dict[str, Any] = {
         "trade_dates": [value.isoformat() for value in requested_dates],
         "factor_pair_count": len(factor_pairs),
     }
+    market_filter = ""
+    if market and market != "ALL":
+        params["market_security_prefix"] = f"SEC_{market}_"
+        market_filter = (
+            "\n    AND startsWith(security_id, {market_security_prefix:String})"
+        )
     pair_predicate = _factor_pair_predicate(factor_pairs, params)
+    coverage_having = (
+        "count() > 0"
+        if coverage_policy == "allow_missing_inputs"
+        else "uniqExact(tuple(factor_id, financial_basis)) >= "
+        "{factor_pair_count:UInt64}"
+    )
     try:
         rows = _records(
             client.query_df(
@@ -961,9 +1004,9 @@ SELECT
 FROM {DEFAULT_FACTOR_SNAPSHOT_TABLE}
 PREWHERE trade_date IN {{trade_dates:Array(Date)}}
 WHERE source_trade_date <= trade_date
-    AND {pair_predicate}
+    AND {pair_predicate}{market_filter}
 GROUP BY trade_date
-HAVING uniqExact(tuple(factor_id, financial_basis)) >= {{factor_pair_count:UInt64}}
+HAVING {coverage_having}
 ORDER BY trade_date
 """.strip(),
                 parameters=params,
@@ -985,13 +1028,33 @@ ORDER BY trade_date
     return DEFAULT_FACTOR_SNAPSHOT_TABLE
 
 
-def _screening_candidate_days() -> int:
+def _screening_candidate_days(
+    *,
+    experiment: dict[str, Any] | None = None,
+    lab_only: bool = False,
+) -> int:
     value = os.getenv("ARCANA_FACTOR_SNAPSHOT_CANDIDATE_DAYS", "14").strip()
     try:
         days = int(value)
     except ValueError:
-        return 14
-    return max(1, min(days, 366))
+        days = 14
+    days = max(1, min(days, 732))
+    if not lab_only:
+        return days
+
+    # A derived FactorLab module generated on scheduled rebalance dates is
+    # intentionally held until the next rebalance.  Requiring it to have a
+    # value within the ordinary daily/raw-factor tolerance makes quarterly or
+    # slower composed strategies impossible to screen between signal dates.
+    rebalance = (experiment or {}).get("rebalance") or {}
+    frequency = str(rebalance.get("frequency") or "").strip().lower()
+    schedule_horizon_days = {
+        "monthly": 45,
+        "quarterly": 120,
+        "semiannual": 220,
+        "annual": 400,
+    }.get(frequency, 14)
+    return max(days, schedule_horizon_days)
 
 
 def _row_date(rows: list[dict[str, Any]], key: str) -> date | None:
