@@ -3615,7 +3615,7 @@ def add_pvgo_factors(
     cost_of_equity = numeric_column(df, "cost_of_equity") / 100
     valid_wacc = wacc.where((wacc > 0) & (wacc < 1))
     valid_cost_of_equity = cost_of_equity.where(
-        (cost_of_equity > 0) & (cost_of_equity < 1)
+        (cost_of_equity > 0) & (cost_of_equity < 0.50)
     )
     net_debt = numeric_column(df, "net_debt").fillna(
         enterprise_value - market_cap
@@ -3639,6 +3639,9 @@ def add_pvgo_factors(
     steady_state_financial_equity = normalized_earnings / valid_cost_of_equity
     df["equity_pvgo_pct"] = (
         (market_cap - steady_state_financial_equity) / market_cap * 100
+    )
+    df["roe_cost_of_equity_spread_pct"] = (
+        numeric_column(df, "roe") - valid_cost_of_equity * 100
     )
 
     roiic = numeric_column(df, "roiic_pct") / 100
@@ -3677,6 +3680,13 @@ def add_pvgo_factors(
     steady_state_growth = growth_pct(positive_steady_state_ev, periods=252)
     market_cap_growth = growth_pct(market_cap, periods=252)
     df["pvgo_compression_pct"] = steady_state_growth - market_cap_growth
+    df["equity_pvgo_compression_pct"] = (
+        growth_pct(
+            steady_state_financial_equity.where(steady_state_financial_equity > 0),
+            periods=252,
+        )
+        - market_cap_growth
+    )
     df["pvgo_change_1y_pctp"] = df["pvgo_pct"] - df["pvgo_pct"].shift(252)
 
     # Equity PVGO based on intangible-adjusted EPS. At the aggregate level
@@ -3699,7 +3709,7 @@ def add_pvgo_factors(
     )
     df["intangible_adjusted_roe_spread_pct"] = (
         numeric_column(df, "intangible_adjusted_roe_pct")
-        - numeric_column(df, "cost_of_equity")
+        - valid_cost_of_equity * 100
     )
     df["intangible_adjusted_pvgo_gap_pct"] = (
         df["justified_pvgo_pct"]
@@ -4396,9 +4406,11 @@ def preferred_factor_columns():
         "pvgo_expectation_factor",
         "normalized_pvgo_pct",
         "equity_pvgo_pct",
+        "roe_cost_of_equity_spread_pct",
         "justified_pvgo_pct",
         "pvgo_gap_pct",
         "pvgo_compression_pct",
+        "equity_pvgo_compression_pct",
         "pvgo_change_1y_pctp",
         "intangible_adjusted_eps",
         "normalized_intangible_adjusted_eps",

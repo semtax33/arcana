@@ -82,6 +82,8 @@ TARGET_DATES = (
 )
 
 FINANCIAL_FACTOR_IDS = (
+    "normalized_earnings_5y",
+    "roe",
     "knowledge_capital",
     "organization_capital",
     "intangible_capital",
@@ -98,6 +100,9 @@ FINANCIAL_FACTOR_IDS = (
     "iroe",
 )
 DAILY_FACTOR_IDS = (
+    "equity_pvgo_pct",
+    "roe_cost_of_equity_spread_pct",
+    "equity_pvgo_compression_pct",
     "intangible_adjusted_roe_spread_pct",
     "intangible_adjusted_pvgo_pct",
     "normalized_intangible_adjusted_pvgo_pct",
@@ -152,41 +157,127 @@ ORDER BY (security_id, effective_date)
 def _valuation_stage_query(start_date: str, end_date: str) -> str:
     return f"""
 INSERT INTO {VALUATION_STAGE}
-SELECT
-    security_id,
-    trade_date AS effective_date,
-    argMaxIf(
-        factor_value,
-        updated_at,
-        factor_id = 'cost_of_equity' AND isFinite(factor_value)
-    ) / 100 AS cost_of_equity,
-    if(
-        countIf(factor_id = 'justified_pvgo_pct' AND isFinite(factor_value)) > 0,
+WITH
+cost_rows AS
+(
+    SELECT
+        security_id,
+        trade_date AS effective_date,
+        argMaxIf(
+            factor_value,
+            updated_at,
+            factor_id = 'cost_of_equity' AND isFinite(factor_value)
+        ) / 100 AS cost_of_equity
+    FROM fact_daily_factors
+    PREWHERE trade_date >= toDate('{start_date}')
+        AND trade_date <= toDate('{end_date}')
+        AND financial_basis = 'annual'
+        AND factor_id = 'cost_of_equity'
+        AND startsWith(security_id, 'SEC_US_')
+    GROUP BY security_id, trade_date
+    -- Values near 100% are historical sentinel/misaligned rows, not plausible
+    -- large-cap U.S. costs of equity.  Keep a deliberately generous 50% cap.
+    HAVING cost_of_equity > 0 AND cost_of_equity < 0.50
+),
+justified_rows AS
+(
+    SELECT
+        security_id,
+        trade_date AS effective_date,
         argMaxIf(
             factor_value,
             updated_at,
             factor_id = 'justified_pvgo_pct' AND isFinite(factor_value)
-        ),
-        NULL
-    ) AS justified_pvgo_pct
-FROM fact_daily_factors
-PREWHERE trade_date >= toDate('{start_date}')
-    AND trade_date <= toDate('{end_date}')
-    AND financial_basis = 'ttm'
-    AND factor_id IN ('cost_of_equity', 'justified_pvgo_pct')
-    AND startsWith(security_id, 'SEC_US_')
-GROUP BY security_id, trade_date
-HAVING cost_of_equity > 0 AND cost_of_equity < 1
+        ) AS justified_pvgo_pct
+    FROM fact_daily_factors
+    PREWHERE trade_date >= toDate('{start_date}')
+        AND trade_date <= toDate('{end_date}')
+        AND financial_basis = 'ttm'
+        AND factor_id = 'justified_pvgo_pct'
+        AND startsWith(security_id, 'SEC_US_')
+    GROUP BY security_id, trade_date
+)
+SELECT
+    c.security_id,
+    c.effective_date,
+    c.cost_of_equity,
+    j.justified_pvgo_pct
+FROM cost_rows AS c
+ASOF LEFT JOIN justified_rows AS j
+    ON c.security_id = j.security_id
+    AND c.effective_date >= j.effective_date
 """.strip()
 
 
-def _symbols(client, start_date: str, end_date: str, stock_codes: str | None) -> list[str]:
+def _symbols(
+    client,
+    start_date: str,
+    end_date: str,
+    stock_codes: str | None,
+    minimum_market_cap_mil: float | None = None,
+    sector_codes: list[str] | None = None,
+) -> list[str]:
     if stock_codes:
         candidates = {
             value.strip().upper()
             for value in stock_codes.split(",")
             if value.strip()
         }
+    elif minimum_market_cap_mil is not None:
+        target_dates = [
+            date.fromisoformat(value)
+            for value in TARGET_DATES
+            if start_date <= value <= end_date
+        ]
+        sector_ctes = ""
+        sector_join = ""
+        sector_filter = ""
+        if sector_codes:
+            sector_ctes = """,
+latest_security AS
+(
+    SELECT security_id, argMax(issuer_id, updated_at) AS issuer_id
+    FROM security_master
+    GROUP BY security_id
+),
+latest_issuer AS
+(
+    SELECT issuer_id, argMax(sector_code, updated_at) AS sector_code
+    FROM issuers
+    GROUP BY issuer_id
+)
+"""
+            sector_join = """
+INNER JOIN latest_security AS sm ON sm.security_id = f.security_id
+INNER JOIN latest_issuer AS iss ON iss.issuer_id = sm.issuer_id
+"""
+            sector_filter = "AND has({sector_codes:Array(String)}, iss.sector_code)"
+        rows = client.query(
+            f"""
+WITH target_rows AS
+(
+    SELECT DISTINCT security_id
+    FROM fact_daily_factor_snapshot FINAL
+    PREWHERE has({{days:Array(Date)}}, trade_date)
+      AND factor_id = 'mcap_mil'
+      AND financial_basis = 'annual'
+    WHERE startsWith(security_id, 'SEC_US_')
+      AND factor_value >= {{minimum_market_cap_mil:Float64}}
+){sector_ctes}
+SELECT DISTINCT substring(f.security_id, 8)
+FROM target_rows AS f
+{sector_join}
+WHERE 1 = 1
+  {sector_filter}
+ORDER BY substring(f.security_id, 8)
+""".strip(),
+            parameters={
+                "days": target_dates,
+                "minimum_market_cap_mil": minimum_market_cap_mil,
+                "sector_codes": sector_codes or [],
+            },
+        ).result_rows
+        candidates = {str(row[0]) for row in rows}
     else:
         rows = client.query(
             f"""
@@ -344,6 +435,11 @@ INSERT INTO fact_daily_factors
     fiscal_year, financial_period, currency, updated_at
 )
 WITH
+eligible_symbols AS
+(
+    SELECT DISTINCT security_id
+    FROM {FINANCIAL_STAGE}
+),
 price_rows AS
 (
     SELECT
@@ -355,6 +451,7 @@ price_rows AS
         AND trade_date <= toDate('{output_end_date}')
         AND startsWith(security_id, 'SEC_US_')
     WHERE toFloat64(close) > 0
+      AND security_id IN (SELECT security_id FROM eligible_symbols)
     GROUP BY security_id, trade_date
     ORDER BY security_id, trade_date
 ),
@@ -368,6 +465,7 @@ share_rows AS
     WHERE startsWith(security_id, 'SEC_US_')
         AND trade_date <= toDate('{output_end_date}')
         AND toFloat64(shares) > 0
+        AND security_id IN (SELECT security_id FROM eligible_symbols)
     GROUP BY security_id, trade_date
     ORDER BY security_id, effective_date
 ),
@@ -412,23 +510,28 @@ pvgo_rows AS
     SELECT
         *,
         if(
-            market_cap > 0 AND cost_of_equity > 0 AND cost_of_equity < 1,
+            market_cap > 0 AND cost_of_equity > 0 AND cost_of_equity < 0.50,
+            normalized_earnings_5y / cost_of_equity,
+            NULL
+        ) AS normalized_steady_state_equity,
+        if(
+            market_cap > 0 AND cost_of_equity > 0 AND cost_of_equity < 0.50,
             intangible_adjusted_net_income / cost_of_equity,
             NULL
         ) AS adjusted_steady_state_equity,
         if(
-            market_cap > 0 AND cost_of_equity > 0 AND cost_of_equity < 1,
+            market_cap > 0 AND cost_of_equity > 0 AND cost_of_equity < 0.50,
             normalized_intangible_adjusted_earnings_5y / cost_of_equity,
             NULL
         ) AS normalized_adjusted_steady_state_equity,
         if(
-            market_cap > 0 AND cost_of_equity > 0 AND cost_of_equity < 1,
+            market_cap > 0 AND cost_of_equity > 0 AND cost_of_equity < 0.50,
             (market_cap - intangible_adjusted_net_income / cost_of_equity)
                 / market_cap * 100,
             NULL
         ) AS intangible_adjusted_pvgo_pct,
         if(
-            market_cap > 0 AND cost_of_equity > 0 AND cost_of_equity < 1,
+            market_cap > 0 AND cost_of_equity > 0 AND cost_of_equity < 0.50,
             (
                 market_cap
                 - normalized_intangible_adjusted_earnings_5y / cost_of_equity
@@ -436,7 +539,18 @@ pvgo_rows AS
             NULL
         ) AS normalized_intangible_adjusted_pvgo_pct,
         if(
-            cost_of_equity > 0 AND cost_of_equity < 1,
+            market_cap > 0 AND cost_of_equity > 0 AND cost_of_equity < 0.50,
+            (market_cap - normalized_earnings_5y / cost_of_equity)
+                / market_cap * 100,
+            NULL
+        ) AS equity_pvgo_pct,
+        if(
+            cost_of_equity > 0 AND cost_of_equity < 0.50,
+            roe - cost_of_equity * 100,
+            NULL
+        ) AS roe_cost_of_equity_spread_pct,
+        if(
+            cost_of_equity > 0 AND cost_of_equity < 0.50,
             intangible_adjusted_roe_pct - cost_of_equity * 100,
             NULL
         ) AS intangible_adjusted_roe_spread_pct
@@ -446,6 +560,8 @@ lagged_rows AS
 (
     SELECT
         *,
+        lagInFrame(normalized_steady_state_equity, 252)
+            OVER daily_window AS prior_normalized_steady_state_equity,
         lagInFrame(normalized_adjusted_steady_state_equity, 252)
             OVER daily_window AS prior_adjusted_steady_state_equity,
         lagInFrame(market_cap, 252) OVER daily_window AS prior_market_cap,
@@ -469,6 +585,21 @@ factor_rows AS
         [{factor_ids_sql}] AS factor_ids,
         [
             {financial_values_sql},
+            toNullable(equity_pvgo_pct),
+            toNullable(roe_cost_of_equity_spread_pct),
+            toNullable(
+                if(
+                    normalized_steady_state_equity > 0
+                        AND prior_normalized_steady_state_equity > 0
+                        AND prior_market_cap > 0,
+                    (
+                        normalized_steady_state_equity
+                        - prior_normalized_steady_state_equity
+                    ) / abs(prior_normalized_steady_state_equity) * 100
+                    - (market_cap - prior_market_cap) / abs(prior_market_cap) * 100,
+                    NULL
+                )
+            ),
             toNullable(intangible_adjusted_roe_spread_pct),
             toNullable(intangible_adjusted_pvgo_pct),
             toNullable(normalized_intangible_adjusted_pvgo_pct),
@@ -662,6 +793,86 @@ ORDER BY trade_date, factor_id
 
 
 def _verify(client, start_date: str, end_date: str) -> dict:
+    target_dates = [
+        date.fromisoformat(value)
+        for value in TARGET_DATES
+        if start_date <= value <= end_date
+    ]
+    identity_row = client.query(
+        """
+WITH paired AS
+(
+    SELECT
+        trade_date,
+        security_id,
+        argMaxIf(
+            factor_value, updated_at,
+            factor_id = 'roe' AND factor_value IS NOT NULL AND isFinite(factor_value)
+        ) AS raw_roe,
+        argMaxIf(
+            factor_value, updated_at,
+            factor_id = 'roe_cost_of_equity_spread_pct'
+                AND factor_value IS NOT NULL AND isFinite(factor_value)
+        ) AS raw_spread,
+        argMaxIf(
+            factor_value, updated_at,
+            factor_id = 'intangible_adjusted_roe_pct'
+                AND factor_value IS NOT NULL AND isFinite(factor_value)
+        ) AS adjusted_roe,
+        argMaxIf(
+            factor_value, updated_at,
+            factor_id = 'intangible_adjusted_roe_spread_pct'
+                AND factor_value IS NOT NULL AND isFinite(factor_value)
+        ) AS adjusted_spread,
+        countIf(
+            factor_id = 'roe' AND factor_value IS NOT NULL AND isFinite(factor_value)
+        ) AS raw_roe_count,
+        countIf(
+            factor_id = 'roe_cost_of_equity_spread_pct'
+                AND factor_value IS NOT NULL AND isFinite(factor_value)
+        ) AS raw_spread_count,
+        countIf(
+            factor_id = 'intangible_adjusted_roe_pct'
+                AND factor_value IS NOT NULL AND isFinite(factor_value)
+        ) AS adjusted_roe_count,
+        countIf(
+            factor_id = 'intangible_adjusted_roe_spread_pct'
+                AND factor_value IS NOT NULL AND isFinite(factor_value)
+        ) AS adjusted_spread_count
+    FROM fact_daily_factors FINAL
+    PREWHERE has({days:Array(Date)}, trade_date)
+      AND financial_basis = 'ttm'
+      AND has(
+          [
+              'roe',
+              'roe_cost_of_equity_spread_pct',
+              'intangible_adjusted_roe_pct',
+              'intangible_adjusted_roe_spread_pct'
+          ],
+          factor_id
+      )
+    WHERE startsWith(security_id, 'SEC_US_')
+    GROUP BY trade_date, security_id
+    HAVING raw_roe_count > 0
+       AND raw_spread_count > 0
+       AND adjusted_roe_count > 0
+       AND adjusted_spread_count > 0
+)
+SELECT
+    count() AS paired_rows,
+    min(adjusted_roe - adjusted_spread) AS minimum_implied_cost_pct,
+    median(adjusted_roe - adjusted_spread) AS median_implied_cost_pct,
+    max(adjusted_roe - adjusted_spread) AS maximum_implied_cost_pct,
+    max(
+        abs(
+            (raw_roe - raw_spread)
+            - (adjusted_roe - adjusted_spread)
+        )
+    ) AS maximum_raw_adjusted_implied_cost_difference
+FROM paired
+""".strip(),
+        parameters={"days": target_dates},
+    ).first_row
     result = {
         "start_date": start_date,
         "end_date": end_date,
@@ -676,6 +887,21 @@ def _verify(client, start_date: str, end_date: str) -> dict:
             start_date,
             end_date,
         ),
+        "economic_identity": {
+            "paired_rows": int(identity_row[0]),
+            "minimum_implied_cost_pct": float(identity_row[1]),
+            "median_implied_cost_pct": float(identity_row[2]),
+            "maximum_implied_cost_pct": float(identity_row[3]),
+            "maximum_raw_adjusted_implied_cost_difference": float(
+                identity_row[4]
+            ),
+            "pass": bool(
+                identity_row[0] > 0
+                and 0 < identity_row[1] < 100
+                and 0 < identity_row[3] < 50
+                and abs(identity_row[4]) <= 1e-8
+            ),
+        },
     }
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     (STATE_DIR / "coverage.json").write_text(
@@ -691,6 +917,18 @@ def main() -> None:
     parser.add_argument("--start-date", default=START_DATE)
     parser.add_argument("--end-date", default=END_DATE)
     parser.add_argument("--stock-codes")
+    parser.add_argument(
+        "--minimum-historical-market-cap-mil",
+        type=float,
+        help=(
+            "Limit local SEC staging to securities that reached this market cap "
+            "on at least one target snapshot date."
+        ),
+    )
+    parser.add_argument(
+        "--sector-codes",
+        help="Optional comma-separated current GICS sectors for staging.",
+    )
     parser.add_argument("--workers", type=int, default=max(1, min(16, os.cpu_count() or 1)))
     parser.add_argument("--symbol-batch-size", type=int, default=20)
     parser.add_argument("--keep-stage", action="store_true")
@@ -713,7 +951,16 @@ def main() -> None:
             print(json.dumps(_verify(client, start_date, end_date), ensure_ascii=False, indent=2))
             return
 
-        symbols = _symbols(client, calculation_floor, end_date, args.stock_codes)
+        symbols = _symbols(
+            client,
+            calculation_floor,
+            end_date,
+            args.stock_codes,
+            args.minimum_historical_market_cap_mil,
+            [value.strip() for value in args.sector_codes.split(",") if value.strip()]
+            if args.sector_codes
+            else None,
+        )
         print(f"[INTANGIBLE-PVGO] symbols={len(symbols):,}", flush=True)
         _execute(client, f"DROP TABLE IF EXISTS {FINANCIAL_STAGE}")
         _execute(client, f"DROP TABLE IF EXISTS {VALUATION_STAGE}")

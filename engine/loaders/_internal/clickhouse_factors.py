@@ -156,6 +156,7 @@ QUALITY_FACTORS = {
     "rnd_to_sales",
     "tax_rate",
     "roe",
+    "roe_cost_of_equity_spread_pct",
     "roa",
     "accrual_ratio",
     "iroe",
@@ -196,6 +197,7 @@ GROWTH_FACTORS = {
     "normalized_nopat_growth_3y_pct",
     "incremental_investment_rate_pct",
     "pvgo_compression_pct",
+    "equity_pvgo_compression_pct",
     "pvgo_change_1y_pctp",
     "intangible_adjusted_pvgo_compression_pct",
     "intangible_adjusted_pvgo_change_1y_pctp",
@@ -368,9 +370,11 @@ FACTOR_NAME_OVERRIDES = {
     "pvgo_expectation_factor": "PVGO Expectation Factor",
     "normalized_pvgo_pct": "Normalized PVGO / Market Cap",
     "equity_pvgo_pct": "Equity PVGO / Market Cap",
+    "roe_cost_of_equity_spread_pct": "ROE - Cost of Equity",
     "justified_pvgo_pct": "Justified PVGO / Market Cap",
     "pvgo_gap_pct": "PVGO Gap",
     "pvgo_compression_pct": "PVGO Compression 1Y",
+    "equity_pvgo_compression_pct": "Equity PVGO Compression 1Y",
     "pvgo_change_1y_pctp": "PVGO Change 1Y",
     "knowledge_capital": "Capitalized Knowledge Capital",
     "organization_capital": "Capitalized Organization Capital",
@@ -481,8 +485,12 @@ FACTOR_DESCRIPTION_OVERRIDES = {
         "자기자본가치를 차감한 시장 내재 성장기회 가치의 시가총액 대비 비율."
     ),
     "equity_pvgo_pct": (
-        "금융주용 별도 산식. 시가총액에서 5년 정상화 순이익/자기자본비용으로 계산한 "
+        "시가총액에서 5년 정상화 순이익/자기자본비용으로 계산한 "
         "정상상태 자기자본가치를 차감한 비율."
+    ),
+    "roe_cost_of_equity_spread_pct": (
+        "보고 순이익 기준 ROE에서 자기자본비용을 차감한 초과 수익성. "
+        "무형자산 조정 ROE 스프레드의 동일 단위 대조 팩터입니다."
     ),
     "justified_pvgo_pct": (
         "보고 매출 성장(P+Q), 5년 정상화 마진(C), 증분투자율(I), ROIIC와 WACC를 "
@@ -495,6 +503,10 @@ FACTOR_DESCRIPTION_OVERRIDES = {
     "pvgo_compression_pct": (
         "최근 1년 정상상태 기업가치 증가율에서 시가총액 증가율을 차감한 값. "
         "높을수록 가격보다 정상상태 가치가 빠르게 개선됐습니다."
+    ),
+    "equity_pvgo_compression_pct": (
+        "최근 1년 5년 정상화 순이익/자기자본비용의 정상상태 자기자본가치 증가율에서 "
+        "시가총액 증가율을 차감한 값. 무형자산 조정 compression의 대조 팩터입니다."
     ),
     "intangible_adjusted_pvgo_pct": (
         "순이익에 세후 R&D와 SG&A 30%의 순무형투자(투자-상각)를 반영한 조정 EPS로 "

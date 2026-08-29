@@ -32,7 +32,6 @@ from scripts.build_us_pvgo_qvir_balanced_hybrid import (
     MAX_POSITIONS,
     QVIR_SOURCE_NAME,
     REBALANCE_FREQUENCY,
-    START_DATE,
     TOP_PERCENT,
     TRANSACTION_COST_BPS,
     _backtest,
@@ -48,6 +47,9 @@ MODEL_NAME = (
     "Arcana_US_IntangibleAdjustedPVGO_QVIR_BalancedHybrid_Quarterly_20260829"
 )
 SLEEVE_WEIGHTS = {"intangible_adjusted_pvgo": 0.50, "qvir_core": 0.50}
+# Match the adjusted-PVGO sleeve's first complete quarterly signal.  Starting in
+# January would create an intentional but misleading zero-position rebalance.
+START_DATE = date(2017, 4, 3)
 
 
 def build_graph(
@@ -64,7 +66,7 @@ def build_graph(
 
     The generic hybrid builder also supports legacy models that include REITs.
     This target deliberately inherits the adjusted sleeve's operating-company,
-    positive-NOPAT, and USD 1bn eligibility because missing PVGO rows are not
+    positive-adjusted-EPS, and USD 1bn eligibility because missing PVGO rows are not
     renormalized at the final sleeve combination.
     """
 
@@ -79,15 +81,21 @@ def build_graph(
         model_name=model_name,
     )
     payload = graph.model_dump(mode="json")
+    payload["experiment"]["start_date"] = START_DATE
     payload["experiment"]["universe"]["sector_codes"] = (
         OPERATING_COMPANY_GICS_SECTORS
     )
-    payload["experiment"]["snapshot_coverage_policy"] = "strict"
+    # This graph orchestrates immutable lab outputs: quarterly history factors
+    # and same-day screen factors are deliberately date-disjoint.  Requiring all
+    # four lab IDs on one date would make current screening impossible.  The
+    # underlying adjusted-PVGO source remains strict PIT, while the final
+    # PVGO/QVIR weighted score still requires both economic sleeves.
+    payload["experiment"]["snapshot_coverage_policy"] = "allow_missing_inputs"
     for node in payload["nodes"]:
         if node["id"] == "balanced_hybrid_score":
             node["config"]["research_design"] = (
                 "equal-weight stock-selection sleeves; both required; adjusted "
-                "PVGO source supplies positive-NOPAT and USD 1bn eligibility"
+                "PVGO source supplies positive-adjusted-EPS and USD 1bn eligibility"
             )
         elif node["id"] == "final_rank_score":
             node["config"]["semantic_label"] = (
@@ -367,7 +375,7 @@ def run() -> dict[str, Any]:
             "missing_policy": "require both sleeves; no weight renormalization",
             "eligibility_inherited_from_pvgo": {
                 "minimum_market_cap_usd_millions": MIN_MARKET_CAP_USD_MILLIONS,
-                "positive_normalized_nopat": True,
+                "positive_normalized_intangible_adjusted_eps": True,
                 "excluded_gics_sectors": ["40", "60"],
             },
             "score_semantics": "0-100 cross-sectional rank, not a success probability",

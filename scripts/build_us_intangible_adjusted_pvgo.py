@@ -39,7 +39,9 @@ from scripts.factor_lab_research_diagnostics import (
 
 
 MODEL_NAME = "Arcana_US_IntangibleAdjustedPVGO_ExpectationsAlpha_Quarterly_20260829"
-START_DATE = date(2017, 1, 3)
+# Compression requires a prior-year market-cap observation.  The first complete
+# quarterly signal is 2017-03-31, so the first investable rebalance is 2017-04-03.
+START_DATE = date(2017, 4, 3)
 END_DATE = date(2026, 8, 27)
 REBALANCE_FREQUENCY = "quarterly"
 TRANSACTION_COST_BPS = 20.0
@@ -152,24 +154,26 @@ def build_graph(name: str = MODEL_NAME) -> FactorLabGraphDto:
     nodes.extend(
         [
             {
-                "id": "normalized_nopat_input",
+                "id": "normalized_adjusted_eps_input",
                 "type": "factor_input",
                 "config": {
-                    "factor_id": "normalized_nopat_5y",
+                    "factor_id": "normalized_intangible_adjusted_eps",
                     "financial_basis": "ttm",
                     "missing_policy": "drop",
                 },
             },
             {
-                "id": "zero_nopat_floor",
+                "id": "zero_earnings_floor",
                 "type": "constant",
                 "config": {"value": 0.0},
             },
             {
-                "id": "positive_normalized_nopat",
+                "id": "positive_normalized_adjusted_eps",
                 "type": "greater_than",
                 "config": {
-                    "research_design": "exclude negative steady-state operating earnings",
+                    "research_design": (
+                        "exclude negative normalized intangible-adjusted equity earnings"
+                    ),
                 },
             },
             {
@@ -177,7 +181,9 @@ def build_graph(name: str = MODEL_NAME) -> FactorLabGraphDto:
                 "type": "factor_input",
                 "config": {
                     "factor_id": "mcap_mil",
-                    "financial_basis": "ttm",
+                    # The snapshot store's annual-labelled mcap series is the
+                    # point-in-time series present on every quarterly signal date.
+                    "financial_basis": "annual",
                     "missing_policy": "drop",
                 },
             },
@@ -198,7 +204,7 @@ def build_graph(name: str = MODEL_NAME) -> FactorLabGraphDto:
                 "type": "and",
                 "config": {
                     "research_design": (
-                        "positive normalized NOPAT and minimum USD 1bn market cap"
+                        "positive normalized adjusted EPS and minimum USD 1bn market cap"
                     ),
                 },
             },
@@ -237,11 +243,19 @@ def build_graph(name: str = MODEL_NAME) -> FactorLabGraphDto:
     )
     edges.extend(
         [
-            _edge("normalized_nopat_input", "positive_normalized_nopat", "left"),
-            _edge("zero_nopat_floor", "positive_normalized_nopat", "right"),
+            _edge(
+                "normalized_adjusted_eps_input",
+                "positive_normalized_adjusted_eps",
+                "left",
+            ),
+            _edge(
+                "zero_earnings_floor",
+                "positive_normalized_adjusted_eps",
+                "right",
+            ),
             _edge("market_cap_input", "market_cap_eligible", "left"),
             _edge("market_cap_floor", "market_cap_eligible", "right"),
-            _edge("positive_normalized_nopat", "eligibility_gate", "left"),
+            _edge("positive_normalized_adjusted_eps", "eligibility_gate", "left"),
             _edge("market_cap_eligible", "eligibility_gate", "right"),
             _edge(value_z, "intangible_expectations_alpha", "expectation_level"),
             _edge(iroe_z, "intangible_expectations_alpha", "quality"),
@@ -366,11 +380,17 @@ def _ablation_graph(
 def _latest_factor_diagnostics(
     service: FactorLabService,
     *,
-    run_id: str,
+    ablation_run_ids: dict[str, str],
 ) -> dict[str, Any]:
     frames: list[pd.DataFrame] = []
-    for sleeve, node_id in FACTOR_NODE_IDS.items():
-        preview = service.preview_node(run_id, node_id=node_id, limit=1_000)
+    for sleeve in FACTOR_NODE_IDS:
+        run_id = ablation_run_ids.get(sleeve)
+        if not run_id:
+            continue
+        # FactorLab currently persists final run values, not intermediate-node
+        # caches.  Each ablation's final value is the eligibility-matched dense
+        # rank of one sleeve, which preserves that sleeve's Spearman ordering.
+        preview = service.preview_node(run_id, limit=1_000)
         rows = [row.model_dump(mode="json") for row in preview.rows if row.is_valid]
         if not rows:
             continue
@@ -483,7 +503,10 @@ def run() -> dict[str, Any]:
     }
     factor_diagnostics = _latest_factor_diagnostics(
         service,
-        run_id=history.run_id,
+        ablation_run_ids={
+            sleeve: value["history_run_id"]
+            for sleeve, value in ablations.items()
+        },
     )
     screen = service.run_graph(
         FactorLabRunRequestDto(
@@ -506,7 +529,7 @@ def run() -> dict[str, Any]:
             "missing_policy": "all three sleeves required; no weight renormalization",
             "eligibility": {
                 "minimum_market_cap_usd_millions": MIN_MARKET_CAP_USD_MILLIONS,
-                "positive_normalized_nopat": True,
+                "positive_normalized_intangible_adjusted_eps": True,
                 "excluded_gics_sectors": ["40", "60"],
             },
             "score_semantics": "0-100 cross-sectional rank, not a success probability",

@@ -11,6 +11,10 @@ from engine.transformers.factors import (
     perpetual_intangible_capital,
     preferred_factor_columns,
 )
+from scripts.backfill_us_intangible_adjusted_pvgo import (
+    DAILY_FACTOR_IDS as CLEAN_CONTROL_DAILY_FACTOR_IDS,
+    _valuation_stage_query,
+)
 
 
 PVGO_FACTOR_IDS = {
@@ -26,9 +30,11 @@ PVGO_FACTOR_IDS = {
     "pvgo_expectation_factor",
     "normalized_pvgo_pct",
     "equity_pvgo_pct",
+    "roe_cost_of_equity_spread_pct",
     "justified_pvgo_pct",
     "pvgo_gap_pct",
     "pvgo_compression_pct",
+    "equity_pvgo_compression_pct",
     "pvgo_change_1y_pctp",
     "knowledge_capital",
     "organization_capital",
@@ -157,6 +163,7 @@ class PvgoFactorTest(unittest.TestCase):
                     "nopat": [80.0],
                     "normalized_nopat_5y": [100.0],
                     "normalized_earnings_5y": [80.0],
+                    "roe": [15.0],
                     "sale": [1_000.0],
                     "wacc": [10.0],
                     "cost_of_equity": [10.0],
@@ -178,6 +185,7 @@ class PvgoFactorTest(unittest.TestCase):
         self.assertAlmostEqual(result["pvgo_expectation_factor"], -40.0)
         self.assertAlmostEqual(result["normalized_pvgo_pct"], 20.0)
         self.assertAlmostEqual(result["equity_pvgo_pct"], 20.0)
+        self.assertAlmostEqual(result["roe_cost_of_equity_spread_pct"], 5.0)
         self.assertAlmostEqual(result["justified_pvgo_pct"], expected_justified / 10)
         self.assertAlmostEqual(
             result["pvgo_gap_pct"],
@@ -219,6 +227,27 @@ class PvgoFactorTest(unittest.TestCase):
             result["justified_pvgo_pct"] - 20.0,
         )
 
+    def test_pvgo_rejects_implausible_cost_of_equity(self):
+        result = add_pvgo_factors(
+            pd.DataFrame(
+                {
+                    "market_cap": [1_000.0],
+                    "enterprise_value": [1_200.0],
+                    "normalized_earnings_5y": [80.0],
+                    "roe": [15.0],
+                    "intangible_adjusted_net_income": [60.0],
+                    "normalized_intangible_adjusted_earnings_5y": [80.0],
+                    "intangible_adjusted_roe_pct": [15.0],
+                    "cost_of_equity": [75.0],
+                }
+            )
+        ).iloc[0]
+
+        self.assertTrue(pd.isna(result["equity_pvgo_pct"]))
+        self.assertTrue(pd.isna(result["roe_cost_of_equity_spread_pct"]))
+        self.assertTrue(pd.isna(result["normalized_intangible_adjusted_pvgo_pct"]))
+        self.assertTrue(pd.isna(result["intangible_adjusted_roe_spread_pct"]))
+
     def test_justified_pvgo_requires_roiic_above_wacc(self):
         result = add_pvgo_factors(
             pd.DataFrame(
@@ -238,6 +267,23 @@ class PvgoFactorTest(unittest.TestCase):
 
         self.assertTrue(pd.isna(result.loc[0, "justified_pvgo_pct"]))
         self.assertTrue(pd.isna(result.loc[0, "pvgo_gap_pct"]))
+
+    def test_clean_control_backfill_uses_annual_cost_of_equity(self):
+        query = _valuation_stage_query("2016-01-04", "2026-08-27")
+
+        self.assertIn("financial_basis = 'annual'", query)
+        self.assertIn("factor_id = 'cost_of_equity'", query)
+        self.assertIn("cost_of_equity < 0.50", query)
+        self.assertNotIn("cost_of_equity < 1", query)
+        self.assertIn("financial_basis = 'ttm'", query)
+        self.assertIn("factor_id = 'justified_pvgo_pct'", query)
+        self.assertTrue(
+            {
+                "equity_pvgo_pct",
+                "roe_cost_of_equity_spread_pct",
+                "equity_pvgo_compression_pct",
+            }.issubset(set(CLEAN_CONTROL_DAILY_FACTOR_IDS))
+        )
 
     def test_pvgo_factors_are_registered_in_catalog(self):
         self.assertTrue(PVGO_FACTOR_IDS.issubset(set(preferred_factor_columns())))
@@ -260,6 +306,14 @@ class PvgoFactorTest(unittest.TestCase):
         )
         self.assertEqual(
             catalog.loc["intangible_adjusted_pvgo_gap_pct", "value_direction"],
+            "HIGHER_BETTER",
+        )
+        self.assertEqual(
+            catalog.loc["roe_cost_of_equity_spread_pct", "value_direction"],
+            "HIGHER_BETTER",
+        )
+        self.assertEqual(
+            catalog.loc["equity_pvgo_compression_pct", "value_direction"],
             "HIGHER_BETTER",
         )
 

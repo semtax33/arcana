@@ -10,12 +10,18 @@ from scripts.build_us_intangible_adjusted_pvgo import (
     FINAL_WEIGHTS,
     MIN_MARKET_CAP_USD_MILLIONS,
     MODEL_NAME,
+    START_DATE,
     _ablation_graph,
     build_graph,
+)
+from scripts.build_us_clean_raw_pvgo import (
+    MODEL_NAME as CLEAN_RAW_MODEL_NAME,
+    build_graph as build_clean_raw_graph,
 )
 from scripts.build_us_intangible_pvgo_qvir_balanced_hybrid import (
     ADJUSTED_PVGO_SOURCE_NAME,
     QVIR_SOURCE_NAME,
+    START_DATE as HYBRID_START_DATE,
     build_graph as build_hybrid_graph,
 )
 from scripts.factor_lab_research_diagnostics import (
@@ -23,14 +29,24 @@ from scripts.factor_lab_research_diagnostics import (
     factor_model_regression,
     newey_west_mean_test,
 )
+from scripts.analyze_us_pvgo_level_cross_section import _fama_macbeth
+from scripts.run_us_pvgo_clean_control_experiment import (
+    _paired_diagnostic,
+    build_frozen_graphs,
+    build_matched_sample_graphs,
+)
 
 
 KNOWN_FACTOR_IDS = {
     "normalized_intangible_adjusted_pvgo_pct",
     "intangible_adjusted_roe_spread_pct",
     "intangible_adjusted_pvgo_compression_pct",
-    "normalized_nopat_5y",
+    "normalized_intangible_adjusted_eps",
     "mcap_mil",
+    "equity_pvgo_pct",
+    "roe_cost_of_equity_spread_pct",
+    "equity_pvgo_compression_pct",
+    "normalized_earnings_5y",
 }
 
 
@@ -107,6 +123,7 @@ class IntangiblePvgoStrategyTest(unittest.TestCase):
         nodes = _nodes(graph)
 
         self.assertEqual(graph.experiment.snapshot_coverage_policy, "strict")
+        self.assertEqual(graph.experiment.start_date, START_DATE)
         self.assertNotIn("40", graph.experiment.universe.sector_codes)
         self.assertNotIn("60", graph.experiment.universe.sector_codes)
         self.assertEqual(
@@ -124,6 +141,14 @@ class IntangiblePvgoStrategyTest(unittest.TestCase):
         self.assertEqual(
             nodes["market_cap_floor"].config["value"],
             MIN_MARKET_CAP_USD_MILLIONS,
+        )
+        self.assertEqual(
+            nodes["market_cap_input"].config["financial_basis"],
+            "annual",
+        )
+        self.assertEqual(
+            nodes["normalized_adjusted_eps_input"].config["factor_id"],
+            "normalized_intangible_adjusted_eps",
         )
         self.assertEqual(
             nodes["final_rank_score"].config["semantic_label"],
@@ -158,6 +183,147 @@ class IntangiblePvgoStrategyTest(unittest.TestCase):
             )
             self.assertTrue(validation.valid, validation.errors)
 
+    def test_clean_raw_is_a_frozen_topology_accounting_control(self):
+        adjusted = build_graph().model_dump(mode="json")
+        raw = build_clean_raw_graph().model_dump(mode="json")
+        adjusted_nodes = {node["id"]: node for node in adjusted["nodes"]}
+        raw_nodes = {node["id"]: node for node in raw["nodes"]}
+
+        self.assertEqual(raw["experiment"]["name"], CLEAN_RAW_MODEL_NAME)
+        self.assertEqual(
+            {key: value for key, value in raw["experiment"].items() if key != "name"},
+            {key: value for key, value in adjusted["experiment"].items() if key != "name"},
+        )
+        self.assertEqual(set(raw_nodes), set(adjusted_nodes))
+        self.assertEqual(raw["edges"], adjusted["edges"])
+        self.assertEqual(
+            raw_nodes["expectation_level_input"]["config"]["factor_id"],
+            "equity_pvgo_pct",
+        )
+        self.assertEqual(
+            raw_nodes["quality_input"]["config"]["factor_id"],
+            "roe_cost_of_equity_spread_pct",
+        )
+        self.assertEqual(
+            raw_nodes["expectation_change_input"]["config"]["factor_id"],
+            "equity_pvgo_compression_pct",
+        )
+        self.assertEqual(
+            raw_nodes["normalized_adjusted_eps_input"]["config"]["factor_id"],
+            "normalized_earnings_5y",
+        )
+        validation = validate_factor_lab_graph(
+            raw,
+            known_factor_ids=KNOWN_FACTOR_IDS,
+        )
+        self.assertTrue(validation.valid, validation.errors)
+
+    def test_frozen_control_suite_contains_all_four_requested_models(self):
+        graphs = build_frozen_graphs()
+
+        self.assertEqual(
+            set(graphs),
+            {
+                "A_legacy_raw",
+                "B_clean_raw",
+                "C_clean_intangible",
+                "D_adjusted_level_only",
+            },
+        )
+        self.assertEqual(
+            graphs["B_clean_raw"].experiment.start_date,
+            graphs["C_clean_intangible"].experiment.start_date,
+        )
+        self.assertEqual(
+            graphs["D_adjusted_level_only"].outputs.final_node_id,
+            "expectation_level_rank_score",
+        )
+
+    def test_matched_controls_share_one_complete_case_topology(self):
+        graphs = build_matched_sample_graphs()
+        self.assertEqual(
+            set(graphs),
+            {
+                "B_clean_raw_matched",
+                "C_clean_intangible_matched",
+                "D_adjusted_level_only_matched",
+            },
+        )
+        canonical = None
+        for graph in graphs.values():
+            payload = graph.model_dump(mode="json")
+            validation = validate_factor_lab_graph(
+                payload,
+                known_factor_ids=KNOWN_FACTOR_IDS,
+            )
+            self.assertTrue(validation.valid, validation.errors)
+            score = next(
+                node
+                for node in payload["nodes"]
+                if node["id"] == "intangible_expectations_alpha"
+            )
+            self.assertEqual(set(score["config"]["weights"]), {
+                "expectation_level",
+                "quality",
+                "expectation_change",
+                "raw_expectation_level",
+                "raw_quality",
+                "raw_expectation_change",
+            })
+            score["config"]["weights"] = "accounting-treatment-placeholder"
+            payload["experiment"]["name"] = "matched-name-placeholder"
+            if canonical is None:
+                canonical = payload
+            else:
+                self.assertEqual(payload, canonical)
+
+    def test_paired_diagnostic_uses_aligned_active_returns(self):
+        dates = pd.bdate_range("2025-01-02", periods=8)
+        left = pd.Series([0.02] * 8, index=dates)
+        right = pd.Series([0.01] * 8, index=dates)
+
+        result = _paired_diagnostic(
+            left,
+            right,
+            {"2025-03-31": {"A", "B"}, "2025-06-30": {"B", "C"}},
+            {"2025-03-31": {"A", "C"}, "2025-06-30": {"B", "D"}},
+        )
+
+        self.assertEqual(result["observations"], 8)
+        self.assertAlmostEqual(result["annualized_arithmetic_active_return"], 2.52)
+        self.assertAlmostEqual(result["mean_rebalance_jaccard_overlap"], 1 / 3)
+
+    def test_fama_macbeth_joint_regression_recovers_incremental_signs(self):
+        rng = np.random.default_rng(20260829)
+        rows = []
+        for signal_date in pd.date_range("2020-03-31", periods=16, freq="QE"):
+            raw = rng.normal(size=120)
+            adjusted = 0.5 * raw + rng.normal(scale=0.8, size=120)
+            future = -0.02 * raw - 0.03 * adjusted + rng.normal(scale=0.01, size=120)
+            for index in range(120):
+                rows.append(
+                    {
+                        "signal_date": signal_date,
+                        "raw_pvgo": raw[index],
+                        "adjusted_pvgo": adjusted[index],
+                        "forward_return": future[index],
+                        "market_cap_mil": 1_000 + index * 10,
+                        "sector_code": str(10 + (index % 5) * 5),
+                    }
+                )
+        result = _fama_macbeth(
+            pd.DataFrame(rows),
+            ["raw_pvgo", "adjusted_pvgo"],
+            controls=False,
+        )
+
+        self.assertEqual(result["periods"], 16)
+        self.assertLess(result["coefficients"]["raw_pvgo_z"]["mean_coefficient"], 0)
+        self.assertLess(
+            result["coefficients"]["adjusted_pvgo_z"]["mean_coefficient"],
+            0,
+        )
+
     def test_hybrid_requires_both_sleeves_and_inherits_operating_universe(self):
         service = _FakeFactorLabService()
         graph, _source_runs = build_hybrid_graph(
@@ -169,6 +335,11 @@ class IntangiblePvgoStrategyTest(unittest.TestCase):
 
         self.assertNotIn("40", graph.experiment.universe.sector_codes)
         self.assertNotIn("60", graph.experiment.universe.sector_codes)
+        self.assertEqual(graph.experiment.start_date, HYBRID_START_DATE)
+        self.assertEqual(
+            graph.experiment.snapshot_coverage_policy,
+            "allow_missing_inputs",
+        )
         self.assertFalse(
             nodes["balanced_hybrid_score"].config[
                 "missing_weight_renormalize"

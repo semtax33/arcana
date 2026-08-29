@@ -306,7 +306,7 @@ pvgo_rows AS
         (enterprise_value - steady_state_ev) / enterprise_value * 100 AS pvgo_ev_pct,
         (market_cap - (normalized_steady_state_ev - net_debt)) / market_cap * 100 AS normalized_pvgo_pct,
         if(
-            cost_of_equity > 0 AND cost_of_equity < 1,
+            cost_of_equity > 0 AND cost_of_equity < 0.50,
             (market_cap - normalized_earnings_5y / cost_of_equity) / market_cap * 100,
             NULL
         ) AS equity_pvgo_pct,
