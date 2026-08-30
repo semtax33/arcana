@@ -1125,6 +1125,66 @@ python scripts\ebitda_ev_coverage.py `
 stock-batch 요약, 종목 단위 검증 보고서, 팩터 추세 CSV 및 클러스터링된 실패를
 사용합니다.
 
+## 미국 Earnings Call Transcript (FMP → Alpha Vantage)
+
+미국 보통주 전체의 earnings call 원문을 별도 Bronze 폴더에 저장합니다. FMP가 보유한
+종목별 전체 분기를 먼저 받고, FMP 원문이 없는 분기만 Alpha Vantage로 보완합니다.
+API 키는 파일이나 명령행 인자가 아니라 프로세스 환경 변수로만 전달합니다.
+
+```powershell
+$env:FMP_API_KEY = "<YOUR_FMP_KEY>"
+$env:ALPHA_VANTAGE_API_KEY = "<YOUR_ALPHA_VANTAGE_KEY>"
+```
+
+먼저 소수 종목과 짧은 기간으로 API 권한 및 저장 결과를 확인합니다.
+
+```powershell
+python -m scripts.download_us_earnings_call_transcripts `
+  --symbols AAPL MSFT `
+  --start-quarter 2024Q1 `
+  --end-quarter 2024Q4
+```
+
+미국 보통주 전체를 수집하려면 `--symbols`를 생략합니다. `--start-quarter`도 생략하면
+FMP는 날짜 API가 제공하는 모든 과거 분기를 수집하고, Alpha Vantage fallback은 공식
+지원 범위인 2010Q1부터 현재 분기까지 확인합니다. 최초 전체 백필은 호출량이 크므로
+`--offset`과 `--limit`으로 재시작 가능한 배치로 나눌 수 있습니다.
+
+```powershell
+python -m scripts.download_us_earnings_call_transcripts --offset 0 --limit 250
+python -m scripts.download_us_earnings_call_transcripts --offset 250 --limit 250
+```
+
+기본 저장 위치는 다음과 같습니다.
+
+```text
+data-lake/bronze/earnings-call-transcripts/
+  fmp/ticker=AAPL/fiscal_year=2024/quarter=Q1.json
+  alpha-vantage/ticker=AAPL/fiscal_year=2024/quarter=Q2.json
+  fmp/dates/ticker=AAPL.json
+  fmp/catalog/earnings-transcript-list.json
+```
+
+각 JSON은 공급자 원문을 `data`에 그대로 보존하고 `provider`, `status`, `retrieved_at`을
+함께 기록합니다. 정상 원문은 다음 실행에서 건너뛰며, 최근 2개 분기의 `no_data` 결과는
+새 원문 반영을 위해 다시 확인합니다. 모든 캐시를 다시 받으려면 `--force`를 사용합니다.
+Alpha Vantage 요청이 모든 내부 재시도 후에도 실패하면 해당 종목·분기를 큐에 보관했다가
+전체 순회가 끝난 뒤 기본 1회 다시 요청합니다. `--alpha-retry-passes N`으로 후처리 재시도
+횟수를 조정할 수 있으며, 복구된 항목은 결과의 `recovered` 카운트에 포함됩니다. 실제
+Alpha Vantage 응답은 75초 전체 기한으로 스트리밍해 느린 단일 응답이 전체 백필을
+무기한 막지 않도록 합니다.
+FMP 또는 Alpha Vantage의 transcript endpoint는 계정 요금제에 따라 별도 권한이 필요할
+수 있습니다. 엔드포인트 사양은 [FMP Earnings Call Transcripts](https://site.financialmodelingprep.com/datasets/earnings-call-transcripts)와
+[Alpha Vantage API Documentation](https://www.alphavantage.co/documentation/)을 기준으로 합니다.
+
+전체 백필 종료 후에는 유니버스의 모든 종목·분기 경로와 JSON 메타데이터를 전수
+검사합니다. `complete=true`, `missing=0`, `invalid=0`이어야 완료로 판정합니다.
+
+```powershell
+python -m scripts.verify_us_earnings_call_transcripts `
+  --output data-lake\bronze\earnings-call-transcripts\verification.json
+```
+
 ## 테스트
 
 US 매핑 커버리지 검증기:

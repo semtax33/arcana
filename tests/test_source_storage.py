@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import socket
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import call, patch
@@ -180,6 +181,56 @@ class SourceStorageTest(unittest.TestCase):
             with SourceRefreshLock("kr", data_lake_root=root):
                 with self.assertRaises(RuntimeError):
                     SourceRefreshLock("kr", data_lake_root=root).acquire()
+
+    def test_market_lock_recovers_dead_same_host_process(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "data-lake"
+            lock = SourceRefreshLock("us", data_lake_root=root)
+            lock.path.parent.mkdir(parents=True)
+            lock.path.write_text(
+                json.dumps(
+                    {
+                        "market": "us",
+                        "pid": 999_999_999,
+                        "host": socket.gethostname(),
+                        "created_at": "2020-01-01T00:00:00+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch(
+                "engine.core.source_storage._process_is_running",
+                return_value=False,
+            ):
+                with lock:
+                    current = json.loads(lock.path.read_text(encoding="utf-8"))
+                    self.assertEqual(current["pid"], __import__("os").getpid())
+                    self.assertEqual(current["market"], "us")
+
+            self.assertFalse(lock.path.exists())
+
+    def test_market_lock_keeps_foreign_host_lock(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "data-lake"
+            lock = SourceRefreshLock("us", data_lake_root=root)
+            lock.path.parent.mkdir(parents=True)
+            lock.path.write_text(
+                json.dumps(
+                    {
+                        "market": "us",
+                        "pid": 999_999_999,
+                        "host": "another-host",
+                        "created_at": "2020-01-01T00:00:00+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(RuntimeError):
+                lock.acquire()
+
+            self.assertTrue(lock.path.exists())
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import socket
+import sys
 import threading
 import time
 from contextlib import AbstractContextManager
@@ -113,22 +114,51 @@ class SourceRefreshLock(AbstractContextManager["SourceRefreshLock"]):
             "host": socket.gethostname(),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        try:
-            descriptor = os.open(
-                self.path,
-                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-            )
-        except FileExistsError as exc:
-            raise RuntimeError(
-                f"another refresh may already be running for market={self.market}; "
-                f"lock={self.path}"
-            ) from exc
+        descriptor = None
+        for attempt in range(2):
+            try:
+                descriptor = os.open(
+                    self.path,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                )
+                break
+            except FileExistsError as exc:
+                if attempt == 0 and self._remove_stale_lock():
+                    continue
+                raise RuntimeError(
+                    f"another refresh may already be running for market={self.market}; "
+                    f"lock={self.path}"
+                ) from exc
+        if descriptor is None:
+            raise RuntimeError(f"failed to acquire refresh lock: {self.path}")
         try:
             os.write(descriptor, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
         finally:
             os.close(descriptor)
         self._acquired = True
         return self
+
+    def _remove_stale_lock(self) -> bool:
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            lock_market = str(payload.get("market", "")).strip().lower()
+            lock_host = str(payload.get("host", "")).strip().lower()
+            lock_pid = int(payload.get("pid", 0))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return False
+        if (
+            lock_market != self.market
+            or lock_host != socket.gethostname().strip().lower()
+            or _process_is_running(lock_pid)
+        ):
+            return False
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return True
 
     def release(self) -> None:
         if not self._acquired:
@@ -145,6 +175,37 @@ class SourceRefreshLock(AbstractContextManager["SourceRefreshLock"]):
     def __exit__(self, exc_type, exc, traceback) -> bool:
         self.release()
         return False
+
+
+def _process_is_running(pid: int) -> bool:
+    """Return whether a local PID exists without signaling or mutating it."""
+    if int(pid) <= 0:
+        return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            process_query_limited_information = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(  # type: ignore[attr-defined]
+                process_query_limited_information,
+                False,
+                int(pid),
+            )
+            if not handle:
+                return False
+            ctypes.windll.kernel32.CloseHandle(handle)  # type: ignore[attr-defined]
+            return True
+        except (AttributeError, OSError, TypeError, ValueError):
+            return True
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
 class SourceArchiveSession(AbstractContextManager["SourceArchiveSession"]):

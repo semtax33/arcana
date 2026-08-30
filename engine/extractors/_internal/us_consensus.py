@@ -22,7 +22,10 @@ import pandas as pd
 import requests
 
 from engine.core.paths import DATA_LAKE
-from engine.core.source_storage import SourceRefreshLock
+from engine.core.source_storage import (
+    SourceRefreshLock,
+    replace_file_with_permission_retry,
+)
 from engine.extractors._internal.yfinance_market_prices import (
     FILTERED_UNIVERSE_PATH,
     download_us_equity_universe,
@@ -129,7 +132,7 @@ class _PersistentRollingRateLimiter:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump({"request_timestamps": timestamps}, handle)
-            os.replace(temporary, self.state_path)
+            replace_file_with_permission_retry(Path(temporary), self.state_path)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)

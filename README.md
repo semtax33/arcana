@@ -60,6 +60,7 @@ Arcana는 서로 다른 시장과 공시 체계를 공통 금융 모델로 변�
 - 한국: DART 공시·주석·사업보고서, KRX 가격·주식수·배당·벤치마크
 - 미국: SEC Company Facts·filing notes, Yahoo Finance 가격·배당
 - 컨센서스: 한국 리포트 데이터와 미국 Finnworlds·FMP·Alpha Vantage·Yahoo Finance
+- 미국 earnings call transcript: FMP 우선, Alpha Vantage 누락분 보완 수집
 - 거시·자본비용 입력: FRED 금리, Damodaran ERP, 시장 벤치마크
 - Bronze → Silver → Gold 계층과 ClickHouse 적재
 
