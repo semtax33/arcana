@@ -584,6 +584,69 @@ def find_next_data_table(header_table):
     return None, " ".join(supporting_text)
 
 
+def _statement_period_year_month(period: Any) -> tuple[int, int] | None:
+    match = re.fullmatch(r"\s*(\d{4})[.]\s*(\d{1,2})\s*", safe_str(period))
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _positive_span(cell: Tag, attribute: str) -> int:
+    try:
+        return max(int(cell.get(attribute) or 1), 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+def current_statement_amount_column(
+    body_table: Tag,
+    *,
+    statement_type: str,
+    period: Any,
+) -> int:
+    """Return the source cell holding the current cumulative amount.
+
+    DART interim income statements commonly expose four amount columns:
+    current-quarter, current-YTD, comparative-quarter, comparative-YTD.  The
+    factor periodizer expects YTD flows, so selecting the first numeric column
+    causes it to difference an already quarter-only value.  Detect the first
+    current-period column group from the header spans and select its final
+    (cumulative) column.  Balance sheets, annual statements, and simple
+    current/comparative tables continue to use the first amount column.
+    """
+
+    period_parts = _statement_period_year_month(period)
+    fiscal_month = period_parts[1] if period_parts is not None else 0
+    if normalize_statement_type(statement_type) not in {"IS", "CIS", "CF"}:
+        return 1
+    if fiscal_month not in {3, 6, 9}:
+        return 1
+
+    for tr in body_table.find_all("tr")[:4]:
+        cells = tr.find_all(["td", "th"], recursive=False)
+        logical_column = 0
+        groups: list[tuple[int, int]] = []
+        for cell in cells:
+            colspan = _positive_span(cell, "colspan")
+            if colspan > 1:
+                groups.append((logical_column, colspan))
+            logical_column += colspan
+        if len(groups) >= 2 and groups[0][1] == groups[1][1]:
+            current_start, current_width = groups[0]
+            if current_width >= 2:
+                return current_start + current_width - 1
+
+    # Readable DART documents may omit colspans but label the subcolumns.
+    # The subheader omits the row-spanned account column, hence the +1.
+    for tr in body_table.find_all("tr")[:4]:
+        cells = tr.find_all(["td", "th"], recursive=False)
+        for index, cell in enumerate(cells):
+            if "누적" in normalize_account_name(cell.get_text(" ", strip=True)):
+                return index + 1
+
+    return 1
+
+
 def extract_rows_from_dart_html(
     html_path: str | Path,
     company_name: str,
@@ -627,15 +690,20 @@ def extract_rows_from_dart_html(
 
         combined_header_text = f"{header_text} {supporting_text}".strip()
         unit_factor = parse_unit_factor(combined_header_text)
+        amount_column = current_statement_amount_column(
+            body_table,
+            statement_type=fs_type,
+            period=period,
+        )
 
         for row_index, tr in enumerate(body_table.find_all("tr")):
             tds = tr.find_all("td")
 
-            if len(tds) < 2:
+            if len(tds) <= amount_column:
                 continue
 
             account_td = tds[0]
-            amount_td = tds[1]
+            amount_td = tds[amount_column]
 
             raw_account_name = account_td.get_text("", strip=False)
             original_account_name = raw_account_name.strip()

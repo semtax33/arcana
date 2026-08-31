@@ -14,6 +14,7 @@ from engine.transformers.sec_filings import normalize_us_sec_filings
 from engine.transformers._internal.sec_filings import (
     US_MAPPING_RULE_PATH,
     SecFactCandidate,
+    _companyfacts_accession_period_ends,
     _fact_units_for_rule,
     _notes_rule_matches_tag,
     add_formula_derived_candidates,
@@ -133,6 +134,46 @@ def fact(label: str, value: float, tag: str) -> dict:
 
 
 class SecFilingsNormalizerTest(unittest.TestCase):
+    def test_accession_period_anchor_ignores_short_post_period_event(self):
+        common = {
+            "accn": "0000000001-24-000001",
+            "fy": 2024,
+            "fp": "Q3",
+            "form": "10-Q",
+            "filed": "2024-11-04",
+        }
+        period_ends = _companyfacts_accession_period_ends(
+            [
+                (
+                    "REVENUE",
+                    [
+                        {
+                            **common,
+                            "start": "2024-01-01",
+                            "end": "2024-09-30",
+                        },
+                        {
+                            **common,
+                            "start": "2023-01-01",
+                            "end": "2023-09-30",
+                        },
+                    ],
+                ),
+                (
+                    "PPE_DISPOSAL_PROCEEDS",
+                    [
+                        {
+                            **common,
+                            "start": "2024-10-01",
+                            "end": "2024-10-31",
+                        }
+                    ],
+                ),
+            ]
+        )
+
+        self.assertEqual(next(iter(period_ends.values())), "2024-09-30")
+
     def test_normalize_sec_date_accepts_companyfacts_and_notes_formats(self):
         self.assertEqual(normalize_sec_date("2018-06-29"), "2018-06-29")
         self.assertEqual(normalize_sec_date("20180629"), "2018-06-29")
@@ -217,6 +258,179 @@ class SecFilingsNormalizerTest(unittest.TestCase):
 
             self.assertEqual(float(revenue["normalized_amount"]), 400)
             self.assertEqual(revenue_debug["period_end"], "2025-12-31")
+
+    def test_companyfacts_accession_period_blocks_stale_primary_tag(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companyfacts = root / "companyfacts"
+            output = root / "out"
+            companyfacts.mkdir()
+            canonical = root / "canonical.csv"
+            ticker_map = root / "tickers.csv"
+            metadata = root / "metadata.csv"
+            write_canonical(canonical)
+            write_ticker_map(ticker_map)
+            accession = "0000320193-26-000001"
+            common = {
+                "accn": accession,
+                "fy": 2025,
+                "fp": "FY",
+                "form": "10-K",
+                "filed": "2026-04-13",
+            }
+            write_companyfacts(
+                companyfacts / "CIK0000320193.json",
+                {
+                    "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                        "label": "Revenue",
+                        "units": {
+                            "USD": [
+                                {
+                                    **common,
+                                    "start": "2024-01-01",
+                                    "end": "2024-12-31",
+                                    "val": 700,
+                                    "frame": "CY2024",
+                                }
+                            ]
+                        },
+                    },
+                    "Revenues": {
+                        "label": "Revenue",
+                        "units": {
+                            "USD": [
+                                {
+                                    **common,
+                                    "start": "2025-01-01",
+                                    "end": "2025-12-31",
+                                    "val": 400,
+                                    "frame": "CY2025",
+                                }
+                            ]
+                        },
+                    },
+                },
+            )
+
+            normalize_us_sec_filings(
+                symbols=["AAPL"],
+                start_year=2025,
+                end_year=2025,
+                companyfacts_dir=companyfacts,
+                notes_root=root / "missing-notes",
+                output_dir=output,
+                ticker_map_path=ticker_map,
+                canonical_csv_path=canonical,
+                report_metadata_path=metadata,
+                use_edgartools=False,
+            )
+
+            df = pd.read_csv(output / "us_normalized_AAPL.csv")
+            debug = pd.read_csv(output / "us_normalized_AAPL.debug.csv")
+            revenue = df.loc[df["canonical_account_id"].eq("REVENUE")].iloc[0]
+            revenue_debug = debug.loc[debug["canonical_account_id"].eq("REVENUE")].iloc[0]
+            self.assertEqual(float(revenue["normalized_amount"]), 400)
+            self.assertEqual(revenue_debug["source"], "companyfacts_alternate")
+            self.assertEqual(revenue_debug["period_end"], "2025-12-31")
+
+    def test_scoped_rebuild_replaces_only_requested_symbol_years(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companyfacts = root / "companyfacts"
+            output = root / "out"
+            companyfacts.mkdir()
+            output.mkdir()
+            canonical = root / "canonical.csv"
+            ticker_map = root / "tickers.csv"
+            metadata = root / "metadata.csv"
+            write_canonical(canonical)
+            write_ticker_map(ticker_map)
+            write_companyfacts(
+                companyfacts / "CIK0000320193.json",
+                {"Revenues": fact("Revenue", 400, "revenue")},
+            )
+            pd.DataFrame(
+                [
+                    {
+                        "canonical_account_id": "REVENUE",
+                        "statement_type": "IS",
+                        "normalized_amount": 300,
+                        "fiscal_year": 2024,
+                        "fiscal_month": 12,
+                    },
+                    {
+                        "canonical_account_id": "RND",
+                        "statement_type": "IS",
+                        "normalized_amount": 999,
+                        "fiscal_year": 2025,
+                        "fiscal_month": 12,
+                    },
+                ]
+            ).to_csv(output / "us_normalized_AAPL.csv", index=False)
+            pd.DataFrame(
+                [
+                    {
+                        "stock_code": "AAPL",
+                        "fiscal_year": 2025,
+                        "fiscal_month": 12,
+                        "report_date": "2026-01-01",
+                        "rcept_no": "stale",
+                        "source_type": "statement",
+                    },
+                    {
+                        "stock_code": "MSFT",
+                        "fiscal_year": 2025,
+                        "fiscal_month": 12,
+                        "report_date": "2026-01-02",
+                        "rcept_no": "keep",
+                        "source_type": "statement",
+                    },
+                ]
+            ).to_csv(metadata, index=False)
+
+            normalize_us_sec_filings(
+                symbols=["AAPL"],
+                start_year=2025,
+                end_year=2025,
+                companyfacts_dir=companyfacts,
+                notes_root=root / "missing-notes",
+                output_dir=output,
+                ticker_map_path=ticker_map,
+                canonical_csv_path=canonical,
+                report_metadata_path=metadata,
+                use_edgartools=False,
+            )
+
+            result = pd.read_csv(output / "us_normalized_AAPL.csv")
+            result_metadata = pd.read_csv(metadata, dtype={"rcept_no": str})
+            self.assertEqual(
+                float(
+                    result.loc[
+                        result["canonical_account_id"].eq("REVENUE")
+                        & result["fiscal_year"].eq(2024),
+                        "normalized_amount",
+                    ].iat[0]
+                ),
+                300,
+            )
+            self.assertFalse(
+                (
+                    result["canonical_account_id"].eq("RND")
+                    & result["fiscal_year"].eq(2025)
+                ).any()
+            )
+            self.assertEqual(
+                float(
+                    result.loc[
+                        result["canonical_account_id"].eq("REVENUE")
+                        & result["fiscal_year"].eq(2025),
+                        "normalized_amount",
+                    ].iat[0]
+                ),
+                400,
+            )
+            self.assertIn("MSFT", set(result_metadata["stock_code"]))
+            self.assertNotIn("stale", set(result_metadata["rcept_no"]))
 
     def test_share_rules_only_accept_share_units(self):
         fact = {

@@ -9,6 +9,7 @@ normalized
 data-lake/bronze/**
 data-lake/silver/**
 data-lake/gold/**
+data-lake/cache/**
 data-lake/meta/screener_strategies.sqlite3
 data-lake/meta/screener_strategies.sqlite3-*
 data-lake/meta/refresh_state/**
@@ -25,3 +26,4 @@ scripts/token_output.csv
 .codex-tmp
 .codex-work/
 _workspace/
+deliverables/

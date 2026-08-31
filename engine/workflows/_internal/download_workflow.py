@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import date, datetime
 
 from engine.extractors.benchmarks import fetch_benchmark_prices, fetch_yfinance_benchmark_prices
@@ -19,7 +20,7 @@ from engine.extractors.market_prices import (
     fetch_all_prices,
     fetch_all_shares,
 )
-from engine.extractors.sec_filings import download_us_companyfacts
+from engine.extractors.sec_filings import download_us_companyfacts, download_us_filing_htmls
 from engine.transformers.benchmarks import (
     DEFAULT_BENCHMARK_INDEX_CODES,
     DEFAULT_YFINANCE_BENCHMARK_TICKERS,
@@ -172,6 +173,25 @@ def download_all_us_statements(args: argparse.Namespace) -> None:
         force=args.force,
         sleep_seconds=args.sleep_seconds if args.sleep_seconds > 0 else 0.1,
     )
+
+
+def download_all_us_filing_htmls(args: argparse.Namespace) -> None:
+    summary = download_us_filing_htmls(
+        symbols=_parse_symbols(args.symbols),
+        start_date=args.start_date,
+        end_date=args.end_date,
+        forms=_parse_sec_forms(args.sec_forms),
+        offset=args.offset,
+        limit=args.limit,
+        force=args.force,
+        resume=not args.no_resume,
+        ir_only=args.ir_only,
+        workers=args.workers,
+        sleep_seconds=args.sleep_seconds if args.sleep_seconds > 0 else 0.1,
+        retries=args.stock_retries,
+        retry_backoff_seconds=args.stock_retry_backoff,
+    )
+    print(json.dumps(summary.to_dict(), ensure_ascii=False, indent=2), flush=True)
 
 
 def download_erp_inputs(args: argparse.Namespace) -> None:
@@ -377,6 +397,8 @@ US_DOWNLOAD_ACTIONS = {
     "prices": download_all_us_prices,
     "benchmarks": download_us_benchmarks,
     "sec-tickers": download_sec_company_tickers,
+    "sec-filings": download_all_us_filing_htmls,
+    "filing-html": download_all_us_filing_htmls,
     "consensus": download_us_consensus,
     "dividend": download_all_us_dividend,
     "erp": download_erp_inputs,
@@ -399,10 +421,21 @@ def main() -> None:
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--no-resume", action="store_true", help="Ignore completed SEC filing checkpoints.")
+    parser.add_argument(
+        "--ir-only",
+        action="store_true",
+        help="Download only HTML EX-99/EX-99.x attachments from 8-K filings.",
+    )
     parser.add_argument("--workers", type=int, default=1, help="Parallel worker count for supported downloads.")
     parser.add_argument("--sleep-seconds", type=float, default=0.0)
     parser.add_argument("--stock-retries", type=int, default=3, help="Per-symbol retry count for supported downloads.")
     parser.add_argument("--stock-retry-backoff", type=float, default=30.0, help="Base seconds for per-symbol retry backoff.")
+    parser.add_argument(
+        "--sec-forms",
+        default="10-K,10-Q,8-K",
+        help="Comma-separated SEC primary forms for filing-html downloads.",
+    )
     parser.add_argument(
         "--yfinance-timeout",
         type=float,
@@ -530,6 +563,12 @@ def _parse_symbols(value: str | None) -> list[str] | None:
     if value is None or not value.strip():
         return None
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _parse_sec_forms(value: str | None) -> list[str]:
+    if value is None or not value.strip():
+        return ["10-K", "10-Q", "8-K"]
+    return [item.strip().upper() for item in value.split(",") if item.strip()]
 
 
 def _parse_benchmark_ids(value: str | None) -> list[str] | None:

@@ -11,6 +11,12 @@ API 키와 토큰은 저장소에 기록하지 않고 실행할 PowerShell 프�
 
 ```powershell
 $env:DART_API_KEY = "<YOUR_DART_API_KEY>"
+$env:BLS_API_KEY = "<YOUR_BLS_API_KEY>"                 # 선택 사항, 등록 사용자 한도 사용
+$env:CENSUS_API_KEY = "<YOUR_CENSUS_API_KEY>"
+$env:BEA_API_KEY = "<YOUR_BEA_API_KEY>"
+$env:EIA_API_KEY = "<YOUR_EIA_API_KEY>"
+$env:NASS_API_KEY = "<YOUR_NASS_API_KEY>"
+$env:EDGAR_IDENTITY = "Your Name your@email.com"       # SEC 요청 식별자; API key가 아님
 $env:HANKYUNG_CONSENSUS_TOKEN = "<YOUR_HANKYUNG_TOKEN>"
 $env:ALPHA_VANTAGE_CSRF_TOKEN = "<YOUR_ALPHA_VANTAGE_CSRF_TOKEN>" # scripts/get_api_key.py 전용
 $env:CLICKHOUSE_PASSWORD = "<YOUR_CLICKHOUSE_PASSWORD>"
@@ -32,6 +38,140 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 
 가상환경이 삭제된 Python 설치 경로를 가리키면 테스트나 파이프라인 명령을
 실행하기 전에 venv를 다시 생성해야 합니다.
+
+### D 드라이브 개발 도구 캐시
+
+C: 사용자 프로필이 커지지 않도록 uv, Poetry, Yarn 캐시는 프로젝트의
+`data-lake/cache/` 아래에 둡니다. 다음 설정은 사용자 범위에 영구 저장되며 기존
+터미널에는 적용되지 않으므로 설정 후 터미널을 다시 엽니다.
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+    "UV_CACHE_DIR",
+    "D:\Programming\python_example\Arcana\data-lake\cache\uv",
+    "User"
+)
+[Environment]::SetEnvironmentVariable(
+    "POETRY_CACHE_DIR",
+    "D:\Programming\python_example\Arcana\data-lake\cache\poetry",
+    "User"
+)
+[Environment]::SetEnvironmentVariable(
+    "YARN_CACHE_FOLDER",
+    "D:\Programming\python_example\Arcana\data-lake\cache\yarn",
+    "User"
+)
+```
+
+`data-lake/cache/**`는 Git에서 제외됩니다. Poetry의 기본 `virtualenvs.path`는
+`POETRY_CACHE_DIR/virtualenvs`를 따르며 Yarn Classic은 실제 패키지를
+`YARN_CACHE_FOLDER/v6`에 저장합니다.
+
+## P/Q/C/I 예측 입력 데이터 수집
+
+BLS, Census, BEA, EIA, FDIC, NASS, FHFA의 대표 데이터셋을 한 명령으로 Bronze에
+수집할 수 있습니다. API 키는 JSON 설정이나 CLI 인자로 받지 않으며 위 환경변수에서만
+읽습니다. Census, BEA, EIA, NASS 키는 필수이고 BLS 키는 선택 사항입니다. FDIC와
+FHFA 공개 다운로드에는 키가 필요하지 않습니다.
+
+```powershell
+# 7개 소스 전체 수집. 필수 키가 하나라도 없으면 네트워크 호출 전에 실패합니다.
+python -m engine.workflows.pqci_inputs
+
+# 일부 소스만 수집
+python -m engine.workflows.pqci_inputs --source bls --source fdic --source fhfa
+
+# 키가 준비되지 않은 소스는 건너뛰고 나머지만 수집
+python -m engine.workflows.pqci_inputs --skip-missing-keys
+
+# API 키를 포함하지 않는 기본 쿼리 설정 확인
+python -m engine.workflows.pqci_inputs --print-default-config
+```
+
+기본 수집 대상은 섹터별 매출과 현금흐름을 `수요 → 수량(Q) × 가격(P) → 매출 →
+비용(C) → 투자·자본(I)`로 연결하는 데 필요한 다음 신호입니다.
+
+| 소스 | 기본 데이터셋 | 주요 PQCI 용도 |
+| --- | --- | --- |
+| BLS | CPI(전체·식품·주거·차량·휘발유), PPI, 시간당 임금, 고용, 실업률, 구인 | P·Q·C |
+| Census | 소매판매, 제조업 주문·출하·재고, 제조·유통 재고/판매, 주택건설·신축판매, 무역 | P·Q·I |
+| BEA | 지역 GDP, 산업별 GDP/산출/중간투입, Input-Output 총소요표 | P·Q·C·I 및 산업 비용 그래프 |
+| EIA | WTI·Brent·Henry Hub, 원유·가스 생산, 원유 재고, 정제 가동률, 전력 판매·가격 | P·Q·C·I |
+| FDIC | 영업 은행 목록, 분기별 대출·예금·이자수익자산·NIM·손익·건전성·자본 | P·Q·C·I |
+| NASS | 옥수수·밀·대두·소의 생산·수율·가격·재고 관련 원자료 | P·Q·I |
+| FHFA | Master HPI | P·I |
+
+실행 시각별 원본 스냅샷과 데이터셋별 최신본은 다음 위치에 저장됩니다.
+
+```text
+data-lake/bronze/pqci/bls/{dataset}_{timestamp}.json
+data-lake/bronze/pqci/census/{dataset}_{timestamp}.json
+data-lake/bronze/pqci/bea/{dataset}_{timestamp}.json
+data-lake/bronze/pqci/eia/{dataset}_{timestamp}.json
+data-lake/bronze/pqci/fdic/{dataset}_{timestamp}.json
+data-lake/bronze/pqci/nass/{dataset}_{timestamp}.json
+data-lake/bronze/pqci/fhfa/hpi_master_{timestamp}.csv
+data-lake/bronze/pqci/{source}/latest_{dataset}.{json|csv}
+data-lake/bronze/pqci/catalog.json
+```
+
+JSON 결과에는 원 응답과 함께 수집 시각, 데이터셋, 행 수, 키를 제거한 요청,
+PQCI 차원·KPI 계층·적용 섹터 메타데이터가 들어갑니다. BLS 결과에는 series ID별
+설명과 PQCI 차원도 포함됩니다. FHFA CSV에는 같은 이름의 `.metadata.json`이 생성되고,
+`catalog.json`은 전체 수집 카탈로그와 P/Q/C/I 정의를 제공합니다.
+API 응답, 파일명, 메타데이터, CLI 출력 어디에도 API 키를 기록하지 않습니다.
+
+기본값 대신 쿼리 조건을 바꾸려면 아래처럼 JSON 파일을 만들고 `--config`로 넘깁니다.
+지정하지 않은 필드는 기본값을 유지합니다. `key`, `api_key`, `UserID`,
+`registrationkey` 같은 비밀 필드를 설정 파일에 넣으면 실행을 거부합니다.
+
+```json
+{
+  "bls": {
+    "start_year": 2020,
+    "end_year": 2026
+  },
+  "census": {
+    "datasets": [
+      {
+        "name": "advance_retail_sales",
+        "dataset": "timeseries/eits/marts",
+        "get": ["cell_value", "data_type_code", "time_slot_id", "category_code", "seasonally_adj"],
+        "query": {"time": "from 2022-01"},
+        "pqci": {
+          "dimensions": ["P", "Q"],
+          "kpi_layers": ["demand", "activity"],
+          "sectors": ["retail"]
+        }
+      }
+    ]
+  },
+  "nass": {
+    "max_records": 40000
+  }
+}
+```
+
+소스 최상위의 `start_year`, `end_year`, `page_size`, `max_records` 같은 값은 그 소스의
+모든 데이터셋에 공통으로 적용됩니다. `datasets` 배열을 지정하면 해당 소스의 기본
+배열 전체를 대체하므로, 일부 데이터셋만 실행할 때도 `name`, 쿼리와 `pqci` 메타데이터를
+함께 적습니다.
+
+EIA와 FDIC는 데이터셋별 응답 전체를 페이지 단위로 수집합니다. 기본 안전 한도는
+EIA 데이터셋당 50,000행, FDIC 데이터셋당 150,000행이며 설정의 `max_records`로
+조정할 수 있습니다. NASS Quick Stats API 자체가
+요청당 최대 50,000행이므로 수집 전 count API를 호출하고, 초과하면 필터를 더 좁히라는
+오류를 냅니다.
+
+공식 문서:
+
+- Census Data API: https://www.census.gov/data/developers/guidance/api-user-guide.API_Key.html
+- BLS Public Data API v2: https://www.bls.gov/developers/api_signature_v2.htm
+- BEA API: https://apps.bea.gov/api/signup/
+- EIA API v2: https://www.eia.gov/opendata/documentation.php
+- FDIC BankFind API: https://api.fdic.gov/banks/docs
+- NASS Quick Stats API: https://quickstats.nass.usda.gov/api
+- FHFA HPI datasets: https://www.fhfa.gov/data/hpi/datasets
 
 ## 통합 최신 데이터 갱신
 
@@ -203,6 +343,9 @@ python -m engine.workflows.download --workers 2 --sleep-seconds 8 --stock-retrie
 python -m engine.workflows.download --force business-info
 python -m engine.workflows.download --market us sec-tickers
 python -m engine.workflows.download --market us statements --symbols AAPL,MSFT --limit 2
+python -m engine.workflows.download --market us --symbols AAPL,MSFT --start-date 2025-01-01 --end-date 2026-08-30 sec-filings
+python -m engine.workflows.download --market us --offset 0 --limit 100 --start-date 2025-01-01 sec-filings
+python -m engine.workflows.download --market us --ir-only --workers 8 --start-date 2016-01-01 sec-filings
 python -m engine.workflows.download --market us prices --symbols AAPL,MSFT --limit 2
 python -m engine.workflows.download --market us prices --offset 100 --limit 500 --sleep-seconds 0.2
 python -m engine.workflows.download --market kr benchmarks
@@ -219,6 +362,40 @@ python -m engine.loaders.consensus --market kr
 범위를 제한합니다. `--start-year`, `--end-year`는 `YYYY` 형식을 허용하며 연간 전체
 날짜 범위로 확장됩니다. DART 재무제표·주석·사업 정보 검색은 10년을 초과하는 범위를
 여러 DART 검색 요청으로 자동 분할하므로 과거 20~30년 구간도 다운로드할 수 있습니다.
+
+### SEC EDGAR 원문 HTML 및 IR 첨부 수집
+
+`sec-filings`는 `edgartools`를 사용해 10-K, 10-Q, 8-K의 주 공시 문서 원문 HTML을
+그대로 보존합니다. 8-K 첨부 중 document type이 `EX-99`, `EX-99.1`, `EX-99.2`처럼
+숫자형 `EX-99.x`인 HTML은 IR 자료로 분리합니다. PDF, XML, `EX-101` 등은 저장하지
+않습니다.
+
+```text
+data-lake/bronze/sec/fillings/10-K/{ticker}/*.htm[l]
+data-lake/bronze/sec/fillings/10-Q/{ticker}/*.htm[l]
+data-lake/bronze/sec/fillings/8-K/{ticker}/*.htm[l]
+data-lake/bronze/sec/fillings/ir/{ticker}/*.htm[l]
+```
+
+각 HTML 옆에는 accession number, filing date, SEC URL, SHA-256, byte size,
+`edgartools` 버전이 들어 있는 `.metadata.json` 파일이 생성됩니다. 종목별 완료 상태는
+`fillings/_checkpoints/`에 기록되므로 같은 조건으로 다시 실행하면 완료 종목을 건너뜁니다.
+`--no-resume`은 checkpoint만 무시하고, `--force`는 기존 파일까지 다시 씁니다.
+
+`--symbols`를 생략하면 `data-lake/bronze/yfinance/universe/us_equity_universe.csv`의
+미국 개별주식 전체를 대상으로 하며 `--offset`과 `--limit`으로 배치를 나눌 수 있습니다.
+날짜를 모두 생략하면 실행일 기준 최근 10년을 수집하고, 기본 form은
+`10-K,10-Q,8-K`입니다. 다른 form 조합은 `--sec-forms 10-K,8-K`처럼 지정합니다.
+`--ir-only`를 지정하면 form을 8-K로 제한하고 주 공시 문서는 저장하지 않은 채 HTML
+`EX-99/EX-99.x`만 수집합니다. `--workers`는 대규모 backfill의 종목 병렬 처리 수이며,
+`edgartools` 프로세스 전역 rate limiter 안에서 동작합니다.
+Arcana는 edgartools의 데이터 및 HTTP 캐시 경로를 프로젝트 내부
+`data-lake/cache/edgar/`로 고정합니다. 따라서 기본 사용자 경로인
+`%USERPROFILE%\.edgar`에 대규모 공시 캐시가 쌓이지 않으며, 이 캐시 디렉터리는 Git에서
+제외됩니다.
+대규모 backfill은 파일 용량과 SEC 호출량이 크므로 작은 배치로 시작해 checkpoint를
+확인하면서 확장하는 것을 권장합니다. SEC의 fair-access 정책에 맞게 실행 프로세스에
+실제 연락 가능한 `EDGAR_IDENTITY`를 반드시 설정하십시오.
 
 Hankyung 컨센서스 다운로드는 원본 JSON 파일을
 `data-lake/bronze/consensus/hankyung/`에 저장합니다. ValueFinder와 EQUITY의 애널리스트

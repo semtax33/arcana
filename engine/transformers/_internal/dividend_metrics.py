@@ -23,7 +23,10 @@ from engine.extractors._internal.yfinance_market_prices import (
     yfinance_price_ticker_from_storage_stem,
 )
 from engine.markets.us import US_MARKET_CONFIG
-from engine.transformers._internal.edgar_identity import configure_edgar_identity
+from engine.transformers._internal.edgar_identity import (
+    configure_edgar_data_directory,
+    configure_edgar_identity,
+)
 from engine.transformers._internal.statement_files import read_statement_period_frames
 
 base_dir = DATA_LAKE.silver("dart", "normalized")
@@ -1435,6 +1438,7 @@ def _extract_sec_notes_dividend_events(
 
 
 def _default_us_dividend_edgartools_provider(symbol, cik, company_name, rules):
+    configure_edgar_data_directory()
     try:
         from edgar import Company, set_identity  # type: ignore
     except Exception as exc:

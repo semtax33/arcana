@@ -58,10 +58,10 @@ Arcana는 서로 다른 시장과 공시 체계를 공통 금융 모델로 변�
 ### Financial data ELT
 
 - 한국: DART 공시·주석·사업보고서, KRX 가격·주식수·배당·벤치마크
-- 미국: SEC Company Facts·filing notes, Yahoo Finance 가격·배당
+- 미국: SEC Company Facts·filing notes·10-K/10-Q/8-K 원문 HTML·8-K EX-99.x IR 첨부, Yahoo Finance 가격·배당
 - 컨센서스: 한국 리포트 데이터와 미국 Finnworlds·FMP·Alpha Vantage·Yahoo Finance
 - 미국 earnings call transcript: FMP 우선, Alpha Vantage 누락분 보완 수집
-- 거시·자본비용 입력: FRED 금리, Damodaran ERP, 시장 벤치마크
+- 거시·산업·지역 입력: BLS, Census, BEA, EIA, FDIC, NASS, FHFA, FRED, Damodaran ERP
 - Bronze → Silver → Gold 계층과 ClickHouse 적재
 
 ### Financial modeling
@@ -121,6 +121,8 @@ POST /api/factor-lab/runs
 ```powershell
 python -m engine.workflows.refresh --market kr
 python -m engine.workflows.score_cli build-factor-scores --trade-date 2026-07-24 --factor-asof-mode asof --financial-basis annual --include-financials
+python -m engine.workflows.pqci_inputs --source bls --source census --source bea
+python -m engine.workflows.download --market us --symbols AAPL,MSFT --start-date 2025-01-01 sec-filings
 python -m pytest tests -q
 ```
 
@@ -132,7 +134,7 @@ python -m pytest tests -q
 - **Data & modeling:** Python, pandas, NumPy, YAML rule sets
 - **API:** FastAPI, Pydantic
 - **Storage:** file-based Bronze/Silver/Gold data lake, ClickHouse
-- **Sources:** DART, SEC EDGAR, KRX, Yahoo Finance, FRED, Damodaran 및 consensus providers
+- **Sources:** DART, SEC EDGAR, KRX, Yahoo Finance, FRED, Damodaran, BLS, Census, BEA, EIA, FDIC, NASS, FHFA 및 consensus providers
 - **Operations:** PowerShell workflows, atomic file replacement, checkpoints, pytest
 
 ## Current limitations

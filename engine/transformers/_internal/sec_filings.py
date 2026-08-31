@@ -11,6 +11,7 @@ import re
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import date as date_type, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,7 +32,10 @@ from engine.transformers._internal.dart_filings import (
     apply_cash_direction,
     safe_str,
 )
-from engine.transformers._internal.edgar_identity import configure_edgar_identity
+from engine.transformers._internal.edgar_identity import (
+    configure_edgar_data_directory,
+    configure_edgar_identity,
+)
 
 
 US_MAPPING_RULE_PATH = first_existing_path(
@@ -413,8 +417,117 @@ def _candidate_from_companyfacts_unit(
     )
 
 
+CompanyFactsAccessionKey = tuple[str, str, str, str, str]
+
+PERIOD_ANCHOR_CANONICAL_IDS = {
+    "REVENUE",
+    "GROSS_PROFIT",
+    "OPERATING_INCOME",
+    "PBT",
+    "NET_INCOME",
+    "NET_INCOME_PARENT",
+    "TOTAL_COMPREHENSIVE_INCOME",
+    "CFO",
+    "CFI",
+    "CFF",
+    "BASIC_EPS",
+    "DILUTED_EPS",
+    "BASIC_SHARES",
+    "DILUTED_SHARES",
+}
+
+
+def _companyfacts_accession_key(unit_row: dict[str, Any]) -> CompanyFactsAccessionKey:
+    return (
+        safe_str(unit_row.get("accn")),
+        safe_str(unit_row.get("form")).upper(),
+        safe_str(unit_row.get("fy")),
+        safe_str(unit_row.get("fp")).upper(),
+        safe_str(unit_row.get("filed")),
+    )
+
+
+def _companyfacts_end_date(unit_row: dict[str, Any]) -> str:
+    parsed = _companyfacts_date(unit_row.get("end") or unit_row.get("ddate"))
+    return parsed.isoformat() if parsed is not None else ""
+
+
+def _companyfacts_date(value: Any) -> date_type | None:
+    text = safe_str(value).strip()
+    if not text:
+        return None
+    try:
+        return date_type.fromisoformat(text[:10])
+    except ValueError:
+        parsed = pd.to_datetime(text, errors="coerce")
+        if pd.isna(parsed):
+            return None
+        return parsed.date()
+
+
+def _companyfacts_accession_period_ends(
+    matched_units: list[tuple[str, list[dict[str, Any]]]],
+) -> dict[CompanyFactsAccessionKey, str]:
+    """Infer each filing's financial period end across all mapped facts.
+
+    Companyfacts attaches the filing's ``fy``/``fp`` to both the current fact
+    and comparative facts.  Looking at one taxonomy tag in isolation is not
+    sufficient because a company can stop using a primary tag and report the
+    current value under an alternate tag while the old primary tag survives as
+    a comparative.  The latest end date among core duration facts in an
+    accession is the filing period end.  This deliberately excludes instant
+    facts and very short event windows: a 10-Q can include, for example, an
+    October asset-sale fact even though the statement period ended in
+    September.  Entity share-count facts are also excluded because SEC records
+    often measure them shortly before filing.
+    """
+
+    all_counts: dict[CompanyFactsAccessionKey, dict[str, int]] = {}
+    duration_ends: dict[CompanyFactsAccessionKey, set[str]] = {}
+    core_duration_ends: dict[CompanyFactsAccessionKey, set[str]] = {}
+    for canonical_id, unit_rows in matched_units:
+        # EntityCommonStockSharesOutstanding is commonly measured on a date
+        # shortly before filing rather than on the statement period end.
+        if canonical_id == "COMMON_SHARES_OUTSTANDING":
+            continue
+        for unit_row in unit_rows:
+            end_date = _companyfacts_end_date(unit_row)
+            if not end_date:
+                continue
+            key = _companyfacts_accession_key(unit_row)
+            date_counts = all_counts.setdefault(key, {})
+            date_counts[end_date] = date_counts.get(end_date, 0) + 1
+
+            start = _companyfacts_date(unit_row.get("start"))
+            end = _companyfacts_date(unit_row.get("end") or unit_row.get("ddate"))
+            if start is None or end is None:
+                continue
+            duration_days = (end - start).days + 1
+            if not 45 <= duration_days <= 450:
+                continue
+            duration_ends.setdefault(key, set()).add(end_date)
+            if canonical_id in PERIOD_ANCHOR_CANONICAL_IDS:
+                core_duration_ends.setdefault(key, set()).add(end_date)
+
+    period_ends: dict[CompanyFactsAccessionKey, str] = {}
+    for key, date_counts in all_counts.items():
+        if core_duration_ends.get(key):
+            period_ends[key] = max(core_duration_ends[key])
+        elif duration_ends.get(key):
+            period_ends[key] = max(duration_ends[key])
+        elif date_counts:
+            period_ends[key] = max(
+                date_counts,
+                key=lambda end_date: (date_counts[end_date], end_date),
+            )
+    return period_ends
+
+
 def _select_current_companyfacts_unit_rows(
     unit_rows: list[dict[str, Any]],
+    *,
+    accession_period_ends: dict[CompanyFactsAccessionKey, str] | None = None,
+    allow_non_period_end: bool = False,
 ) -> list[dict[str, Any]]:
     """Keep the current-period fact from each SEC filing accession.
 
@@ -430,38 +543,42 @@ def _select_current_companyfacts_unit_rows(
     expects cumulative statement values.
     """
 
-    grouped: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = {}
+    grouped: dict[CompanyFactsAccessionKey, list[dict[str, Any]]] = {}
     for row in unit_rows:
-        key = (
-            safe_str(row.get("accn")),
-            safe_str(row.get("form")).upper(),
-            safe_str(row.get("fy")),
-            safe_str(row.get("fp")).upper(),
-            safe_str(row.get("filed")),
-        )
+        key = _companyfacts_accession_key(row)
         grouped.setdefault(key, []).append(row)
 
     selected: list[dict[str, Any]] = []
-    for rows in grouped.values():
-        ends = pd.Series(
-            [row.get("end") or row.get("ddate") for row in rows],
-            dtype="object",
-        )
-        parsed_ends = pd.to_datetime(ends, errors="coerce")
-        if parsed_ends.notna().any():
-            latest_end = parsed_ends.max()
-            rows = [
-                row
-                for row, parsed_end in zip(rows, parsed_ends, strict=True)
-                if pd.notna(parsed_end) and parsed_end == latest_end
+    for key, rows in grouped.items():
+        accession_end = (accession_period_ends or {}).get(key)
+        if accession_end:
+            period_rows = [
+                row for row in rows if _companyfacts_end_date(row) == accession_end
             ]
+            if period_rows:
+                rows = period_rows
+            elif not allow_non_period_end:
+                continue
+        else:
+            parsed_ends = [
+                _companyfacts_date(row.get("end") or row.get("ddate"))
+                for row in rows
+            ]
+            valid_ends = [end for end in parsed_ends if end is not None]
+            if valid_ends:
+                latest_end = max(valid_ends)
+                rows = [
+                    row
+                    for row, parsed_end in zip(rows, parsed_ends, strict=True)
+                    if parsed_end == latest_end
+                ]
 
         if len(rows) > 1:
-            durations: list[pd.Timedelta | None] = []
+            durations: list[timedelta | None] = []
             for row in rows:
-                start = pd.to_datetime(row.get("start"), errors="coerce")
-                end = pd.to_datetime(row.get("end") or row.get("ddate"), errors="coerce")
-                durations.append(end - start if pd.notna(start) and pd.notna(end) else None)
+                start = _companyfacts_date(row.get("start"))
+                end = _companyfacts_date(row.get("end") or row.get("ddate"))
+                durations.append(end - start if start is not None and end is not None else None)
             valid_durations = [duration for duration in durations if duration is not None]
             if valid_durations:
                 longest = max(valid_durations)
@@ -514,6 +631,17 @@ def extract_companyfacts_candidates_from_data(
     facts = data.get("facts", {}) or {}
     candidates: list[SecFactCandidate] = []
 
+    matched_fact_units: list[
+        tuple[
+            dict[str, Any],
+            str,
+            str,
+            str,
+            dict[str, Any],
+            list[dict[str, Any]],
+        ]
+    ] = []
+
     for rule in rules:
         for source, field_name in [
             ("companyfacts_primary", "primary_tags"),
@@ -540,23 +668,48 @@ def extract_companyfacts_candidates_from_data(
                             end_year=end_year,
                         )
                     ]
-                    for unit_row in _select_current_companyfacts_unit_rows(ranged_unit_rows):
-                        candidate = _candidate_from_companyfacts_unit(
-                            symbol=symbol,
-                            cik=cik,
-                            entity_name=entity_name,
-                            canonical_names=canonical_names,
-                            rule=rule,
-                            source=source,
-                            namespace=namespace,
-                            tag=tag,
-                            fact=fact,
-                            unit_row=unit_row,
+                    if ranged_unit_rows:
+                        matched_fact_units.append(
+                            (
+                                rule,
+                                source,
+                                namespace,
+                                tag,
+                                fact,
+                                ranged_unit_rows,
+                            )
                         )
-                        if candidate is None:
-                            continue
-                        if start_year <= candidate.fiscal_year <= end_year:
-                            candidates.append(candidate)
+
+    accession_period_ends = _companyfacts_accession_period_ends(
+        [
+            (safe_str(rule.get("canonical_id")), unit_rows)
+            for rule, _, _, _, _, unit_rows in matched_fact_units
+        ]
+    )
+
+    for rule, source, namespace, tag, fact, unit_rows in matched_fact_units:
+        canonical_id = safe_str(rule.get("canonical_id"))
+        for unit_row in _select_current_companyfacts_unit_rows(
+            unit_rows,
+            accession_period_ends=accession_period_ends,
+            allow_non_period_end=canonical_id == "COMMON_SHARES_OUTSTANDING",
+        ):
+            candidate = _candidate_from_companyfacts_unit(
+                symbol=symbol,
+                cik=cik,
+                entity_name=entity_name,
+                canonical_names=canonical_names,
+                rule=rule,
+                source=source,
+                namespace=namespace,
+                tag=tag,
+                fact=fact,
+                unit_row=unit_row,
+            )
+            if candidate is None:
+                continue
+            if start_year <= candidate.fiscal_year <= end_year:
+                candidates.append(candidate)
 
     return candidates
 
@@ -1105,6 +1258,7 @@ def default_edgartools_provider(
     start_year: int,
     end_year: int,
 ) -> list[dict[str, Any]]:
+    configure_edgar_data_directory()
     try:
         from edgar import Company, set_identity  # type: ignore
     except Exception as exc:
@@ -1441,16 +1595,28 @@ def write_symbol_outputs(
     *,
     output_dir: str | Path = US_NORMALIZED_DIR,
     save_debug: bool = True,
+    symbols: list[str] | None = None,
+    replace_year_range: tuple[int, int] | None = None,
 ) -> list[Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
 
-    by_symbol: dict[str, list[SecFactCandidate]] = {}
+    by_symbol: dict[str, list[SecFactCandidate]] = {
+        US_MARKET_CONFIG.normalize_symbol(symbol): []
+        for symbol in (symbols or [])
+    }
     for candidate in candidates:
         by_symbol.setdefault(candidate.symbol, []).append(candidate)
 
     for symbol, rows in sorted(by_symbol.items()):
+        output_path = output_dir / statement_symbol_name(symbol, market="us")
+        if (
+            not rows
+            and not output_path.exists()
+            and not legacy_statement_snapshot_files(symbol, output_dir, market="us")
+        ):
+            continue
         normalized_rows: list[dict[str, Any]] = []
         debug_rows: list[dict[str, Any]] = []
         for candidate in sorted(rows, key=lambda row: (row.fiscal_year, row.fiscal_month, row.statement_type, row.canonical_id)):
@@ -1458,11 +1624,11 @@ def write_symbol_outputs(
             normalized_rows.append(normalized)
             debug_rows.append(debug)
 
-        output_path = output_dir / statement_symbol_name(symbol, market="us")
         output_frame = _merged_symbol_normalized_frame(
             output_dir=output_dir,
             symbol=symbol,
             normalized_rows=normalized_rows,
+            replace_year_range=replace_year_range,
         )
         output_frame.to_csv(
             output_path,
@@ -1488,9 +1654,15 @@ def write_symbol_outputs(
                 "source",
             ]
             debug_columns = list(dict.fromkeys(debug_columns))
-            output_path.with_suffix(".debug.csv").write_text("", encoding="utf-8-sig")
-            pd.DataFrame(debug_rows).reindex(columns=debug_columns).to_csv(
-                output_path.with_suffix(".debug.csv"),
+            debug_path = output_path.with_suffix(".debug.csv")
+            debug_frame = _merged_symbol_debug_frame(
+                debug_path=debug_path,
+                debug_rows=debug_rows,
+                debug_columns=debug_columns,
+                replace_year_range=replace_year_range,
+            )
+            debug_frame.to_csv(
+                debug_path,
                 index=False,
                 encoding="utf-8-sig",
                 quoting=csv.QUOTE_ALL,
@@ -1505,6 +1677,7 @@ def _merged_symbol_normalized_frame(
     output_dir: Path,
     symbol: str,
     normalized_rows: list[dict[str, Any]],
+    replace_year_range: tuple[int, int] | None = None,
 ) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     consolidated_path = consolidated_statement_path(output_dir, symbol, market="us")
@@ -1524,6 +1697,16 @@ def _merged_symbol_normalized_frame(
             )
         )
 
+    if frames and replace_year_range is not None:
+        start_year, end_year = replace_year_range
+        retained_frames: list[pd.DataFrame] = []
+        for frame in frames:
+            years = pd.to_numeric(frame.get("fiscal_year"), errors="coerce")
+            retained_frames.append(
+                frame.loc[~years.between(start_year, end_year, inclusive="both")].copy()
+            )
+        frames = retained_frames
+
     if normalized_rows:
         frames.append(pd.DataFrame(normalized_rows))
 
@@ -1539,6 +1722,44 @@ def _merged_symbol_normalized_frame(
     return output.reindex(columns=EXPECTED_HEADER)
 
 
+def _merged_symbol_debug_frame(
+    *,
+    debug_path: Path,
+    debug_rows: list[dict[str, Any]],
+    debug_columns: list[str],
+    replace_year_range: tuple[int, int] | None,
+) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    if debug_path.exists():
+        try:
+            existing = pd.read_csv(debug_path)
+        except (OSError, ValueError, pd.errors.EmptyDataError):
+            existing = pd.DataFrame()
+        if not existing.empty:
+            if replace_year_range is not None:
+                start_year, end_year = replace_year_range
+                years = pd.to_numeric(existing.get("fiscal_year"), errors="coerce")
+                existing = existing.loc[
+                    ~years.between(start_year, end_year, inclusive="both")
+                ].copy()
+            frames.append(existing)
+    if debug_rows:
+        frames.append(pd.DataFrame(debug_rows))
+    if not frames:
+        return pd.DataFrame(columns=debug_columns)
+
+    output = pd.concat(frames, ignore_index=True)
+    output = output.drop_duplicates(
+        ["fiscal_year", "fiscal_month", "canonical_account_id"],
+        keep="last",
+    )
+    output = output.sort_values(
+        ["fiscal_year", "fiscal_month", "statement_type", "canonical_account_id"],
+        kind="stable",
+    )
+    return output.reindex(columns=debug_columns)
+
+
 def _remove_legacy_symbol_outputs(output_dir: Path, symbol: str) -> None:
     for path in legacy_statement_snapshot_files(symbol, output_dir, market="us"):
         debug_path = path.with_suffix(".debug.csv")
@@ -1546,9 +1767,32 @@ def _remove_legacy_symbol_outputs(output_dir: Path, symbol: str) -> None:
         debug_path.unlink(missing_ok=True)
 
 
-def write_report_metadata(candidates: list[SecFactCandidate], path: str | Path = US_REPORT_METADATA_PATH) -> None:
-    if not candidates:
+def write_report_metadata(
+    candidates: list[SecFactCandidate],
+    path: str | Path = US_REPORT_METADATA_PATH,
+    *,
+    processed_symbols: list[str] | None = None,
+    replace_year_range: tuple[int, int] | None = None,
+) -> None:
+    processed_symbols = [
+        US_MARKET_CONFIG.normalize_symbol(symbol)
+        for symbol in (processed_symbols or [])
+    ]
+    if not candidates and not processed_symbols:
         return
+
+    period_end_counts: dict[tuple[str, int, int, str], dict[str, int]] = {}
+    for candidate in candidates:
+        key = (candidate.symbol, candidate.fiscal_year, candidate.fiscal_month, candidate.accn)
+        end_date = normalize_sec_date(candidate.period_end)
+        if end_date:
+            counts = period_end_counts.setdefault(key, {})
+            counts[end_date] = counts.get(end_date, 0) + 1
+    period_end_by_key = {
+        key: max(counts, key=lambda value: (counts[value], value))
+        for key, counts in period_end_counts.items()
+        if counts
+    }
 
     rows = []
     seen = set()
@@ -1566,7 +1810,10 @@ def write_report_metadata(candidates: list[SecFactCandidate], path: str | Path =
                 "filing_system": "SEC",
                 "fiscal_year": candidate.fiscal_year,
                 "fiscal_month": candidate.fiscal_month,
-                "period_end_date": normalize_sec_date(candidate.period_end),
+                "period_end_date": period_end_by_key.get(
+                    key,
+                    normalize_sec_date(candidate.period_end),
+                ),
                 "report_date": normalize_sec_date(candidate.filed or candidate.period_end),
                 "rcept_no": candidate.accn,
                 "report_name": candidate.form,
@@ -1577,7 +1824,40 @@ def write_report_metadata(candidates: list[SecFactCandidate], path: str | Path =
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).to_csv(path, index=False, encoding="utf-8-sig", quoting=csv.QUOTE_ALL)
+    frames: list[pd.DataFrame] = []
+    if path.exists():
+        try:
+            existing = pd.read_csv(path, dtype={"stock_code": str, "rcept_no": str})
+        except (OSError, ValueError, pd.errors.EmptyDataError):
+            existing = pd.DataFrame()
+        if not existing.empty and processed_symbols:
+            stock_code = existing.get("stock_code", pd.Series("", index=existing.index)).astype(str)
+            replace_mask = stock_code.isin(processed_symbols)
+            if replace_year_range is not None:
+                start_year, end_year = replace_year_range
+                fiscal_year = pd.to_numeric(existing.get("fiscal_year"), errors="coerce")
+                replace_mask &= fiscal_year.between(start_year, end_year, inclusive="both")
+            existing = existing.loc[~replace_mask].copy()
+        if not existing.empty:
+            frames.append(existing)
+    if rows:
+        frames.append(pd.DataFrame(rows))
+    if frames:
+        output = pd.concat(frames, ignore_index=True, sort=False)
+        output["_report_date"] = pd.to_datetime(output.get("report_date"), errors="coerce")
+        output["_rcept_no"] = output.get("rcept_no", "").astype(str)
+        output = (
+            output.sort_values(["_report_date", "_rcept_no"], kind="stable")
+            .drop_duplicates(
+                ["stock_code", "fiscal_year", "fiscal_month", "source_type"],
+                keep="last",
+            )
+            .drop(columns=["_report_date", "_rcept_no"])
+            .sort_values(["stock_code", "fiscal_year", "fiscal_month"], kind="stable")
+        )
+    else:
+        output = pd.DataFrame()
+    output.to_csv(path, index=False, encoding="utf-8-sig", quoting=csv.QUOTE_ALL)
 
 
 def normalize_sec_date(value: Any) -> str:
@@ -1763,8 +2043,21 @@ def normalize_us_sec_filings(
     if log_progress:
         print(f"[INFO] dedupe done candidates={len(deduped)}, derived_formula={derived_count}")
         print(f"[INFO] write outputs start output_dir={output_dir}")
-    written = write_symbol_outputs(deduped, output_dir=output_dir, save_debug=save_debug)
-    write_report_metadata(deduped, report_metadata_path)
+    processed_symbols = sorted({symbol for _, symbol, _ in files})
+    replace_year_range = (int(start_year), int(end_year))
+    written = write_symbol_outputs(
+        deduped,
+        output_dir=output_dir,
+        save_debug=save_debug,
+        symbols=processed_symbols,
+        replace_year_range=replace_year_range,
+    )
+    write_report_metadata(
+        deduped,
+        report_metadata_path,
+        processed_symbols=processed_symbols,
+        replace_year_range=replace_year_range,
+    )
     if log_progress:
         elapsed = time.monotonic() - started_at
         print(
