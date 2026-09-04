@@ -44,12 +44,28 @@ MAPPING_RULE_PATH = first_existing_path(
     DATA_LAKE.rules("mapping_kr.yaml"),
     DATA_LAKE.rules("mapping_common.yaml"),
 )
+SEMANTIC_MAPPING_RULE_PATH = first_existing_path(
+    DATA_LAKE.rules("semantic_kr_v2.yaml"),
+    MAPPING_RULE_PATH,
+)
 COMMENT_RULE_PATH = (
     DATA_LAKE.rules("comment_kr.yaml")
     if DATA_LAKE.rules("comment_kr.yaml").exists()
     else DATA_LAKE.rules("comment_common.yaml")
 )
 SIGN_POLICY_PATH = DATA_LAKE.rules("sign_policy_common.yaml")
+SEMANTIC_CONTEXT_RULE_PATH = first_existing_path(
+    DATA_LAKE.rules("semantic_kr_v2.yaml"),
+    CONTEXT_RULE_PATH,
+)
+SEMANTIC_COMMENT_RULE_PATH = first_existing_path(
+    DATA_LAKE.rules("semantic_kr_v2.yaml"),
+    COMMENT_RULE_PATH,
+)
+SEMANTIC_SIGN_POLICY_PATH = first_existing_path(
+    DATA_LAKE.rules("semantic_kr_v2.yaml"),
+    SIGN_POLICY_PATH,
+)
 US_MAPPING_RULE_PATH = first_existing_path(
     DATA_LAKE.rules("us_mapping.yaml"),
     DATA_LAKE.rules("mapping_us.yaml"),
@@ -90,6 +106,10 @@ def normalization_dependency_paths() -> list[Path]:
         CANONICAL_CSV_PATH,
         CONTEXT_RULE_PATH,
         MAPPING_RULE_PATH,
+        SEMANTIC_MAPPING_RULE_PATH,
+        SEMANTIC_CONTEXT_RULE_PATH,
+        SEMANTIC_COMMENT_RULE_PATH,
+        SEMANTIC_SIGN_POLICY_PATH,
         COMMENT_RULE_PATH,
         SIGN_POLICY_PATH,
     ]
@@ -473,11 +493,11 @@ def _init_normalize_worker() -> None:
     global _WORKER_CANONICAL_DF, _WORKER_CONTEXT_ENGINE, _WORKER_MAPPING_ENGINE
 
     _WORKER_CANONICAL_DF = load_canonical_accounts(CANONICAL_CSV_PATH)
-    _WORKER_CONTEXT_ENGINE = ContextEngine.from_yaml(CONTEXT_RULE_PATH)
+    _WORKER_CONTEXT_ENGINE = ContextEngine.from_yaml(SEMANTIC_CONTEXT_RULE_PATH)
     _WORKER_MAPPING_ENGINE = RuleEngine.from_files(
         canonical_csv_path=CANONICAL_CSV_PATH,
-        rule_paths=[MAPPING_RULE_PATH],
-        sign_policy_path=SIGN_POLICY_PATH,
+        rule_paths=[SEMANTIC_MAPPING_RULE_PATH],
+        sign_policy_path=SEMANTIC_SIGN_POLICY_PATH,
     )
 
 
@@ -509,15 +529,15 @@ def _normalize_one_statement(task: StatementTask) -> NormalizeResult:
                 period=period,
                 output_csv_path=output_csv_path,
                 canonical_csv_path=CANONICAL_CSV_PATH,
-                context_rule_path=CONTEXT_RULE_PATH,
-                mapping_rule_paths=[MAPPING_RULE_PATH],
-                sign_policy_path=SIGN_POLICY_PATH,
+                context_rule_path=SEMANTIC_CONTEXT_RULE_PATH,
+                mapping_rule_paths=[SEMANTIC_MAPPING_RULE_PATH],
+                sign_policy_path=SEMANTIC_SIGN_POLICY_PATH,
                 save_debug=save_debug,
                 context_engine=_WORKER_CONTEXT_ENGINE,
                 mapping_engine=_WORKER_MAPPING_ENGINE,
                 canonical_df=_WORKER_CANONICAL_DF,
                 verbose=False,
-                comment_rule_paths=[COMMENT_RULE_PATH],
+                comment_rule_paths=[SEMANTIC_COMMENT_RULE_PATH],
                 comment_html_path=comment_html_path,
             )
     except FileNotFoundError as e:

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import csv
+from datetime import date
+import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
@@ -14,6 +16,18 @@ import yaml
 from bs4 import BeautifulSoup, Tag
 
 from engine.core.paths import parse_statement_snapshot_filename
+from engine.semantic import (
+    AccountingRegimeDetector,
+    AccountingRegimeFamily,
+    Comparability,
+    DocumentDialect,
+    SemanticRuleExecutor,
+    SemanticRuleSet,
+    compile_legacy_mapping_rule,
+    detect_document_dialect,
+    detect_scope,
+    load_semantic_mapping_rules,
+)
 from engine.transformers._internal.statement_files import (
     STATEMENT_PERIOD_COLUMNS,
     add_statement_period_columns,
@@ -50,9 +64,21 @@ DEBUG_COLUMNS = [
     "context_reason",
     "amount_raw",
     "unit_factor",
+    "semantic_engine_version",
+    "accounting_regime",
+    "accounting_regime_confidence",
+    "accounting_regime_evidence",
+    "document_dialect",
+    "scope",
+    "currency",
+    "comparability",
+    "semantic_provenance",
 ]
 
 UNITS = {
+    "조원": 1_000_000_000_000,
+    "십억원": 1_000_000_000,
+    "억원": 100_000_000,
     "천만원": 10_000_000,
     "백만원": 1_000_000,
     "십만원": 100_000,
@@ -215,6 +241,10 @@ def _normalize_account_name_text(value: str) -> str:
     s = re.sub(r"^\s*[<〈《]\s*", "", s)
     s = re.sub(r"\s*[>〉》]\s*$", "", s)
 
+    # 과거 K-GAAP 공시에서 계정 그룹을 표시하던 대괄호 wrapper 제거
+    s = re.sub(r"^\s*[\[［【]\s*", "", s)
+    s = re.sub(r"\s*[\]］】]\s*$", "", s)
+
     # DART 주석 제거: (주26), (주29,35,36,48)
     s = re.sub(r"\(주\s*\d+(?:\s*[,\.]\s*\d+)*\)", "", s)
 
@@ -295,7 +325,14 @@ def normalize_statement_type(value: Any) -> str:
     s = safe_str(value).strip()
     lower = s.lower()
 
-    if s in {"재무상태표", "연결재무상태표", "별도재무상태표"} or lower in {
+    if s in {
+        "재무상태표",
+        "연결재무상태표",
+        "별도재무상태표",
+        "대차대조표",
+        "연결대차대조표",
+        "별도대차대조표",
+    } or lower in {
         "bs",
         "balance_sheet",
     }:
@@ -389,13 +426,21 @@ def parse_amount(value: Any, unit_factor: int = 1) -> int:
         sign = -1
         s = s[1:].strip()
 
-    s = re.sub(r"[^0-9.]", "", s)
-
-    if not s:
+    # A data cell must contain one scalar.  Removing every non-numeric
+    # character used to concatenate malformed multi-value legacy tables into
+    # a huge but plausible-looking integer.
+    scalar = re.fullmatch(
+        r"(?:₩|￦)?\s*(\d+(?:\.\d+)?)\s*(?:원|KRW)?",
+        s,
+        flags=re.IGNORECASE,
+    )
+    if scalar is None:
         return 0
 
     try:
-        return int(Decimal(s)) * sign * unit_factor
+        # Preserve fractional display units (for example ``1.5억원``).  Truncating
+        # before scaling silently loses 50,000,000 won in that case.
+        return int(Decimal(scalar.group(1)) * unit_factor) * sign
     except (InvalidOperation, ValueError, OverflowError):
         return 0
 
@@ -444,7 +489,7 @@ def detect_indent_level(raw_name: str, td_style: str = "") -> int:
 
     level = 0
     for ch in s:
-        if ch == "\u3000":
+        if ch in {"\u3000", "\xa0"}:
             level += 1
         elif ch == " ":
             continue
@@ -478,7 +523,7 @@ def get_statement_type_from_text(text: str) -> str:
     t = safe_str(text)
     normalized = normalize_account_name(t)
 
-    if "재무상태표" in normalized:
+    if "재무상태표" in normalized or "대차대조표" in normalized:
         return "BS"
 
     if "현금흐름표" in normalized:
@@ -508,12 +553,39 @@ def is_statement_header_text(text: str) -> bool:
         keyword in normalized
         for keyword in [
             "재무상태표",
+            "대차대조표",
             "손익계산서",
             "포괄손익계산서",
             "현금흐름표",
             "자본변동표",
         ]
     )
+
+
+def is_statement_title_text(text: str) -> bool:
+    """Return True only for a standalone statement title, not narrative notes."""
+    normalized = normalize_account_name(text)
+    normalized = re.sub(r"^[\d.．ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+", "", normalized)
+    return normalized in {
+        "재무상태표",
+        "연결재무상태표",
+        "별도재무상태표",
+        "대차대조표",
+        "연결대차대조표",
+        "별도대차대조표",
+        "손익계산서",
+        "연결손익계산서",
+        "별도손익계산서",
+        "포괄손익계산서",
+        "연결포괄손익계산서",
+        "별도포괄손익계산서",
+        "현금흐름표",
+        "연결현금흐름표",
+        "별도현금흐름표",
+        "자본변동표",
+        "연결자본변동표",
+        "별도자본변동표",
+    }
 
 
 def is_header_table(table) -> bool:
@@ -527,7 +599,41 @@ def is_header_paragraph(node: Tag) -> bool:
     if node.name != "p" or node.find_parent("table") is not None:
         return False
 
-    return is_statement_header_text(node.get_text(" ", strip=True))
+    if not is_statement_title_text(node.get_text(" ", strip=True)):
+        return False
+
+    classes = {safe_str(value).lower() for value in node.get("class", [])}
+    if any(value.startswith("table-group") for value in classes):
+        return True
+
+    # Some legacy filings put a numbered caption immediately before the styled
+    # title, or put the title directly before a non-data period/unit table.
+    sibling = node.find_next_sibling()
+    while sibling is not None and not isinstance(sibling, Tag):
+        sibling = sibling.find_next_sibling()
+    if sibling is None:
+        return False
+    if sibling.name == "p":
+        sibling_classes = {
+            safe_str(value).lower() for value in sibling.get("class", [])
+        }
+        if any(value.startswith("table-group") for value in sibling_classes):
+            return True
+        supporting_text = sibling.get_text(" ", strip=True)
+        looks_like_period_or_unit = bool(
+            re.search(r"제\s*\d+\s*기", supporting_text)
+            or re.search(r"\d{4}[./년-]", supporting_text)
+            or "단위" in supporting_text
+        )
+        next_sibling = sibling.find_next_sibling()
+        while next_sibling is not None and not isinstance(next_sibling, Tag):
+            next_sibling = next_sibling.find_next_sibling()
+        return bool(
+            looks_like_period_or_unit
+            and next_sibling is not None
+            and next_sibling.name == "table"
+        )
+    return sibling.name == "table" and not is_data_table(sibling)
 
 
 def is_header_node(node: Tag) -> bool:
@@ -543,6 +649,9 @@ def is_header_node(node: Tag) -> bool:
 def find_next_data_table(header_table):
     node = header_table
     supporting_text: list[str] = []
+    header_statement_type = get_statement_type_from_text(
+        header_table.get_text(" ", strip=True)
+    )
 
     while node is not None:
         node = node.find_next_sibling()
@@ -555,6 +664,12 @@ def find_next_data_table(header_table):
 
         if node.name == "p":
             if is_header_paragraph(node):
+                next_statement_type = get_statement_type_from_text(
+                    node.get_text(" ", strip=True)
+                )
+                if next_statement_type == header_statement_type:
+                    supporting_text.append(node.get_text(" ", strip=True))
+                    continue
                 return None, " ".join(supporting_text)
 
             text = node.get_text(" ", strip=True)
@@ -589,6 +704,62 @@ def _statement_period_year_month(period: Any) -> tuple[int, int] | None:
     if match is None:
         return None
     return int(match.group(1)), int(match.group(2))
+
+
+@lru_cache(maxsize=1)
+def _accounting_regime_detector() -> AccountingRegimeDetector:
+    return AccountingRegimeDetector()
+
+
+def detect_financial_document_semantics(
+    html: str,
+    soup: BeautifulSoup,
+    period: Any,
+) -> dict[str, str]:
+    period_parts = _statement_period_year_month(period)
+    effective_at = None
+    if period_parts is not None:
+        year, month = period_parts
+        # Day precision is not required for regime applicability; the period
+        # endpoint remains distinct from published_at in FactIdentity.
+        effective_at = date(year, month, 1)
+    namespaces = [
+        safe_str(value)
+        for tag in soup.find_all(True, limit=5_000)
+        for key, value in tag.attrs.items()
+        if safe_str(key).lower().startswith("xmlns")
+    ]
+    visible_text = soup.get_text(" ", strip=True)[:100_000]
+    detection = _accounting_regime_detector().detect(
+        visible_text,
+        taxonomy_namespaces=namespaces,
+        filing_date=effective_at,
+    )
+    evidence = [
+        {
+            "kind": item.kind,
+            "value": item.value,
+            "candidate": item.candidate.value,
+            "weight": item.weight,
+            "source": item.source,
+        }
+        for item in detection.evidence
+    ]
+    return {
+        "semantic_engine_version": "2",
+        "accounting_regime": detection.regime.family.value,
+        "accounting_regime_confidence": format(detection.confidence, ".6f"),
+        "accounting_regime_evidence": json.dumps(
+            evidence, ensure_ascii=False, separators=(",", ":")
+        ),
+        "document_dialect": detect_document_dialect(
+            html,
+            source="dart",
+            filing_date=effective_at,
+        ).value,
+        "scope": detect_scope(visible_text).value,
+        "currency": "KRW",
+    }
 
 
 def _positive_span(cell: Tag, attribute: str) -> int:
@@ -659,6 +830,7 @@ def extract_rows_from_dart_html(
 
     html = html_path.read_text(encoding="utf-8", errors="ignore")
     soup = BeautifulSoup(html, "lxml")
+    document_semantics = detect_financial_document_semantics(html, soup, period)
 
     rows: list[dict[str, Any]] = []
     table_index = 0
@@ -732,6 +904,7 @@ def extract_rows_from_dart_html(
                     "amount_raw": amount_raw,
                     "unit_factor": safe_str(row_unit_factor),
                     "table_title": combined_header_text,
+                    **document_semantics,
                 }
             )
 
@@ -1072,7 +1245,26 @@ def _load_comment_extraction_rules_cached(path_key: tuple[str, ...]) -> tuple[di
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
-        rules = data.get("comment_rules", [])
+        if int(data.get("schema_version", 1) or 1) >= 2:
+            rules = []
+            for semantic_rule in (
+                (data.get("rule_sets", {}) or {}).get("comments", []) or []
+            ):
+                section_values = (
+                    (((semantic_rule.get("match", {}) or {}).get("section", {}) or {}).get("contains_any", []))
+                    or [""]
+                )
+                rules.append(
+                    {
+                        "id": semantic_rule.get("id", ""),
+                        "priority": semantic_rule.get("priority", 0),
+                        "confidence": semantic_rule.get("confidence", "medium"),
+                        "section_name": section_values[0],
+                        "target_patterns": semantic_rule.get("captures", {}) or {},
+                    }
+                )
+        else:
+            rules = data.get("comment_rules", [])
 
         if not isinstance(rules, list):
             raise ValueError(f"comment_rules must be a list: {path}")
@@ -1588,7 +1780,42 @@ class ContextEngine:
         with Path(path).open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
-        rules = data.get("context_rules", [])
+        if int(data.get("schema_version", 1) or 1) >= 2:
+            rules = []
+            for semantic_rule in (
+                (data.get("rule_sets", {}) or {}).get("context", []) or []
+            ):
+                applies = semantic_rule.get("applies", {}) or {}
+                match = semantic_rule.get("match", {}) or {}
+                label = match.get("label", {}) or {}
+                emit = semantic_rule.get("emit", {}) or {}
+                statement_types = applies.get("statement_types", ["ANY"]) or ["ANY"]
+                item: dict[str, Any] = {
+                    "id": semantic_rule.get("id", ""),
+                    "priority": semantic_rule.get("priority", 0),
+                    "fs_type": statement_types[0],
+                    "action": {
+                        "type": emit.get("context_action", "IGNORE_CONTEXT"),
+                        "context_label": emit.get("context_label", ""),
+                    },
+                    "reason": semantic_rule.get("reason", ""),
+                }
+                if label.get("exact_any"):
+                    item["exact_any"] = label["exact_any"]
+                if label.get("contains_all"):
+                    item["include_all"] = label["contains_all"]
+                if label.get("excludes_any"):
+                    item["exclude_any"] = label["excludes_any"]
+                for group_index, group in enumerate(
+                    label.get("contains_any_groups", []) or []
+                ):
+                    key = "include_any" if group_index == 0 else f"include_any_{group_index + 1}"
+                    item[key] = group
+                if match.get("constraints"):
+                    item["conditions"] = match["constraints"]
+                rules.append(item)
+        else:
+            rules = data.get("context_rules", [])
 
         if not isinstance(rules, list):
             raise ValueError("context_rules must be a list")
@@ -1759,6 +1986,8 @@ class MappingResult:
     reason: str
     amount_policy: str
     cash_direction: str
+    comparability: str = Comparability.EXACT.value
+    semantic_provenance: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -1785,6 +2014,9 @@ class SignPolicyEngine:
 
         with p.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
+
+        if int(data.get("schema_version", 1) or 1) >= 2:
+            data = data.get("sign_policy", {}) or {}
 
         return cls(data)
 
@@ -1923,7 +2155,73 @@ def load_mapping_rules(paths: list[str | Path]) -> list[dict[str, Any]]:
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
-        rules = data.get("rules", [])
+        if int(data.get("schema_version", 1) or 1) >= 2:
+            rules = []
+            for semantic_rule in (
+                (data.get("rule_sets", {}) or {}).get("mapping", []) or []
+            ):
+                applies = semantic_rule.get("applies", {}) or {}
+                match = semantic_rule.get("match", {}) or {}
+                label = match.get("label", {}) or {}
+                context = match.get("context", {}) or {}
+                emit = semantic_rule.get("emit", {}) or {}
+                statement_types = applies.get("statement_types", ["ANY"]) or ["ANY"]
+                item: dict[str, Any] = {
+                    "id": semantic_rule.get("id", ""),
+                    "fs_type": statement_types[0],
+                    "priority": semantic_rule.get("priority", 0),
+                    "canonical_id": emit.get("canonical_id", "UNMAPPED"),
+                    "reason": semantic_rule.get("reason", ""),
+                }
+                for source_key, target_key in (
+                    ("exact_any", "exact_any"),
+                    ("contains_all", "include_all"),
+                    ("excludes_any", "exclude_any"),
+                ):
+                    if label.get(source_key):
+                        item[target_key] = label[source_key]
+                for group_index, group in enumerate(
+                    label.get("contains_any_groups", []) or []
+                ):
+                    key = "include_any" if group_index == 0 else f"include_any_{group_index + 1}"
+                    item[key] = group
+                for source_key, target_key in (
+                    ("contains_all", "context_include_all"),
+                    ("excludes_any", "context_exclude_any"),
+                ):
+                    if context.get(source_key):
+                        item[target_key] = context[source_key]
+                for group_index, group in enumerate(
+                    context.get("contains_any_groups", []) or []
+                ):
+                    key = (
+                        "context_include_any"
+                        if group_index == 0
+                        else f"context_include_any_{group_index + 1}"
+                    )
+                    item[key] = group
+                if match.get("constraints"):
+                    item["conditions"] = match["constraints"]
+                for key in (
+                    "amount_policy",
+                    "cash_direction",
+                    "fallback_if_missing",
+                    "comparability",
+                    "relations",
+                ):
+                    if key in emit:
+                        item[key] = emit[key]
+                for key in (
+                    "accounting_regimes",
+                    "document_dialects",
+                    "effective_from",
+                    "effective_to",
+                ):
+                    if key in applies:
+                        item[key] = applies[key]
+                rules.append(item)
+        else:
+            rules = data.get("rules", [])
 
         if not isinstance(rules, list):
             raise ValueError(f"rules must be a list: {path}")
@@ -1945,6 +2243,7 @@ class RuleEngine:
         canonical_df: pd.DataFrame,
         rules: list[dict[str, Any]],
         sign_policy_engine: SignPolicyEngine | None = None,
+        semantic_ruleset: SemanticRuleSet | None = None,
     ):
         self.canonical_df = canonical_df.copy()
         self.rules = sorted(
@@ -1961,6 +2260,28 @@ class RuleEngine:
             )
         )
         self.valid_ids = set(self.id_to_name.keys())
+        if semantic_ruleset is None:
+            semantic_ruleset = SemanticRuleSet(
+                schema_version=2,
+                profile="legacy_runtime_migration",
+                rules=tuple(
+                    compile_legacy_mapping_rule(
+                        rule,
+                        source_file=safe_str(rule.get("_source")),
+                        source_index=index,
+                        text_normalizer=normalize_account_name,
+                    )
+                    for index, rule in enumerate(rules)
+                ),
+                declared_source_rule_count=len(rules),
+            )
+        self.semantic_ruleset = semantic_ruleset
+        self.semantic_engine = SemanticRuleExecutor(
+            semantic_ruleset,
+            self.id_to_name,
+            text_normalizer=normalize_account_name,
+            sign_resolver=self._semantic_sign_resolver,
+        )
         self._map_cache: dict[tuple[Any, ...], MappingResult] = {}
         self._candidate_buckets = {
             fs_type: self._build_rule_candidate_bucket(fs_type)
@@ -1977,12 +2298,33 @@ class RuleEngine:
     ) -> "RuleEngine":
         canonical_df = pd.read_csv(canonical_csv_path, dtype=str).fillna("")
         rules = load_mapping_rules(rule_paths)
+        semantic_ruleset = load_semantic_mapping_rules(
+            rule_paths,
+            text_normalizer=normalize_account_name,
+        )
         sign_policy_engine = SignPolicyEngine.from_yaml(sign_policy_path)
         return cls(
             canonical_df=canonical_df,
             rules=rules,
             sign_policy_engine=sign_policy_engine,
+            semantic_ruleset=semantic_ruleset,
         )
+
+    def _semantic_sign_resolver(
+        self,
+        fs_type: str,
+        canonical_id: str,
+        rule,
+    ) -> tuple[str, str]:
+        decision = self.sign_policy_engine.decide(
+            fs_type=fs_type,
+            canonical_id=canonical_id,
+            rule={
+                "amount_policy": rule.emit.amount_policy,
+                "cash_direction": rule.emit.cash_direction,
+            },
+        )
+        return decision.amount_policy, decision.cash_direction
 
     def has_canonical_id(self, canonical_id: str) -> bool:
         return canonical_id == "UNMAPPED" or canonical_id in self.valid_ids
@@ -1994,60 +2336,56 @@ class RuleEngine:
 
     def map_row(self, row: dict[str, Any]) -> MappingResult:
         normalized_row = self._normalize_row_for_matching(row)
+        regime_value = safe_str(row.get("accounting_regime", "UNKNOWN")) or "UNKNOWN"
+        dialect_value = safe_str(row.get("document_dialect", "UNKNOWN")) or "UNKNOWN"
+        try:
+            regime = AccountingRegimeFamily(regime_value)
+        except ValueError:
+            regime = AccountingRegimeFamily.UNKNOWN
+        try:
+            dialect = DocumentDialect(dialect_value)
+        except ValueError:
+            dialect = DocumentDialect.UNKNOWN
+        period_parts = _statement_period_year_month(row.get("period"))
+        effective_at = (
+            date(period_parts[0], period_parts[1], 1)
+            if period_parts is not None
+            else None
+        )
         cache_key = (
             normalized_row["fs_type"],
             normalized_row["name"],
             normalized_row["context"],
             normalized_row["has_children"],
             normalized_row["amount_is_zero_or_blank"],
+            regime.value,
+            dialect.value,
+            effective_at,
         )
 
         cached = self._map_cache.get(cache_key)
         if cached is not None:
             return cached
 
-        for rule in self._candidate_rules(normalized_row["fs_type"], normalized_row["name"]):
-            if not self._match_rule(normalized_row, rule):
-                continue
-
-            canonical_id = safe_str(rule.get("canonical_id", "UNMAPPED")).strip()
-
-            if not self.has_canonical_id(canonical_id):
-                canonical_id = safe_str(rule.get("fallback_if_missing", "UNMAPPED")).strip()
-
-            if not self.has_canonical_id(canonical_id):
-                canonical_id = "UNMAPPED"
-
-            sign_decision = self.sign_policy_engine.decide(
-                fs_type=normalized_row["fs_type"],
-                canonical_id=canonical_id,
-                rule=rule,
-            )
-
-            result = MappingResult(
-                canonical_account_id=canonical_id,
-                canonical_account_name=self.canonical_name(canonical_id),
-                rule_id=safe_str(rule.get("id")),
-                reason=safe_str(rule.get("reason")),
-                amount_policy=sign_decision.amount_policy,
-                cash_direction=sign_decision.cash_direction,
-            )
-            self._remember_mapping(cache_key, result)
-            return result
-
-        sign_decision = self.sign_policy_engine.decide(
-            fs_type=normalized_row["fs_type"],
-            canonical_id="UNMAPPED",
-            rule=None,
+        semantic_result = self.semantic_engine.match(
+            statement_type=normalized_row["fs_type"],
+            label=normalized_row["name"],
+            context=normalized_row["context"],
+            has_children=bool(normalized_row["has_children"]),
+            amount_is_zero_or_blank=bool(normalized_row["amount_is_zero_or_blank"]),
+            regime=regime,
+            dialect=dialect,
+            effective_at=effective_at,
         )
-
         result = MappingResult(
-            canonical_account_id="UNMAPPED",
-            canonical_account_name="미매핑",
-            rule_id="default_unmapped",
-            reason="매칭된 룰 없음",
-            amount_policy=sign_decision.amount_policy,
-            cash_direction=sign_decision.cash_direction,
+            canonical_account_id=semantic_result.canonical_id,
+            canonical_account_name=semantic_result.canonical_name,
+            rule_id=semantic_result.rule_id,
+            reason=semantic_result.reason,
+            amount_policy=semantic_result.amount_policy,
+            cash_direction=semantic_result.cash_direction,
+            comparability=semantic_result.comparability.value,
+            semantic_provenance=asdict(semantic_result.provenance),
         )
         self._remember_mapping(cache_key, result)
         return result
@@ -2153,6 +2491,20 @@ class RuleEngine:
                         "context_reason": safe_str(row.get("context_reason")),
                         "amount_raw": safe_str(row.get("amount_raw")),
                         "unit_factor": "1" if result.canonical_account_id in EPS_CANONICAL_IDS else safe_str(row.get("unit_factor")),
+                        "semantic_engine_version": safe_str(row.get("semantic_engine_version", "2")),
+                        "accounting_regime": safe_str(row.get("accounting_regime", "UNKNOWN")),
+                        "accounting_regime_confidence": safe_str(row.get("accounting_regime_confidence")),
+                        "accounting_regime_evidence": safe_str(row.get("accounting_regime_evidence")),
+                        "document_dialect": safe_str(row.get("document_dialect", "UNKNOWN")),
+                        "scope": safe_str(row.get("scope", "UNKNOWN")),
+                        "currency": safe_str(row.get("currency", "KRW")),
+                        "comparability": result.comparability,
+                        "semantic_provenance": json.dumps(
+                            result.semantic_provenance or {},
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            default=str,
+                        ),
                     }
                 )
 

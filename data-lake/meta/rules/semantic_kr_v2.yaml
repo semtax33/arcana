@@ -1,0 +1,4869 @@
+schema_version: 2
+engine: arcana-financial-semantic
+profile: kr_all_regimes
+description: Deterministic typed semantic rules for K-GAAP, general K-GAAP and K-IFRS filings.
+migration:
+  mapping_source_rule_count: 126
+  mapping_migrated_rule_count: 126
+  context_source_rule_count: 21
+  context_migrated_rule_count: 21
+  comment_source_rule_count: 9
+  comment_migrated_rule_count: 9
+  native_k_gaap_rule_count: 26
+  native_common_rule_count: 3
+  sources:
+  - path: data-lake/meta/rules/kr_mapping.yaml
+    sha256: 545a8f5349659b0f8f484b592e280e2e884cd1b1639cf2a296886adbfb2b6623
+    rule_kind: mapping
+    source_rule_count: 126
+  - path: data-lake/meta/rules/context_kr.yaml
+    sha256: 7f49b23cc09aceba1c47932bb1d43a68e280c60f67d86cbef7d99b7ebcdb7429
+    rule_kind: context
+    source_rule_count: 21
+  - path: data-lake/meta/rules/comment_kr.yaml
+    sha256: 846085f8231a62c76ce06ebb8ded8a80b70214952b036f23c0080efc54f59913
+    rule_kind: comment
+    source_rule_count: 9
+  - path: data-lake/meta/rules/sign_policy_common.yaml
+    sha256: 91bb4e2e282a68042449353841c383eb19b1424671192b0e4efa2302ff83bb28
+    rule_kind: sign_policy
+    source_rule_count: 36
+rule_sets:
+  mapping:
+  - id: bs_section_headers
+    version: 2
+    phase: normalize
+    priority: 1000
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 자산
+        - 부채
+        - 자본
+    emit:
+      canonical_id: UNMAPPED
+    reason: 재무상태표 섹션 헤더
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 0
+  - id: is_section_headers
+    version: 2
+    phase: normalize
+    priority: 1000
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 당기순이익의귀속
+        - 당기순손익의귀속
+        - 당기순이익손실의귀속
+        - 당기손익의귀속
+        - 주당손익
+        - 지배기업의소유주지분에대한주당이익
+    emit:
+      canonical_id: UNMAPPED
+    reason: 손익계산서 섹션 헤더
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 1
+  - id: cis_section_headers
+    version: 2
+    phase: normalize
+    priority: 1000
+    applies:
+      statement_types:
+      - CIS
+    match:
+      label:
+        exact_any:
+        - 총포괄이익의귀속
+        - 총포괄손익의귀속
+        - 총포괄이익손실의귀속
+        - 총포괄손익손실의귀속
+    emit:
+      canonical_id: UNMAPPED
+    reason: 포괄손익계산서 섹션 헤더
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 2
+  - id: is_net_income_zero_attribution_header
+    version: 2
+    phase: normalize
+    priority: 995
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 당기순이익
+        - 당기순이익손실
+        - 당기순이익(손실)
+      constraints:
+        has_children: true
+        amount_is_zero_or_blank: true
+    emit:
+      canonical_id: UNMAPPED
+    reason: 금액 0인 당기순이익 attribution section header
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 3
+  - id: cf_cfo_section_header_unmapped
+    version: 2
+    phase: normalize
+    priority: 1000
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 영업활동현금흐름
+      constraints:
+        has_children: true
+        amount_is_zero_or_blank: true
+    emit:
+      canonical_id: UNMAPPED
+    reason: 영업활동현금흐름 섹션 제목이므로 최종 CFO가 아님
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 4
+  - id: cf_cfi_section_header_unmapped
+    version: 2
+    phase: normalize
+    priority: 1000
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 투자활동현금흐름
+      constraints:
+        has_children: true
+        amount_is_zero_or_blank: true
+    emit:
+      canonical_id: UNMAPPED
+    reason: 투자활동현금흐름 섹션 제목이므로 최종 CFI가 아님
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 5
+  - id: cf_cff_section_header_unmapped
+    version: 2
+    phase: normalize
+    priority: 1000
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 재무활동현금흐름
+      constraints:
+        has_children: true
+        amount_is_zero_or_blank: true
+    emit:
+      canonical_id: UNMAPPED
+    reason: 재무활동현금흐름 섹션 제목이므로 최종 CFF가 아님
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 6
+  - id: cf_cash_generated_from_operations
+    version: 2
+    phase: normalize
+    priority: 950
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        contains_any_groups:
+        - - 영업활동에서창출된현금흐름
+          - 영업에서창출된현금
+          - 영업으로부터창출된현금
+          - 영업활동으로부터 창출된 현금흐름
+    emit:
+      canonical_id: UNMAPPED
+    reason: CFO 이전 subtotal
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 7
+  - id: cf_cfo_plain_subtotal
+    version: 2
+    phase: normalize
+    priority: 900
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 영업활동현금흐름
+        - 영업활동순현금흐름
+        - 영업활동으로인한순현금흐름
+        - 영업활동으로인한현금흐름
+        excludes_any:
+        - 창출
+        - 조정전
+      constraints:
+        amount_is_zero_or_blank: false
+    emit:
+      canonical_id: CFO
+      amount_policy: as_reported
+    reason: 금액 있는 영업활동현금흐름 subtotal
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 8
+  - id: cf_cfi_plain_subtotal
+    version: 2
+    phase: normalize
+    priority: 900
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 투자활동현금흐름
+        - 투자활동순현금흐름
+        - 투자활동으로인한순현금흐름
+        - 투자활동으로인한현금흐름
+      constraints:
+        amount_is_zero_or_blank: false
+    emit:
+      canonical_id: CFI
+      amount_policy: as_reported
+    reason: 금액 있는 투자활동현금흐름 subtotal
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 9
+  - id: cf_cff_plain_subtotal
+    version: 2
+    phase: normalize
+    priority: 900
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 재무활동현금흐름
+        - 재무활동순현금흐름
+        - 재무활동으로인한순현금흐름
+        - 재무활동으로인한현금흐름
+      constraints:
+        amount_is_zero_or_blank: false
+    emit:
+      canonical_id: CFF
+      amount_policy: as_reported
+    reason: 금액 있는 재무활동현금흐름 subtotal
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 10
+  - id: cf_special_cash_change
+    version: 2
+    phase: normalize
+    priority: 880
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        contains_any_groups:
+        - - 연결범위변동
+          - 연결범위의변동
+          - 연결실체의변동
+          - 연결변동으로인한유출입
+          - 연결대상범위변동으로인한증가감소
+          - 연결대상범위변동으로인한현금변동
+          - 연결실체변동으로인한현금의증가
+          - 연결실체변동에의한기초현금및현금성자산의증감
+          - 연결실체변동으로인한순현금흐름
+          - 연결대상범위의변동
+          - 연결재무제표작성대상의변동
+          - 연결범위변동으로인한효과
+          - 연결범뷔변동에따른현금재분류효과
+          - 연결실체의변동으로인한현금의증감
+          - 매각예정으로분류된현금및현금성자산
+          - 매각예정자산에포함된현금및현금성자산
+          - 매각예정자산으로분류된현금및현금성자산
+          - 매각예정자산집단에포함된현금성자산
+          - 매각예정자산으로대체
+          - 매각예정자산으로분류
+          - 매각예정으로분류
+          - 매각예정자산으로의분류
+          - 매각예정비유동자산의분류효과
+          - 매각예정자산대체
+          - 매각예정자산대체로인한현금의감소
+          - 매각예정비유동자산대체
+          - 매각예정의일부로분류된현금및현금성자산
+          - 매각예정자산집단에포함된현금및현금성자산
+          - 매각예정처분자산집단에포함된현금및현금성자산
+          - 매각예정처분집단자산으로분류된현금및현금성자산
+          - 매각예정비유동자산으로분류된현금및현금성자산
+          - 매각예정자산에포함된현금
+          - 매각예정자산의현금및현금성자산
+          - 매각예정현금및현금성자산
+          - 매각예정자산으로분류된현금
+          - 매각예정처분집단자산의현금흐름
+          - 매각예정처분자산집단의현금흐름
+          - 매각예정처분자산집단으로의대체
+          - 매각예정처분자산집단대체
+          - 매각예정비유동자산의대체
+          - 매각예정자산으로의대체
+          - 매각예정자산으로부터의대체
+          - 매각예정자산의순현금변동
+          - 기초의매각예정집단에포함된현금및현금성자산
+          - 기초매각예정자산에서분류된현금및현금성자산
+          - 소유주분배예정자산으로대체
+          - 처분집단으로분류된현금및현금성자산
+          - 합병으로인한현금의증가
+          - 합병으로인한현금증가
+          - 합병으로인한증가
+          - 합병으로인한현금흐름
+          - 사업결합으로인한현금의증가
+          - 사업결합으로인한현금의순증감
+          - 사업결합으로인한현금의증감
+          - 사업결합으로인한현금유입
+          - 사업결합으로인한현금유출
+          - 사업결합으로인한현금및현금성자산의증가
+          - 사업결합으로인한현금및현금성자산효과
+          - 사업결합증가감소
+          - 기업결합으로인한현금의증가
+          - 기업결합으로인한현금증감
+          - 분할로인한감소
+          - 분할로인한현금의감소
+          - 분할로인한현금및현금성자산의감소
+          - 인적분할로인한변동
+          - 분할로인한변동
+          - 중단영업현금흐름
+          - 중단영업으로인한현금의감소
+          - 중단사업으로인한현금흐름
+          - 연결자본거래로인한현금유출
+          - 연결회사제외로인한기초현금의감소
+          - 매각예정분류
+          - 매각예정분류에따른현금의감소
+          - 매각예정비유동자산으로대체
+          - 매각예정자산집단으로분류된현금의감소
+          - 매각예정비유동자산에포함된현금및현금성자산
+          - 매각예정자산내현금및현금성자산의감소증가
+          - 매각예정종속기업투자로분류된현금의증감
+          - 매각예정처분자산집단으로분류된현금및현금성자산
+          - 매각예정처분자산집단으로인한변동
+          - 종속기업과기타사업의지배력상실에따른현금흐름
+          - 종속기업변동에따른현금및현금성자산의변동
+          - 종속기업취득에따른기초현금
+          - 종속기업취득으로인한현금증가
+          - 종속기업매각에따른변동
+          - 종속회사취득및처분으로인한현금증가감소
+          - 종속회사취득으로인한현금증가
+          - 연결기업의변동
+          - 연결범위변경에의한현금흐름
+          - 연결대상범위변동으로인한현금의증가감소
+          - 중단영업으로인한현금흐름
+          - 중단영업현금및현금성자산
+          - 중단사업현금흐름
+          - 현금및현금성자산의기타변동
+          - 기타현금의증가
+          - 기타현금의증가합병으로인한승계
+    emit:
+      canonical_id: SPECIAL_CASH_CHANGE
+      amount_policy: as_reported
+    reason: 연결범위/매각예정/처분자산집단으로 인한 특수 현금및현금성자산 변동
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 11
+  - id: cf_translation_difference
+    version: 2
+    phase: normalize
+    priority: 880
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 환율변동차이
+        - 외화환산차이
+        - 해외사업환산손익
+        - 해외사업환산차이
+        - 해외사업장환산의증가감소
+        - 재무제표의환산으로인한조정
+        - 재무제표환산으로인한조정
+        - 재무제표환환산으로인한조정
+        - 재무제표환산으로인한현금의감소
+        - 재무제표환산으로인한조정액
+        - 연결재무제표환산으로인한조정
+        - 현금흐름의외화환산차이
+        - 현금및현금성자산의외화환산차이
+        - 환율변동차이현금및현금성자산등
+        - 외화환산차이조정
+        - 해외사업환산손익효과
+        - 해외사업장환산외환차이
+        - 해외사업장환산으로인한효과
+        - 해외사업장의외화환산으로인한조정
+        - 해외종속기업의재무제표에대한환율변동효과
+        - 해외사업환율변동효과
+        - 해외종속회사환율변동효과
+        - 해외사업장외화환산
+        - 해외사업장환산차이
+        - 해외사업장환산
+        - 해외사업장환산조정
+        - 해외사업장환산손익
+        - 해외사업환산으로인한현금의변동
+        - 해외사업환산에따른현금변동
+        - 해외사업환산조정
+        - 해외사업환산에따른환율변동효과
+        - 표시통화로전환에대한환율변동효과
+        - 환율차이로인한해외사업환산손익
+        - 환율차이에인한변동
+        - 외화재무제표환산으로인한현금의변동
+        - 외화재무제표환산으로인한현금의변동액
+        - 연결재무제표환산으로인한현금및현금성자산의증가감소
+    emit:
+      canonical_id: CF_TRANSLATION_DIFFERENCE
+      amount_policy: as_reported
+    reason: CFO+CFI+CFF와 환율효과 전 현금증가 사이에 들어가는 환산/환율 차이
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 12
+  - id: cf_cash_change
+    version: 2
+    phase: normalize
+    priority: 860
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 현금및현금성자산의증가감소
+        - 현금및현금성자산의증가
+        - 현금및현금성자산의감소
+        - 현금및현금성자산의순증가감소
+        - 현금및현금성자산의순증감
+        - 현금및현금성자산의증감
+        excludes_any:
+        - 환율변동효과전
+        - 환율효과전
+        - 반영전
+        - 기초
+        - 기말
+        - 당기말
+        - 환율변동효과
+    emit:
+      canonical_id: CF_CASH_CHANGE
+      amount_policy: as_reported
+    reason: 현금및현금성자산 총 증가/감소
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 13
+  - id: cf_cash_begin
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 기초의현금및현금성자산
+        - 기초현금및현금성자산
+        - 기초의현금및현금성자산및현금성자산
+        - 기초현금및현금성자산의잔액
+    emit:
+      canonical_id: CF_CASH_BEGIN
+      amount_policy: as_reported
+    reason: 현금흐름표 기초 현금
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 14
+  - id: cf_cash_end
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 기말의현금및현금성자산
+        - 당기말의현금및현금성자산
+        - 기말현금및현금성자산
+        - 기말의현금및현금성자산및현금성자산
+        - 기말현금및현금성자산의잔액
+    emit:
+      canonical_id: CF_CASH_END
+      amount_policy: as_reported
+    reason: 현금흐름표 기말 현금
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 15
+  - id: cf_fx_effect_cash
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 외화표시현금및현금성자산의환율변동효과
+        - 현금및현금성자산에대한환율변동효과
+        - 현금및현금성자산에대한환율변동효과등
+        - 외화환산으로인한현금및현금성자산증감
+        - 외화환산으로인한현금및현금성자산의증감
+        - 외화환산으로인한현금흐름
+        - 현금및현금성자산의외화환산효과
+        - 현금및현금성자산의환율변동차이
+        - 해외사업장의외화환산으로인한현금및현금성자산의증가
+        - 현금및현금성자산에대한환율변동효과_
+        - 현금및현금상자산의환율변동효과
+        - 외화표시자산부채의환율변동효과
+        - 현금및현금성자산으로인한환율효과
+        - 현금의환율변동효과
+        - 환율변동효과현금및현금성자산
+        - 외화표시및현금및현금성자산에대한환율변동효과
+        - 외화환산에따른변동효과
+        - 외화표시현금및현금성자산의환동변율효과
+        - 외화표시현금및현금성자산에대한활율변동효과
+        - 외화표시현금및현금성자산의환률변동효과
+        - 외화표시현금및현금성자산의환율변동효과등
+        - 현금및현금성자산관련환율변동효과
+        - 현금성외화자산부채의환율변동
+        - 외화예금에대한환율변동효과
+        - 외화표시예금으로인한환율변동효과
+        - 외화표시예금의환율변동효과
+        - 외화자산의환율변동효과
+        - 외환자산부채의환율변동효과
+        - 기타환율변동으로인한현금흐름
+        - 자산부채환율변동효과
+    emit:
+      canonical_id: FX_EFFECT_CASH
+      amount_policy: as_reported
+    reason: 현금및현금성자산 환율변동효과
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 16
+  - id: cf_debt_net_borrowing
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 단기차입금의순차입
+        - 차입금의순차입
+    emit:
+      canonical_id: DEBT_NET_BORROWING
+      fallback_if_missing: UNMAPPED
+    reason: 차입금 차입/상환 순액
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 17
+  - id: cf_lease_repayment
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 리스부채의상환
+        - 리스부채의원금상환
+        - 리스부채상환
+        - 리스부채의감소
+        - 리스부채감소
+    emit:
+      canonical_id: LEASE_REPAYMENT
+      amount_policy: abs
+      cash_direction: outflow
+    reason: 리스부채 상환/감소
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 18
+  - id: cf_cash_change_before_fx
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 환율변동효과전현금및현금성자산의증가감소
+        - 환율효과전현금및현금성자산의증가감소
+        - 환율변동효과반영전현금및현금성자산의순증가감소
+        - 환율변동효과반영전현금및현금성자산의증가감소
+    emit:
+      canonical_id: CF_CASH_CHANGE_BEFORE_FX
+      amount_policy: as_reported
+    reason: CFO+CFI+CFF와 일치하는 환율효과 전 현금증가
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 19
+  - id: cf_fx_effect_cash__legacy_dup_2
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 외화표시현금및현금성자산의환율변동효과
+        - 외화표시현금및현금성자산에대한환율변동효과
+        - 현금및현금성자산에대한환율변동효과
+        - 외화표시현금및현금성자산에대한환율변동효과
+        - 현금및현금성자산의환율변동효과
+        - 현금성자산의환율변동효과
+        - 외화표시현금의환율변동효과
+        - 현금및현금성자산의환율변동으로인한효과
+        - 현금및현금성자산에대한환율변동
+        - 현금및현금성자산에의한환율변동효과
+        - 현금및현금성자산의환율변동
+        - 현금및현금성자산환율변동효과
+        - 외화현금및현금성자산의환율변동효과
+        - 외화표시현금및현금성자산의환율변동
+        - 외화표시현금및현금성자산환율변동효과
+        - 외화표시현금성자산의환율변동효과
+        - 외화표시현금환율변동효과
+        - 외화표시현금등의환율변동효과
+        - 외화표시현금및현금성자산등의환율변동효과
+        - 외화표시현금성자산의환율변동효과등
+        - 현금및현금성자산등에대한환율변동효과
+        - 현금및현금성자산에대한환율변동으로인한효과
+        - 현금및현금성자산의환산으로인한증감
+        - 현금및현금성자산의환산으로인한증가
+        - 현금및현금성자산에서발생한환산손익
+        - 외화표시현금및현금성자산의환산에의한증감
+        - 현금성자산환율변동효과
+        - 현금성자산의환산손익
+        - 외화환산으로인한현금증감
+        - 외화환산으로인한현금의증감
+        - 외화환산으로인한현금의증가감소
+        - 외화환산으로인한현금의변동
+        - 외화환산으로인한현금의변동액
+        - 외화환산으로인한현금변동
+        - 외화환산으로인한현금및현금성자산의변동
+        - 외화환산으로인한현금및현금성자산의변동액
+        - 외화환산으로인한변동
+        - 외화환산으로인한변동효과
+        - 외화환산으로인한효과
+        - 외환환산으로인한현금의변동
+        - 외화화산으로인한현금의변동
+        - 외화환산
+        - 외화환산효과
+        - 환율변동효과
+        - 환율변동으로인한효과
+        - 환율변동으로인한현금흐름
+        - 환율효과
+        - 환율변동
+        - 환율변동으로인한차이
+        - 환율차이에의한변동
+        - 환율변동으로인한증감
+        - 환율변동으로인한증가
+        - 환율변동으로인한현금의변동
+        - 환율변동으로인한현금및현금성자산의증가
+        - 환율변동으로인한현금및현금성자산의증가감소
+        - 환율변동으로인한영향
+        - 환율변동으로인한증가감소
+        - 횐율변동으로인한증가
+        - 현금및현금성자산의환율변둉효과
+        - 현금및현금자산에대한환율변동효과
+        - 외화예금환율변동효과
+        - 보유중인외화예금의환율변동효과
+        - 보유현금및현금성자산환산효과
+        - 외화표시현금현금성자산에대한환율변동
+        - 외화표시현금및현금자산성의환율변동효과
+        - 외화표시현금및현금성자산의환율변동으로인한효과
+        - 외화표시현금및현금성자산효과
+        - 외화표시현금성자산환율변동효과
+        - 외화표시현금성자산의환율변동
+        - 외화현금의환율변동효과
+        - 외화현금및현금성자산에대한환율변동효과
+        - 외화로표시된현금및현금성자산의환율변동효과
+        - 현금과현금성자산에대한환율변동효과
+        - 현금및현금성자산대한환율변동효과
+        - 현금및현금성자산에대한환율변동효
+        - 현금및현금성자산외환율변동효과
+        - 현금및현금성자산의외화환산손익
+        - 현금및현금성자산의외화환산이익
+        - 현금및현금성자산의외화환산이익손실
+        - 현금및현금성자산의환율변동효과로인한증가감소
+        - 현금성자산의환율변동
+        - 현금성자산에대한환율효과
+        - 현금의외화환산효과
+        - 현금환율변동효과
+        - 환율변동효과등
+        - 환율차이등으로인한변동
+        - 연결환율변동
+        - 해외사업의환율변동효과
+        - 해외사업장외화환산으로인한조정
+        - 해외사업장환율변동효과
+        - 외환표시현금및현금성자산에대한환율변동효과
+        - 기타환율변동효과
+        - 기타의증감환율변동효과
+        - 외화표시환율변동효과
+    emit:
+      canonical_id: FX_EFFECT_CASH
+      amount_policy: as_reported
+    reason: 기초현금과 기말현금 검산에 필요한 환율변동효과
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 20
+    extensions:
+      legacy_rule_id: cf_fx_effect_cash
+  - id: cf_cash_begin__legacy_dup_2
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 기초의현금및현금성자산
+        - 기초현금및현금성자산
+    emit:
+      canonical_id: CF_CASH_BEGIN
+      amount_policy: as_reported
+    reason: 현금흐름표 기초 현금
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 21
+    extensions:
+      legacy_rule_id: cf_cash_begin
+  - id: cf_cash_end__legacy_dup_2
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 기말의현금및현금성자산
+        - 당기말의현금및현금성자산
+        - 기말현금및현금성자산
+    emit:
+      canonical_id: CF_CASH_END
+      amount_policy: as_reported
+    reason: 현금흐름표 기말 현금
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 22
+    extensions:
+      legacy_rule_id: cf_cash_end
+  - id: cf_fx_effect_cash_generic_cash_fx
+    version: 2
+    phase: normalize
+    priority: 845
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        excludes_any:
+        - 기초
+        - 기말
+        - 효과전
+        - 차입
+        - 사채
+        contains_any_groups:
+        - - 현금
+          - 현금성자산
+          - 현금자산
+        - - 환율
+          - 외화환산
+          - 외환
+          - 환산
+    emit:
+      canonical_id: FX_EFFECT_CASH
+      amount_policy: as_reported
+    reason: 현금/현금성자산 관련 환율·외화환산효과 generic alias
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 23
+  - id: cf_capex_ppe
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 유형자산의취득
+        - 유형자산취득
+        - 유형자산의 취득
+    emit:
+      canonical_id: CAPEX_PPE
+      amount_policy: abs
+      cash_direction: outflow
+    reason: 유형자산 취득 지출
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 24
+  - id: cf_capex_intang
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 무형자산의취득
+        - 무형자산취득
+    emit:
+      canonical_id: CAPEX_INTANG
+      amount_policy: abs
+      cash_direction: outflow
+    reason: 무형자산 취득 지출
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 25
+  - id: cf_capitalized_rnd
+    version: 2
+    phase: normalize
+    priority: 820
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 개발비의증가
+        - 개발비의취득
+        - 개발비자산의취득
+        - 개발비자산취득
+        - 개발중인무형자산의취득
+        - 개발 중인 무형자산의 취득
+    emit:
+      canonical_id: RND
+      amount_policy: abs
+      cash_direction: outflow
+    reason: 정책상 자본화 개발비 취득도 혁신 투자/R&D 지출로 포함
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 26
+  - id: cf_depreciation_expense
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 감가상각비
+    emit:
+      canonical_id: DEPRECIATION_EXPENSE
+    reason: 감가상각비
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 27
+  - id: cf_amortization
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 무형자산 상각비
+        - 무형자산상각비
+        - 무형자산상각비에대한조정
+        - 무형자산상각비의조정
+        - 무형자산상각
+        - 무형자산 상각
+        - 영업권이외의무형자산상각비
+        - 영업권 이외의 무형자산상각비
+    emit:
+      canonical_id: AMORTIZATION
+    reason: 무형자산 상각비
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 28
+  - id: cf_ppe_disposal
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 유형자산의 처분
+        - 유형자산의처분
+        - 유형자산처분
+    emit:
+      canonical_id: PPE_DISPOSAL_PROCEEDS
+      amount_policy: abs
+      cash_direction: inflow
+    reason: 유형자산 처분대금
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 29
+  - id: cf_intangible_disposal
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 무형자산의 처분
+        - 무형자산의처분
+        - 무형자산처분
+    emit:
+      canonical_id: INTANGIBLE_DISPOSAL_PROCEEDS
+      amount_policy: abs
+      cash_direction: inflow
+    reason: 무형자산 처분대금
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 30
+  - id: cf_interest_paid
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 이자의지급
+        - 이자지급
+    emit:
+      canonical_id: INT_PAID
+      amount_policy: abs
+      cash_direction: outflow
+    reason: 이자 지급
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 31
+  - id: cf_tax_paid
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 법인세의납부
+        - 법인세납부
+        - 법인세지급
+    emit:
+      canonical_id: TAX_PAID
+      amount_policy: abs
+      cash_direction: outflow
+    reason: 법인세 지급
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 32
+  - id: cf_dividend_paid
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 배당금의 지급
+        - 배당금의지급
+        - 배당의지급
+        - 배당
+    emit:
+      canonical_id: DIV_PAID
+      amount_policy: abs
+      cash_direction: outflow
+    reason: 배당금 지급
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 33
+  - id: cf_tax_paid_or_refund
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 법인세의환급납부
+        - 법인세환급납부
+        - 법인세의납부
+        - 법인세납부
+        - 법인세지급
+    emit:
+      canonical_id: TAX_PAID
+    reason: 법인세 현금흐름. 환급/납부 순액은 현재 TAX_PAID로 fallback
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 34
+  - id: cf_debt_issue
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        contains_any_groups:
+        - - 차입금의차입
+          - 차입금의증가
+          - 사채의발행
+          - 금융부채의증가
+          - 단기금융부채의증가
+          - 장기금융부채의증가
+          - 단기차입금의순차입
+    emit:
+      canonical_id: DEBT_ISSUE
+      amount_policy: abs
+      cash_direction: inflow
+    reason: 차입금/사채 유입
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 35
+  - id: cf_debt_repay
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        contains_any_groups:
+        - - 차입금의상환
+          - 차입금의감소
+          - 사채의상환
+          - 금융부채의감소
+          - 단기금융부채의감소
+          - 장기금융부채의감소
+          - 유동성장기부채의상환
+    emit:
+      canonical_id: DEBT_REPAY
+      amount_policy: abs
+      cash_direction: outflow
+    reason: 차입금/사채 상환
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 36
+  - id: bs_non_current_liabilities
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 비유동부채
+        - 비유동부채 합계
+        - 비유동부채합계
+        - 비유동부채 계
+        - 비유동부채총계
+    emit:
+      canonical_id: NON_CURRENT_LIABILITIES
+      fallback_if_missing: UNMAPPED
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 37
+  - id: cf_buyback
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 자기주식의취득
+        - 자기주식취득
+    emit:
+      canonical_id: BUYBACK
+      amount_policy: abs
+      cash_direction: outflow
+    reason: 자기주식 취득
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 38
+  - id: cf_equity_issue
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        contains_any_groups:
+        - - 유상증자
+          - 주식발행
+          - 비지배지분의유상증자참여
+          - 연결자본거래로인한현금유입
+    emit:
+      canonical_id: EQ_ISSUE
+      amount_policy: abs
+      cash_direction: inflow
+    reason: 자본 유입
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 39
+  - id: bs_assets_held_for_sale
+    version: 2
+    phase: normalize
+    priority: 820
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        excludes_any:
+        - 부채
+        - 자본
+        - 현금및현금성자산
+        contains_any_groups:
+        - - 매각예정비유동자산
+          - 매각예정자산
+          - 매각예정집단의자산
+          - 매각예정으로분류된비유동자산
+          - 매각예정으로재분류된투자주식
+          - 매각예정으로분류된처분집단의자산
+          - 매각예정또는소유주에대한분배예정으로분류된비유동자산이나처분자산집단
+          - 처분자산집단의자산
+          - 처분자산집단
+          - 매각예정처분자산집단
+          - 처분자산집단내자산합계
+          - 소유주분배예정자산집단
+          - 매각예정유동자산
+          - 매각비유동자산
+      context:
+        excludes_any:
+        - 유동자산
+        - 비유동자산
+        - 자본
+    emit:
+      canonical_id: ASSETS_HELD_FOR_SALE
+      amount_policy: abs
+    reason: 자산총계 검증에서 유동자산+비유동자산 외 별도 표시되는 매각예정자산
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 40
+  - id: bs_liabilities_held_for_sale
+    version: 2
+    phase: normalize
+    priority: 820
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        contains_any_groups:
+        - - 매각예정비유동부채
+          - 매각예정부채
+          - 매각예정으로분류된처분집단의부채
+          - 매각예정집단의부채
+          - 매각예정처분부채집단
+          - 매각예정으로분류된처분자산집단에포함된부채
+          - 매각예정비유동자산과직접관련된부채
+          - 매각예정비유동자산관련부채
+          - 처분자산집단의부채
+          - 처분자산집단과직접관련된부채
+          - 매각예정자산관련부채
+          - 소유주분배예정부채집단
+      context:
+        excludes_any:
+        - 유동부채
+        - 비유동부채
+    emit:
+      canonical_id: LIABILITIES_HELD_FOR_SALE
+      amount_policy: as_reported
+    reason: 부채총계 검증에서 유동부채+비유동부채 외 별도 표시되는 매각예정부채
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 41
+  - id: bs_financial_business_assets
+    version: 2
+    phase: normalize
+    priority: 760
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 금융업자산
+        - 금융부문자산
+        - 금융사업자산
+        - 증권업자산
+        - 창업투자자산
+        - 창업투자자
+        - 사모투자자산
+        - 사모투자자
+    emit:
+      canonical_id: FINANCIAL_BUSINESS_ASSETS
+      amount_policy: as_reported
+    reason: 일부 지주/복합기업에서 금융업 자산이 별도 subtotal로 표시됨
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 42
+  - id: bs_financial_business_assets_generic_parent
+    version: 2
+    phase: normalize
+    priority: 758
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 금융채권
+        - 금융자산
+      constraints:
+        has_children: true
+    emit:
+      canonical_id: FINANCIAL_BUSINESS_ASSETS
+      amount_policy: as_reported
+    reason: 금융업 자산 generic parent subtotal. 하위 leaf 금융자산은 과대합산 방지를 위해 매핑하지 않음
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 43
+  - id: bs_financial_business_assets_leaf_details
+    version: 2
+    phase: normalize
+    priority: 755
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 투자실적자산
+      constraints:
+        has_children: false
+    emit:
+      canonical_id: UNMAPPED
+      amount_policy: as_reported
+    reason: 금융업/창업투자 자산 leaf detail. 부모 subtotal과 과대합산되지 않도록 미매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 44
+  - id: bs_financial_business_liabilities
+    version: 2
+    phase: normalize
+    priority: 760
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 금융업부채
+        - 금융부문부채
+        - 금융사업부채
+        - 증권업부채
+    emit:
+      canonical_id: FINANCIAL_BUSINESS_LIABILITIES
+      amount_policy: as_reported
+    reason: 일부 지주/복합기업에서 금융업 부채가 별도 subtotal로 표시됨
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 45
+  - id: bs_long_term_debt_generic_borrowings
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 차입금
+      context:
+        contains_any_groups:
+        - - 비유동부채
+    emit:
+      canonical_id: LONG_TERM_DEBT
+    reason: 비유동부채 하위 차입금
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 46
+  - id: bs_short_term_debt_generic_borrowings
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 차입금
+      context:
+        contains_any_groups:
+        - - 유동부채
+    emit:
+      canonical_id: SHORT_TERM_DEBT
+    reason: 유동부채 하위 차입금
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 47
+  - id: bs_liabilities_and_equity_total
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 부채및자본총계
+        - 부채와자본총계
+        - 부채와자본합계
+        - 자본과부채총계
+        - 자본및부채총계
+        - 자본과부채합계
+        - 부채및자본의총계
+    emit:
+      canonical_id: UNMAPPED
+    reason: 자산총계와 중복되는 보조 총계
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 48
+  - id: bs_total_assets
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 자산총계
+        - 자산합계
+      constraints:
+        amount_is_zero_or_blank: false
+    emit:
+      canonical_id: TOTAL_ASSETS
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 49
+  - id: bs_total_liabilities
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 부채총계
+        - 부채합계
+      constraints:
+        amount_is_zero_or_blank: false
+    emit:
+      canonical_id: TOTAL_LIABILITIES
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 50
+  - id: bs_total_equity
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 자본총계
+        - 자본합계
+      constraints:
+        amount_is_zero_or_blank: false
+    emit:
+      canonical_id: TOTAL_EQUITY
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 51
+  - id: bs_current_non_current_zero_section_headers
+    version: 2
+    phase: normalize
+    priority: 790
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 유동자산
+        - 비유동자산
+        - 유동부채
+        - 비유동부채
+      constraints:
+        has_children: true
+        amount_is_zero_or_blank: true
+    emit:
+      canonical_id: UNMAPPED
+    reason: 금액 0인 유동/비유동 분류 parent는 subtotal이 아니라 section header
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 52
+  - id: bs_current_assets
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 유동자산
+        - 유동자산 합계
+        - 유동자산합계
+        - 유동자산 계
+        - 유동자산(금융업)
+        - 유동자산총계
+    emit:
+      canonical_id: CURRENT_ASSETS
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 53
+  - id: bs_non_current_assets
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 비유동자산
+        - 비유동 자산
+        - 비유동자산 합계
+        - 비유동자산합계
+        - 비유동자산 계
+        - 비유동자산(금융업)
+        - 비유동자산총계
+    emit:
+      canonical_id: NON_CURRENT_ASSETS
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 54
+  - id: bs_current_liabilities
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 유동부채
+        - 유동부채 합계
+        - 유동부채합계
+        - 유동부채 계
+        - 유동부채총계
+    emit:
+      canonical_id: CURRENT_LIABILITIES
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 55
+  - id: bs_other_current_assets
+    version: 2
+    phase: normalize
+    priority: 640
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        excludes_any:
+        - 비유동
+        contains_any_groups:
+        - - 기타
+        - - 유동자산
+    emit:
+      canonical_id: OTHER_CURRENT_ASSETS
+      amount_policy: as_reported
+    reason: 기타 유동자산 매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 56
+  - id: bs_other_non_current_assets
+    version: 2
+    phase: normalize
+    priority: 640
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        contains_any_groups:
+        - - 기타
+        - - 비유동자산
+    emit:
+      canonical_id: OTHER_NON_CURRENT_ASSETS
+      amount_policy: as_reported
+    reason: 기타 비유동자산 매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 57
+  - id: bs_other_current_liabilities
+    version: 2
+    phase: normalize
+    priority: 640
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        excludes_any:
+        - 비유동
+        contains_any_groups:
+        - - 기타
+        - - 유동부채
+    emit:
+      canonical_id: OTHER_CURRENT_LIABILITIES
+      amount_policy: as_reported
+    reason: 기타 유동부채 매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 58
+  - id: bs_other_non_current_liabilities
+    version: 2
+    phase: normalize
+    priority: 640
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        contains_any_groups:
+        - - 기타
+        - - 비유동부채
+    emit:
+      canonical_id: OTHER_NON_CURRENT_LIABILITIES
+      amount_policy: as_reported
+    reason: 기타 비유동부채 매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 59
+  - id: bs_cash
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 현금및현금성자산
+        - 현금및현금성자산, 금융업
+        - 현금및현금성자산, 비금융업
+        - 현금및현금성자산-증권업
+    emit:
+      canonical_id: CASH_AND_EQUIVALENTS
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 60
+  - id: bs_short_term_financial_assets
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 단기금융자산
+        - 단기금융상품
+        - 단기투자자산
+    emit:
+      canonical_id: SHORT_TERM_FINANCIAL_ASSETS
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 61
+  - id: bs_inventory
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 재고자산
+        - 유동재고자산
+        - 재고 자산
+        - 상품및제품
+        - 제품및상품
+    emit:
+      canonical_id: INVENTORIES
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 62
+  - id: bs_ppe
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 유형자산
+    emit:
+      canonical_id: PPE
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 63
+  - id: bs_intangible_assets
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 무형자산
+        - 개발비
+        - 2.개발비
+        - 개발중인무형자산
+        - 개발 중인 무형자산
+        - 개발중인무형자산,총액
+        - 개발 중인 무형자산, 총액
+        - 영업권이외의무형자산
+        - 영업권 이외의 무형자산
+        - 기타무형자산
+        - 영업권및무형자산
+        - 영업권및기타무형자산
+        - 영업권과무형자산
+        - 영업권과기타무형자산
+    emit:
+      canonical_id: INTANGIBLE_ASSETS
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 64
+  - id: bs_goodwill
+    version: 2
+    phase: normalize
+    priority: 760
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 영업권
+        - 연결영업권
+        - 사업결합영업권
+        - 합병영업권
+        excludes_any:
+        - 이외
+        - 제외
+        - 손상
+        - 상각
+        - 처분
+        - 취득
+        - 무형자산
+    emit:
+      canonical_id: GOODWILL
+      amount_policy: as_reported
+    reason: 재무상태표 영업권 장부가치
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 65
+  - id: bs_contract_assets
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 계약자산
+    emit:
+      canonical_id: CONTRACT_ASSETS
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 66
+  - id: bs_contract_liabilities
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 계약부채
+        - 장기계약부채
+    emit:
+      canonical_id: CONTRACT_LIABILITIES
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 67
+  - id: bs_advances_from_customers
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 선수금
+    emit:
+      canonical_id: ADVANCES_FROM_CUSTOMERS
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 68
+  - id: bs_trade_receivables
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 매출채권
+        - 장기매출채권
+        - 단기매출채권
+        - 유동매출채권
+        - 매출채권순액
+        - 매출채권(순액)
+    emit:
+      canonical_id: TRADE_RECEIVABLES
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 69
+  - id: bs_trade_and_other_receivables
+    version: 2
+    phase: normalize
+    priority: 680
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 매출채권및기타채권
+        - 장기매출채권및기타채권
+        - 매출채권 및 기타채권
+        - 매출채권과기타채권
+        - 매출채권및기타수취채권
+        - 매출채권과기타수취채권
+        - 매출채권및기타금융채권
+        - 매출채권 및 기타채권 합계
+        - 매출채권 및 기타유동채권
+        - 장기매출채권및기타비유동채권
+        - 장기매출채권 및 기타비유동채권
+        - 장기매출채권및기타채권
+        - 장기매출채권 및 기타비유동채권, 총액
+        - 장기매출채권및기타비유동채권,총액
+        - 매출채권및계약자산
+        - 매출채권 및 계약자산
+    emit:
+      canonical_id: TRADE_AND_OTHER_RECEIVABLES
+    reason: Beneish DSRI에는 매출채권과 기타채권 합산 canonical을 우선 사용
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 70
+  - id: bs_other_receivables
+    version: 2
+    phase: normalize
+    priority: 660
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 기타채권
+        - 기타수취채권
+        - 기타비유동수취채권
+        - 미수금
+        - 미수수익
+        - 단기미수금
+        - 단기미수수익
+        - 장기미수금
+        - 장기미수수익
+    emit:
+      canonical_id: OTHER_RECEIVABLES
+    reason: 매출채권이 명시되지 않은 기타채권/미수금
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 71
+  - id: bs_trade_payables
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 매입채무
+        - 단기매입채무
+        - 유동매입채무
+        - 장기매입채무
+    emit:
+      canonical_id: TRADE_PAYABLES
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 72
+  - id: bs_trade_and_other_payables
+    version: 2
+    phase: normalize
+    priority: 680
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 매입채무및기타채무
+        - 매입채무 및 기타채무
+        - 장기매입채무및기타채무
+        - 장기매입채무 및 기타채무
+        - 매입채무및미지급금
+        - 매입채무 및 미지급금
+        - 매입채무및기타유동채무
+        - 매입채무 및 기타유동채무
+        - 장기매입채무및기타비유동채무
+        - 장기매입채무 및 기타비유동채무
+        - 매입채무및기타지급채무
+        - 매입채무 및 기타지급채무
+    emit:
+      canonical_id: TRADE_AND_OTHER_PAYABLES
+    reason: 지급채무 회전율에는 매입채무와 기타채무 합산 canonical을 우선 사용
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 73
+  - id: bs_other_payables
+    version: 2
+    phase: normalize
+    priority: 660
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 미지급금
+        - 미지급비용
+        - 단기미지급금
+        - 장기미지급금
+        - 단기미지급비용
+        - 장기미지급비용
+        - 기타채무
+    emit:
+      canonical_id: OTHER_PAYABLES
+    reason: 매입채무가 명시되지 않은 기타채무/미지급금
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 74
+  - id: bs_short_term_debt
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 단기차입금
+        - 유동성장기부채
+        - 유동성장기차입금
+        - 유동성전환사채
+        - 유동성사채
+        - 유동성리스부채
+        - 유동차입금
+        - 유동 차입금
+        - 유동차입금(사채포함)
+        - 유동 차입금(사채 포함)
+        - 단기금융부채
+    emit:
+      canonical_id: SHORT_TERM_DEBT
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 75
+  - id: bs_long_term_debt
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 장기차입금
+        - 사채
+        - 전환사채
+        - 신주인수권부사채
+        - 장기리스부채
+        - 장기차입금(사채포함),총액
+        - 장기차입금(사채 포함), 총액
+        - 장기금융부채
+    emit:
+      canonical_id: LONG_TERM_DEBT
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 76
+  - id: bs_lease_liability
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 리스부채
+        - 유동리스부채
+        - 비유동리스부채
+    emit:
+      canonical_id: LEASE_LIABILITY
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 77
+  - id: bs_parent_equity
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 지배기업의소유지분
+        - 지배기업소유지분
+        - 지배기업의소유주지분
+        - 지배기업소유주지분
+        - 지배기업주주지분
+        - 지배주주지분
+        - 지배기업소유주에게귀속되는자본
+        - 지배기업의소유주에게귀속되는자본
+      constraints:
+        has_children: false
+        amount_is_zero_or_blank: false
+    emit:
+      canonical_id: EAOP
+      amount_policy: as_reported
+    reason: 지배주주지분 leaf row만 매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 78
+  - id: bs_parent_equity_subtotal
+    version: 2
+    phase: normalize
+    priority: 805
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 지배기업의소유지분
+        - 지배기업소유지분
+        - 지배기업의소유주지분
+        - 지배기업소유주지분
+        - 지배기업주주지분
+        - 지배주주지분
+        - 지배기업소유주에게귀속되는자본
+        - 지배기업의소유주에게귀속되는자본
+      context:
+        contains_any_groups:
+        - - 자본
+      constraints:
+        has_children: true
+        amount_is_zero_or_blank: false
+    emit:
+      canonical_id: EAOP
+      amount_policy: as_reported
+    reason: 자본 section의 지배주주지분 subtotal
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 79
+  - id: bs_nci_equity
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 비지배지분
+        - 비지배주주지분
+        - 비지배주주 지분
+      context:
+        excludes_any:
+        - 부채
+      constraints:
+        has_children: false
+        amount_is_zero_or_blank: false
+    emit:
+      canonical_id: NEAOP
+      amount_policy: as_reported
+    reason: 비지배주주지분 leaf row만 매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 80
+  - id: bs_disposal_group_equity
+    version: 2
+    phase: normalize
+    priority: 790
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 매각예정자산처분집단관련자본
+        - 매각예정자산처분집단관련 자본
+        - 매각예정자산처분집단 관련 자본
+        - 처분자산집단관련자본
+        - 처분자산집단관련 자본
+        - 처분자산집단 관련 자본
+      context:
+        contains_any_groups:
+        - - 자본
+    emit:
+      canonical_id: DISPOSAL_GROUP_EQUITY
+      amount_policy: as_reported
+    reason: 자본총계에 별도 포함되는 매각예정/처분집단 관련 자본
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 81
+  - id: bs_retained_earnings
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 이익잉여금
+    emit:
+      canonical_id: RETAINED_EARNINGS
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 82
+  - id: is_basic_eps
+    version: 2
+    phase: normalize
+    priority: 970
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 기본주당이익
+        - 기본주당손익
+        - 기본주당순이익
+        - 기본주당순손익
+        - 기본주당이익손실
+        - 기본주당순이익손실
+        - 보통주기본주당이익
+        - 보통주기본주당손익
+        - 보통주기본주당순이익
+        - 보통주기본주당순손익
+        - 보통주기본주당이익손실
+        - 보통주기본주당순이익손실
+        excludes_any:
+        - 계속영업
+        - 중단영업
+    emit:
+      canonical_id: BASIC_EPS
+      amount_policy: as_reported
+    reason: 기본 EPS. 추출 단계에서 원/주 단위로 강제 정규화
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 83
+  - id: is_diluted_eps
+    version: 2
+    phase: normalize
+    priority: 970
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 희석주당이익
+        - 희석주당손익
+        - 희석주당순이익
+        - 희석주당순손익
+        - 희석주당이익손실
+        - 희석주당순이익손실
+        - 보통주희석주당이익
+        - 보통주희석주당손익
+        - 보통주희석주당순이익
+        - 보통주희석주당순손익
+        - 보통주희석주당이익손실
+        - 보통주희석주당순이익손실
+        excludes_any:
+        - 계속영업
+        - 중단영업
+    emit:
+      canonical_id: DILUTED_EPS
+      amount_policy: as_reported
+    reason: 희석 EPS. 추출 단계에서 원/주 단위로 강제 정규화
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 84
+  - id: is_net_income_parent_explicit
+    version: 2
+    phase: normalize
+    priority: 950
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 지배기업지분순이익
+        - 지배기업지분순이익손실
+        - 지배회사지분순이익
+        - 지배회사지분순이익손실
+        - 지배기업소유주지분순이익
+        - 지배기업소유주지분순이익손실
+        - 지배기업의소유주지분순이익
+        - 지배기업의소유주지분순이익손실
+        - 지배주주순이익
+      context:
+        excludes_any:
+        - 주당손익
+        - 주당이익
+    emit:
+      canonical_id: NET_INCOME_PARENT
+    reason: 명시적 지배주주순이익
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 85
+  - id: is_net_income_parent_zero_detail_header_unmapped
+    version: 2
+    phase: normalize
+    priority: 960
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 지배기업의소유주지분
+        - 지배기업소유주지분
+        - 지배주주지분
+        - 지배기업지분순이익
+        - 지배기업지분순이익손실
+        - 지배회사지분순이익
+        - 지배회사지분순이익손실
+        - 지배기업소유주지분순이익
+        - 지배기업소유주지분순이익손실
+        - 지배기업의소유주지분순이익
+        - 지배기업의소유주지분순이익손실
+        - 지배기업의소유주에게귀속되는당기순이익손실
+        - 지배기업소유주귀속당기순이익
+        - 지배기업소유주에귀속될당기순이익
+        - 지배기업의소유주에귀속될당기순이익
+        - 지배기업의소유주에게귀속될당기순이익
+      context:
+        contains_any_groups:
+        - - 당기순이익의귀속
+          - 당기순손익의귀속
+          - 당기순이익손실의귀속
+      constraints:
+        has_children: true
+        amount_is_zero_or_blank: true
+    emit:
+      canonical_id: UNMAPPED
+    reason: 계속/중단영업 세부행을 가진 지배주주순이익 0원 header
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 86
+  - id: is_net_income_nci_explicit
+    version: 2
+    phase: normalize
+    priority: 950
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 비지배지분순이익
+        - 비지배지분순손실
+        - 비지배지분순손익
+        - 비지배주주순이익
+        - 비지배주주순손실
+        - 비지배지분귀속당기순이익
+        - 비지배지분에귀속되는당기순이익손실
+        - 비지배기업소유주지분
+        - 비지배기업의소유주에게귀속되는당기순이익손실
+        - 비지배지분에귀속되는당기순이익
+      context:
+        excludes_any:
+        - 주당손익
+        - 주당이익
+    emit:
+      canonical_id: NET_INCOME_NCI
+    reason: 명시적 비지배지분순이익
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 87
+  - id: is_net_income_nci_zero_detail_header_unmapped
+    version: 2
+    phase: normalize
+    priority: 960
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 비지배지분
+        - 비지배주주지분
+        - 비지배지분에귀속되는당기순이익손실
+        - 비지배지분에귀속될당기순이익
+        - 비지배지분귀속당기순이익손실
+        - 비지배기업의소유주에귀속될당기순이익
+        - 비지배기업의소유주에게귀속되는당기순이익손실
+        - 비지배지분에귀속되는당기순이익
+      context:
+        contains_any_groups:
+        - - 당기순이익의귀속
+          - 당기순손익의귀속
+          - 당기순이익손실의귀속
+      constraints:
+        has_children: true
+        amount_is_zero_or_blank: true
+    emit:
+      canonical_id: UNMAPPED
+    reason: 계속/중단영업 세부행을 가진 비지배지분순이익 0원 header
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 88
+  - id: is_continuing_operations_income
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 계속영업이익손실
+        - 계속영업손익
+        - 계속영업이익
+        - 계속영업손실
+        - 계속영업당기순이익손실
+        - 계속영업당기순이익
+        - 계속영업당기순손실
+        - 계속영업순이익손실
+        - 계속영업순이익
+        - 계속영업순손실
+    emit:
+      canonical_id: CONTINUING_OPERATIONS_INCOME
+      amount_policy: as_reported
+    reason: 계속영업손익
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 89
+  - id: is_discontinued_operations_income
+    version: 2
+    phase: normalize
+    priority: 850
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 중단영업이익손실
+        - 중단영업손익
+        - 중단영업이익
+        - 중단영업손실
+        - 중단영업당기순이익손실
+        - 중단영업당기순이익
+        - 중단영업당기순손실
+        - 중단영업순이익손실
+        - 중단사업손익
+        - 중단사업이익손실
+        - 중단사업손실
+        - 중단사업당기순이익손실
+        - 중단사업당기순이익
+        - 중단사업순이익손실
+        - 중단영업당기순손익
+        - 중단영업순이익
+        - 중단영업순손실
+        - 중단영업손익손실
+        - 중단사업영업순손익
+        - 중단사업의영업이익손실
+        - 중단사업이익
+        - 중단손익
+        - 당기순이익중단영업
+        - 세후중단영업손익
+        - 세후중단영업이익
+        - 세후중단영업손실
+        - 세후중단영업순손실
+        - 세후중단영업이익손실
+        - 세후중단영업당기순이익손실
+    emit:
+      canonical_id: DISCONTINUED_OPERATIONS_INCOME
+      amount_policy: as_reported
+    reason: 중단영업손익
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 90
+  - id: is_bad_debt_expense
+    version: 2
+    phase: normalize
+    priority: 815
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 대손상각비
+        - 매출채권손상차손
+        - 매출채권및기타채권손상차손
+        - 매출채권에대한손상차손
+        - 수취채권과계약자산손상차손
+        - 수취채권손상차손
+        - 매출채권및기타금융자산손상손실
+        - 매출채권및기타채권등손상차손
+        - 매출채권등금융자산손상차손
+        - 기타의대손상각비
+        excludes_any:
+        - 환입
+    emit:
+      canonical_id: BAD_DEBT_EXPENSE
+      amount_policy: abs
+    reason: 매출총이익 이후 별도 표시되는 대손/매출채권 손상 관련 영업비용
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 91
+  - id: is_bad_debt_expense_contextual_impairment
+    version: 2
+    phase: normalize
+    priority: 812
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 금융자산손상차손
+        - 손상차손
+        - 손상손실
+        excludes_any:
+        - 환입
+      context:
+        contains_any_groups:
+        - - 판매비와관리비
+          - 판매비및관리비
+          - 판매관리비
+          - 영업비용
+    emit:
+      canonical_id: BAD_DEBT_EXPENSE
+      amount_policy: abs
+    reason: 넓은 손상 표현은 영업비용/판관비 문맥에서만 대손성 비용으로 매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 92
+  - id: is_bad_debt_reversal
+    version: 2
+    phase: normalize
+    priority: 815
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        excludes_any:
+        - 금융상품
+        contains_any_groups:
+        - - 대손상각비환입
+          - 대손충당금환입
+          - 매출채권손상차손환입
+          - 매출채권및기타채권손상차손환입
+          - 대손상각비대손충당금환입
+          - 대손상각비환입손상차손
+    emit:
+      canonical_id: BAD_DEBT_REVERSAL
+      amount_policy: abs
+    reason: 대손상각비/손상차손 환입. 영업이익 rollup에서 가산
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 93
+  - id: is_bad_debt_reversal_contextual_impairment
+    version: 2
+    phase: normalize
+    priority: 813
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 손상차손환입
+      context:
+        contains_any_groups:
+        - - 판매비와관리비
+          - 판매비및관리비
+          - 판매관리비
+          - 영업비용
+    emit:
+      canonical_id: BAD_DEBT_REVERSAL
+      amount_policy: abs
+    reason: 일반 손상차손환입은 판관비/영업비용 문맥에서만 대손 환입으로 매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 94
+  - id: is_bad_debt_reversal_contextual_financial_asset
+    version: 2
+    phase: normalize
+    priority: 812
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        excludes_any:
+        - 금융상품
+        contains_any_groups:
+        - - 금융자산손상차손환입
+      context:
+        contains_any_groups:
+        - - 판매비와관리비
+          - 판매비및관리비
+          - 판매관리비
+          - 영업비용
+    emit:
+      canonical_id: BAD_DEBT_REVERSAL
+      amount_policy: abs
+    reason: 금융자산 손상 환입은 영업비용/판관비 문맥에서만 대손 환입으로 매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 95
+  - id: is_logistics_cost
+    version: 2
+    phase: normalize
+    priority: 800
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 물류원가
+        - 물류비
+        - 판매및물류비
+        - 판매물류비
+    emit:
+      canonical_id: LOGISTICS_COST
+      amount_policy: abs
+    reason: 매출총이익 이후 별도 표시되는 물류 관련 영업비용
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 96
+  - id: is_operating_expenses_total
+    version: 2
+    phase: normalize
+    priority: 790
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 영업비용
+        - 영업비용합계
+        - 영업비용총계
+    emit:
+      canonical_id: OPERATING_EXPENSES_TOTAL
+      amount_policy: abs
+    reason: SGNA/R&D 구성요소가 아니라 매출총이익에서 바로 차감되는 영업비용 subtotal
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 97
+  - id: is_other_operating_income
+    version: 2
+    phase: normalize
+    priority: 760
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 기타영업수익
+        - 기타영업수익주6
+        - 기타의영업수익
+    emit:
+      canonical_id: OTHER_OPERATING_INCOME
+      amount_policy: abs
+    reason: 영업이익 계산에 포함되는 기타영업수익
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 98
+  - id: is_other_operating_expenses
+    version: 2
+    phase: normalize
+    priority: 760
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 기타영업비용
+        - 기타영업비용주6
+        - 기타의영업비용
+        - 기타영업손실
+    emit:
+      canonical_id: OTHER_OPERATING_EXPENSES
+      amount_policy: abs
+    reason: 영업이익 계산에 포함되는 기타영업비용
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 99
+  - id: is_other_non_operating_income
+    version: 2
+    phase: normalize
+    priority: 650
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 기타영업외수익
+        - 기타영업외이익
+        - 기타수익
+    emit:
+      canonical_id: OTHER_NON_OPERATING_INCOME
+      amount_policy: abs
+    reason: 기타 영업외수익 매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 100
+  - id: is_other_non_operating_expenses
+    version: 2
+    phase: normalize
+    priority: 650
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 기타영업외비용
+        - 기타영업외손실
+        - 기타비용
+    emit:
+      canonical_id: OTHER_NON_OPERATING_EXPENSES
+      amount_policy: abs
+    reason: 기타 영업외비용 매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 101
+  - id: is_revenue
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 매출액
+        - 영업수익
+        - 수익
+        - 수익(매출액)
+    emit:
+      canonical_id: REVENUE
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 102
+  - id: is_cogs
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 매출원가
+    emit:
+      canonical_id: COGS
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 103
+  - id: is_gross_profit
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 매출총이익
+        - 매출총이익손실
+    emit:
+      canonical_id: GROSS_PROFIT
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 104
+  - id: is_sgna_component_other_unmapped
+    version: 2
+    phase: normalize
+    priority: 705
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 기타판매비와관리비
+      context:
+        contains_any_groups:
+        - - 판매비와관리비
+          - 판매비및관리비
+          - 판매관리비
+    emit:
+      canonical_id: UNMAPPED
+    reason: 판관비 총액 아래의 기타판매비와관리비 구성요소를 SGNA 총액으로 중복 매핑하지 않음
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 105
+  - id: is_sgna
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 판매비와관리비
+        - 판매비및관리비
+        - 판매관리비
+        - 판매및일반관리비
+        - 판매비와일반관리비
+        - 판매비와관리비영업비용
+        - 판매비와관리비(영업비용)
+        - 판매비및일반관리비총계
+        - 판매비와관리비및물류비
+        - 기타판매비와관리비
+        - 판매리와관리비
+        - 판배비와관리비
+        - 판매비및관리비등
+    emit:
+      canonical_id: SGNA
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 106
+  - id: is_rnd
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 연구개발비
+        - 개발비
+        - 연구비
+        - 경상연구개발비
+        - 경상개발비
+        - 경상연구비
+        - 연구와개발비용
+        - 연구개발비
+        - 기술개발비
+        - 경상개발비판관비
+        - 소프트웨어개발비
+        - 연구개발비등
+        - 개발비등
+        - 연구및개발비
+        - 연구및개발비용
+        - 특정과제연구개발비
+        - 기타연구개발비
+        - 시험연구비
+        - 경상시험연구비
+        - 위탁연구비
+        - 조사연구비
+    emit:
+      canonical_id: RND
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 107
+  - id: cis_rnd
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - CIS
+    match:
+      label:
+        exact_any:
+        - 연구개발비
+        - 개발비
+        - 연구비
+        - 경상연구개발비
+        - 경상개발비
+        - 경상연구비
+        - 연구와개발비용
+        - 기술개발비
+        - 소프트웨어개발비
+        - 연구개발비등
+        - 개발비등
+        - 연구및개발비
+        - 연구및개발비용
+        - 특정과제연구개발비
+        - 기타연구개발비
+        - 시험연구비
+        - 경상시험연구비
+        - 위탁연구비
+        - 조사연구비
+    emit:
+      canonical_id: RND
+    reason: 포괄손익계산서형 본문에 표시된 연구개발비
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 108
+  - id: is_amortization
+    version: 2
+    phase: normalize
+    priority: 710
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 무형자산상각비
+        - 무형자산 상각비
+        - 영업권이외의무형자산상각비
+        - 영업권 이외의 무형자산상각비
+    emit:
+      canonical_id: DNA_IS
+      amount_policy: abs
+    reason: 손익계산서 무형자산상각비
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 109
+  - id: is_operating_income
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 영업이익
+        - 영업이익손실
+        - 영업손익
+    emit:
+      canonical_id: OPERATING_INCOME
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 110
+  - id: is_pbt
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 법인세비용차감전순이익
+        - 법인세비용차감전순이익손실
+        - 법인세비용차감전순손익
+        - 법인세차감전순이익
+        - 법인세차감전순손익
+        - 세전이익
+    emit:
+      canonical_id: PBT
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 111
+  - id: is_tax_expense
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 법인세비용
+        - 법인세비용수익
+        - 법인세비용이익
+        - 법인세비용손실
+        - 법인세수익비용
+    emit:
+      canonical_id: TAX_EXPENSE
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 112
+  - id: cis_operating_income_fallback
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - CIS
+    match:
+      label:
+        exact_any:
+        - 영업이익
+        - 영업이익손실
+        - 영업손익
+    emit:
+      canonical_id: OPERATING_INCOME
+    reason: 포괄손익계산서형 본문에 표시된 영업손익은 IS fallback으로 승격
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 113
+  - id: cis_pbt_fallback
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - CIS
+    match:
+      label:
+        exact_any:
+        - 법인세비용차감전순이익
+        - 법인세비용차감전순이익손실
+        - 법인세비용차감전순손익
+        - 법인세차감전순이익
+        - 법인세차감전순손익
+        - 세전이익
+    emit:
+      canonical_id: PBT
+    reason: 포괄손익계산서형 본문에 표시된 세전손익은 IS fallback으로 승격
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 114
+  - id: is_net_income
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 분기순이익
+        - 분기순이익(손실)
+        - 분기순이익손실
+        - 분기순손익
+        - 반기순이익
+        - 반기순이익(손실)
+        - 반기순이익손실
+        - 반기순손익
+        - 당기순이익
+        - 당기순이익손실
+        - 당기순손익
+        - 당기순이익(손실)
+    emit:
+      canonical_id: NET_INCOME
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 115
+  - id: is_gross_profit__legacy_dup_2
+    version: 2
+    phase: normalize
+    priority: 700
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 매출총이익
+        - 매출총이익손실
+    emit:
+      canonical_id: GROSS_PROFIT
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 116
+    extensions:
+      legacy_rule_id: is_gross_profit
+  - id: is_net_income_parent
+    version: 2
+    phase: normalize
+    priority: 900
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 지배기업의소유주지분
+        - 지배기업소유주지분
+        - 지배주주지분
+        - 지배주주순이익
+        - 지배주주귀속순이익
+        - 지배기업의소유주
+        - 지배기업소유주지분순이익손실
+        - 지배기업의소유주에게귀속되는당기순이익손실
+        - 지배기업소유주귀속당기순이익
+        - 지배기업소유주에귀속될당기순이익
+        - 지배기업의소유주에귀속될당기순이익
+        - 지배기업의소유주에게귀속될당기순이익
+      context:
+        contains_any_groups:
+        - - 당기순이익의귀속
+          - 당기순손익의귀속
+          - 당기순이익손실의귀속
+    emit:
+      canonical_id: NET_INCOME_PARENT
+    reason: 당기순이익 귀속 중 지배주주순이익
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 117
+  - id: is_net_income_nci
+    version: 2
+    phase: normalize
+    priority: 900
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 비지배분
+        - 비지배지분
+        - 비지배주주지분
+        - 비지배지분순이익
+        - 비지배지분순손실
+        - 비지배지분순손익
+        - 비지배주주순이익
+        - 비지배지분에귀속되는당기순이익손실
+        - 비지배지분순이익손실
+        - 비지배지분귀속당기순이익
+        - 비지배지분귀속
+        - 비지배지분소유주지분
+        - 비지배지분에배분된당기순손익
+        - 비지배지분에배분된순손익
+        - 비지배지분에귀속되는순이익손실
+        - 비지배지분에귀속될당기순이익
+        - 비지배지분귀속당기순이익손실
+        - 비지배지분에귀속되는당기순손실
+        - 비지배지분에귀속분기순손익
+        - 비지배주주지분순이익
+        - 비지배지분손익
+        - 비지배지분지분
+        - 비지배기업의소유주에귀속될당기순이익
+        - 비지배기업소유주지분
+        - 비지배기업소유지분
+        - 비지배기업의소유주에게귀속되는당기순이익손실
+        - 비지배지분에귀속되는당기순이익
+      context:
+        contains_any_groups:
+        - - 당기순이익의귀속
+          - 당기순손익의귀속
+          - 당기순이익손실의귀속
+          - 당기손익의귀속
+    emit:
+      canonical_id: NET_INCOME_NCI
+    reason: CanonicalAccount에 비지배지분순이익 계정이 있으므로 UNMAPPED 대신 매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 118
+  - id: cis_comprehensive_income_parent_explicit
+    version: 2
+    phase: normalize
+    priority: 950
+    applies:
+      statement_types:
+      - CIS
+    match:
+      label:
+        exact_any:
+        - 지배기업소유주지분총포괄손익
+        - 지배기업의소유주지분총포괄손익
+        - 지배주주지분총포괄손익
+        - 총포괄손익지배기업의소유주에게귀속되는지분
+        - 포괄손익지배기업의소유주에게귀속되는지분
+    emit:
+      canonical_id: COMPREHENSIVE_INCOME_PARENT
+    reason: 명시적 지배주주총포괄손익
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 119
+  - id: cis_comprehensive_income_nci_explicit
+    version: 2
+    phase: normalize
+    priority: 950
+    applies:
+      statement_types:
+      - CIS
+    match:
+      label:
+        exact_any:
+        - 비지배지분총포괄손익
+        - 비지배주주지분총포괄손익
+        - 총포괄손익비지배지분
+        - 포괄손익비지배지분
+        - 비지배지분에배분된총포괄손익
+    emit:
+      canonical_id: COMPREHENSIVE_INCOME_NCI
+    reason: 명시적 비지배지분총포괄손익
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 120
+  - id: cis_comprehensive_income_parent_attribution
+    version: 2
+    phase: normalize
+    priority: 900
+    applies:
+      statement_types:
+      - CIS
+    match:
+      label:
+        exact_any:
+        - 지배기업의소유주지분
+        - 지배기업소유주지분
+        - 지배주주지분
+      context:
+        contains_any_groups:
+        - - 총포괄이익의귀속
+          - 총포괄손익의귀속
+          - 총포괄이익손실의귀속
+          - 총포괄손익손실의귀속
+    emit:
+      canonical_id: COMPREHENSIVE_INCOME_PARENT
+    reason: 총포괄손익 귀속 중 지배주주총포괄손익
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 121
+  - id: cis_comprehensive_income_nci_attribution
+    version: 2
+    phase: normalize
+    priority: 900
+    applies:
+      statement_types:
+      - CIS
+    match:
+      label:
+        exact_any:
+        - 비지배분
+        - 비지배지분
+        - 비지배주주지분
+      context:
+        contains_any_groups:
+        - - 총포괄이익의귀속
+          - 총포괄손익의귀속
+          - 총포괄이익손실의귀속
+          - 총포괄손익손실의귀속
+    emit:
+      canonical_id: COMPREHENSIVE_INCOME_NCI
+    reason: 총포괄손익 귀속 중 비지배지분총포괄손익
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 122
+  - id: cis_total_comprehensive_income
+    version: 2
+    phase: normalize
+    priority: 880
+    applies:
+      statement_types:
+      - CIS
+    match:
+      label:
+        exact_any:
+        - 총포괄손익
+        - 총포괄이익
+        - 총포괄이익손실
+        - 당기총포괄손익
+        - 당기총포괄이익
+        - 당기총포괄이익손실
+      constraints:
+        amount_is_zero_or_blank: false
+    emit:
+      canonical_id: TOTAL_COMPREHENSIVE_INCOME
+      amount_policy: as_reported
+    reason: 당기 총포괄손익
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 123
+  - id: cis_other_comprehensive_income_total
+    version: 2
+    phase: normalize
+    priority: 870
+    applies:
+      statement_types:
+      - CIS
+    match:
+      label:
+        exact_any:
+        - 기타포괄손익
+        - 기타포괄이익손실
+        - 기타포괄손익합계
+        - 세후기타포괄손익
+        - 당기손익으로재분류되지않는항목세후기타포괄손익
+        - 당기손익으로재분류될수있는항목세후기타포괄손익
+      constraints:
+        amount_is_zero_or_blank: false
+    emit:
+      canonical_id: OTHER_COMPREHENSIVE_INCOME
+      amount_policy: as_reported
+    reason: 기타포괄손익 subtotal
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 124
+  - id: cis_oci_component_unmapped
+    version: 2
+    phase: normalize
+    priority: 860
+    applies:
+      statement_types:
+      - CIS
+    match:
+      label:
+        exact_any:
+        - 확정급여제도의재측정손익세후기타포괄손익
+        - 확정급여제도의재측정요소
+        - 확정급여제도의재측정손익
+        - 순확정급여부채의재측정요소
+        - 순확정급여부채자산의재측정요소
+        - 기타포괄손익공정가치측정금융자산평가손익
+        - 해외사업환산손익
+    emit:
+      canonical_id: UNMAPPED
+    reason: OCI 세부 구성요소는 OTHER_COMPREHENSIVE_INCOME subtotal과 중복될 수 있으므로 기본 미매핑
+    migration:
+      source_file: data-lake/meta/rules/kr_mapping.yaml
+      source_index: 125
+  - id: kgaap_bs_fixed_assets
+    version: 2
+    phase: normalize
+    priority: 760
+    applies: &id001
+      statement_types:
+      - BS
+      accounting_regimes:
+      - K_GAAP
+      - GENERAL_K_GAAP
+      - UNKNOWN
+    match:
+      label:
+        exact_any:
+        - 고정자산
+        - 고정자산계
+        - 고정자산합계
+    emit:
+      canonical_id: NON_CURRENT_ASSETS
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: K-GAAP 고정자산 표시를 비유동자산으로 연결
+  - id: kgaap_bs_quick_assets
+    version: 2
+    phase: normalize
+    priority: 750
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 당좌자산
+        - 당좌자산계
+        - 당좌자산합계
+    emit:
+      canonical_id: OTHER_CURRENT_ASSETS
+      comparability: AGGREGATION_DIFFERENCE
+    reason: K-GAAP 당좌자산은 현대 유동자산의 부분집합
+  - id: kgaap_bs_cash_equivalents_legacy
+    version: 2
+    phase: normalize
+    priority: 770
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 현금및현금등가물
+        - 현금과예금
+        - 현금예금
+        - 현금및예금
+    emit:
+      canonical_id: CASH_AND_EQUIVALENTS
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: K-GAAP 현금 및 현금등가물 명칭 정규화
+  - id: kgaap_bs_marketability_securities
+    version: 2
+    phase: normalize
+    priority: 750
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 유가증권
+        - 단기유가증권
+        - 시장성유가증권
+        - 단기투자자산
+    emit:
+      canonical_id: SHORT_TERM_FINANCIAL_ASSETS
+      comparability: MEASUREMENT_DIFFERENCE
+    reason: K-GAAP 유가증권은 현대 금융자산과 측정 분류 차이가 있을 수 있음
+  - id: kgaap_bs_trade_receivables_legacy
+    version: 2
+    phase: normalize
+    priority: 770
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 외상매출금
+        - 받을어음
+        - 외상매출금및받을어음
+        - 외상매출금과받을어음
+        - 매출채권순액
+    emit:
+      canonical_id: TRADE_RECEIVABLES
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 외상매출금 및 받을어음을 매출채권 bridge로 정규화
+  - id: kgaap_bs_allowance_doubtful_accounts
+    version: 2
+    phase: normalize
+    priority: 780
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 대손충당금
+        - 매출채권대손충당금
+        - 외상매출금대손충당금
+    emit:
+      canonical_id: ALLOWANCE_FOR_DOUBTFUL_ACCOUNTS
+      comparability: EXACT
+      relations:
+      - CONTRA_OF
+    reason: 매출채권 contra 계정을 독립 보존
+  - id: kgaap_bs_inventory_allowance
+    version: 2
+    phase: normalize
+    priority: 780
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 재고자산평가충당금
+        - 재고평가충당금
+    emit:
+      canonical_id: INVENTORY_VALUATION_ALLOWANCE
+      comparability: EXACT
+      relations:
+      - CONTRA_OF
+    reason: 재고자산 평가충당금 contra 계정을 독립 보존
+  - id: kgaap_bs_investment_assets
+    version: 2
+    phase: normalize
+    priority: 740
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 투자자산
+        - 투자자산계
+        - 투자와기타자산
+    emit:
+      canonical_id: OTHER_NON_CURRENT_ASSETS
+      comparability: AGGREGATION_DIFFERENCE
+    reason: K-GAAP 투자자산 표시의 aggregate bridge
+  - id: kgaap_bs_ppe_gross_components
+    version: 2
+    phase: normalize
+    priority: 730
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 토지
+        - 건물
+        - 구축물
+        - 기계장치
+        - 차량운반구
+        - 공구와기구
+        - 집기비품
+        - 건설중인자산
+    emit:
+      canonical_id: PPE_GROSS
+      comparability: AGGREGATION_DIFFERENCE
+      relations:
+      - COMPONENT_OF
+    reason: 유형자산 원가 구성요소를 gross 계층에 보존
+  - id: kgaap_bs_accumulated_depreciation
+    version: 2
+    phase: normalize
+    priority: 790
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 감가상각누계액
+        - 유형자산감가상각누계액
+    emit:
+      canonical_id: ACCUMULATED_DEPRECIATION
+      comparability: EXACT
+      relations:
+      - CONTRA_OF
+    reason: 유형자산 감가상각누계액을 contra로 보존
+  - id: kgaap_bs_accumulated_impairment
+    version: 2
+    phase: normalize
+    priority: 790
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 감액손실누계액
+        - 유형자산감액손실누계액
+        - 손상차손누계액
+    emit:
+      canonical_id: ACCUMULATED_IMPAIRMENT_PPE
+      comparability: EXACT
+      relations:
+      - CONTRA_OF
+    reason: 유형자산 감액 누계액을 contra로 보존
+  - id: kgaap_bs_deferred_assets
+    version: 2
+    phase: normalize
+    priority: 760
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 이연자산
+        - 창업비
+        - 개업비
+        - 사채발행비
+    emit:
+      canonical_id: DEFERRED_ASSETS_K_GAAP
+      comparability: ACCOUNTING_POLICY_BREAK
+    reason: IFRS에서 동일 인식이 보장되지 않는 K-GAAP 이연자산
+  - id: kgaap_bs_fixed_liabilities
+    version: 2
+    phase: normalize
+    priority: 760
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 고정부채
+        - 고정부채계
+        - 고정부채합계
+    emit:
+      canonical_id: NON_CURRENT_LIABILITIES
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: K-GAAP 고정부채 표시를 비유동부채로 연결
+  - id: kgaap_bs_trade_payables_legacy
+    version: 2
+    phase: normalize
+    priority: 770
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 외상매입금
+        - 지급어음
+        - 외상매입금및지급어음
+        - 외상매입금과지급어음
+    emit:
+      canonical_id: TRADE_PAYABLES
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 외상매입금 및 지급어음을 매입채무 bridge로 정규화
+  - id: kgaap_bs_retirement_allowance
+    version: 2
+    phase: normalize
+    priority: 780
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 퇴직급여충당금
+        - 퇴직급여충당부채
+        - 퇴직충당금
+    emit:
+      canonical_id: RETIREMENT_BENEFIT_OBLIGATION
+      comparability: MEASUREMENT_DIFFERENCE
+    reason: K-GAAP 충당금과 IFRS 확정급여채무의 측정 차이를 표시
+  - id: kgaap_bs_capital_stock
+    version: 2
+    phase: normalize
+    priority: 780
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 자본금
+        - 보통주자본금
+        - 우선주자본금
+    emit:
+      canonical_id: CAPITAL_STOCK
+      comparability: EXACT
+    reason: 납입 자본금 정규화
+  - id: kgaap_bs_capital_surplus
+    version: 2
+    phase: normalize
+    priority: 780
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 자본잉여금
+        - 주식발행초과금
+        - 재평가적립금
+    emit:
+      canonical_id: CAPITAL_SURPLUS
+      comparability: AGGREGATION_DIFFERENCE
+    reason: K-GAAP 자본잉여금 구성 정규화
+  - id: kgaap_bs_equity_adjustments
+    version: 2
+    phase: normalize
+    priority: 780
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 자본조정
+        - 자본조정계
+    emit:
+      canonical_id: EQUITY_ADJUSTMENTS
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: K-GAAP 자본조정 표시를 독립 보존
+  - id: kgaap_bs_treasury_stock
+    version: 2
+    phase: normalize
+    priority: 790
+    applies: *id001
+    match:
+      label:
+        exact_any:
+        - 자기주식
+        - 자기주식처분손실
+        - 자기주식처분이익
+    emit:
+      canonical_id: TREASURY_STOCK
+      comparability: AGGREGATION_DIFFERENCE
+      relations:
+      - CONTRA_OF
+    reason: 자기주식 및 관련 자본조정을 보존
+  - id: kgaap_is_ordinary_income
+    version: 2
+    phase: normalize
+    priority: 780
+    applies: &id002
+      statement_types:
+      - IS
+      accounting_regimes:
+      - K_GAAP
+      - GENERAL_K_GAAP
+      - UNKNOWN
+    match:
+      label:
+        exact_any:
+        - 경상이익
+        - 경상손익
+        - 경상손실
+    emit:
+      canonical_id: ORDINARY_INCOME
+      comparability: ACCOUNTING_POLICY_BREAK
+    reason: 폐지된 K-GAAP 경상이익 subtotal을 독립 보존
+  - id: kgaap_is_extraordinary_gain
+    version: 2
+    phase: normalize
+    priority: 780
+    applies: *id002
+    match:
+      label:
+        exact_any:
+        - 특별이익
+        - 특별이익계
+    emit:
+      canonical_id: EXTRAORDINARY_GAIN
+      comparability: ACCOUNTING_POLICY_BREAK
+    reason: K-GAAP 특별이익은 IFRS와 직접 동등하지 않음
+  - id: kgaap_is_extraordinary_loss
+    version: 2
+    phase: normalize
+    priority: 780
+    applies: *id002
+    match:
+      label:
+        exact_any:
+        - 특별손실
+        - 특별손실계
+    emit:
+      canonical_id: EXTRAORDINARY_LOSS
+      comparability: ACCOUNTING_POLICY_BREAK
+    reason: K-GAAP 특별손실은 IFRS와 직접 동등하지 않음
+  - id: kgaap_is_non_operating_income
+    version: 2
+    phase: normalize
+    priority: 760
+    applies: *id002
+    match:
+      label:
+        exact_any:
+        - 영업외수익
+        - 영업외수익계
+    emit:
+      canonical_id: OTHER_NON_OPERATING_INCOME
+      amount_policy: abs
+      comparability: AGGREGATION_DIFFERENCE
+    reason: K-GAAP 영업외수익 aggregate 정규화
+  - id: kgaap_is_non_operating_expenses
+    version: 2
+    phase: normalize
+    priority: 760
+    applies: *id002
+    match:
+      label:
+        exact_any:
+        - 영업외비용
+        - 영업외비용계
+    emit:
+      canonical_id: OTHER_NON_OPERATING_EXPENSES
+      amount_policy: abs
+      comparability: AGGREGATION_DIFFERENCE
+    reason: K-GAAP 영업외비용 aggregate 정규화
+  - id: kgaap_is_net_income_before_appropriation
+    version: 2
+    phase: normalize
+    priority: 785
+    applies: *id002
+    match:
+      label:
+        exact_any:
+        - 이익잉여금처분전당기순이익
+        - 처분전이익잉여금
+    emit:
+      canonical_id: NET_INCOME
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: 이익잉여금처분계산서 연결 표시
+  - id: kgaap_cf_cash_change
+    version: 2
+    phase: normalize
+    priority: 770
+    applies:
+      statement_types:
+      - CF
+      accounting_regimes:
+      - K_GAAP
+      - GENERAL_K_GAAP
+      - UNKNOWN
+    match:
+      label:
+        exact_any:
+        - 현금의증가감소
+        - 현금의순증가감소
+        - 현금및현금등가물의순증가감소
+    emit:
+      canonical_id: CF_CASH_CHANGE
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: 역사적 현금 증감 표시 정규화
+  - id: semantic_is_ebitda
+    version: 2
+    phase: normalize
+    priority: 720
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - EBITDA
+        - 상각전영업이익
+        - 감가상각비차감전영업이익
+    emit:
+      canonical_id: EBITDA
+      comparability: EXACT
+    reason: 보고된 EBITDA 직접 매핑
+  - id: semantic_is_interest_expense
+    version: 2
+    phase: normalize
+    priority: 720
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 이자비용
+        - 지급이자
+        - 금융비용중이자비용
+    emit:
+      canonical_id: INTEREST_EXPENSE
+      amount_policy: abs
+      comparability: EXACT
+    reason: 손익계산서 이자비용 직접 매핑
+  - id: semantic_cf_working_capital_change
+    version: 2
+    phase: normalize
+    priority: 720
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        exact_any:
+        - 운전자본의변동
+        - 영업자산부채의변동
+        - 영업활동으로인한자산부채의변동
+    emit:
+      canonical_id: WC_CHANGE
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 운전자본 변동 aggregate 직접 매핑
+  context:
+  - id: ignore_bs_totals
+    version: 2
+    phase: context
+    priority: 1000
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        contains_any_groups:
+        - - 자산총계
+          - 부채총계
+          - 자본총계
+          - 부채및자본총계
+          - 부채와자본총계
+    emit:
+      context_action: IGNORE_CONTEXT
+      context_label: ''
+    reason: 총계 행은 section_context로 사용하지 않음
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 0
+  - id: ignore_is_totals_and_profit_lines
+    version: 2
+    phase: context
+    priority: 1000
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 매출총이익
+        - 영업이익
+        - 법인세비용차감전순이익
+        - 당기순이익
+        - 총포괄이익
+        - 총포괄손익
+        - 기본주당이익
+        - 희석주당이익
+    emit:
+      context_action: IGNORE_CONTEXT
+      context_label: ''
+    reason: 손익계산서 성과 계정은 context로 사용하지 않음
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 1
+  - id: ignore_cf_cash_begin_end
+    version: 2
+    phase: context
+    priority: 1000
+    applies:
+      statement_types:
+      - CF
+    match:
+      label:
+        contains_any_groups:
+        - - 기초의현금및현금성자산
+          - 기말의현금및현금성자산
+          - 현금및현금성자산의증가
+          - 현금및현금성자산의감소
+          - 현금및현금성자산에대한환율변동효과
+    emit:
+      context_action: IGNORE_CONTEXT
+      context_label: ''
+    reason: 현금흐름표 보조 subtotal은 context로 사용하지 않음
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 2
+  - id: is_profit_attribution_parent_header
+    version: 2
+    phase: context
+    priority: 1005
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 당기순이익
+        - 당기순이익손실
+        - 당기순이익(손실)
+        - 당기순손익
+      constraints:
+        has_children: true
+        amount_is_zero_or_blank: true
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 당기순이익의귀속
+    reason: 금액 0인 당기순이익 parent 아래의 지배/비지배 귀속 행 판별
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 3
+  - id: is_comprehensive_attribution_parent_header
+    version: 2
+    phase: context
+    priority: 1005
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 총포괄이익
+        - 총포괄손익
+        - 총포괄이익손실
+        - 총포괄이익(손실)
+        - 당기총포괄손익
+        - 당기총포괄이익손실
+        - 당기총포괄이익(손실)
+        - 세후총포괄손익
+      constraints:
+        has_children: true
+        amount_is_zero_or_blank: true
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 총포괄이익의귀속
+    reason: 금액 0인 총포괄손익 parent 아래의 지배/비지배 귀속 행 판별
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 4
+  - id: is_profit_attribution_section
+    version: 2
+    phase: context
+    priority: 900
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 당기순이익의귀속
+        - 당기순손익의귀속
+        - 당기순이익귀속
+        - 당기순손익귀속
+        - 당기순이익손실의귀속
+        - 당기순이익손실귀속
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 당기순이익의귀속
+    reason: 전체 당기순이익 귀속 section만 지배/비지배 귀속 컨텍스트로 사용
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 5
+  - id: is_comprehensive_attribution_section
+    version: 2
+    phase: context
+    priority: 900
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 총포괄이익의귀속
+        - 총포괄손익의귀속
+        - 총포괄이익귀속
+        - 총포괄손익귀속
+        - 총포괄이익손실의귀속
+        - 총포괄이익손실귀속
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 총포괄이익의귀속
+    reason: 총포괄손익 귀속 section
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 6
+  - id: is_eps_section
+    version: 2
+    phase: context
+    priority: 800
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        contains_any_groups:
+        - - 주당이익
+          - 주당손익
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 주당손익
+    reason: 주당손익 section
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 7
+  - id: is_sgna_section
+    version: 2
+    phase: context
+    priority: 780
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 판매비와관리비
+        - 판매비및관리비
+        - 판매관리비
+        - 판매비
+        - 관리비
+      constraints:
+        has_children: true
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 판매비와관리비
+    reason: 금액이 있는 판관비 subtotal도 하위 항목의 문맥으로 사용
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 8
+  - id: is_operating_expense_section
+    version: 2
+    phase: context
+    priority: 770
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 영업비용
+        - 영업비용합계
+        - 비용의성격별분류
+        - 성격별비용
+        - 비용성격별분류
+      constraints:
+        has_children: true
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 영업비용
+    reason: 성격별 비용/영업비용 section에서 애매한 비용 항목을 판별
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 9
+  - id: is_finance_income_expense_section
+    version: 2
+    phase: context
+    priority: 760
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 금융수익
+        - 금융비용
+        - 금융원가
+        - 금융손익
+      constraints:
+        has_children: true
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 금융손익
+    reason: 금융손익 section의 손상/환입 항목을 영업비용으로 오인하지 않도록 구분
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 10
+  - id: is_other_income_expense_section
+    version: 2
+    phase: context
+    priority: 760
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        exact_any:
+        - 기타수익
+        - 기타비용
+        - 기타영업외수익
+        - 기타영업외비용
+      constraints:
+        has_children: true
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 기타손익
+    reason: 기타손익 section의 손상/환입 항목을 영업비용으로 오인하지 않도록 구분
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 11
+  - id: is_oci_reclass_section
+    version: 2
+    phase: context
+    priority: 700
+    applies:
+      statement_types:
+      - IS
+    match:
+      label:
+        contains_any_groups:
+        - - 후속적으로당기손익으로재분류되는
+          - 후속적으로당기손익으로재분류되지않는
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: SELF
+    reason: 기타포괄손익 하위 section
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 12
+  - id: bs_non_current_liabilities_section
+    version: 2
+    phase: context
+    priority: 850
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 비유동부채
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 비유동부채
+    reason: 비유동부채 section
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 13
+  - id: bs_current_liabilities_section
+    version: 2
+    phase: context
+    priority: 850
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 유동부채
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 유동부채
+    reason: 유동부채 section
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 14
+  - id: bs_non_current_assets_section
+    version: 2
+    phase: context
+    priority: 850
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 비유동자산
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 비유동자산
+    reason: 비유동자산 section
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 15
+  - id: bs_current_assets_section
+    version: 2
+    phase: context
+    priority: 850
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 유동자산
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 유동자산
+    reason: 유동자산 section
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 16
+  - id: bs_assets_section
+    version: 2
+    phase: context
+    priority: 800
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 자산
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 자산
+    reason: 자산 section
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 17
+  - id: bs_liabilities_section
+    version: 2
+    phase: context
+    priority: 800
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 부채
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 부채
+    reason: 부채 section
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 18
+  - id: bs_equity_section
+    version: 2
+    phase: context
+    priority: 800
+    applies:
+      statement_types:
+      - BS
+    match:
+      label:
+        exact_any:
+        - 자본
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: 자본
+    reason: 자본 section
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 19
+  - id: generic_group_header
+    version: 2
+    phase: context
+    priority: 100
+    applies:
+      statement_types:
+      - ANY
+    match:
+      label: {}
+      constraints:
+        has_children: true
+        amount_is_zero_or_blank: true
+    emit:
+      context_action: PUSH_CONTEXT
+      context_label: SELF
+    reason: 하위 행이 있고 금액이 비어 있거나 0인 일반 그룹 헤더
+    migration:
+      source_file: data-lake/meta/rules/context_kr.yaml
+      source_index: 20
+  comments:
+  - id: cash_flow_note_common
+    version: 2
+    phase: parse
+    priority: 100
+    confidence: high
+    match:
+      section:
+        contains_any:
+        - 현금흐름
+    captures:
+      DEPRECIATION_EXPENSE: ^감가상각비$
+      AMORTIZATION:
+      - ^무형자산\s*상각비$
+      - ^무형자산\s*상각비에\s*대한\s*조정$
+      - ^무형자산\s*상각비의\s*조정$
+      - ^무형자산\s*상각$
+      - ^영업권\s*이외의\s*무형자산\s*상각비$
+      BAD_DEBT_EXPENSE: ^대손상각비$
+    emit:
+      fact_layer: REPORTED
+    migration:
+      source_file: data-lake/meta/rules/comment_kr.yaml
+      source_index: 0
+  - id: intangible_assets_note_common
+    version: 2
+    phase: parse
+    priority: 300
+    confidence: medium
+    match:
+      section:
+        contains_any:
+        - 무형자산
+    captures:
+      AMORTIZATION:
+      - ^무형자산\s*상각비$
+      - ^무형자산\s*상각$
+      - ^당기\s*상각비$
+      - ^상각비$
+      - ^영업권\s*이외의\s*무형자산\s*상각비$
+      RND:
+      - ^연구개발비$
+      - ^연구와 개발 비용$
+      - ^경상개발비$
+      - ^연구 및 개발비$
+      - ^경상연구개발비(?:\(.*\))?$
+      - ^연구와개발비용$
+      - ^연구및개발비(?:용)?$
+      - ^연구및경상개발비$
+      - ^기술개발비$
+      - ^특정과제연구개발비$
+      - ^기타연구개발비$
+      - ^시험연구비$
+      - ^경상시험연구비$
+      - ^조사연구비$
+      - ^교육및조사연구비$
+      - ^위탁연구비$
+      - ^경상개발연구비$
+    emit:
+      fact_layer: REPORTED
+    migration:
+      source_file: data-lake/meta/rules/comment_kr.yaml
+      source_index: 1
+  - id: trade_receivables_note_balance
+    version: 2
+    phase: parse
+    priority: 180
+    confidence: high
+    match:
+      section:
+        contains_any:
+        - 매출채권
+    captures:
+      TRADE_RECEIVABLES:
+      - ^매출\s*채권$
+      - ^매출채권$
+      - ^유동\s*매출채권$
+      - ^단기\s*매출채권$
+      - ^장기\s*매출채권$
+      - ^매출채권\s*순액$
+      - ^매출채권\(순액\)$
+    emit:
+      fact_layer: REPORTED
+    migration:
+      source_file: data-lake/meta/rules/comment_kr.yaml
+      source_index: 2
+  - id: trade_payables_note_balance
+    version: 2
+    phase: parse
+    priority: 180
+    confidence: high
+    match:
+      section:
+        contains_any:
+        - 매입채무
+    captures:
+      TRADE_PAYABLES:
+      - ^매입\s*채무$
+      - ^매입채무$
+      - ^유동\s*매입채무$
+      - ^단기\s*매입채무$
+      - ^장기\s*매입채무$
+    emit:
+      fact_layer: REPORTED
+    migration:
+      source_file: data-lake/meta/rules/comment_kr.yaml
+      source_index: 3
+  - id: inventories_note_balance
+    version: 2
+    phase: parse
+    priority: 180
+    confidence: high
+    match:
+      section:
+        contains_any:
+        - 재고자산
+    captures:
+      INVENTORIES:
+      - ^재고\s*자산$
+      - ^재고자산$
+      - ^유동\s*재고자산$
+      - ^기말\s*재고자산$
+      - ^합계$
+      - ^총계$
+      - ^계$
+    emit:
+      fact_layer: REPORTED
+    migration:
+      source_file: data-lake/meta/rules/comment_kr.yaml
+      source_index: 4
+  - id: expense_nature_note_amortization
+    version: 2
+    phase: parse
+    priority: 150
+    confidence: high
+    match:
+      section:
+        contains_any:
+        - 비용의 성격
+    captures:
+      DNA_IS:
+      - ^무형자산\s*상각비$
+      - ^영업권\s*이외의\s*무형자산\s*상각비$
+      RND:
+      - ^연구개발비$
+      - ^연구와 개발 비용$
+      - ^경상개발비$
+      - ^연구 및 개발비$
+      - ^경상연구개발비(?:\(.*\))?$
+      - ^연구와개발비용$
+      - ^연구및개발비(?:용)?$
+      - ^연구및경상개발비$
+      - ^기술개발비$
+      - ^특정과제연구개발비$
+      - ^기타연구개발비$
+      - ^시험연구비$
+      - ^경상시험연구비$
+      - ^조사연구비$
+      - ^교육및조사연구비$
+      - ^위탁연구비$
+      - ^경상개발연구비$
+      - ^연구개발비$
+      - ^연구와 개발 비용$
+      - ^개발비$
+      - ^연구비$
+      - ^경상연구비$
+      - ^경상개발비판관비
+      - ^경상개발비(?:[,/]?판관비|\(판관비\))?$
+      - ^연구와\s*개발\s*비용$
+      - ^연구\s*및\s*개발비(?:용)?$
+      - ^소프트웨어개발비$
+      - ^제품개발비$
+      - ^상품개발비$
+      - ^신제품개발비$
+      - ^임상시험비$
+      - ^임상개발비$
+      - ^연구용역비$
+      - ^개발용역비$
+      - ^외주개발비$
+      - ^연구재료비$
+      - ^(?:경상)?(?:연구|개발|연구개발|기술개발|제품개발|상품개발|소프트웨어개발|임상(?:시험|개발)|시험연구|위탁연구|외주개발|연구용역|개발용역|연구재료)(?:비|비용|원가|수수료)?$
+      - ^연구개발비등$
+      - ^개발비등$
+    emit:
+      fact_layer: REPORTED
+    migration:
+      source_file: data-lake/meta/rules/comment_kr.yaml
+      source_index: 5
+  - id: sgna_note_amortization
+    version: 2
+    phase: parse
+    priority: 100
+    confidence: high
+    match:
+      section:
+        contains_any:
+        - 판매비와관리비
+    captures:
+      SGNA:
+      - ^합계$
+      - ^총계$
+      - ^계$
+      - ^판매비\s*와\s*관리비$
+      - ^판매비\s*및\s*관리비$
+      - ^판매관리비$
+      DNA_IS:
+      - ^무형자산\s*상각비$
+      - ^영업권\s*이외의\s*무형자산\s*상각비$
+      RND:
+      - ^연구개발비$
+      - ^연구와 개발 비용$
+      - ^경상개발비$
+      - ^연구 및 개발비$
+      - ^경상연구개발비(?:\(.*\))?$
+      - ^연구와개발비용$
+      - ^연구및개발비(?:용)?$
+      - ^연구및경상개발비$
+      - ^기술개발비$
+      - ^특정과제연구개발비$
+      - ^기타연구개발비$
+      - ^시험연구비$
+      - ^경상시험연구비$
+      - ^조사연구비$
+      - ^교육및조사연구비$
+      - ^위탁연구비$
+      - ^경상개발연구비$
+      - ^연구개발비$
+      - ^연구와 개발 비용$
+      - ^개발비$
+      - ^연구비$
+      - ^경상연구비$
+      - ^경상개발비판관비
+      - ^경상개발비(?:[,/]?판관비|\(판관비\))?$
+      - ^연구와\s*개발\s*비용$
+      - ^연구\s*및\s*개발비(?:용)?$
+      - ^소프트웨어개발비$
+      - ^제품개발비$
+      - ^상품개발비$
+      - ^신제품개발비$
+      - ^임상시험비$
+      - ^임상개발비$
+      - ^연구용역비$
+      - ^개발용역비$
+      - ^외주개발비$
+      - ^연구재료비$
+      - ^(?:경상)?(?:연구|개발|연구개발|기술개발|제품개발|상품개발|소프트웨어개발|임상(?:시험|개발)|시험연구|위탁연구|외주개발|연구용역|개발용역|연구재료)(?:비|비용|원가|수수료)?$
+      - ^연구개발비등$
+      - ^개발비등$
+    emit:
+      fact_layer: REPORTED
+    migration:
+      source_file: data-lake/meta/rules/comment_kr.yaml
+      source_index: 6
+  - id: sgna_note_amortization_alt
+    version: 2
+    phase: parse
+    priority: 100
+    confidence: high
+    match:
+      section:
+        contains_any:
+        - 판매비및관리비
+    captures:
+      SGNA:
+      - ^합계$
+      - ^총계$
+      - ^계$
+      - ^판매비\s*와\s*관리비$
+      - ^판매비\s*및\s*관리비$
+      - ^판매관리비$
+      DNA_IS:
+      - ^무형자산\s*상각비$
+      - ^영업권\s*이외의\s*무형자산\s*상각비$
+      RND:
+      - ^연구개발비$
+      - ^연구와 개발 비용$
+      - ^경상개발비$
+      - ^연구 및 개발비$
+      - ^경상연구개발비(?:\(.*\))?$
+      - ^연구와개발비용$
+      - ^연구및개발비(?:용)?$
+      - ^연구및경상개발비$
+      - ^기술개발비$
+      - ^특정과제연구개발비$
+      - ^기타연구개발비$
+      - ^시험연구비$
+      - ^경상시험연구비$
+      - ^조사연구비$
+      - ^교육및조사연구비$
+      - ^위탁연구비$
+      - ^경상개발연구비$
+      - ^연구개발비$
+      - ^경상개발비$
+      - ^경상연구개발비$
+      - ^개발비$
+      - ^연구비$
+      - ^경상연구비$
+      - ^경상개발비판관비
+      - ^경상개발비(?:[,/]?판관비|\(판관비\))?$
+      - ^연구와\s*개발\s*비용$
+      - ^연구\s*및\s*개발비(?:용)?$
+      - ^경상시험연구비$
+      - ^소프트웨어개발비$
+      - ^제품개발비$
+      - ^상품개발비$
+      - ^신제품개발비$
+      - ^임상시험비$
+      - ^임상개발비$
+      - ^연구용역비$
+      - ^개발용역비$
+      - ^외주개발비$
+      - ^연구재료비$
+      - ^(?:경상)?(?:연구|개발|연구개발|기술개발|제품개발|상품개발|소프트웨어개발|임상(?:시험|개발)|시험연구|위탁연구|외주개발|연구용역|개발용역|연구재료)(?:비|비용|원가|수수료)?$
+      - ^연구개발비등$
+      - ^개발비등$
+    emit:
+      fact_layer: REPORTED
+    migration:
+      source_file: data-lake/meta/rules/comment_kr.yaml
+      source_index: 7
+  - id: canonical_note_all_sections_common
+    version: 2
+    phase: parse
+    priority: 900
+    confidence: low
+    match:
+      section:
+        contains_any:
+        - '*'
+    captures:
+      TOTAL_ASSETS:
+      - ^자산\s*총계$
+      - ^총자산$
+      TOTAL_EQUITY:
+      - ^자본\s*총계$
+      - ^총자본$
+      TOTAL_LIABILITIES:
+      - ^부채\s*총계$
+      - ^총부채$
+      CURRENT_ASSETS: ^유동\s*자산$
+      NON_CURRENT_ASSETS: ^비유동\s*자산$
+      CURRENT_LIABILITIES: ^유동\s*부채$
+      NON_CURRENT_LIABILITIES: ^비유동\s*부채$
+      INVENTORIES:
+      - ^재고\s*자산$
+      - ^재고$
+      TRADE_RECEIVABLES:
+      - ^매출\s*채권$
+      TRADE_AND_OTHER_RECEIVABLES:
+      - ^매출채권\s*및\s*기타채권$
+      - ^매출채권및기타채권$
+      - ^장기매출채권\s*및\s*기타비유동채권$
+      - ^장기매출채권및기타비유동채권$
+      - ^매출채권및계약자산$
+      CASH_AND_EQUIVALENTS:
+      - ^현금\s*및\s*현금성\s*자산$
+      - ^현금및현금성자산$
+      - ^현금\s*및\s*단기금융상품$
+      PPE:
+      - ^유형\s*자산$
+      - ^유형자산\s*장부금액$
+      INTANGIBLE_ASSETS:
+      - ^무형\s*자산$
+      - ^개발비$
+      - ^개발중인\s*무형자산$
+      - ^영업권\s*및\s*무형\s*자산$
+      - ^영업권\s*및\s*기타\s*무형\s*자산$
+      GOODWILL:
+      - ^영업권$
+      - ^연결\s*영업권$
+      - ^사업결합\s*영업권$
+      - ^합병\s*영업권$
+      TRADE_PAYABLES:
+      - ^매입\s*채무$
+      TRADE_AND_OTHER_PAYABLES:
+      - ^매입채무\s*및\s*기타채무$
+      - ^매입채무및기타채무$
+      - ^매입채무\s*및\s*기타유동채무$
+      - ^매입채무및기타유동채무$
+      - ^매입채무및미지급금$
+      SHORT_TERM_DEBT:
+      - ^단기\s*차입금$
+      - ^유동성\s*장기\s*부채$
+      - ^유동성\s*장기\s*차입금$
+      - ^유동성\s*사채$
+      - ^유동성\s*전환사채$
+      - ^유동\s*차입금(?:\(사채포함\))?$
+      LONG_TERM_DEBT:
+      - ^장기\s*차입금$
+      - ^사채$
+      - ^전환사채$
+      - ^장기차입금\s*및\s*사채$
+      LEASE_LIABILITY:
+      - ^리스\s*부채$
+      - ^유동\s*리스\s*부채$
+      - ^비유동\s*리스\s*부채$
+      SHORT_TERM_FINANCIAL_ASSETS:
+      - ^단기\s*금융\s*상품$
+      - ^단기\s*투자\s*자산$
+      - ^단기\s*금융\s*자산$
+      EAOP:
+      - ^지배기업의\s*소유주에게\s*귀속되는\s*자본$
+      - ^지배기업\s*소유주\s*지분$
+      - ^지배주주\s*지분$
+      NEAOP:
+      - ^비지배\s*지분$
+      - ^비지배주주\s*지분$
+      RETAINED_EARNINGS:
+      - ^이익\s*잉여금(?:\(결손금\))?$
+      - ^미처분이익잉여금(?:\(미처리결손금\))?$
+      - ^이익\s*잉여금\s*결손금$
+      - ^미처리\s*결손금$
+      - ^누적\s*결손금$
+      - ^결손금\s*누계$
+      - ^결손금$
+      CONTRACT_ASSETS: ^계약\s*자산$
+      CONTRACT_LIABILITIES: ^계약\s*부채$
+      ADVANCES_FROM_CUSTOMERS:
+      - ^선수금$
+      - ^선수수익$
+      OTHER_RECEIVABLES: ^기타\s*채권$
+      OTHER_PAYABLES: ^기타\s*채무$
+      ASSETS_HELD_FOR_SALE:
+      - ^매각예정\s*비유동\s*자산$
+      - ^매각예정\s*자산$
+      LIABILITIES_HELD_FOR_SALE:
+      - ^매각예정\s*비유동\s*부채$
+      - ^매각예정\s*부채$
+      FINANCIAL_BUSINESS_ASSETS: ^금융업\s*자산$
+      FINANCIAL_BUSINESS_LIABILITIES: ^금융업\s*부채$
+      OTHER_CURRENT_ASSETS: ^기타\s*유동\s*자산$
+      OTHER_NON_CURRENT_ASSETS: ^기타\s*비유동\s*자산$
+      OTHER_CURRENT_LIABILITIES: ^기타\s*유동\s*부채$
+      OTHER_NON_CURRENT_LIABILITIES: ^기타\s*비유동\s*부채$
+      CFO:
+      - ^영업활동\s*현금흐름$
+      - ^영업활동으로\s*인한\s*현금흐름$
+      CFI:
+      - ^투자활동\s*현금흐름$
+      - ^투자활동으로\s*인한\s*현금흐름$
+      CFF:
+      - ^재무활동\s*현금흐름$
+      - ^재무활동으로\s*인한\s*현금흐름$
+      CAPEX_PPE:
+      - ^유형자산의\s*취득$
+      - ^유형자산\s*취득$
+      CAPEX_INTANG:
+      - ^무형자산의\s*취득$
+      - ^무형자산\s*취득$
+      - ^개발비의\s*취득$
+      - ^개발비의\s*증가$
+      - ^개발중인무형자산의\s*취득$
+      DEPRECIATION_EXPENSE:
+      - ^감가\s*상각비$
+      - ^유형자산\s*감가\s*상각비$
+      AMORTIZATION:
+      - ^무형자산\s*상각비$
+      - ^영업권\s*이외의\s*무형자산\s*상각비$
+      WC_CHANGE:
+      - ^운전자본\s*변동$
+      - ^영업활동으로\s*인한\s*자산부채의\s*변동$
+      INT_PAID:
+      - ^이자\s*지급$
+      - ^이자의\s*지급$
+      - ^이자지급\(영업\)$
+      - ^이자비용의\s*지급$
+      - ^이자비용지급$
+      TAX_PAID:
+      - ^법인세\s*지급$
+      - ^법인세의\s*지급$
+      DIV_PAID:
+      - ^배당금\s*지급$
+      - ^배당금의\s*지급$
+      - ^배당금지급\(영업\)$
+      - ^현금배당$
+      DEBT_ISSUE:
+      - ^차입금의\s*차입$
+      - ^사채의\s*발행$
+      DEBT_REPAY:
+      - ^차입금의\s*상환$
+      - ^사채의\s*상환$
+      DEBT_NET_BORROWING:
+      - ^차입금\s*순차입$
+      - ^차입금및사채\s*순차입$
+      EQ_ISSUE:
+      - ^유상증자$
+      - ^주식의\s*발행$
+      - ^보통주의\s*발행$
+      - ^전환우선주의\s*발행$
+      - ^상환우선주\s*발행$
+      - ^전환상환우선주의\s*발행$
+      - ^상환전환우선주의\s*발행$
+      BUYBACK:
+      - ^자기주식의\s*취득$
+      - ^자기주식\s*취득$
+      - ^자기주식의\s*취득으로\s*인한\s*현금의\s*유출$
+      - ^자기주식의\s*소각$
+      - ^자기주식소각$
+      LEASE_REPAYMENT:
+      - ^리스부채의\s*상환$
+      - ^리스\s*부채\s*상환$
+      PPE_DISPOSAL_PROCEEDS:
+      - ^유형자산의\s*처분$
+      - ^유형자산\s*처분대금$
+      INTANGIBLE_DISPOSAL_PROCEEDS:
+      - ^무형자산의\s*처분$
+      - ^무형자산\s*처분대금$
+      CF_CASH_CHANGE_BEFORE_FX: ^환율효과전\s*현금및현금성자산\s*증가감소$
+      FX_EFFECT_CASH:
+      - ^현금및현금성자산에\s*대한\s*환율변동효과$
+      - ^환율변동효과$
+      CF_CASH_BEGIN: ^기초\s*현금및현금성자산$
+      CF_CASH_END: ^기말\s*현금및현금성자산$
+      CF_CASH_CHANGE: ^현금및현금성자산의\s*증가감소$
+      CF_TRANSLATION_DIFFERENCE: ^환율변동\s*차이$
+      SPECIAL_CASH_CHANGE:
+      - ^연결범위\s*변동$
+      - ^특수\s*현금및현금성자산\s*변동$
+      REVENUE:
+      - ^매출액$
+      - ^영업수익$
+      - ^수익$
+      COGS:
+      - ^매출원가$
+      - ^영업비용$
+      GROSS_PROFIT:
+      - ^매출총이익$
+      - ^매출총손익$
+      SGNA:
+      - ^판매비와관리비$
+      - ^판매비\s*및\s*관리비$
+      RND:
+      - ^연구개발비$
+      - ^경상개발비$
+      - ^경상연구개발비$
+      - ^개발비$
+      - ^연구비$
+      - ^경상연구비$
+      - ^연구와개발비용$
+      - ^연구개발비
+      - ^기술개발비$
+      - ^경상개발비판관비
+      - ^경상연구개발비(?:\(.*\))?$
+      - ^경상개발비(?:[,/]?판관비|\(판관비\))?$
+      - ^연구와\s*개발\s*비용$
+      - ^연구\s*및\s*개발비(?:용)?$
+      - ^연구및경상개발비$
+      - ^특정과제연구개발비$
+      - ^기타연구개발비$
+      - ^시험연구비$
+      - ^경상시험연구비$
+      - ^조사연구비$
+      - ^교육및조사연구비$
+      - ^위탁연구비$
+      - ^경상개발연구비$
+      - ^소프트웨어개발비$
+      - ^연구개발비등$
+      - ^개발비등$
+      DNA_IS:
+      - ^감가상각비$
+      - ^감가\s*상각비$
+      OPERATING_INCOME:
+      - ^영업이익$
+      - ^영업손익$
+      NET_INCOME:
+      - ^당기순이익$
+      - ^분기순이익$
+      - ^당기순손익$
+      NET_INCOME_PARENT:
+      - ^지배기업의\s*소유주에게\s*귀속되는\s*당기순이익$
+      - ^지배주주\s*순이익$
+      TAX_EXPENSE:
+      - ^법인세비용$
+      - ^법인세비용\(수익\)$
+      PBT:
+      - ^법인세비용차감전순이익$
+      - ^법인세비용차감전\s*순손익$
+      EBITDA:
+      - ^상각전영업이익$
+      - ^EBITDA$
+      NET_INCOME_NCI:
+      - ^비지배지분\s*순이익$
+      - ^비지배지분에\s*귀속되는\s*당기순이익$
+      BASIC_EPS:
+      - ^기본주당이익$
+      - ^기본주당손익$
+      DILUTED_EPS:
+      - ^희석주당이익$
+      - ^희석주당손익$
+      OTHER_COMPREHENSIVE_INCOME:
+      - ^기타포괄손익$
+      - ^세후기타포괄손익$
+      TOTAL_COMPREHENSIVE_INCOME:
+      - ^당기총포괄손익$
+      - ^총포괄손익$
+      COMPREHENSIVE_INCOME_PARENT:
+      - ^지배기업의\s*소유주에게\s*귀속되는\s*총포괄손익$
+      - ^지배주주\s*총포괄손익$
+      COMPREHENSIVE_INCOME_NCI:
+      - ^비지배지분\s*총포괄손익$
+      - ^비지배지분에\s*귀속되는\s*총포괄손익$
+      DISCONTINUED_OPERATIONS_INCOME:
+      - ^중단영업손익$
+      - ^중단영업이익$
+      CONTINUING_OPERATIONS_INCOME:
+      - ^계속영업손익$
+      - ^계속영업이익$
+      BAD_DEBT_EXPENSE:
+      - ^대손상각비$
+      - ^매출채권\s*손상차손$
+      BAD_DEBT_REVERSAL:
+      - ^대손상각비환입$
+      LOGISTICS_COST:
+      - ^물류원가$
+      - ^물류비$
+      OPERATING_EXPENSES_TOTAL:
+      - ^영업비용총계$
+      - ^영업비용\s*합계$
+      OTHER_OPERATING_INCOME: ^기타\s*영업\s*수익$
+      OTHER_OPERATING_EXPENSES: ^기타\s*영업\s*비용$
+      OTHER_NON_OPERATING_INCOME: ^기타\s*영업외\s*수익$
+      OTHER_NON_OPERATING_EXPENSES: ^기타\s*영업외\s*비용$
+    emit:
+      fact_layer: REPORTED
+    migration:
+      source_file: data-lake/meta/rules/comment_kr.yaml
+      source_index: 8
+sign_policy:
+  version: 1
+  defaults:
+    BS:
+      amount_policy: as_reported
+    IS:
+      amount_policy: as_reported
+    CF:
+      amount_policy: as_reported
+  canonical_policies:
+    GOODWILL:
+      amount_policy: as_reported
+    REVENUE:
+      amount_policy: abs
+    COGS:
+      amount_policy: abs
+    GROSS_PROFIT:
+      amount_policy: as_reported
+    SGNA:
+      amount_policy: abs
+    RND:
+      amount_policy: abs
+    DNA_IS:
+      amount_policy: abs
+    TAX_EXPENSE:
+      amount_policy: abs
+    OTHER_NON_OPERATING_INCOME:
+      amount_policy: abs
+    OTHER_NON_OPERATING_EXPENSES:
+      amount_policy: abs
+    OPERATING_INCOME:
+      amount_policy: as_reported
+    PBT:
+      amount_policy: as_reported
+    NET_INCOME:
+      amount_policy: as_reported
+    NET_INCOME_PARENT:
+      amount_policy: as_reported
+    NET_INCOME_NCI:
+      amount_policy: as_reported
+    BASIC_EPS:
+      amount_policy: as_reported
+    DILUTED_EPS:
+      amount_policy: as_reported
+    COMPREHENSIVE_INCOME_PARENT:
+      amount_policy: as_reported
+    CFO:
+      amount_policy: as_reported
+    CFI:
+      amount_policy: as_reported
+    CFF:
+      amount_policy: as_reported
+    WC_CHANGE:
+      amount_policy: as_reported
+    CAPEX_PPE:
+      amount_policy: abs
+      cash_direction: outflow
+    CAPEX_INTANG:
+      amount_policy: abs
+      cash_direction: outflow
+    PPE_DISPOSAL_PROCEEDS:
+      amount_policy: abs
+      cash_direction: inflow
+    INTANGIBLE_DISPOSAL_PROCEEDS:
+      amount_policy: abs
+      cash_direction: inflow
+    DEPRECIATION_EXPENSE:
+      amount_policy: abs
+    AMORTIZATION:
+      amount_policy: abs
+    INT_PAID:
+      amount_policy: abs
+      cash_direction: outflow
+    TAX_PAID:
+      amount_policy: abs
+      cash_direction: outflow
+    DIV_PAID:
+      amount_policy: abs
+      cash_direction: outflow
+    DEBT_ISSUE:
+      amount_policy: abs
+      cash_direction: inflow
+    DEBT_REPAY:
+      amount_policy: abs
+      cash_direction: outflow
+    EQ_ISSUE:
+      amount_policy: abs
+      cash_direction: inflow
+    BUYBACK:
+      amount_policy: abs
+      cash_direction: outflow
+    LEASE_REPAYMENT:
+      amount_policy: abs
+      cash_direction: outflow

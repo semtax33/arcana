@@ -1,0 +1,374 @@
+schema_version: 2
+profile: kr_historical
+description: >-
+  K-GAAP 및 일반기업회계기준의 역사적 표시 계정을 source-faithful canonical
+  facts로 올리는 규칙. 현대 IFRS와 의미가 달라질 수 있는 항목은 comparability로
+  차이를 명시하며 원문 ReportedFact는 덮어쓰지 않는다.
+
+rule_sets:
+  mapping:
+    - id: kgaap_bs_fixed_assets
+      version: 2
+      phase: normalize
+      priority: 760
+      applies: &kgaap_bs
+        statement_types: [BS]
+        accounting_regimes: [K_GAAP, GENERAL_K_GAAP, UNKNOWN]
+      match:
+        label:
+          exact_any: [고정자산, 고정자산계, 고정자산합계]
+      emit:
+        canonical_id: NON_CURRENT_ASSETS
+        comparability: PRESENTATION_ONLY_DIFFERENCE
+      reason: K-GAAP 고정자산 표시를 비유동자산으로 연결
+
+    - id: kgaap_bs_quick_assets
+      version: 2
+      phase: normalize
+      priority: 750
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [당좌자산, 당좌자산계, 당좌자산합계]
+      emit:
+        canonical_id: OTHER_CURRENT_ASSETS
+        comparability: AGGREGATION_DIFFERENCE
+      reason: K-GAAP 당좌자산은 현대 유동자산의 부분집합
+
+    - id: kgaap_bs_cash_equivalents_legacy
+      version: 2
+      phase: normalize
+      priority: 770
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [현금및현금등가물, 현금과예금, 현금예금, 현금및예금]
+      emit:
+        canonical_id: CASH_AND_EQUIVALENTS
+        comparability: PRESENTATION_ONLY_DIFFERENCE
+      reason: K-GAAP 현금 및 현금등가물 명칭 정규화
+
+    - id: kgaap_bs_marketability_securities
+      version: 2
+      phase: normalize
+      priority: 750
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [유가증권, 단기유가증권, 시장성유가증권, 단기투자자산]
+      emit:
+        canonical_id: SHORT_TERM_FINANCIAL_ASSETS
+        comparability: MEASUREMENT_DIFFERENCE
+      reason: K-GAAP 유가증권은 현대 금융자산과 측정 분류 차이가 있을 수 있음
+
+    - id: kgaap_bs_trade_receivables_legacy
+      version: 2
+      phase: normalize
+      priority: 770
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any:
+            - 외상매출금
+            - 받을어음
+            - 외상매출금및받을어음
+            - 외상매출금과받을어음
+            - 매출채권순액
+      emit:
+        canonical_id: TRADE_RECEIVABLES
+        comparability: AGGREGATION_DIFFERENCE
+      reason: 외상매출금 및 받을어음을 매출채권 bridge로 정규화
+
+    - id: kgaap_bs_allowance_doubtful_accounts
+      version: 2
+      phase: normalize
+      priority: 780
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [대손충당금, 매출채권대손충당금, 외상매출금대손충당금]
+      emit:
+        canonical_id: ALLOWANCE_FOR_DOUBTFUL_ACCOUNTS
+        comparability: EXACT
+        relations: [CONTRA_OF]
+      reason: 매출채권 contra 계정을 독립 보존
+
+    - id: kgaap_bs_inventory_allowance
+      version: 2
+      phase: normalize
+      priority: 780
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [재고자산평가충당금, 재고평가충당금]
+      emit:
+        canonical_id: INVENTORY_VALUATION_ALLOWANCE
+        comparability: EXACT
+        relations: [CONTRA_OF]
+      reason: 재고자산 평가충당금 contra 계정을 독립 보존
+
+    - id: kgaap_bs_investment_assets
+      version: 2
+      phase: normalize
+      priority: 740
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [투자자산, 투자자산계, 투자와기타자산]
+      emit:
+        canonical_id: OTHER_NON_CURRENT_ASSETS
+        comparability: AGGREGATION_DIFFERENCE
+      reason: K-GAAP 투자자산 표시의 aggregate bridge
+
+    - id: kgaap_bs_ppe_gross_components
+      version: 2
+      phase: normalize
+      priority: 730
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any:
+            - 토지
+            - 건물
+            - 구축물
+            - 기계장치
+            - 차량운반구
+            - 공구와기구
+            - 집기비품
+            - 건설중인자산
+      emit:
+        canonical_id: PPE_GROSS
+        comparability: AGGREGATION_DIFFERENCE
+        relations: [COMPONENT_OF]
+      reason: 유형자산 원가 구성요소를 gross 계층에 보존
+
+    - id: kgaap_bs_accumulated_depreciation
+      version: 2
+      phase: normalize
+      priority: 790
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [감가상각누계액, 유형자산감가상각누계액]
+      emit:
+        canonical_id: ACCUMULATED_DEPRECIATION
+        comparability: EXACT
+        relations: [CONTRA_OF]
+      reason: 유형자산 감가상각누계액을 contra로 보존
+
+    - id: kgaap_bs_accumulated_impairment
+      version: 2
+      phase: normalize
+      priority: 790
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [감액손실누계액, 유형자산감액손실누계액, 손상차손누계액]
+      emit:
+        canonical_id: ACCUMULATED_IMPAIRMENT_PPE
+        comparability: EXACT
+        relations: [CONTRA_OF]
+      reason: 유형자산 감액 누계액을 contra로 보존
+
+    - id: kgaap_bs_deferred_assets
+      version: 2
+      phase: normalize
+      priority: 760
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [이연자산, 창업비, 개업비, 사채발행비]
+      emit:
+        canonical_id: DEFERRED_ASSETS_K_GAAP
+        comparability: ACCOUNTING_POLICY_BREAK
+      reason: IFRS에서 동일 인식이 보장되지 않는 K-GAAP 이연자산
+
+    - id: kgaap_bs_fixed_liabilities
+      version: 2
+      phase: normalize
+      priority: 760
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [고정부채, 고정부채계, 고정부채합계]
+      emit:
+        canonical_id: NON_CURRENT_LIABILITIES
+        comparability: PRESENTATION_ONLY_DIFFERENCE
+      reason: K-GAAP 고정부채 표시를 비유동부채로 연결
+
+    - id: kgaap_bs_trade_payables_legacy
+      version: 2
+      phase: normalize
+      priority: 770
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [외상매입금, 지급어음, 외상매입금및지급어음, 외상매입금과지급어음]
+      emit:
+        canonical_id: TRADE_PAYABLES
+        comparability: AGGREGATION_DIFFERENCE
+      reason: 외상매입금 및 지급어음을 매입채무 bridge로 정규화
+
+    - id: kgaap_bs_retirement_allowance
+      version: 2
+      phase: normalize
+      priority: 780
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [퇴직급여충당금, 퇴직급여충당부채, 퇴직충당금]
+      emit:
+        canonical_id: RETIREMENT_BENEFIT_OBLIGATION
+        comparability: MEASUREMENT_DIFFERENCE
+      reason: K-GAAP 충당금과 IFRS 확정급여채무의 측정 차이를 표시
+
+    - id: kgaap_bs_capital_stock
+      version: 2
+      phase: normalize
+      priority: 780
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [자본금, 보통주자본금, 우선주자본금]
+      emit:
+        canonical_id: CAPITAL_STOCK
+        comparability: EXACT
+      reason: 납입 자본금 정규화
+
+    - id: kgaap_bs_capital_surplus
+      version: 2
+      phase: normalize
+      priority: 780
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [자본잉여금, 주식발행초과금, 재평가적립금]
+      emit:
+        canonical_id: CAPITAL_SURPLUS
+        comparability: AGGREGATION_DIFFERENCE
+      reason: K-GAAP 자본잉여금 구성 정규화
+
+    - id: kgaap_bs_equity_adjustments
+      version: 2
+      phase: normalize
+      priority: 780
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [자본조정, 자본조정계]
+      emit:
+        canonical_id: EQUITY_ADJUSTMENTS
+        comparability: PRESENTATION_ONLY_DIFFERENCE
+      reason: K-GAAP 자본조정 표시를 독립 보존
+
+    - id: kgaap_bs_treasury_stock
+      version: 2
+      phase: normalize
+      priority: 790
+      applies: *kgaap_bs
+      match:
+        label:
+          exact_any: [자기주식, 자기주식처분손실, 자기주식처분이익]
+      emit:
+        canonical_id: TREASURY_STOCK
+        comparability: AGGREGATION_DIFFERENCE
+        relations: [CONTRA_OF]
+      reason: 자기주식 및 관련 자본조정을 보존
+
+    - id: kgaap_is_ordinary_income
+      version: 2
+      phase: normalize
+      priority: 780
+      applies: &kgaap_is
+        statement_types: [IS]
+        accounting_regimes: [K_GAAP, GENERAL_K_GAAP, UNKNOWN]
+      match:
+        label:
+          exact_any: [경상이익, 경상손익, 경상손실]
+      emit:
+        canonical_id: ORDINARY_INCOME
+        comparability: ACCOUNTING_POLICY_BREAK
+      reason: 폐지된 K-GAAP 경상이익 subtotal을 독립 보존
+
+    - id: kgaap_is_extraordinary_gain
+      version: 2
+      phase: normalize
+      priority: 780
+      applies: *kgaap_is
+      match:
+        label:
+          exact_any: [특별이익, 특별이익계]
+      emit:
+        canonical_id: EXTRAORDINARY_GAIN
+        comparability: ACCOUNTING_POLICY_BREAK
+      reason: K-GAAP 특별이익은 IFRS와 직접 동등하지 않음
+
+    - id: kgaap_is_extraordinary_loss
+      version: 2
+      phase: normalize
+      priority: 780
+      applies: *kgaap_is
+      match:
+        label:
+          exact_any: [특별손실, 특별손실계]
+      emit:
+        canonical_id: EXTRAORDINARY_LOSS
+        comparability: ACCOUNTING_POLICY_BREAK
+      reason: K-GAAP 특별손실은 IFRS와 직접 동등하지 않음
+
+    - id: kgaap_is_non_operating_income
+      version: 2
+      phase: normalize
+      priority: 760
+      applies: *kgaap_is
+      match:
+        label:
+          exact_any: [영업외수익, 영업외수익계]
+      emit:
+        canonical_id: OTHER_NON_OPERATING_INCOME
+        amount_policy: abs
+        comparability: AGGREGATION_DIFFERENCE
+      reason: K-GAAP 영업외수익 aggregate 정규화
+
+    - id: kgaap_is_non_operating_expenses
+      version: 2
+      phase: normalize
+      priority: 760
+      applies: *kgaap_is
+      match:
+        label:
+          exact_any: [영업외비용, 영업외비용계]
+      emit:
+        canonical_id: OTHER_NON_OPERATING_EXPENSES
+        amount_policy: abs
+        comparability: AGGREGATION_DIFFERENCE
+      reason: K-GAAP 영업외비용 aggregate 정규화
+
+    - id: kgaap_is_net_income_before_appropriation
+      version: 2
+      phase: normalize
+      priority: 785
+      applies: *kgaap_is
+      match:
+        label:
+          exact_any: [이익잉여금처분전당기순이익, 처분전이익잉여금]
+      emit:
+        canonical_id: NET_INCOME
+        comparability: PRESENTATION_ONLY_DIFFERENCE
+      reason: 이익잉여금처분계산서 연결 표시
+
+    - id: kgaap_cf_cash_change
+      version: 2
+      phase: normalize
+      priority: 770
+      applies:
+        statement_types: [CF]
+        accounting_regimes: [K_GAAP, GENERAL_K_GAAP, UNKNOWN]
+      match:
+        label:
+          exact_any: [현금의증가감소, 현금의순증가감소, 현금및현금등가물의순증가감소]
+      emit:
+        canonical_id: CF_CASH_CHANGE
+        comparability: PRESENTATION_ONLY_DIFFERENCE
+      reason: 역사적 현금 증감 표시 정규화
+

@@ -799,6 +799,12 @@ function piotroski(r, prev) {
 // Legacy bronze dividend JSON helpers were removed from this calculation path.
 async function loadGroupedCsv(filePath, wantedSecurities, columns) {
   const grouped = new Map();
+  if (!fs.existsSync(filePath)) {
+    process.stderr.write(
+      `[WARN] optional coverage input is missing: ${filePath}\n`,
+    );
+    return grouped;
+  }
   const stream = fs.createReadStream(filePath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   let headers = null;

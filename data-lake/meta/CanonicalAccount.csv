@@ -76,6 +76,20 @@ BASIC_EPS,기본주당이익,IS,FALSE,,보통주 기본 EPS. 정규화 금액은
 DILUTED_EPS,희석주당이익,IS,FALSE,,희석 EPS. 정규화 금액은 항상 원/주 단위,
 OTHER_COMPREHENSIVE_INCOME,기타포괄손익,IS,FALSE,,기타포괄손익,
 TOTAL_COMPREHENSIVE_INCOME,당기총포괄손익,IS,FALSE,,당기 총포괄손익,
+ALLOWANCE_FOR_DOUBTFUL_ACCOUNTS,대손충당금,BS,FALSE,,매출채권 등에 대한 차감계정,K-GAAP gross/contra/net 관계 보존
+INVENTORY_VALUATION_ALLOWANCE,재고자산평가충당금,BS,FALSE,,재고자산에 대한 차감계정,K-GAAP gross/contra/net 관계 보존
+PPE_GROSS,유형자산취득원가,BS,FALSE,,유형자산 원가 및 구성요소,K-GAAP gross/contra/net 관계 보존
+ACCUMULATED_DEPRECIATION,감가상각누계액,BS,FALSE,,유형자산 감가상각 차감계정,K-GAAP gross/contra/net 관계 보존
+ACCUMULATED_IMPAIRMENT_PPE,유형자산감액손실누계액,BS,FALSE,,유형자산 감액 차감계정,K-GAAP gross/contra/net 관계 보존
+DEFERRED_ASSETS_K_GAAP,K-GAAP 이연자산,BS,FALSE,,종전 K-GAAP에서 인식한 이연자산,IFRS와 회계정책 단절 가능
+RETIREMENT_BENEFIT_OBLIGATION,퇴직급여채무,BS,FALSE,,퇴직급여충당금 또는 확정급여채무,K-GAAP/IFRS 측정 차이 가능
+CAPITAL_STOCK,자본금,BS,FALSE,,납입 자본금,
+CAPITAL_SURPLUS,자본잉여금,BS,FALSE,,주식발행초과금 등 자본잉여금,
+EQUITY_ADJUSTMENTS,자본조정,BS,FALSE,,종전 K-GAAP 자본조정 표시,K-GAAP 표시 차이
+TREASURY_STOCK,자기주식,BS,FALSE,,자기주식 차감계정,
+ORDINARY_INCOME,경상이익,IS,FALSE,,종전 K-GAAP 경상이익 subtotal,IFRS와 회계정책 단절
+EXTRAORDINARY_GAIN,특별이익,IS,FALSE,,종전 K-GAAP 특별이익,IFRS와 회계정책 단절
+EXTRAORDINARY_LOSS,특별손실,IS,FALSE,,종전 K-GAAP 특별손실,IFRS와 회계정책 단절
 COMPREHENSIVE_INCOME_PARENT,지배주주총포괄이익,IS,FALSE,,지배주주 귀속 총포괄이익,
 COMPREHENSIVE_INCOME_NCI,비지배지분총포괄이익,IS,FALSE,,비지배지분 귀속 총포괄이익,
 DISCONTINUED_OPERATIONS_INCOME,중단영업손익,IS,FALSE,,중단영업이익(손실),

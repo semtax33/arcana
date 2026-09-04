@@ -1,0 +1,49 @@
+schema_version: 2
+profile: common_financial
+description: Canonical 계정 카탈로그의 직접 statement matcher 보강 규칙
+
+rule_sets:
+  mapping:
+    - id: semantic_is_ebitda
+      version: 2
+      phase: normalize
+      priority: 720
+      applies:
+        statement_types: [IS]
+      match:
+        label:
+          exact_any: [EBITDA, 상각전영업이익, 감가상각비차감전영업이익]
+      emit:
+        canonical_id: EBITDA
+        comparability: EXACT
+      reason: 보고된 EBITDA 직접 매핑
+
+    - id: semantic_is_interest_expense
+      version: 2
+      phase: normalize
+      priority: 720
+      applies:
+        statement_types: [IS]
+      match:
+        label:
+          exact_any: [이자비용, 지급이자, 금융비용중이자비용]
+      emit:
+        canonical_id: INTEREST_EXPENSE
+        amount_policy: abs
+        comparability: EXACT
+      reason: 손익계산서 이자비용 직접 매핑
+
+    - id: semantic_cf_working_capital_change
+      version: 2
+      phase: normalize
+      priority: 720
+      applies:
+        statement_types: [CF]
+      match:
+        label:
+          exact_any: [운전자본의변동, 영업자산부채의변동, 영업활동으로인한자산부채의변동]
+      emit:
+        canonical_id: WC_CHANGE
+        comparability: AGGREGATION_DIFFERENCE
+      reason: 운전자본 변동 aggregate 직접 매핑
+

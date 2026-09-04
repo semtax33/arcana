@@ -1,5 +1,8 @@
 # Arcana
 
+재무제표 의미 정규화 구조와 K-GAAP/K-IFRS v2 규칙은
+[`docs/SEMANTIC_RULE_ENGINE_V2.md`](docs/SEMANTIC_RULE_ENGINE_V2.md)를 참고하세요.
+
 > **Financial Disclosure ELT & Factor Research Platform**
 
 Arcana는 DART와 SEC EDGAR 공시를 **Point-in-Time 금융 데이터**로 정규화하고,
