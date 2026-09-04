@@ -64,7 +64,20 @@ SILVER_DIVIDEND_PATH = DATA_LAKE.silver("us", "dividend", "us_dividend_normalize
 FINANCIAL_DIR = DATA_LAKE.silver("sec", "normalized")
 REPORT_PATH = DATA_LAKE.silver("sec", "us_report_metadata.csv")
 SHARD_COUNT = 8
-FINANCIAL_BASES = ("annual", "ttm")
+FINANCIAL_BASES = tuple(
+    value.strip().lower()
+    for value in os.getenv(
+        "ARCANA_US_FACTOR_BACKFILL_BASES",
+        "annual,ttm",
+    ).split(",")
+    if value.strip()
+)
+if not FINANCIAL_BASES or any(
+    value not in {"annual", "quarterly", "ttm"} for value in FINANCIAL_BASES
+):
+    raise RuntimeError(
+        "ARCANA_US_FACTOR_BACKFILL_BASES must contain annual, quarterly, and/or ttm"
+    )
 CONSENSUS_AND_TARGET_FACTOR_IDS = (
     "us_consensus_analyst_count",
     "us_eps_consensus",
@@ -452,7 +465,7 @@ SETTINGS max_threads = 12
         )
     finally:
         client.close()
-    print("Annual/TTM PIT snapshot copy complete", flush=True)
+    print(f"{'/'.join(FINANCIAL_BASES)} PIT snapshot copy complete", flush=True)
 
 
 def verify() -> dict[str, object]:

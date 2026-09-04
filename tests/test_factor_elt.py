@@ -252,6 +252,56 @@ class FactorEltTest(unittest.TestCase):
         self.assertEqual(column_names, FACT_DAILY_FACTOR_COLUMNS)
         self.assertEqual(set(inserted_df["security_id"]), {"SEC_KR_005930", "SEC_KR_000660"})
 
+    def test_insert_daily_factors_can_use_one_multi_partition_insert(self):
+        class FakeClient:
+            def __init__(self):
+                self.inserted = []
+
+            def insert_df(self, table_name, dataframe, column_names, settings=None):
+                self.inserted.append(
+                    (table_name, dataframe.copy(), list(column_names), settings)
+                )
+
+        wide_df = pd.DataFrame(
+            [
+                {
+                    "security_id": "SEC_US_TEST",
+                    "trade_date": "2026-01-02",
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "currency": "USD",
+                    "updated_at": "2026-01-03 09:00:00",
+                    "roe": 10.0,
+                },
+                {
+                    "security_id": "SEC_US_TEST",
+                    "trade_date": "2026-02-02",
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "currency": "USD",
+                    "updated_at": "2026-02-03 09:00:00",
+                    "roe": 11.0,
+                },
+            ]
+        )
+        client = FakeClient()
+        with (
+            patch("engine.loaders.factors._resolve_stock_codes", return_value=["TEST"]),
+            patch("engine.loaders.factors.create_stock_factor_dataframe", return_value=wide_df),
+        ):
+            result = insert_daily_factors(
+                stock_codes=["TEST"],
+                market="us",
+                client=client,
+                insert_catalog=False,
+                reader_mode="csv",
+                split_insert_by_partition=False,
+            )
+
+        self.assertEqual(result.attrs["inserted_rows"], 2)
+        self.assertEqual(len(client.inserted), 1)
+        self.assertEqual(client.inserted[0][3], {"max_partitions_per_insert_block": 1_000})
+
     def test_insert_daily_factors_can_filter_to_wacc_bundle(self):
         class FakeClient:
             def __init__(self):

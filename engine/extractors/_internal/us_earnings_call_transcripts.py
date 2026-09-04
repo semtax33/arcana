@@ -720,6 +720,19 @@ def _alpha_request(
             raise ProviderAuthenticationError(
                 "Alpha Vantage transcript authorization or subscription failed"
             )
+        # Alpha Vantage returns ``Invalid API call`` (HTTP 200) for valid
+        # symbols/quarters for which its transcript endpoint has no snapshot.
+        # Preserve that response as a normal no-data payload so the bronze
+        # coverage invariant can distinguish an unavailable quarter from a
+        # failed request and resume safely on subsequent runs.
+        invalid_api_call = (
+            isinstance(payload, dict)
+            and str(payload.get("Error Message", "")).strip().lower().startswith(
+                "invalid api call"
+            )
+        )
+        if invalid_api_call:
+            return payload
         limited = (
             status_code == 429
             or (isinstance(payload, dict) and "Note" in payload)

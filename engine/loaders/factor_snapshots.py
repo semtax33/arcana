@@ -147,6 +147,7 @@ def build_factor_snapshot_insert_query(
     carry_forward: bool = True,
     snapshot_dates: list[str | date] | None = None,
     max_lookback_days: int | None = None,
+    security_ids: list[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     if not carry_forward:
         return _build_raw_copy_snapshot_insert_query(
@@ -157,6 +158,7 @@ def build_factor_snapshot_insert_query(
             factor_ids=factor_ids,
             source_table=source_table,
             snapshot_table=snapshot_table,
+            security_ids=security_ids,
         )
 
     params: dict[str, Any] = {}
@@ -165,6 +167,9 @@ def build_factor_snapshot_insert_query(
     if security_prefix:
         params["security_prefix"] = security_prefix
         source_filters.append("startsWith(security_id, {security_prefix:String})")
+    if security_ids:
+        params["security_ids"] = sorted({str(value).strip() for value in security_ids if str(value).strip()})
+        source_filters.append("security_id IN {security_ids:Array(String)}")
     normalized_snapshot_dates = (
         sorted({_date_iso(value) for value in snapshot_dates})
         if snapshot_dates is not None
@@ -267,6 +272,7 @@ def build_incremental_factor_snapshot_insert_query(
     factor_ids: list[str] | None = None,
     source_table: str = FACTOR_SOURCE_TABLE,
     snapshot_table: str = FACTOR_SNAPSHOT_TABLE,
+    security_ids: list[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     params: dict[str, Any] = {
         "snapshot_date": _date_iso(snapshot_date),
@@ -284,6 +290,10 @@ def build_incremental_factor_snapshot_insert_query(
         params["security_prefix"] = security_prefix
         current_filters.append("startsWith(f.security_id, {security_prefix:String})")
         previous_filters.append("startsWith(s.security_id, {security_prefix:String})")
+    if security_ids:
+        params["security_ids"] = sorted({str(value).strip() for value in security_ids if str(value).strip()})
+        current_filters.append("f.security_id IN {security_ids:Array(String)}")
+        previous_filters.append("s.security_id IN {security_ids:Array(String)}")
     if financial_basis:
         params["financial_basis"] = str(financial_basis)
         current_filters.append("f.financial_basis = {financial_basis:String}")
@@ -557,6 +567,7 @@ def _build_raw_copy_snapshot_insert_query(
     factor_ids: list[str] | None = None,
     source_table: str = FACTOR_SOURCE_TABLE,
     snapshot_table: str = FACTOR_SNAPSHOT_TABLE,
+    security_ids: list[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     params: dict[str, Any] = {}
     filters = ["isFinite(factor_value)"]
@@ -564,6 +575,9 @@ def _build_raw_copy_snapshot_insert_query(
     if security_prefix:
         params["security_prefix"] = security_prefix
         filters.append("startsWith(security_id, {security_prefix:String})")
+    if security_ids:
+        params["security_ids"] = sorted({str(value).strip() for value in security_ids if str(value).strip()})
+        filters.append("security_id IN {security_ids:Array(String)}")
     if start_date is not None:
         params["start_date"] = _date_iso(start_date)
         filters.append("trade_date >= {start_date:Date}")

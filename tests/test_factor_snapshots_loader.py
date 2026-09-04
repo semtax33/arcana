@@ -21,6 +21,27 @@ class FactorSnapshotsLoaderTest(unittest.TestCase):
             query,
         )
 
+    def test_snapshot_queries_can_filter_audited_security_ids(self):
+        security_ids = ["SEC_US_CNX", "SEC_US_AAPL"]
+        carry_query, carry_params = build_factor_snapshot_insert_query(
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+            market="us",
+            security_ids=security_ids,
+        )
+        incremental_query, incremental_params = build_incremental_factor_snapshot_insert_query(
+            snapshot_date="2026-01-06",
+            previous_snapshot_date="2026-01-05",
+            market="us",
+            security_ids=security_ids,
+        )
+
+        self.assertEqual(carry_params["security_ids"], sorted(security_ids))
+        self.assertIn("security_id IN {security_ids:Array(String)}", carry_query)
+        self.assertEqual(incremental_params["security_ids"], sorted(security_ids))
+        self.assertIn("f.security_id IN {security_ids:Array(String)}", incremental_query)
+        self.assertIn("s.security_id IN {security_ids:Array(String)}", incremental_query)
+
     def test_build_factor_snapshot_insert_query_builds_carry_forward_snapshot(self):
         query, params = build_factor_snapshot_insert_query(
             start_date="2026-01-01",

@@ -4,7 +4,7 @@ import csv
 import math
 import re
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -395,8 +395,8 @@ def parse_amount(value: Any, unit_factor: int = 1) -> int:
         return 0
 
     try:
-        return int(float(s)) * sign * unit_factor
-    except ValueError:
+        return int(Decimal(s)) * sign * unit_factor
+    except (InvalidOperation, ValueError, OverflowError):
         return 0
 
 
@@ -406,8 +406,8 @@ def amount_to_int(value: Any) -> int:
     if not s:
         return 0
     try:
-        return int(float(s))
-    except Exception:
+        return int(Decimal(s))
+    except (InvalidOperation, ValueError, OverflowError):
         return 0
 
 
@@ -2301,7 +2301,12 @@ def dedupe_duplicate_subtotals(df: pd.DataFrame) -> pd.DataFrame:
         else:
             sub["_is_parent"] = False
 
-        sub["_indent"] = pd.to_numeric(sub.get("indent_level", 0), errors="coerce").fillna(0)
+        indent_values = (
+            sub["indent_level"]
+            if "indent_level" in sub.columns
+            else pd.Series(0, index=sub.index)
+        )
+        sub["_indent"] = pd.to_numeric(indent_values, errors="coerce").fillna(0)
 
         # leaf 우선, indent 깊은 row 우선
         keep_idx = (
@@ -2533,10 +2538,11 @@ def repair_unit_scale_outliers_from_neighbor_reports(
 
     df = mapped_df.copy()
     scale_support: dict[float, int] = {}
+    scale_rows: dict[float, list[Any]] = {}
     comparable_count = 0
 
-    for row in df.itertuples(index=False):
-        row_dict = row._asdict()
+    for row_index, row in df.iterrows():
+        row_dict = row.to_dict()
         canonical_id = safe_str(row_dict.get("canonical_account_id")).strip().upper()
         statement_type = safe_str(row_dict.get("statement_type")).strip().upper()
         if not canonical_id or canonical_id == "UNMAPPED" or canonical_id in EPS_CANONICAL_IDS:
@@ -2556,11 +2562,23 @@ def repair_unit_scale_outliers_from_neighbor_reports(
         if current_abs <= reference_abs * UNIT_SCALE_OUTLIER_MULTIPLE:
             continue
 
+        unit_factor = pd.to_numeric(
+            pd.Series([row_dict.get("unit_factor")]), errors="coerce"
+        ).iat[0]
+        if pd.isna(unit_factor) or float(unit_factor) < 1:
+            continue
+
         for scale_factor in UNIT_SCALE_OUTLIER_FACTORS:
             repaired_abs = current_abs / scale_factor
-            if repaired_abs <= reference_abs * UNIT_SCALE_REPAIRED_MULTIPLE:
-                scale_support[float(scale_factor)] = scale_support.get(float(scale_factor), 0) + 1
-                break
+            corrected_unit = float(unit_factor) / scale_factor
+            if corrected_unit < 1 or not corrected_unit.is_integer():
+                continue
+            if repaired_abs > reference_abs * UNIT_SCALE_REPAIRED_MULTIPLE:
+                continue
+            scale = float(scale_factor)
+            scale_support[scale] = scale_support.get(scale, 0) + 1
+            scale_rows.setdefault(scale, []).append(row_index)
+            break
 
     if not scale_support:
         return df
@@ -2572,7 +2590,9 @@ def repair_unit_scale_outliers_from_neighbor_reports(
         return df
 
     cid = df["canonical_account_id"].astype(str).str.upper()
-    repair_mask = ~cid.isin({"UNMAPPED", *EPS_CANONICAL_IDS})
+    repair_mask = df.index.isin(scale_rows[scale_factor]) & ~cid.isin(
+        {"UNMAPPED", *EPS_CANONICAL_IDS}
+    )
     for column in ["amount", "raw_amount", "normalized_amount", "cash_effect_amount"]:
         if column in df.columns:
             values = pd.to_numeric(df.loc[repair_mask, column], errors="coerce")
@@ -2585,7 +2605,7 @@ def repair_unit_scale_outliers_from_neighbor_reports(
         df.loc[repair_mask & unit_values.notna(), "unit_factor"] = corrected_unit.dropna().map(safe_str)
 
     if "reason" in df.columns:
-        suffix = f" / report unit-scale repaired: divided by {safe_str(scale_factor)}"
+        suffix = f" / row unit-scale repaired: divided by {safe_str(scale_factor)}"
         df.loc[repair_mask, "reason"] = df.loc[repair_mask, "reason"].astype(str) + suffix
 
     return df

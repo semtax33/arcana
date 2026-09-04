@@ -1597,6 +1597,7 @@ def write_symbol_outputs(
     save_debug: bool = True,
     symbols: list[str] | None = None,
     replace_year_range: tuple[int, int] | None = None,
+    replace_existing: bool = False,
 ) -> list[Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1629,6 +1630,7 @@ def write_symbol_outputs(
             symbol=symbol,
             normalized_rows=normalized_rows,
             replace_year_range=replace_year_range,
+            replace_existing=replace_existing,
         )
         output_frame.to_csv(
             output_path,
@@ -1660,6 +1662,7 @@ def write_symbol_outputs(
                 debug_rows=debug_rows,
                 debug_columns=debug_columns,
                 replace_year_range=replace_year_range,
+                replace_existing=replace_existing,
             )
             debug_frame.to_csv(
                 debug_path,
@@ -1678,13 +1681,19 @@ def _merged_symbol_normalized_frame(
     symbol: str,
     normalized_rows: list[dict[str, Any]],
     replace_year_range: tuple[int, int] | None = None,
+    replace_existing: bool = False,
 ) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     consolidated_path = consolidated_statement_path(output_dir, symbol, market="us")
-    if consolidated_path.exists():
+    if consolidated_path.exists() and not replace_existing:
         frames.append(pd.read_csv(consolidated_path))
 
-    for path in legacy_statement_snapshot_files(symbol, output_dir, market="us"):
+    legacy_paths = (
+        []
+        if replace_existing
+        else legacy_statement_snapshot_files(symbol, output_dir, market="us")
+    )
+    for path in legacy_paths:
         meta = path.name
         parsed = re.match(r"us_normalized_.+_(\d{4})[._](\d{2})\.csv$", meta, re.IGNORECASE)
         if parsed is None:
@@ -1728,9 +1737,10 @@ def _merged_symbol_debug_frame(
     debug_rows: list[dict[str, Any]],
     debug_columns: list[str],
     replace_year_range: tuple[int, int] | None,
+    replace_existing: bool = False,
 ) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
-    if debug_path.exists():
+    if debug_path.exists() and not replace_existing:
         try:
             existing = pd.read_csv(debug_path)
         except (OSError, ValueError, pd.errors.EmptyDataError):
@@ -1866,6 +1876,10 @@ def normalize_sec_date(value: Any) -> str:
         return ""
     if re.fullmatch(r"\d{8}", text):
         text = f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+    try:
+        return date_type.fromisoformat(text[:10]).isoformat()
+    except ValueError:
+        pass
     parsed = pd.to_datetime(text, errors="coerce")
     if pd.isna(parsed):
         return ""
@@ -1914,6 +1928,7 @@ def normalize_us_sec_filings(
     workers: int = 1,
     log_progress: bool = True,
     progress_interval: int = 100,
+    replace_existing: bool = False,
 ) -> list[Path]:
     started_at = time.monotonic()
     rules = load_us_mapping_rules(mapping_rule_path)
@@ -2051,12 +2066,13 @@ def normalize_us_sec_filings(
         save_debug=save_debug,
         symbols=processed_symbols,
         replace_year_range=replace_year_range,
+        replace_existing=replace_existing,
     )
     write_report_metadata(
         deduped,
         report_metadata_path,
         processed_symbols=processed_symbols,
-        replace_year_range=replace_year_range,
+        replace_year_range=None if replace_existing else replace_year_range,
     )
     if log_progress:
         elapsed = time.monotonic() - started_at

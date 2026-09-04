@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext, redirect_stdout
+from io import StringIO
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor
@@ -58,7 +60,7 @@ MAX_WORKERS = int(os.environ.get("NORMALIZE_MAX_WORKERS") or "0")
 if MAX_WORKERS <= 0:
     MAX_WORKERS = max(1, min((os.cpu_count() or 2) - 1, 8))
 
-StatementTask = tuple[Path, str, str, Path, Path | None]
+StatementTask = tuple[Path, str, str, Path, Path | None, bool]
 NormalizeResult = tuple[str, str, str, str]
 
 _WORKER_CANONICAL_DF: Any | None = None
@@ -132,6 +134,7 @@ def build_normalization_tasks(
     *,
     start_year: int,
     end_year: int,
+    months: tuple[int, ...] = (3, 6, 9, 12),
     dependency_paths: list[Path],
     save_debug: bool = SAVE_DEBUG,
     newest_dependency_mtime: float | None = None,
@@ -145,7 +148,7 @@ def build_normalization_tasks(
 
     for stock_code in stock_codes:
         for year in range(start_year, end_year):
-            for month in [3, 6, 9, 12]:
+            for month in months:
                 month_text = str(month).zfill(2)
                 input_html_path = (
                     DATA_LAKE.bronze(
@@ -189,6 +192,7 @@ def build_normalization_tasks(
                         period,
                         output_csv_path,
                         comment_html_path if comment_html_path.exists() else None,
+                        save_debug,
                     )
                 )
 
@@ -301,11 +305,26 @@ def normalize_us_dividend_history() -> dict[str, Path | int]:
 
 def normalize_all_statements(
     *,
+    symbols: list[str] | None = None,
     start_year: int | None = None,
     end_year: int | None = None,
-) -> None:
-    corps_list = kospi_kosdaq_corp_list()
-    stock_codes = sorted(corps_list["stock_code"].tolist())
+    months: tuple[int, ...] | None = None,
+    save_debug: bool = SAVE_DEBUG,
+    workers: int | None = None,
+) -> dict[str, int]:
+    if symbols:
+        requested_symbols = {
+            _normalize_kr_symbol(symbol)
+            for symbol in symbols
+        }
+        stock_codes = sorted(requested_symbols)
+    else:
+        corps_list = kospi_kosdaq_corp_list()
+        available_stock_codes = {
+            _normalize_kr_symbol(stock_code)
+            for stock_code in corps_list["stock_code"].tolist()
+        }
+        stock_codes = sorted(available_stock_codes)
     today = date.today()
     if start_year is None and end_year is None:
         # Preserve the existing default window: the ten completed calendar years.
@@ -319,6 +338,9 @@ def normalize_all_statements(
 
     if requested_start_year > requested_end_year:
         raise ValueError("--start-year must be less than or equal to --end-year")
+    selected_months = tuple(months or (3, 6, 9, 12))
+    if not selected_months or any(month not in {3, 6, 9, 12} for month in selected_months):
+        raise ValueError("statement months must be selected from 3, 6, 9, and 12")
 
     dependency_paths = normalization_dependency_paths()
     newest_dependency_mtime = max(p.stat().st_mtime for p in dependency_paths)
@@ -327,20 +349,22 @@ def normalize_all_statements(
         start_year=requested_start_year,
         # build_normalization_tasks uses an exclusive upper bound. CLI years are inclusive.
         end_year=requested_end_year + 1,
+        months=selected_months,
         dependency_paths=dependency_paths,
-        save_debug=SAVE_DEBUG,
+        save_debug=save_debug,
         newest_dependency_mtime=newest_dependency_mtime,
     )
 
     processed_count = 0
     failed_count = 0
+    worker_count = MAX_WORKERS if workers is None else max(1, int(workers))
 
     print(
-        f"[INFO] pending={len(tasks)}, workers={MAX_WORKERS}, "
+        f"[INFO] pending={len(tasks)}, workers={worker_count}, "
         f"skipped={skipped_count}, missing={missing_count}"
     )
 
-    if MAX_WORKERS == 1:
+    if worker_count == 1:
         _init_normalize_worker()
         for task in tasks:
             print(f"[START PROCESS] {task[0]}")
@@ -358,7 +382,7 @@ def normalize_all_statements(
             _print_progress(processed_count, skipped_count, missing_count, failed_count)
     elif tasks:
         with ProcessPoolExecutor(
-            max_workers=MAX_WORKERS,
+            max_workers=worker_count,
             initializer=_init_normalize_worker,
         ) as executor:
             for status, path, message, stock_code in executor.map(
@@ -395,7 +419,7 @@ def normalize_all_statements(
             output_dir=normalized_dir,
         ):
             consolidated_count += 1
-        if SAVE_DEBUG:
+        if save_debug:
             consolidate_statement_debug_snapshots(
                 stock_code,
                 snapshot_dir,
@@ -406,6 +430,14 @@ def normalize_all_statements(
     print(f"[DONE] consolidated statement files={consolidated_count}")
     if removed_count:
         print(f"[DONE] removed legacy statement snapshot files={removed_count}")
+    return {
+        "processed": processed_count,
+        "skipped": skipped_count,
+        "missing": missing_count,
+        "failed": failed_count,
+        "consolidated": consolidated_count,
+        "removed_legacy": removed_count,
+    }
 
 
 def remove_legacy_statement_snapshots(normalized_dir: str | Path) -> int:
@@ -459,26 +491,35 @@ def _normalize_one_statement(task: StatementTask) -> NormalizeResult:
     ):
         _init_normalize_worker()
 
-    input_html_path, stock_code, period, output_csv_path, comment_html_path = task
+    (
+        input_html_path,
+        stock_code,
+        period,
+        output_csv_path,
+        comment_html_path,
+        save_debug,
+    ) = task
 
     try:
-        normalize_financial_statement_rule_based(
-            input_html_path=input_html_path,
-            company_name=stock_code,
-            period=period,
-            output_csv_path=output_csv_path,
-            canonical_csv_path=CANONICAL_CSV_PATH,
-            context_rule_path=CONTEXT_RULE_PATH,
-            mapping_rule_paths=[MAPPING_RULE_PATH],
-            sign_policy_path=SIGN_POLICY_PATH,
-            save_debug=SAVE_DEBUG,
-            context_engine=_WORKER_CONTEXT_ENGINE,
-            mapping_engine=_WORKER_MAPPING_ENGINE,
-            canonical_df=_WORKER_CANONICAL_DF,
-            verbose=False,
-            comment_rule_paths=[COMMENT_RULE_PATH],
-            comment_html_path=comment_html_path,
-        )
+        output_context = redirect_stdout(StringIO()) if not save_debug else nullcontext()
+        with output_context:
+            normalize_financial_statement_rule_based(
+                input_html_path=input_html_path,
+                company_name=stock_code,
+                period=period,
+                output_csv_path=output_csv_path,
+                canonical_csv_path=CANONICAL_CSV_PATH,
+                context_rule_path=CONTEXT_RULE_PATH,
+                mapping_rule_paths=[MAPPING_RULE_PATH],
+                sign_policy_path=SIGN_POLICY_PATH,
+                save_debug=save_debug,
+                context_engine=_WORKER_CONTEXT_ENGINE,
+                mapping_engine=_WORKER_MAPPING_ENGINE,
+                canonical_df=_WORKER_CANONICAL_DF,
+                verbose=False,
+                comment_rule_paths=[COMMENT_RULE_PATH],
+                comment_html_path=comment_html_path,
+            )
     except FileNotFoundError as e:
         return ("missing", str(input_html_path), str(e), stock_code)
     except KeyError as e:
@@ -596,13 +637,13 @@ def main() -> None:
 
     if args.market == "kr":
         if args.target in {"statements", "all"}:
-            if args.start_year is None and args.end_year is None:
-                normalize_all_statements()
-            else:
-                normalize_all_statements(
-                    start_year=args.start_year,
-                    end_year=args.end_year,
-                )
+            statement_kwargs: dict[str, Any] = {}
+            if symbols is not None:
+                statement_kwargs["symbols"] = symbols
+            if args.start_year is not None or args.end_year is not None:
+                statement_kwargs["start_year"] = args.start_year
+                statement_kwargs["end_year"] = args.end_year
+            normalize_all_statements(**statement_kwargs)
         if args.target in {"business-info", "all"}:
             normalize_business_infos(
                 symbols=symbols,

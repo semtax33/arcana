@@ -910,6 +910,18 @@ def _warm_market_data_cache(market_data_cache) -> None:
         return
     for dataset in ("price", "shares", "dividend"):
         groups(dataset)
+    # These frames are lazily initialized and then copied by each stock worker.
+    # Initialize them before starting threads so concurrent first access cannot
+    # observe a pandas DataFrame while another thread is still mutating it.
+    for method_name in (
+        "risk_free_rates",
+        "country_erps",
+        "wacc_assumptions",
+        "benchmark_weekly_returns",
+    ):
+        method = getattr(market_data_cache, method_name, None)
+        if callable(method):
+            method()
 
 
 def _iter_prepared_daily_factor_rows(
@@ -1029,9 +1041,39 @@ def _kr_stock_codes_from_normalized_price() -> list[str]:
     return sorted(stock_codes)
 
 
-def _insert_daily_factor_rows_by_partition(client, factor_df: pd.DataFrame) -> int:
+def _insert_daily_factor_rows_by_partition(
+    client,
+    factor_df: pd.DataFrame,
+    *,
+    split_by_partition: bool = True,
+) -> int:
     if factor_df.empty:
         return 0
+
+    if not split_by_partition:
+        from clickhouse_connect.driver.exceptions import OperationalError
+
+        for attempt in range(5):
+            try:
+                client.insert_df(
+                    "fact_daily_factors",
+                    factor_df,
+                    column_names=list(factor_df.columns),
+                    settings={"max_partitions_per_insert_block": 1_000},
+                )
+                break
+            except OperationalError:
+                if attempt == 4:
+                    raise
+                wait_seconds = (attempt + 1) * 5
+                print(
+                    f"[WARN] factor insert connection failed; "
+                    f"retry={attempt + 1}/4 in {wait_seconds}s",
+                    flush=True,
+                )
+                time.sleep(wait_seconds)
+        print(f"inserted multi-partition rows={len(factor_df):,}", flush=True)
+        return len(factor_df)
 
     inserted_count = 0
     factor_df = factor_df.copy()
@@ -1054,6 +1096,7 @@ def _flush_daily_factor_batch(
     batch_frames: list[pd.DataFrame],
     *,
     batch_index: int,
+    split_by_partition: bool = True,
 ) -> int:
     if not batch_frames:
         return 0
@@ -1064,7 +1107,11 @@ def _flush_daily_factor_batch(
         f"stocks={len(batch_frames):,}, rows={len(batch_df):,}",
         flush=True,
     )
-    return _insert_daily_factor_rows_by_partition(client, batch_df)
+    return _insert_daily_factor_rows_by_partition(
+        client,
+        batch_df,
+        split_by_partition=split_by_partition,
+    )
 
 
 def _maybe_backfill_wacc_inputs(market: str, start_date: str | None, end_date: str | None, kwargs: dict) -> None:
@@ -1445,6 +1492,7 @@ def insert_daily_factors(
     progress_interval: int = 25,
     reader_mode: str = "cached",
     parallel_workers: int = 1,
+    split_insert_by_partition: bool = True,
     **kwargs,
 ) -> pd.DataFrame:
     reader_mode = str(reader_mode or "cached").strip().lower()
@@ -1580,6 +1628,7 @@ def insert_daily_factors(
                     client,
                     batch_frames,
                     batch_index=batch_index,
+                    split_by_partition=split_insert_by_partition,
                 )
                 batch_frames = []
                 batch_rows = 0
@@ -1590,6 +1639,7 @@ def insert_daily_factors(
                 client,
                 batch_frames,
                 batch_index=batch_index,
+                split_by_partition=split_insert_by_partition,
             )
         print(
             "[DONE] daily factors "
