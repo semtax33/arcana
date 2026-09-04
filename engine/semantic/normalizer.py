@@ -15,13 +15,16 @@ from .matcher import SemanticRuleExecutor
 from .models import (
     AccountingRegimeFamily,
     CanonicalFact,
+    DisclosureSourceType,
     DocumentDialect,
     DurationView,
     FactIdentity,
     HarmonizedFact,
+    LossState,
     PeriodKind,
     PeriodView,
     ReportedFact,
+    SemanticLoss,
     Scope,
     SemanticAddress,
     SourceLocation,
@@ -295,6 +298,15 @@ class FinancialSemanticNormalizer:
                 *reported.address.row_header_path[:-1],
             ]
         )
+        source_type_value = str(
+            reported.attributes.get(
+                "source_type", DisclosureSourceType.FINANCIAL_STATEMENT.value
+            )
+        )
+        try:
+            source_type = DisclosureSourceType(source_type_value)
+        except ValueError:
+            source_type = DisclosureSourceType.FINANCIAL_STATEMENT
         matched = self.executor.match(
             statement_type=reported.statement_type.value,
             label=reported.raw_label,
@@ -304,6 +316,12 @@ class FinancialSemanticNormalizer:
             regime=reported.identity.accounting_regime,
             dialect=reported.document_dialect,
             effective_at=reported.identity.period_end,
+            source_type=source_type,
+            sector_code=str(reported.attributes.get("sector_code") or ""),
+            industry_group_code=str(
+                reported.attributes.get("industry_group_code") or ""
+            ),
+            table_kind=str(reported.attributes.get("table_kind") or ""),
         )
         raw_value = reported.numeric_value
         value = raw_value
@@ -332,6 +350,7 @@ class FinancialSemanticNormalizer:
             comparability=matched.comparability,
             reported_fact=reported,
             provenance=matched.provenance,
+            semantic_loss=_semantic_loss(reported, matched.canonical_name),
         )
 
     def normalize_rows(
@@ -373,7 +392,98 @@ class FinancialSemanticNormalizer:
             comparability=comparability,
             canonical_facts=selected,
             bridge_rule_id=bridge_rule_id,
+            semantic_loss=_harmonized_loss(selected),
         )
+
+
+_GRANULARITY_QUALIFIERS = (
+    "장기성",
+    "단기성",
+    "유동",
+    "비유동",
+    "국내",
+    "해외",
+    "관계기업",
+    "종속기업",
+    "지배기업",
+    "비지배",
+)
+_MEASUREMENT_QUALIFIERS = (
+    "취득원가",
+    "공정가치",
+    "상각후원가",
+    "순실현가능가치",
+    "장부금액",
+)
+
+
+def _semantic_loss(reported: ReportedFact, canonical_name: str) -> SemanticLoss:
+    raw = SemanticFieldNormalizer.normalize_text(reported.raw_label)
+    target = SemanticFieldNormalizer.normalize_text(canonical_name)
+    lost: list[str] = []
+    for qualifier in (*_GRANULARITY_QUALIFIERS, *_MEASUREMENT_QUALIFIERS):
+        normalized = SemanticFieldNormalizer.normalize_text(qualifier)
+        if normalized in raw and normalized not in target:
+            lost.append(qualifier)
+    granularity_lost = any(value in lost for value in _GRANULARITY_QUALIFIERS)
+    measurement_lost = any(value in lost for value in _MEASUREMENT_QUALIFIERS)
+    return SemanticLoss(
+        granularity=LossState.LOST if granularity_lost else LossState.PRESERVED,
+        measurement_basis=(
+            LossState.LOST if measurement_lost else LossState.PRESERVED
+        ),
+        scope=(
+            LossState.PRESERVED
+            if reported.identity.scope != Scope.UNKNOWN
+            else LossState.UNKNOWN
+        ),
+        period_semantics=(
+            LossState.PRESERVED
+            if reported.identity.period_end is not None
+            else LossState.UNKNOWN
+        ),
+        lost_qualifiers=tuple(lost),
+        reason=(
+            "reported qualifiers are not represented by the canonical concept"
+            if lost
+            else "no explicit semantic qualifier loss detected"
+        ),
+    )
+
+
+def _harmonized_loss(facts: tuple[CanonicalFact, ...]) -> SemanticLoss:
+    lost_qualifiers = tuple(
+        sorted(
+            {
+                qualifier
+                for fact in facts
+                for qualifier in fact.semantic_loss.lost_qualifiers
+            }
+        )
+    )
+
+    def combined(field_name: str, *, aggregation_loses_granularity: bool = False) -> LossState:
+        if aggregation_loses_granularity and len(facts) > 1:
+            return LossState.LOST
+        states = {getattr(fact.semantic_loss, field_name) for fact in facts}
+        if LossState.LOST in states:
+            return LossState.LOST
+        if states == {LossState.PRESERVED}:
+            return LossState.PRESERVED
+        return LossState.UNKNOWN
+
+    return SemanticLoss(
+        granularity=combined("granularity", aggregation_loses_granularity=True),
+        measurement_basis=combined("measurement_basis"),
+        scope=combined("scope"),
+        period_semantics=combined("period_semantics"),
+        lost_qualifiers=lost_qualifiers,
+        reason=(
+            "harmonization aggregates multiple canonical facts"
+            if len(facts) > 1
+            else facts[0].semantic_loss.reason
+        ),
+    )
 
 
 def _period_end(value: str) -> date | None:

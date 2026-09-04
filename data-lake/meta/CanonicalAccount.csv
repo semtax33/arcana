@@ -106,3 +106,29 @@ OTHER_CURRENT_LIABILITIES,기타유동부채,BS,FALSE,,기타 유동부채,
 OTHER_NON_CURRENT_LIABILITIES,기타비유동부채,BS,FALSE,,기타 비유동부채,
 OTHER_NON_OPERATING_INCOME,기타영업외수익,IS,FALSE,,기타 영업외수익,
 OTHER_NON_OPERATING_EXPENSES,기타영업외비용,IS,FALSE,,기타 영업외비용,
+LOAN_RECEIVABLES_FINANCIAL,금융업대출채권,BS,FALSE,,은행·보험 등 금융업의 대출채권 및 대출금,
+DEPOSIT_LIABILITIES_FINANCIAL,금융업예수부채,BS,FALSE,,은행 등 금융업의 고객 예수부채,
+AVAILABLE_FOR_SALE_SECURITIES,매도가능증권,BS,FALSE,,구 K-GAAP 및 IAS 39의 매도가능증권,측정기준 차이를 보존
+HELD_TO_MATURITY_SECURITIES,만기보유증권,BS,FALSE,,구 K-GAAP 및 IAS 39의 만기보유증권,측정기준 차이를 보존
+TRADING_SECURITIES,단기매매증권,BS,FALSE,,단기매매 목적 유가증권,
+INVESTMENT_SECURITIES,투자유가증권,BS,FALSE,,분류가 더 구체적이지 않은 투자유가증권,
+DERIVATIVE_ASSETS,파생상품자산,BS,FALSE,,파생상품의 자산 잔액,
+DERIVATIVE_LIABILITIES,파생상품부채,BS,FALSE,,파생상품의 부채 잔액,
+INSURANCE_CONTRACT_LIABILITIES,보험계약부채,BS,FALSE,,책임준비금 및 보험료적립금 등 보험계약 관련 부채,
+BANK_CASH_AND_DUE_FROM_BANKS,현금및예치금,BS,FALSE,,금융업 현금 및 금융기관 예치금,일반 현금성자산과 집계 차이 보존
+FINANCIAL_BORROWINGS,금융업차입부채,BS,FALSE,,콜머니·환매조건부채권매도·사채 등 금융업 차입부채,유동성 구분 미확정
+INTEREST_INCOME,이자수익,IS,FALSE,,이자 및 대출채권 이자수익,
+INSURANCE_PREMIUM_REVENUE,보험료수익,IS,FALSE,,보험계약 보험료 수익,
+INSURANCE_CLAIMS_EXPENSE,지급보험금,IS,FALSE,,보험계약 지급보험금 및 보험금 비용,
+CONSTRUCTION_REVENUE,공사수익,IS,FALSE,,건설계약 공사수익,
+CONSTRUCTION_COST,공사원가,IS,FALSE,,건설계약 공사원가,
+PRODUCT_REVENUE,제품매출액,IS,FALSE,,제품 판매 매출액,매출액 구성요소
+PRODUCT_COGS,제품매출원가,IS,FALSE,,제품 판매 매출원가,매출원가 구성요소
+CFI_GROSS_INFLOW,투자활동총현금유입,CF,FALSE,,투자활동 현금유입 총액,순투자활동현금흐름과 별도
+CFI_GROSS_OUTFLOW,투자활동총현금유출,CF,FALSE,,투자활동 현금유출 총액,순투자활동현금흐름과 별도
+CFF_GROSS_INFLOW,재무활동총현금유입,CF,FALSE,,재무활동 현금유입 총액,순재무활동현금흐름과 별도
+CFF_GROSS_OUTFLOW,재무활동총현금유출,CF,FALSE,,재무활동 현금유출 총액,순재무활동현금흐름과 별도
+NON_CASH_EXPENSE_ADD_BACK,비현금비용가산,CF,FALSE,,영업현금흐름 조정의 비현금 비용 가산 총액,조정항목
+NON_CASH_INCOME_DEDUCTION,비현금수익차감,CF,FALSE,,영업현금흐름 조정의 비현금 수익 차감 총액,조정항목
+PPE_ACQUISITION_COMPONENT,유형자산항목별취득지출,CF,FALSE,,토지·건물·기계장치 등 유형자산 항목별 취득 현금유출,CAPEX 집계 전 구성요소
+PPE_DISPOSAL_COMPONENT_PROCEEDS,유형자산항목별처분대금,CF,FALSE,,토지·건물·기계장치 등 유형자산 항목별 처분 현금유입,처분손익과 구분

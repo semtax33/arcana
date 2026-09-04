@@ -8,7 +8,7 @@ import re
 from concurrent.futures import ProcessPoolExecutor
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from engine.core.paths import (
     DATA_LAKE,
@@ -94,6 +94,10 @@ def normalized_statement_snapshot_dir() -> Path:
 
 def business_info_output_dir() -> Path:
     return DATA_LAKE.silver("dart", "business-info")
+
+
+def finance_notes_output_dir() -> Path:
+    return DATA_LAKE.silver("dart", "finance-notes")
 
 
 def normalization_dependency_paths() -> list[Path]:
@@ -252,12 +256,75 @@ def iter_business_info_paths(
     return paths
 
 
+_FINANCE_COMMENT_FILE_RE = re.compile(
+    r"finance_statement_comment_\((?P<year>\d{4})[._](?P<month>\d{1,2})\)\.html$",
+    re.IGNORECASE,
+)
+
+
+def iter_finance_comment_paths(
+    symbols: list[str] | None = None,
+    *,
+    start_year: int | None = None,
+    end_year: int | None = None,
+    bronze_root: str | Path | None = None,
+) -> list[Path]:
+    root = Path(bronze_root) if bronze_root is not None else DATA_LAKE.bronze("dart", "finance-comment")
+    if not root.exists():
+        return []
+    stock_dirs = [root / _normalize_kr_symbol(symbol) for symbol in symbols] if symbols else sorted(path for path in root.iterdir() if path.is_dir())
+    paths: list[Path] = []
+    for stock_dir in stock_dirs:
+        if not stock_dir.is_dir():
+            continue
+        for path in sorted(stock_dir.glob("finance_statement_comment_(*).html")):
+            match = _FINANCE_COMMENT_FILE_RE.match(path.name)
+            if not match:
+                continue
+            year = int(match.group("year"))
+            if start_year is not None and year < start_year:
+                continue
+            if end_year is not None and year > end_year:
+                continue
+            paths.append(path)
+    return paths
+
+
+def normalize_finance_comments(
+    symbols: list[str] | None = None,
+    *,
+    start_year: int | None = None,
+    end_year: int | None = None,
+    sector_codes: Mapping[str, str] | None = None,
+    industry_group_codes: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    from engine.semantic import DisclosureSourceType
+    from engine.transformers._internal.kr_disclosure_normalizer import normalize_disclosure_files
+
+    paths = iter_finance_comment_paths(symbols, start_year=start_year, end_year=end_year)
+    print(f"[INFO] finance-notes files={len(paths)}")
+    result = normalize_disclosure_files(
+        paths,
+        source_type=DisclosureSourceType.FINANCIAL_NOTES,
+        output_root=finance_notes_output_dir(),
+        sector_codes=sector_codes,
+        industry_group_codes=industry_group_codes,
+    )
+    print(
+        f"[DONE] finance-notes documents={result['parsed_document_count']}, "
+        f"candidates={result['candidate_count']}, failures={result['failed_document_count']}"
+    )
+    return result
+
+
 def normalize_business_infos(
     symbols: list[str] | None = None,
     *,
     start_year: int | None = None,
     end_year: int | None = None,
     workers: int | None = 1,
+    sector_codes: Mapping[str, str] | None = None,
+    industry_group_codes: Mapping[str, str] | None = None,
 ) -> list[tuple[Path, Path, Path, Path]] | tuple[Path, Path, Path, Path]:
     from engine.transformers._internal.kr_business_extractor import (
         document_to_cell_records,
@@ -275,7 +342,10 @@ def normalize_business_infos(
     )
     worker_count = workers if workers is not None else 1
     print(f"[INFO] business-info files={len(paths)}, workers={worker_count}")
-    documents = parse_business_info_files(paths, max_workers=worker_count)
+    parse_options: dict[str, Any] = {"max_workers": worker_count}
+    if sector_codes:
+        parse_options["sector_code_map"] = dict(sector_codes)
+    documents = parse_business_info_files(paths, **parse_options)
     section_rows = sum(len(document_to_section_records(document)) for document in documents)
     table_rows = sum(len(document_to_table_records(document)) for document in documents)
     cell_rows = sum(len(document_to_cell_records(document)) for document in documents)
@@ -298,6 +368,28 @@ def normalize_business_infos(
         print(f"[DONE] business-info tables={table_path}")
         print(f"[DONE] business-info cells={cell_path}")
         print(f"[DONE] business-info rows={row_path}")
+
+    semantic_paths = [
+        Path(document.source_path)
+        for document in documents
+        if hasattr(document, "source_path") and Path(document.source_path).exists()
+    ]
+    if semantic_paths:
+        from engine.semantic import DisclosureSourceType
+        from engine.transformers._internal.kr_disclosure_normalizer import normalize_disclosure_files
+
+        semantic_result = normalize_disclosure_files(
+            semantic_paths,
+            source_type=DisclosureSourceType.BUSINESS_CONTENT,
+            output_root=business_info_output_dir(),
+            sector_codes=sector_codes,
+            industry_group_codes=industry_group_codes,
+        )
+        print(
+            f"[DONE] business-info semantic_documents={semantic_result['parsed_document_count']}, "
+            f"candidates={semantic_result['candidate_count']}, "
+            f"failures={semantic_result['failed_document_count']}"
+        )
     return written_paths
 
 
@@ -617,8 +709,8 @@ def main() -> None:
     parser.add_argument(
         "--target",
         default="statements",
-        choices=["statements", "business-info", "consensus", "dividend", "all"],
-        help="Normalize statements, consensus, or dividend sources. business-info is KR-only.",
+        choices=["statements", "notes", "business-info", "consensus", "dividend", "all"],
+        help="Normalize statements, notes, business-info, consensus, or dividend sources. notes/business-info are KR-only.",
     )
     parser.add_argument("--symbols", help="Comma-separated symbols. US examples: AAPL,MSFT")
     parser.add_argument(
@@ -670,6 +762,12 @@ def main() -> None:
                 start_year=args.start_year,
                 end_year=args.end_year,
                 workers=args.workers,
+            )
+        if args.target in {"notes", "all"}:
+            normalize_finance_comments(
+                symbols=symbols,
+                start_year=args.start_year,
+                end_year=args.end_year,
             )
         if args.target in {"consensus", "all"}:
             normalize_consensus(args)

@@ -40,6 +40,15 @@ EXPECTED_CF_DIRECTIONS = {
     "BUYBACK": "outflow",
     "LEASE_REPAYMENT": "outflow",
 }
+V3_EXPECTED_CF_DIRECTIONS = {
+    "CFI_GROSS_INFLOW": "inflow",
+    "CFI_GROSS_OUTFLOW": "outflow",
+    "CFF_GROSS_INFLOW": "inflow",
+    "CFF_GROSS_OUTFLOW": "outflow",
+    "PPE_ACQUISITION_COMPONENT": "outflow",
+    "PPE_DISPOSAL_COMPONENT_PROCEEDS": "inflow",
+}
+ALL_EXPECTED_CF_DIRECTIONS = {**EXPECTED_CF_DIRECTIONS, **V3_EXPECTED_CF_DIRECTIONS}
 _SCALAR_AMOUNT_RE = re.compile(
     r"^\s*(?:\(\s*)?[△▲+\-－]?\s*\d[\d,]*(?:\.\d+)?\s*\)?\s*$"
 )
@@ -125,7 +134,7 @@ def static_sign_policy_audit(path: str | Path) -> dict[str, Any]:
             errors.append(
                 {"location": str(canonical_id), "error": f"invalid {direction}"}
             )
-    for canonical_id, expected in EXPECTED_CF_DIRECTIONS.items():
+    for canonical_id, expected in ALL_EXPECTED_CF_DIRECTIONS.items():
         actual = str((policies.get(canonical_id, {}) or {}).get("cash_direction", ""))
         if actual != expected:
             errors.append(
@@ -139,7 +148,7 @@ def static_sign_policy_audit(path: str | Path) -> dict[str, Any]:
         for rule in ((bundle.get("rule_sets", {}) or {}).get("mapping", []) or []):
             emit = rule.get("emit", {}) or {}
             canonical_id = str(emit.get("canonical_id", ""))
-            expected = EXPECTED_CF_DIRECTIONS.get(canonical_id)
+            expected = ALL_EXPECTED_CF_DIRECTIONS.get(canonical_id)
             if expected is None:
                 continue
             rule_direction_check_count += 1
@@ -158,6 +167,7 @@ def static_sign_policy_audit(path: str | Path) -> dict[str, Any]:
         "policy_path": str(Path(path).resolve()),
         "canonical_policy_count": len(policies),
         "expected_direction_count": len(EXPECTED_CF_DIRECTIONS),
+        "v3_expected_direction_count": len(V3_EXPECTED_CF_DIRECTIONS),
         "rule_direction_check_count": rule_direction_check_count,
         "error_count": len(errors),
         "errors": errors,

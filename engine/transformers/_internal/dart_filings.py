@@ -20,6 +20,7 @@ from engine.semantic import (
     AccountingRegimeDetector,
     AccountingRegimeFamily,
     Comparability,
+    DisclosureSourceType,
     DocumentDialect,
     SemanticRuleExecutor,
     SemanticRuleSet,
@@ -69,6 +70,10 @@ DEBUG_COLUMNS = [
     "accounting_regime_confidence",
     "accounting_regime_evidence",
     "document_dialect",
+    "source_type",
+    "sector_code",
+    "industry_group_code",
+    "table_kind",
     "scope",
     "currency",
     "comparability",
@@ -286,6 +291,13 @@ def _normalize_account_name_text(value: str) -> str:
         for pattern in prefix_patterns:
             s = re.sub(pattern, "", s)
         changed = before != s
+
+    # Some pre-IFRS DART tables rendered list markers in a separate visual
+    # span, so get_text() produces "ⅰ영업활동..." or "1당기순이익" without
+    # punctuation. Strip only unmistakable ordinal forms. Numeric maturity
+    # qualifiers such as "1년 이내" retain accounting meaning.
+    s = re.sub(r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹⅺⅻ]+(?=[가-힣])", "", s)
+    s = re.sub(r"^\d{1,2}(?!(?:년|개월|분기|일|회|차|기))(?=[가-힣])", "", s)
 
     # 후행 설명 제거
     s = re.sub(r"[,，]\s*(총액|합계|계)\s*$", "", s)
@@ -746,7 +758,7 @@ def detect_financial_document_semantics(
         for item in detection.evidence
     ]
     return {
-        "semantic_engine_version": "2",
+        "semantic_engine_version": "3",
         "accounting_regime": detection.regime.family.value,
         "accounting_regime_confidence": format(detection.confidence, ".6f"),
         "accounting_regime_evidence": json.dumps(
@@ -2338,6 +2350,10 @@ class RuleEngine:
         normalized_row = self._normalize_row_for_matching(row)
         regime_value = safe_str(row.get("accounting_regime", "UNKNOWN")) or "UNKNOWN"
         dialect_value = safe_str(row.get("document_dialect", "UNKNOWN")) or "UNKNOWN"
+        source_type_value = (
+            safe_str(row.get("source_type", DisclosureSourceType.FINANCIAL_STATEMENT.value))
+            or DisclosureSourceType.FINANCIAL_STATEMENT.value
+        )
         try:
             regime = AccountingRegimeFamily(regime_value)
         except ValueError:
@@ -2346,6 +2362,13 @@ class RuleEngine:
             dialect = DocumentDialect(dialect_value)
         except ValueError:
             dialect = DocumentDialect.UNKNOWN
+        try:
+            source_type = DisclosureSourceType(source_type_value)
+        except ValueError:
+            source_type = DisclosureSourceType.FINANCIAL_STATEMENT
+        sector_code = safe_str(row.get("sector_code"))
+        industry_group_code = safe_str(row.get("industry_group_code"))
+        table_kind = safe_str(row.get("table_kind"))
         period_parts = _statement_period_year_month(row.get("period"))
         effective_at = (
             date(period_parts[0], period_parts[1], 1)
@@ -2361,6 +2384,10 @@ class RuleEngine:
             regime.value,
             dialect.value,
             effective_at,
+            source_type.value,
+            sector_code,
+            industry_group_code,
+            table_kind,
         )
 
         cached = self._map_cache.get(cache_key)
@@ -2376,6 +2403,10 @@ class RuleEngine:
             regime=regime,
             dialect=dialect,
             effective_at=effective_at,
+            source_type=source_type,
+            sector_code=sector_code,
+            industry_group_code=industry_group_code,
+            table_kind=table_kind,
         )
         result = MappingResult(
             canonical_account_id=semantic_result.canonical_id,
@@ -2491,11 +2522,22 @@ class RuleEngine:
                         "context_reason": safe_str(row.get("context_reason")),
                         "amount_raw": safe_str(row.get("amount_raw")),
                         "unit_factor": "1" if result.canonical_account_id in EPS_CANONICAL_IDS else safe_str(row.get("unit_factor")),
-                        "semantic_engine_version": safe_str(row.get("semantic_engine_version", "2")),
+                        "semantic_engine_version": safe_str(row.get("semantic_engine_version", "3")),
                         "accounting_regime": safe_str(row.get("accounting_regime", "UNKNOWN")),
                         "accounting_regime_confidence": safe_str(row.get("accounting_regime_confidence")),
                         "accounting_regime_evidence": safe_str(row.get("accounting_regime_evidence")),
                         "document_dialect": safe_str(row.get("document_dialect", "UNKNOWN")),
+                        "source_type": safe_str(
+                            row.get(
+                                "source_type",
+                                DisclosureSourceType.FINANCIAL_STATEMENT.value,
+                            )
+                        ),
+                        "sector_code": safe_str(row.get("sector_code")),
+                        "industry_group_code": safe_str(
+                            row.get("industry_group_code")
+                        ),
+                        "table_kind": safe_str(row.get("table_kind")),
                         "scope": safe_str(row.get("scope", "UNKNOWN")),
                         "currency": safe_str(row.get("currency", "KRW")),
                         "comparability": result.comparability,

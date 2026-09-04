@@ -10,7 +10,7 @@ from spacy.lang.xx import MultiLanguage
 from spacy.matcher import PhraseMatcher
 from spacy.tokens import Doc
 
-from .rules import SemanticRuleSet
+from .rules import RuleApplicability, SemanticRuleSet
 
 
 NARRATIVE_UNIT_FACTORS: Mapping[str, Decimal] = {
@@ -35,6 +35,11 @@ _MONEY_RE = re.compile(
     rf"(?P<number>(?:\d{{1,3}}(?:,\d{{3}})+|\d+)(?:\.\d+)?)\s*"
     rf"(?P<unit>{_UNIT_PATTERN})(?P<close>\))?"
 )
+_COMPOSITE_MONEY_RE = re.compile(
+    r"(?P<prefix>\(\s*[△▲+\-－]\s*\)|[△▲+\-－]?)\s*"
+    r"(?P<jo>(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*조(?:원)?\s*"
+    r"(?P<eok>(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*억(?:원)?"
+)
 _GENERIC_ALIASES = {"계", "합계", "총계", "증가", "감소", "손익", "비용", "수익"}
 
 
@@ -53,6 +58,15 @@ class NarrativeFactCandidate:
     reasons: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class MoneyMention:
+    raw_text: str
+    value_krw: Decimal
+    unit: str
+    start: int
+    end: int
+
+
 class NarrativeAccountScanner:
     """Find account/value candidates hidden in prose without auto-emitting facts.
 
@@ -68,6 +82,9 @@ class NarrativeAccountScanner:
         self.matcher = PhraseMatcher(self.nlp.vocab, attr="ORTH")
         self._alias_by_id: dict[int, str] = {}
         self._canonical_by_alias: dict[str, tuple[str, ...]] = {}
+        self._applicability_by_alias_id: dict[
+            tuple[str, str], tuple[RuleApplicability, ...]
+        ] = {}
         normalized_aliases: dict[str, set[str]] = {}
         for raw_alias, canonical_ids in aliases.items():
             alias = self.normalize_text(raw_alias)
@@ -96,7 +113,88 @@ class NarrativeAccountScanner:
                 continue
             for alias in rule.label.exact_any:
                 aliases.setdefault(alias, set()).add(canonical_id)
-        return cls(aliases, max_distance=max_distance)
+        scanner = cls(aliases, max_distance=max_distance)
+        applicability: dict[tuple[str, str], list[RuleApplicability]] = {}
+        for rule in ruleset.normalization_rules:
+            canonical_id = rule.emit.canonical_id
+            if canonical_id == "UNMAPPED":
+                continue
+            for raw_alias in rule.label.exact_any:
+                alias = scanner.normalize_text(raw_alias)
+                if alias in scanner._canonical_by_alias:
+                    applicability.setdefault((alias, canonical_id), []).append(
+                        rule.applies
+                    )
+        scanner._applicability_by_alias_id = {
+            key: tuple(values) for key, values in applicability.items()
+        }
+        return scanner
+
+    @staticmethod
+    def _context_applies(
+        applies: RuleApplicability,
+        *,
+        source_type: object,
+        sector_code: str,
+        industry_group_code: str,
+        table_kind: str,
+    ) -> bool:
+        source_value = getattr(source_type, "value", str(source_type or ""))
+        if applies.source_types and source_value not in {
+            value.value for value in applies.source_types
+        }:
+            return False
+        if applies.sector_codes and sector_code not in applies.sector_codes:
+            return False
+        if (
+            applies.industry_group_codes
+            and industry_group_code not in applies.industry_group_codes
+        ):
+            return False
+        if applies.table_kinds and table_kind not in applies.table_kinds:
+            return False
+        return True
+
+    def contextual_canonical_ids(
+        self,
+        alias: str,
+        canonical_ids: Iterable[str],
+        *,
+        source_type: object,
+        sector_code: str = "",
+        industry_group_code: str = "",
+        table_kind: str = "NARRATIVE",
+    ) -> tuple[tuple[str, ...], bool]:
+        """Filter aliases by hierarchical rule context without losing review evidence."""
+
+        normalized_alias = self.normalize_text(alias)
+        original = tuple(canonical_ids)
+        permitted: list[str] = []
+        had_constraints = False
+        for canonical_id in original:
+            entries = self._applicability_by_alias_id.get(
+                (normalized_alias, canonical_id), ()
+            )
+            if not entries:
+                permitted.append(canonical_id)
+                continue
+            had_constraints = True
+            if any(
+                self._context_applies(
+                    applies,
+                    source_type=source_type,
+                    sector_code=str(sector_code or ""),
+                    industry_group_code=str(industry_group_code or ""),
+                    table_kind=str(table_kind or ""),
+                )
+                for applies in entries
+            ):
+                permitted.append(canonical_id)
+        if permitted:
+            return tuple(sorted(set(permitted))), True
+        # Preserve the proposed concept for the human review queue, but mark it
+        # context-ineligible so it can never be treated as a confirmed capture.
+        return original, not had_constraints
 
     @staticmethod
     def normalize_text(value: str) -> str:
@@ -126,6 +224,44 @@ class NarrativeAccountScanner:
         value *= NARRATIVE_UNIT_FACTORS[match.group("unit")]
         return -value if negative else value
 
+    @classmethod
+    def extract_money_mentions(cls, text: str) -> tuple[MoneyMention, ...]:
+        """Extract atomic and Korean composite money amounts without double counting."""
+
+        normalized = cls.normalize_text(text)
+        mentions: list[MoneyMention] = []
+        occupied: list[tuple[int, int]] = []
+        for match in _COMPOSITE_MONEY_RE.finditer(normalized):
+            try:
+                value = (
+                    Decimal(match.group("jo").replace(",", ""))
+                    * Decimal(1_000_000_000_000)
+                    + Decimal(match.group("eok").replace(",", ""))
+                    * Decimal(100_000_000)
+                )
+            except (InvalidOperation, ValueError):
+                continue
+            prefix = re.sub(r"\s", "", match.group("prefix") or "")
+            if any(sign in prefix for sign in ("△", "▲", "-", "－")):
+                value = -value
+            mentions.append(
+                MoneyMention(match.group(0), value, "조원+억원", match.start(), match.end())
+            )
+            occupied.append((match.start(), match.end()))
+
+        for match in _MONEY_RE.finditer(normalized):
+            if any(start <= match.start() and match.end() <= end for start, end in occupied):
+                continue
+            value = cls._money_value(match)
+            if value is None:
+                continue
+            mentions.append(
+                MoneyMention(
+                    match.group(0), value, match.group("unit"), match.start(), match.end()
+                )
+            )
+        return tuple(sorted(mentions, key=lambda item: (item.start, item.end)))
+
     def scan_text(self, text: str, *, paragraph_index: int = 0) -> tuple[NarrativeFactCandidate, ...]:
         normalized = self.normalize_text(text)
         if not normalized:
@@ -134,7 +270,7 @@ class NarrativeAccountScanner:
             (match_id, start, end)
             for match_id, start, end in self.matcher(self._char_doc(normalized))
         ]
-        money_hits = list(_MONEY_RE.finditer(normalized))
+        money_hits = self.extract_money_mentions(normalized)
         if not account_hits or not money_hits:
             return ()
 
@@ -145,19 +281,16 @@ class NarrativeAccountScanner:
             nearby = [
                 money
                 for money in money_hits
-                if min(abs(money.start() - end), abs(start - money.end()))
+                if min(abs(money.start - end), abs(start - money.end))
                 <= self.max_distance
             ]
             for money in nearby:
-                key = (alias, money.start(), money.end())
+                key = (alias, money.start, money.end)
                 if key in seen:
                     continue
                 seen.add(key)
-                value = self._money_value(money)
-                if value is None:
-                    continue
                 canonical_ids = self._canonical_by_alias[alias]
-                distance = min(abs(money.start() - end), abs(start - money.end()))
+                distance = min(abs(money.start - end), abs(start - money.end))
                 reasons: list[str] = ["unit_bearing_amount", "spacy_alias_match"]
                 if len(canonical_ids) != 1:
                     reasons.append("alias_maps_to_multiple_accounts")
@@ -172,9 +305,9 @@ class NarrativeAccountScanner:
                     NarrativeFactCandidate(
                         canonical_ids=canonical_ids,
                         matched_alias=alias,
-                        raw_amount=money.group(0),
-                        value_krw=value,
-                        unit=money.group("unit"),
+                        raw_amount=money.raw_text,
+                        value_krw=money.value_krw,
+                        unit=money.unit,
                         paragraph_index=paragraph_index,
                         source_text=" ".join(str(text).split())[:1000],
                         distance=distance,

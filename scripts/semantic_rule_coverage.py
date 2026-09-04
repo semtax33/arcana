@@ -174,7 +174,9 @@ def main() -> None:
                 "output": str(output),
                 "migration_coverage_pct": migration["coverage_pct"],
                 "canonical_rule_coverage_pct": canonical["coverage_pct"],
-                "observed_v2_mapping_pct": observed.get("v2_mapped_row_pct"),
+                "observed_v3_mapping_pct": observed.get(
+                    "v3_mapped_row_pct", observed.get("v2_mapped_row_pct")
+                ),
                 "factor_coverage_pct": factor_report.get("coverage_pct"),
             },
             ensure_ascii=True,

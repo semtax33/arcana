@@ -79,6 +79,76 @@ class Comparability(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class LossState(StrEnum):
+    PRESERVED = "PRESERVED"
+    LOST = "LOST"
+    UNKNOWN = "UNKNOWN"
+
+
+class UnmappedCategory(StrEnum):
+    UNKNOWN_LABEL = "UNKNOWN_LABEL"
+    KNOWN_CONCEPT_UNKNOWN_EXPRESSION = "KNOWN_CONCEPT_UNKNOWN_EXPRESSION"
+    STRUCTURAL_PARSE_FAILURE = "STRUCTURAL_PARSE_FAILURE"
+    PERIOD_AMBIGUITY = "PERIOD_AMBIGUITY"
+    SCOPE_AMBIGUITY = "SCOPE_AMBIGUITY"
+    DIMENSIONAL_MEMBER = "DIMENSIONAL_MEMBER"
+    SUBTOTAL_OR_PRESENTATION_ONLY = "SUBTOTAL_OR_PRESENTATION_ONLY"
+    DISCLOSURE_SPECIFIC = "DISCLOSURE_SPECIFIC"
+    ENTITY_SPECIFIC_EXTENSION = "ENTITY_SPECIFIC_EXTENSION"
+    NON_FINANCIAL = "NON_FINANCIAL"
+    LOW_INFORMATION = "LOW_INFORMATION"
+
+
+class DisclosureSourceType(StrEnum):
+    FINANCIAL_STATEMENT = "FINANCIAL_STATEMENT"
+    FINANCIAL_NOTES = "FINANCIAL_NOTES"
+    BUSINESS_CONTENT = "BUSINESS_CONTENT"
+
+
+class NarrativeRelation(StrEnum):
+    REPORTED = "REPORTED"
+    BALANCE = "BALANCE"
+    INCURRED = "INCURRED"
+    PAID = "PAID"
+    ACQUIRED = "ACQUIRED"
+    DISPOSED = "DISPOSED"
+    INCREASED_TO = "INCREASED_TO"
+    DECREASED_TO = "DECREASED_TO"
+    REVENUE = "REVENUE"
+    ORDER_BACKLOG = "ORDER_BACKLOG"
+    CAPACITY = "CAPACITY"
+    PRODUCTION = "PRODUCTION"
+    UTILIZATION = "UTILIZATION"
+    PLANNED = "PLANNED"
+    UNKNOWN = "UNKNOWN"
+
+
+class Qualifier(StrEnum):
+    ACTUAL = "ACTUAL"
+    PLAN = "PLAN"
+    FORECAST = "FORECAST"
+    MAXIMUM = "MAXIMUM"
+    MINIMUM = "MINIMUM"
+    APPROXIMATE = "APPROXIMATE"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class SemanticContext:
+    """Hierarchical context used by deterministic semantic constraints."""
+
+    source_type: DisclosureSourceType = DisclosureSourceType.FINANCIAL_STATEMENT
+    statement_type: StatementType = StatementType.UNKNOWN
+    section_path: tuple[str, ...] = ()
+    parent_account_path: tuple[str, ...] = ()
+    table_kind: str = ""
+    sector_code: str = ""
+    industry_group_code: str = ""
+    scope: Scope = Scope.UNKNOWN
+    accounting_regime: AccountingRegimeFamily = AccountingRegimeFamily.UNKNOWN
+    period_label: str = ""
+
+
 class NodeKind(StrEnum):
     DOCUMENT = "DOCUMENT"
     SECTION = "SECTION"
@@ -264,6 +334,16 @@ class MatchProvenance:
 
 
 @dataclass(frozen=True)
+class SemanticLoss:
+    granularity: LossState = LossState.UNKNOWN
+    measurement_basis: LossState = LossState.UNKNOWN
+    scope: LossState = LossState.UNKNOWN
+    period_semantics: LossState = LossState.UNKNOWN
+    lost_qualifiers: tuple[str, ...] = ()
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class ReportedFact:
     identity: FactIdentity
     statement_type: StatementType
@@ -295,6 +375,7 @@ class CanonicalFact:
     reported_fact: ReportedFact | None = None
     provenance: MatchProvenance | None = None
     relations: tuple[DocumentRelation, ...] = ()
+    semantic_loss: SemanticLoss = field(default_factory=SemanticLoss)
 
 
 @dataclass(frozen=True)
@@ -306,4 +387,4 @@ class HarmonizedFact:
     canonical_facts: tuple[CanonicalFact, ...]
     bridge_rule_id: str
     provenance: MatchProvenance | None = None
-
+    semantic_loss: SemanticLoss = field(default_factory=SemanticLoss)

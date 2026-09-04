@@ -12,6 +12,7 @@ import yaml
 from .models import (
     AccountingRegimeFamily,
     Comparability,
+    DisclosureSourceType,
     DocumentDialect,
     RelationType,
 )
@@ -53,6 +54,10 @@ class RuleApplicability:
     statement_types: tuple[str, ...] = ("ANY",)
     accounting_regimes: tuple[AccountingRegimeFamily, ...] = ()
     document_dialects: tuple[DocumentDialect, ...] = ()
+    source_types: tuple[DisclosureSourceType, ...] = ()
+    sector_codes: tuple[str, ...] = ()
+    industry_group_codes: tuple[str, ...] = ()
+    table_kinds: tuple[str, ...] = ()
     effective_from: date | None = None
     effective_to: date | None = None
 
@@ -156,6 +161,10 @@ V2_APPLIES_KEYS = {
     "statement_types",
     "accounting_regimes",
     "document_dialects",
+    "source_types",
+    "sector_codes",
+    "industry_group_codes",
+    "table_kinds",
     "effective_from",
     "effective_to",
 }
@@ -408,6 +417,12 @@ def compile_v2_mapping_rule(
             document_dialects=_enum_tuple(
                 DocumentDialect, applies.get("document_dialects")
             ),
+            source_types=_enum_tuple(
+                DisclosureSourceType, applies.get("source_types")
+            ),
+            sector_codes=_tuple(applies.get("sector_codes")),
+            industry_group_codes=_tuple(applies.get("industry_group_codes")),
+            table_kinds=_tuple(applies.get("table_kinds")),
             effective_from=_date(applies.get("effective_from")),
             effective_to=_date(applies.get("effective_to")),
         ),

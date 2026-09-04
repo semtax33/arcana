@@ -1,7 +1,7 @@
-schema_version: 2
-engine: arcana-financial-semantic
+schema_version: 3
+engine: arcana-financial-semantic-v3
 profile: kr_all_regimes
-description: Deterministic typed semantic rules for K-GAAP, general K-GAAP and K-IFRS filings.
+description: Deterministic typed semantic rules for K-GAAP, general K-GAAP and K-IFRS filings; v3 adds disclosure relations, unmapped taxonomy, semantic-loss and invariant audit layers while preserving every migrated v2 rule.
 migration:
   mapping_source_rule_count: 126
   mapping_migrated_rule_count: 126
@@ -11,6 +11,8 @@ migration:
   comment_migrated_rule_count: 9
   native_k_gaap_rule_count: 26
   native_common_rule_count: 3
+  native_v3_rule_count: 34
+  native_v3_sign_policy_count: 6
   sources:
   - path: data-lake/meta/rules/kr_mapping.yaml
     sha256: 545a8f5349659b0f8f484b592e280e2e884cd1b1639cf2a296886adbfb2b6623
@@ -3701,6 +3703,464 @@ rule_sets:
       canonical_id: WC_CHANGE
       comparability: AGGREGATION_DIFFERENCE
     reason: 운전자본 변동 aggregate 직접 매핑
+  - id: v3_bs_financial_loan_receivables
+    version: 3
+    phase: normalize
+    priority: 780
+    applies:
+      statement_types: [BS]
+    match:
+      label:
+        exact_any: [대출채권, 대출금, 원화대출금, 신용카드채권, 보험약관대출금, 부동산담보대출금, 신용대출금]
+    emit:
+      canonical_id: LOAN_RECEIVABLES_FINANCIAL
+      comparability: EXACT
+    reason: 금융업 대출채권을 매출채권과 혼동하지 않고 독립 보존
+  - id: v3_bs_financial_deposit_liabilities
+    version: 3
+    phase: normalize
+    priority: 780
+    applies:
+      statement_types: [BS]
+    match:
+      label:
+        exact_any: [예수부채, 원화예수금, 요구불예금, 기한부예금, 양도성예금증서]
+    emit:
+      canonical_id: DEPOSIT_LIABILITIES_FINANCIAL
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 금융업 고객 예수부채를 일반 기타채무와 분리
+  - id: v3_bs_financial_sector_generic_deposits
+    version: 3
+    phase: normalize
+    priority: 790
+    applies:
+      statement_types: [BS]
+      source_types: [FINANCIAL_STATEMENT]
+      sector_codes: ['40', FINANCIALS]
+    match:
+      label:
+        exact_any: [예수금]
+    emit:
+      canonical_id: DEPOSIT_LIABILITIES_FINANCIAL
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 금융 섹터의 재무상태표에서만 일반 예수금을 고객 예수부채로 판정
+  - id: v3_bs_available_for_sale_securities
+    version: 3
+    phase: normalize
+    priority: 780
+    applies:
+      statement_types: [BS]
+    match:
+      label:
+        exact_any: [매도가능증권, 매도가능유가증권]
+    emit:
+      canonical_id: AVAILABLE_FOR_SALE_SECURITIES
+      comparability: MEASUREMENT_DIFFERENCE
+    reason: 매도가능 분류와 측정기준을 독립 보존
+  - id: v3_bs_held_to_maturity_securities
+    version: 3
+    phase: normalize
+    priority: 780
+    applies:
+      statement_types: [BS]
+    match:
+      label:
+        exact_any: [만기보유증권, 만기보유유가증권]
+    emit:
+      canonical_id: HELD_TO_MATURITY_SECURITIES
+      comparability: MEASUREMENT_DIFFERENCE
+    reason: 만기보유 분류와 측정기준을 독립 보존
+  - id: v3_bs_trading_securities
+    version: 3
+    phase: normalize
+    priority: 780
+    applies:
+      statement_types: [BS]
+    match:
+      label:
+        exact_any: [단기매매증권, 단기매매유가증권]
+    emit:
+      canonical_id: TRADING_SECURITIES
+      comparability: MEASUREMENT_DIFFERENCE
+    reason: 단기매매 목적 유가증권 독립 보존
+  - id: v3_bs_investment_securities
+    version: 3
+    phase: normalize
+    priority: 750
+    applies:
+      statement_types: [BS]
+    match:
+      label:
+        exact_any: [투자유가증권, 국공채, 특수채, 수익증권]
+    emit:
+      canonical_id: INVESTMENT_SECURITIES
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 구체적 측정 분류가 없는 투자유가증권 보존
+  - id: v3_bs_derivative_assets
+    version: 3
+    phase: normalize
+    priority: 780
+    applies:
+      statement_types: [BS]
+    match:
+      label:
+        exact_any: [파생상품자산, 파생금융자산]
+    emit:
+      canonical_id: DERIVATIVE_ASSETS
+      comparability: EXACT
+    reason: 파생상품 자산 잔액
+  - id: v3_bs_derivative_liabilities
+    version: 3
+    phase: normalize
+    priority: 780
+    applies:
+      statement_types: [BS]
+    match:
+      label:
+        exact_any: [파생상품부채, 파생금융부채]
+    emit:
+      canonical_id: DERIVATIVE_LIABILITIES
+      comparability: EXACT
+    reason: 파생상품 부채 잔액
+  - id: v3_bs_insurance_contract_liabilities
+    version: 3
+    phase: normalize
+    priority: 780
+    applies:
+      statement_types: [BS]
+    match:
+      label:
+        exact_any: [보험료적립금, 책임준비금, 보험계약부채]
+    emit:
+      canonical_id: INSURANCE_CONTRACT_LIABILITIES
+      comparability: MEASUREMENT_DIFFERENCE
+    reason: 보험 준비금의 시대별 측정 차이를 보존
+  - id: v3_bs_bank_cash_and_due
+    version: 3
+    phase: normalize
+    priority: 770
+    applies:
+      statement_types: [BS]
+    match:
+      label:
+        exact_any: [현금및예치금, 현금과예치금]
+    emit:
+      canonical_id: BANK_CASH_AND_DUE_FROM_BANKS
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 금융업 예치금을 일반 현금성자산과 혼동하지 않음
+  - id: v3_bs_financial_borrowings
+    version: 3
+    phase: normalize
+    priority: 770
+    applies:
+      statement_types: [BS]
+    match:
+      label:
+        exact_any: [차입부채, 원화사채, 사모사채, 콜머니, 환매조건부채권매도]
+    emit:
+      canonical_id: FINANCIAL_BORROWINGS
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 유동성 구분이 불명확한 금융업 차입부채 보존
+  - id: v3_is_interest_income
+    version: 3
+    phase: normalize
+    priority: 770
+    applies:
+      statement_types: [IS, CIS]
+    match:
+      label:
+        exact_any: [이자수익, 대출채권이자, 수입이자]
+    emit:
+      canonical_id: INTEREST_INCOME
+      amount_policy: abs
+      comparability: EXACT
+    reason: 이자수익을 총매출로 합치지 않고 독립 보존
+  - id: v3_is_insurance_premium_revenue
+    version: 3
+    phase: normalize
+    priority: 770
+    applies:
+      statement_types: [IS, CIS]
+    match:
+      label:
+        exact_any: [보험료수익, 수입보험료, 개인보험료]
+    emit:
+      canonical_id: INSURANCE_PREMIUM_REVENUE
+      amount_policy: abs
+      comparability: MEASUREMENT_DIFFERENCE
+    reason: 보험료 수익을 보험 회계 측정 차이와 함께 보존
+  - id: v3_is_insurance_claims_expense
+    version: 3
+    phase: normalize
+    priority: 770
+    applies:
+      statement_types: [IS, CIS]
+    match:
+      label:
+        exact_any: [지급보험금, 보험금비용]
+    emit:
+      canonical_id: INSURANCE_CLAIMS_EXPENSE
+      amount_policy: abs
+      comparability: MEASUREMENT_DIFFERENCE
+    reason: 보험금 비용 독립 보존
+  - id: v3_is_construction_revenue
+    version: 3
+    phase: normalize
+    priority: 770
+    applies:
+      statement_types: [IS, CIS]
+    match:
+      label:
+        exact_any: [공사수익, 공사매출액, 도급공사수익]
+    emit:
+      canonical_id: CONSTRUCTION_REVENUE
+      amount_policy: abs
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 건설계약 수익 구성요소
+  - id: v3_is_construction_cost
+    version: 3
+    phase: normalize
+    priority: 770
+    applies:
+      statement_types: [IS, CIS]
+    match:
+      label:
+        exact_any: [공사원가, 공사매출원가, 도급공사원가]
+    emit:
+      canonical_id: CONSTRUCTION_COST
+      amount_policy: abs
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 건설계약 원가 구성요소
+  - id: v3_is_product_revenue
+    version: 3
+    phase: normalize
+    priority: 760
+    applies:
+      statement_types: [IS, CIS]
+    match:
+      label:
+        exact_any: [제품매출액, 상품매출액, 매출액영업수익]
+    emit:
+      canonical_id: PRODUCT_REVENUE
+      amount_policy: abs
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 총매출과 중복 가능한 매출 구성요소로 독립 보존
+  - id: v3_is_product_cogs
+    version: 3
+    phase: normalize
+    priority: 760
+    applies:
+      statement_types: [IS, CIS]
+    match:
+      label:
+        exact_any: [제품매출원가, 상품매출원가, 매출원가영업원가]
+    emit:
+      canonical_id: PRODUCT_COGS
+      amount_policy: abs
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 총매출원가와 중복 가능한 원가 구성요소로 독립 보존
+  - id: v3_cf_investing_gross_inflow
+    version: 3
+    phase: normalize
+    priority: 780
+    applies:
+      statement_types: [CF]
+    match:
+      label:
+        exact_any: [투자활동으로인한현금유입액, 투자활동현금유입액]
+    emit:
+      canonical_id: CFI_GROSS_INFLOW
+      amount_policy: abs
+      cash_direction: inflow
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: 순투자활동현금흐름과 구분되는 총유입
+  - id: v3_cf_investing_gross_outflow
+    version: 3
+    phase: normalize
+    priority: 780
+    applies:
+      statement_types: [CF]
+    match:
+      label:
+        exact_any: [투자활동으로인한현금유출액, 투자활동현금유출액]
+    emit:
+      canonical_id: CFI_GROSS_OUTFLOW
+      amount_policy: abs
+      cash_direction: outflow
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: 순투자활동현금흐름과 구분되는 총유출
+  - id: v3_cf_financing_gross_inflow
+    version: 3
+    phase: normalize
+    priority: 780
+    applies:
+      statement_types: [CF]
+    match:
+      label:
+        exact_any: [재무활동으로인한현금유입액, 재무활동현금유입액]
+    emit:
+      canonical_id: CFF_GROSS_INFLOW
+      amount_policy: abs
+      cash_direction: inflow
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: 순재무활동현금흐름과 구분되는 총유입
+  - id: v3_cf_financing_gross_outflow
+    version: 3
+    phase: normalize
+    priority: 780
+    applies:
+      statement_types: [CF]
+    match:
+      label:
+        exact_any: [재무활동으로인한현금유출액, 재무활동현금유출액]
+    emit:
+      canonical_id: CFF_GROSS_OUTFLOW
+      amount_policy: abs
+      cash_direction: outflow
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: 순재무활동현금흐름과 구분되는 총유출
+  - id: v3_cf_non_cash_expense_addback
+    version: 3
+    phase: normalize
+    priority: 770
+    applies:
+      statement_types: [CF]
+    match:
+      label:
+        exact_any: [현금의유출이없는비용등의가산, 현금유출없는비용등가산]
+    emit:
+      canonical_id: NON_CASH_EXPENSE_ADD_BACK
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 간접법 비현금 비용 조정 총액
+  - id: v3_cf_non_cash_income_deduction
+    version: 3
+    phase: normalize
+    priority: 770
+    applies:
+      statement_types: [CF]
+    match:
+      label:
+        exact_any: [현금의유입이없는수익등의차감, 현금유입없는수익등차감]
+    emit:
+      canonical_id: NON_CASH_INCOME_DEDUCTION
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 간접법 비현금 수익 조정 총액
+  - id: v3_cf_legacy_cash_begin
+    version: 3
+    phase: normalize
+    priority: 790
+    applies:
+      statement_types: [CF]
+    match:
+      label:
+        exact_any: [기초의현금, 기초현금]
+    emit:
+      canonical_id: CF_CASH_BEGIN
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: K-GAAP 기초 현금 표현
+  - id: v3_cf_legacy_cash_end
+    version: 3
+    phase: normalize
+    priority: 790
+    applies:
+      statement_types: [CF]
+    match:
+      label:
+        exact_any: [기말의현금, 기말현금]
+    emit:
+      canonical_id: CF_CASH_END
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: K-GAAP 기말 현금 표현
+  - id: v3_bs_kgaap_consolidated_capital_surplus
+    version: 3
+    phase: normalize
+    priority: 785
+    applies: *id001
+    match:
+      label:
+        exact_any: [연결자본잉여금, 기타자본잉여금]
+    emit:
+      canonical_id: CAPITAL_SURPLUS
+      comparability: AGGREGATION_DIFFERENCE
+    reason: K-GAAP 연결 자본잉여금 표현
+  - id: v3_bs_kgaap_consolidated_retained_earnings
+    version: 3
+    phase: normalize
+    priority: 785
+    applies: *id001
+    match:
+      label:
+        exact_any: [연결이익잉여금, 미처분연결이익잉여금]
+    emit:
+      canonical_id: RETAINED_EARNINGS
+      comparability: AGGREGATION_DIFFERENCE
+    reason: K-GAAP 연결 이익잉여금 표현
+  - id: v3_bs_kgaap_consolidated_equity_adjustments
+    version: 3
+    phase: normalize
+    priority: 785
+    applies: *id001
+    match:
+      label:
+        exact_any: [연결자본조정, 연결기타포괄손익누계액]
+    emit:
+      canonical_id: EQUITY_ADJUSTMENTS
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: K-GAAP 연결 자본조정 표현
+  - id: v3_bs_kgaap_parent_equity
+    version: 3
+    phase: normalize
+    priority: 785
+    applies: *id001
+    match:
+      label:
+        exact_any: [지배회사지분, 지배주주지분]
+    emit:
+      canonical_id: EAOP
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: K-GAAP 지배회사 지분 표시
+  - id: v3_bs_kgaap_outside_shareholder_equity
+    version: 3
+    phase: normalize
+    priority: 785
+    applies: *id001
+    match:
+      label:
+        exact_any: [외부주주지분, 소수주주지분]
+    emit:
+      canonical_id: NEAOP
+      comparability: PRESENTATION_ONLY_DIFFERENCE
+    reason: K-GAAP 외부주주·소수주주 지분 표시
+  - id: v3_cf_ppe_component_acquisition
+    version: 3
+    phase: normalize
+    priority: 760
+    applies:
+      statement_types: [CF]
+    match:
+      label:
+        exact_any: [토지의취득, 건물의취득, 구축물의취득, 기계장치의취득, 차량운반구의취득, 비품의취득, 건설중인자산의증가]
+    emit:
+      canonical_id: PPE_ACQUISITION_COMPONENT
+      amount_policy: abs
+      cash_direction: outflow
+      comparability: AGGREGATION_DIFFERENCE
+    reason: CAPEX 총액과 중복 가능한 유형자산 항목별 취득 지출
+  - id: v3_cf_ppe_component_disposal
+    version: 3
+    phase: normalize
+    priority: 760
+    applies:
+      statement_types: [CF]
+    match:
+      label:
+        exact_any: [토지의처분, 건물의처분, 구축물의처분, 기계장치의처분, 차량운반구의처분, 비품의처분]
+    emit:
+      canonical_id: PPE_DISPOSAL_COMPONENT_PROCEEDS
+      amount_policy: abs
+      cash_direction: inflow
+      comparability: AGGREGATION_DIFFERENCE
+    reason: 처분손익과 구분되는 유형자산 항목별 처분 현금유입
   context:
   - id: ignore_bs_totals
     version: 2
@@ -4867,3 +5327,21 @@ sign_policy:
     LEASE_REPAYMENT:
       amount_policy: abs
       cash_direction: outflow
+    CFI_GROSS_INFLOW:
+      amount_policy: abs
+      cash_direction: inflow
+    CFI_GROSS_OUTFLOW:
+      amount_policy: abs
+      cash_direction: outflow
+    CFF_GROSS_INFLOW:
+      amount_policy: abs
+      cash_direction: inflow
+    CFF_GROSS_OUTFLOW:
+      amount_policy: abs
+      cash_direction: outflow
+    PPE_ACQUISITION_COMPONENT:
+      amount_policy: abs
+      cash_direction: outflow
+    PPE_DISPOSAL_COMPONENT_PROCEEDS:
+      amount_policy: abs
+      cash_direction: inflow

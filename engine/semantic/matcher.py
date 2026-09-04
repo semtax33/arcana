@@ -14,6 +14,7 @@ from spacy.tokens import Doc
 from .models import (
     AccountingRegimeFamily,
     Comparability,
+    DisclosureSourceType,
     DocumentDialect,
     MatchProvenance,
     RelationType,
@@ -239,6 +240,10 @@ class SemanticRuleExecutor:
         dialect: DocumentDialect,
         effective_at: date | None,
         relations: frozenset[RelationType],
+        source_type: DisclosureSourceType,
+        sector_code: str,
+        industry_group_code: str,
+        table_kind: str,
     ) -> bool:
         if not any(
             self.statement_type_compatible(rule_type, statement_type)
@@ -248,6 +253,14 @@ class SemanticRuleExecutor:
         if rule.applies.accounting_regimes and regime not in rule.applies.accounting_regimes:
             return False
         if rule.applies.document_dialects and dialect not in rule.applies.document_dialects:
+            return False
+        if rule.applies.source_types and source_type not in rule.applies.source_types:
+            return False
+        if rule.applies.sector_codes and sector_code not in rule.applies.sector_codes:
+            return False
+        if rule.applies.industry_group_codes and industry_group_code not in rule.applies.industry_group_codes:
+            return False
+        if rule.applies.table_kinds and table_kind not in rule.applies.table_kinds:
             return False
         if rule.applies.effective_from and (
             effective_at is None or effective_at < rule.applies.effective_from
@@ -275,6 +288,10 @@ class SemanticRuleExecutor:
         dialect: DocumentDialect = DocumentDialect.UNKNOWN,
         effective_at: date | None = None,
         relations: Iterable[RelationType] = (),
+        source_type: DisclosureSourceType = DisclosureSourceType.FINANCIAL_STATEMENT,
+        sector_code: str = "",
+        industry_group_code: str = "",
+        table_kind: str = "",
     ) -> SemanticMatch:
         fs_type = str(statement_type or "UNKNOWN")
         normalized_label = self.text_normalizer(label)
@@ -291,6 +308,10 @@ class SemanticRuleExecutor:
                 dialect=dialect,
                 effective_at=effective_at,
                 relations=relation_set,
+                source_type=source_type,
+                sector_code=str(sector_code or ""),
+                industry_group_code=str(industry_group_code or ""),
+                table_kind=str(table_kind or ""),
             ):
                 continue
             matched: list[str] = []
@@ -337,6 +358,10 @@ class SemanticRuleExecutor:
                     "statement_type": fs_type,
                     "accounting_regime": regime.value,
                     "document_dialect": dialect.value,
+                    "source_type": source_type.value,
+                    "sector_code": str(sector_code or ""),
+                    "industry_group_code": str(industry_group_code or ""),
+                    "table_kind": str(table_kind or ""),
                 },
                 captures={
                     "label": label,
@@ -376,6 +401,10 @@ class SemanticRuleExecutor:
                 "statement_type": fs_type,
                 "accounting_regime": regime.value,
                 "document_dialect": dialect.value,
+                "source_type": source_type.value,
+                "sector_code": str(sector_code or ""),
+                "industry_group_code": str(industry_group_code or ""),
+                "table_kind": str(table_kind or ""),
             },
             captures={"label": label, "context": context},
             assertions={"canonical_id_exists": True},

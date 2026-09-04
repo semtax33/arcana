@@ -68,7 +68,7 @@ def migration_coverage(bundle_path: str | Path) -> MigrationCoverage:
     )
     sign_migrated = len(
         ((data.get("sign_policy", {}) or {}).get("canonical_policies", {}) or {})
-    )
+    ) - int(migration.get("native_v3_sign_policy_count", 0) or 0)
     return MigrationCoverage(
         mapping_source_rules=int(migration.get("mapping_source_rule_count", 0)),
         mapping_migrated_rules=int(migration.get("mapping_migrated_rule_count", 0)),
@@ -266,6 +266,11 @@ def observed_mapping_coverage(
                     row.get("accounting_regime", "UNKNOWN") or "UNKNOWN",
                     row.get("document_dialect", "UNKNOWN") or "UNKNOWN",
                     row.get("period", "") if date_sensitive else "",
+                    row.get("source_type", "FINANCIAL_STATEMENT")
+                    or "FINANCIAL_STATEMENT",
+                    row.get("sector_code", "") or "",
+                    row.get("industry_group_code", "") or "",
+                    row.get("table_kind", "") or "",
                 )
                 result = result_cache.get(key)
                 if result is None:
@@ -338,7 +343,8 @@ def observed_mapping_coverage(
                         )
 
     row_count = totals["row_count"]
-    return {
+    result = {
+        "semantic_engine_version": 3,
         "input_dir": str(Path(input_dir).resolve()),
         "file_count": len(paths),
         **totals,
@@ -399,6 +405,19 @@ def observed_mapping_coverage(
         ],
         "newly_mapped_examples": newly_mapped_examples,
     }
+    # Keep v2 names as compatibility aliases for downstream readers while the
+    # v3 report uses version-accurate terminology.
+    result.update(
+        {
+            "v3_mapped_row_count": totals["v2_mapped_row_count"],
+            "v3_mapped_row_pct": result["v2_mapped_row_pct"],
+            "v3_mapped_absolute_amount_pct": result[
+                "v2_mapped_absolute_amount_pct"
+            ],
+            "top_v3_rule_hits": result["top_v2_rule_hits"],
+        }
+    )
+    return result
 
 
 def load_factor_coverage(
@@ -440,7 +459,7 @@ def build_coverage_report(
     migration = migration_coverage(bundle_path)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "semantic_engine_version": 2,
+        "semantic_engine_version": 3,
         "migration": {**asdict(migration), "coverage_pct": migration.coverage_pct},
         "migration_integrity": migration_integrity(
             bundle_path,
