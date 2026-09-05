@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import json
 from datetime import date, datetime
 
@@ -91,16 +92,17 @@ def download_all_report_metadata(args: argparse.Namespace) -> None:
 
 def download_all_prices(args: argparse.Namespace) -> None:
     result = fetch_all_prices(
-        None,
+        _stock_codes(),
         args.offset,
         args.start_date or DEFAULT_KR_PRICE_START_DATE,
         args.end_date or date.today().strftime("%Y%m%d"),
     )
+    summary = result if isinstance(result, Mapping) else {}
     print(
         "[DONE] KR price download "
-        f"provider={result.get('provider', '-')} rows={result.get('rows', 0):,} "
-        f"files={result.get('files', 0):,} "
-        f"range={result.get('min_date') or '-'}..{result.get('max_date') or '-'}",
+        f"provider={summary.get('provider', '-')} rows={summary.get('rows', 0):,} "
+        f"files={summary.get('files', 0):,} "
+        f"range={summary.get('min_date') or '-'}..{summary.get('max_date') or '-'}",
         flush=True,
     )
 

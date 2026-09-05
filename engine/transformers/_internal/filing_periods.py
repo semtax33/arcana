@@ -109,6 +109,7 @@ def attach_report_metadata(
     metadata_path: str | Path = REPORT_METADATA_PATH,
     *,
     source_type: str = "statement",
+    fallback_to_period_end: bool = True,
 ) -> pd.DataFrame:
     if snapshot_df.empty:
         return snapshot_df
@@ -128,8 +129,12 @@ def attach_report_metadata(
 
     metadata_df = load_report_metadata(metadata_path, source_type=source_type)
     if metadata_df.empty:
-        df["report_date"] = pd.to_datetime(df.get("report_date", fallback_report_date), errors="coerce")
-        df["report_date"] = df["report_date"].fillna(fallback_report_date)
+        default_report_date = fallback_report_date if fallback_to_period_end else pd.NaT
+        df["report_date"] = pd.to_datetime(
+            df.get("report_date", default_report_date), errors="coerce"
+        )
+        if fallback_to_period_end:
+            df["report_date"] = df["report_date"].fillna(fallback_report_date)
         return df
 
     keep_columns = [
@@ -137,9 +142,12 @@ def attach_report_metadata(
         for column in ["stock_code", "fiscal_year", "fiscal_month", "report_date", "rcept_no", "report_name", "source_url"]
         if column in metadata_df.columns
     ]
+    sort_columns = [
+        column for column in ["report_date", "rcept_no"] if column in keep_columns
+    ]
     metadata_df = (
         metadata_df[keep_columns]
-        .sort_values(["report_date", "rcept_no"], kind="stable")
+        .sort_values(sort_columns, kind="stable")
         .drop_duplicates(["stock_code", "fiscal_year", "fiscal_month"], keep="last")
     )
     df = df.drop(columns=["report_date", "rcept_no", "report_name", "source_url"], errors="ignore")
@@ -149,7 +157,9 @@ def attach_report_metadata(
         on=["stock_code", "fiscal_year", "fiscal_month"],
         how="left",
     )
-    df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce").fillna(fallback_report_date)
+    df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce")
+    if fallback_to_period_end:
+        df["report_date"] = df["report_date"].fillna(fallback_report_date)
     return df
 
 

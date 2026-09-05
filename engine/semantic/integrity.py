@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from engine.semantic.manifest import resolve_rule_bundle
+
 
 VALID_AMOUNT_POLICIES = {"as_reported", "abs", "neg_abs"}
 VALID_CASH_DIRECTIONS = {"", "inflow", "outflow"}
@@ -110,7 +112,7 @@ def _expected_cash_effect(normalized_amount: Decimal, direction: str) -> Decimal
 
 
 def static_sign_policy_audit(path: str | Path) -> dict[str, Any]:
-    bundle = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    bundle = yaml.safe_load(resolve_rule_bundle(path).read_text(encoding="utf-8")) or {}
     is_v2 = int(bundle.get("schema_version", 1) or 1) >= 2
     data = bundle.get("sign_policy", {}) or {} if is_v2 else bundle
     defaults = data.get("defaults", {}) or {}

@@ -28,6 +28,7 @@ from engine.semantic import (
     detect_document_dialect,
     detect_scope,
     load_semantic_mapping_rules,
+    resolve_rule_bundle,
 )
 from engine.transformers._internal.statement_files import (
     STATEMENT_PERIOD_COLUMNS,
@@ -758,7 +759,7 @@ def detect_financial_document_semantics(
         for item in detection.evidence
     ]
     return {
-        "semantic_engine_version": "3",
+        "semantic_engine_version": "4",
         "accounting_regime": detection.regime.family.value,
         "accounting_regime_confidence": format(detection.confidence, ".6f"),
         "accounting_regime_evidence": json.dumps(
@@ -1253,7 +1254,7 @@ def _load_comment_extraction_rules_cached(path_key: tuple[str, ...]) -> tuple[di
     all_rules: list[dict[str, Any]] = []
 
     for path in path_key:
-        path = Path(path)
+        path = resolve_rule_bundle(path)
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
@@ -1789,7 +1790,7 @@ class ContextEngine:
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ContextEngine":
-        with Path(path).open("r", encoding="utf-8") as f:
+        with resolve_rule_bundle(path).open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
         if int(data.get("schema_version", 1) or 1) >= 2:
@@ -2024,6 +2025,7 @@ class SignPolicyEngine:
             print(f"[WARN] sign policy file not found: {p}; using defaults")
             return cls({})
 
+        p = resolve_rule_bundle(p)
         with p.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
@@ -2163,7 +2165,7 @@ def load_mapping_rules(paths: list[str | Path]) -> list[dict[str, Any]]:
     all_rules: list[dict[str, Any]] = []
 
     for path in paths:
-        path = Path(path)
+        path = resolve_rule_bundle(path)
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
@@ -2522,7 +2524,7 @@ class RuleEngine:
                         "context_reason": safe_str(row.get("context_reason")),
                         "amount_raw": safe_str(row.get("amount_raw")),
                         "unit_factor": "1" if result.canonical_account_id in EPS_CANONICAL_IDS else safe_str(row.get("unit_factor")),
-                        "semantic_engine_version": safe_str(row.get("semantic_engine_version", "3")),
+                        "semantic_engine_version": safe_str(row.get("semantic_engine_version", "4")),
                         "accounting_regime": safe_str(row.get("accounting_regime", "UNKNOWN")),
                         "accounting_regime_confidence": safe_str(row.get("accounting_regime_confidence")),
                         "accounting_regime_evidence": safe_str(row.get("accounting_regime_evidence")),

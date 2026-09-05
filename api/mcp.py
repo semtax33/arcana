@@ -15,6 +15,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.params import Param
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
+from pydantic_core import PydanticUndefined
 
 from api.main import app
 
@@ -385,7 +386,7 @@ def _parameter_default(parameter: inspect.Parameter) -> tuple[bool, Any]:
     if default is inspect.Signature.empty:
         return True, None
     if isinstance(default, Param):
-        if default.default is Ellipsis:
+        if default.default is Ellipsis or default.default is PydanticUndefined:
             return True, None
         return False, default.default
     return False, default

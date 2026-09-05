@@ -14,7 +14,7 @@ from engine.semantic.integrity import audit_debug_corpus, static_sign_policy_aud
 
 
 NORMALIZED = PROJECT_ROOT / "data-lake" / "silver" / "dart" / "normalized"
-SIGN_POLICY = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "semantic_kr_v2.yaml"
+SIGN_POLICY = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "semantic_kr_current.yaml"
 OUTPUT = PROJECT_ROOT / "deliverables" / "semantic_value_integrity_audit.json"
 
 

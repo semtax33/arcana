@@ -58,9 +58,11 @@ industry-group registry를 주입할 수 있고, 없는 경우 sector-gated 규�
 
 ## v3 규칙 문법
 
-실행 bundle은 경로 호환을 위해 파일명은
-[`semantic_kr_v2.yaml`](../data-lake/meta/rules/semantic_kr_v2.yaml)을 유지하지만,
-내부 `schema_version`과 `engine`은 각각 `3`, `arcana-financial-semantic-v3`다.
+불변 실행 bundle은
+[`semantic_kr_v3.yaml`](../data-lake/meta/rules/semantic_kr_v3.yaml)이며,
+[`semantic_rule_manifest.json`](../data-lake/meta/rules/semantic_rule_manifest.json)이 checksum을
+검증해 활성 버전을 고른다. `semantic_kr_current.yaml`은 안정 alias이고, 과거
+`semantic_kr_v2.yaml` 경로는 호환 alias일 뿐이다.
 
 ```yaml
 - id: v3_bs_financial_sector_generic_deposits

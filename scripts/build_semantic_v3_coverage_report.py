@@ -22,7 +22,7 @@ from engine.semantic.integrity import static_sign_policy_audit
 from engine.transformers._internal.dart_filings import normalize_account_name
 
 
-RULES = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "semantic_kr_v2.yaml"
+RULES = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "semantic_kr_current.yaml"
 CANONICAL = PROJECT_ROOT / "data-lake" / "meta" / "CanonicalAccount.csv"
 OPERATIONAL = PROJECT_ROOT / "deliverables" / "semantic_rule_engine_coverage.json"
 HISTORICAL = PROJECT_ROOT / "deliverables" / "historical_semantic_audit_2000_2012.json"

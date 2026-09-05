@@ -1,0 +1,19 @@
+{
+  "manifest_version": 2,
+  "bundle_id": "arcana.semantic.kr.v5",
+  "schema": "arcana.semantic-rules/v4",
+  "engine": "arcana-financial-semantic-v5",
+  "hash": "sha256:44607a375f41f9096bacc0320beea2cfa9861b40b696e6f5737d0b2f1804a5ba",
+  "created_at": "2026-09-05T11:50:00+09:00",
+  "parent": {
+    "bundle_id": "arcana.semantic.kr.v3",
+    "hash": "sha256:9d3657de5bfa701eaf0f2d555a94f0076d94390a90824b2559b764beaa4f7927"
+  },
+  "golden_corpus_hash": "sha256:e4cead15e17e92c77e57671b25faad109d87cbfd92d8f34901bcf03f608dc54e",
+  "test_suite_hash": "sha256:b9f540d1e09fadfcd701a269d06f0bd0f0b6994a3b312b6c157e989cec067303",
+  "engine_version": 5,
+  "schema_version": 4,
+  "active_bundle": "semantic_kr_v5.yaml",
+  "sha256": "44607a375f41f9096bacc0320beea2cfa9861b40b696e6f5737d0b2f1804a5ba",
+  "immutability_policy": "A published bundle is never edited in place; create a new version and update this manifest after tests and audit pass."
+}

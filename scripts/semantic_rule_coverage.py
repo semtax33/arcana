@@ -18,6 +18,7 @@ from engine.semantic.coverage import (
     observed_mapping_coverage,
     write_coverage_report,
 )
+from engine.semantic.manifest import resolve_rule_bundle
 from engine.transformers._internal.dart_filings import (
     RuleEngine,
     amount_to_int,
@@ -26,7 +27,7 @@ from engine.transformers._internal.dart_filings import (
 )
 
 
-RULES = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "semantic_kr_v2.yaml"
+RULES = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "semantic_kr_current.yaml"
 CANONICAL = PROJECT_ROOT / "data-lake" / "meta" / "CanonicalAccount.csv"
 SIGN_POLICY = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "sign_policy_common.yaml"
 LEGACY_RULES = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "kr_mapping.yaml"
@@ -149,7 +150,17 @@ def main() -> None:
             engine,
             legacy_mapping_engine=legacy_engine,
             max_files=args.max_files,
+            progress=True,
         )
+    resolved_rules = resolve_rule_bundle(args.rules)
+    semantic_engine_version = 5 if resolved_rules.name == "semantic_kr_v5.yaml" else 4
+    if semantic_engine_version == 5 and observed:
+        observed["semantic_engine_version"] = 5
+        observed["v5_mapped_row_count"] = observed["v2_mapped_row_count"]
+        observed["v5_mapped_row_pct"] = observed["v2_mapped_row_pct"]
+        observed["v5_mapped_absolute_amount_pct"] = observed[
+            "v2_mapped_absolute_amount_pct"
+        ]
     factor = load_factor_coverage(args.factor_summary, args.factor_detail)
     report = build_coverage_report(
         bundle_path=args.rules,
@@ -159,6 +170,7 @@ def main() -> None:
         observed=observed,
         factor=factor,
     )
+    report["semantic_engine_version"] = semantic_engine_version
     report["historical_k_gaap_validation"] = historical_k_gaap_validation(
         args.historical_sample,
         engine,
@@ -174,8 +186,12 @@ def main() -> None:
                 "output": str(output),
                 "migration_coverage_pct": migration["coverage_pct"],
                 "canonical_rule_coverage_pct": canonical["coverage_pct"],
-                "observed_v3_mapping_pct": observed.get(
-                    "v3_mapped_row_pct", observed.get("v2_mapped_row_pct")
+                "observed_mapping_pct": observed.get(
+                    "v5_mapped_row_pct",
+                    observed.get(
+                        "v4_mapped_row_pct",
+                        observed.get("v3_mapped_row_pct", observed.get("v2_mapped_row_pct")),
+                    ),
                 ),
                 "factor_coverage_pct": factor_report.get("coverage_pct"),
             },

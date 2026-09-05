@@ -1,0 +1,3 @@
+schema_version: 4
+alias_of: semantic_rule_manifest.json
+description: Stable alias for the active Korean semantic rule bundle.

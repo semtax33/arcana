@@ -18,7 +18,7 @@ from engine.semantic import NarrativeAccountScanner, load_semantic_mapping_rules
 from engine.transformers._internal.dart_filings import normalize_account_name
 
 
-RULES = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "semantic_kr_v2.yaml"
+RULES = PROJECT_ROOT / "data-lake" / "meta" / "rules" / "semantic_kr_current.yaml"
 COMMENT_ROOT = PROJECT_ROOT / "data-lake" / "bronze" / "dart" / "finance-comment"
 OUTPUT = PROJECT_ROOT / "deliverables" / "narrative_account_candidate_audit.json"
 

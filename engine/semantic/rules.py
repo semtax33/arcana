@@ -9,6 +9,8 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import yaml
 
+from .manifest import resolve_rule_bundle
+
 from .models import (
     AccountingRegimeFamily,
     Comparability,
@@ -472,7 +474,7 @@ def load_semantic_mapping_rules(
     declared_source_count = 0
 
     for raw_path in paths:
-        path = Path(raw_path)
+        path = resolve_rule_bundle(raw_path)
         raw = path.read_bytes()
         data = yaml.safe_load(raw) or {}
         source_hash = sha256(raw).hexdigest()

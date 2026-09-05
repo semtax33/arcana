@@ -2,7 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import Enum
 from typing import Iterable, Mapping
+
+
+class NotTestableReason(str, Enum):
+    MISSING_REQUIRED_FACT = "missing_required_fact"
+    INCOMPATIBLE_PERIOD = "incompatible_period"
+    INCOMPATIBLE_SCOPE = "incompatible_scope"
+    INCOMPATIBLE_CURRENCY = "incompatible_currency"
+    INCOMPATIBLE_UNIT = "incompatible_unit"
+    ACCOUNTING_REGIME_MISMATCH = "accounting_regime_mismatch"
+    DIMENSIONAL_INCOMPLETENESS = "dimensional_incompleteness"
+    UNRESOLVED_CONTRA_RELATION = "unresolved_contra_relation"
+    INSUFFICIENT_STATEMENT_STRUCTURE = "insufficient_statement_structure"
 
 
 @dataclass(frozen=True)
@@ -17,6 +30,7 @@ class InvariantEvidence:
     candidate_only: bool = True
     reason: str = ""
     eligibility_checks: tuple[str, ...] = ()
+    not_testable_reason: NotTestableReason | None = None
 
 
 @dataclass(frozen=True)
@@ -28,6 +42,8 @@ class InvariantContext:
     accounting_basis_consistent: bool = True
     has_dimensional_duplicates: bool = False
     aggregation_complete: bool = False
+    contra_relations_resolved: bool = True
+    statement_structure_sufficient: bool = True
     qualifiers: tuple[str, ...] = ()
 
 
@@ -49,7 +65,9 @@ class AccountingInvariantAuditor:
             return None
 
     @staticmethod
-    def _eligibility(context: InvariantContext) -> tuple[bool, tuple[str, ...]]:
+    def _eligibility(
+        context: InvariantContext,
+    ) -> tuple[bool, tuple[str, ...], NotTestableReason | None]:
         checks = (
             f"scope_consistent:{context.scope_consistent}",
             f"period_consistent:{context.period_consistent}",
@@ -57,17 +75,27 @@ class AccountingInvariantAuditor:
             f"unit_normalized:{context.unit_normalized}",
             f"accounting_basis_consistent:{context.accounting_basis_consistent}",
             f"no_dimensional_duplicates:{not context.has_dimensional_duplicates}",
+            f"contra_relations_resolved:{context.contra_relations_resolved}",
+            f"statement_structure_sufficient:{context.statement_structure_sufficient}",
         )
-        return all(
+        reason = next(
             (
-                context.scope_consistent,
-                context.period_consistent,
-                context.currency_consistent,
-                context.unit_normalized,
-                context.accounting_basis_consistent,
-                not context.has_dimensional_duplicates,
-            )
-        ), checks
+                item
+                for condition, item in (
+                    (context.period_consistent, NotTestableReason.INCOMPATIBLE_PERIOD),
+                    (context.scope_consistent, NotTestableReason.INCOMPATIBLE_SCOPE),
+                    (context.currency_consistent, NotTestableReason.INCOMPATIBLE_CURRENCY),
+                    (context.unit_normalized, NotTestableReason.INCOMPATIBLE_UNIT),
+                    (context.accounting_basis_consistent, NotTestableReason.ACCOUNTING_REGIME_MISMATCH),
+                    (not context.has_dimensional_duplicates, NotTestableReason.DIMENSIONAL_INCOMPLETENESS),
+                    (context.contra_relations_resolved, NotTestableReason.UNRESOLVED_CONTRA_RELATION),
+                    (context.statement_structure_sufficient, NotTestableReason.INSUFFICIENT_STATEMENT_STRUCTURE),
+                )
+                if not condition
+            ),
+            None,
+        )
+        return reason is None, checks, reason
 
     def _compare(
         self,
@@ -77,16 +105,18 @@ class AccountingInvariantAuditor:
         involved: tuple[str, ...],
         context: InvariantContext,
     ) -> InvariantEvidence:
-        eligible, checks = self._eligibility(context)
+        eligible, checks, not_testable_reason = self._eligibility(context)
         if not eligible:
             return InvariantEvidence(
                 invariant_id, "NOT_TESTABLE", left, right, None, None, involved,
                 reason="semantic_dimensions_are_not_comparable", eligibility_checks=checks,
+                not_testable_reason=not_testable_reason,
             )
         if left is None or right is None:
             return InvariantEvidence(
                 invariant_id, "NOT_TESTABLE", left, right, None, None, involved,
                 reason="required_fact_missing", eligibility_checks=checks,
+                not_testable_reason=NotTestableReason.MISSING_REQUIRED_FACT,
             )
         residual = left - right
         denominator = max(abs(left), abs(right), Decimal(1))
@@ -224,3 +254,23 @@ class AccountingInvariantAuditor:
             "residual_improvement": before_residual - after_residual,
             "tested_invariant_count": sum(item.status != "NOT_TESTABLE" for item in after),
         }
+
+
+def summarize_invariant_evidence(
+    evidence: Iterable[InvariantEvidence],
+) -> dict[str, object]:
+    rows = tuple(evidence)
+    testable = tuple(item for item in rows if item.status != "NOT_TESTABLE")
+    reason_counts = {reason.value: 0 for reason in NotTestableReason}
+    status_counts: dict[str, int] = {}
+    for item in rows:
+        status_counts[item.status] = status_counts.get(item.status, 0) + 1
+        if item.not_testable_reason is not None:
+            reason_counts[item.not_testable_reason.value] += 1
+    return {
+        "invariant_count": len(rows),
+        "testable_count": len(testable),
+        "testability_pct": 100.0 * len(testable) / len(rows) if rows else 0.0,
+        "status_counts": status_counts,
+        "reason_counts": reason_counts,
+    }

@@ -26,14 +26,25 @@ const SHARES_PATH = path.join(
   "shares",
   "kr_normalized_shares.csv",
 );
-const DIVIDEND_PATH = path.join(
+const DIVIDEND_PATH =
+  process.env.FACTOR_COVERAGE_DIVIDEND_PATH ||
+  path.join(
   ROOT,
   "data-lake",
   "silver",
   "dart",
   "dividend",
-  "kr_dividend_normalized.csv",
-);
+  "kr_dividend_pit_events.csv",
+  );
+const FINANCIAL_AVAILABILITY_PATH =
+  process.env.FACTOR_COVERAGE_FINANCIAL_AVAILABILITY_PATH ||
+  path.join(
+    ROOT,
+    "data-lake",
+    "silver",
+    "dart",
+    "kr_annual_financial_availability.csv",
+  );
 const DIVIDEND_DIR = path.join(ROOT, "data-lake", "bronze", "dart", "dividend");
 const OUT_DIR = path.join(ROOT, "data-lake", "gold", "factor_coverage");
 const OUT_CSV = path.join(OUT_DIR, "kr_factor_coverage_all_stocks.csv");
@@ -392,8 +403,16 @@ function discoverAnnualFiles() {
   return byStock;
 }
 
-function readAnnualFinancials(stockCode, files) {
+function readAnnualFinancials(stockCode, files, availabilityRows = []) {
   const rows = [];
+  const availabilityByYear = new Map();
+  for (const availability of availabilityRows) {
+    const year = Number(availability.fiscal_year);
+    const ts = Date.parse(`${availability.trade_date}T00:00:00+09:00`);
+    if (!year || !isCovered(ts)) continue;
+    const prior = availabilityByYear.get(year);
+    if (!prior || prior._ts < ts) availabilityByYear.set(year, { ...availability, _ts: ts });
+  }
   for (const file of files) {
     const csvRows = readCsv(file.path);
     if (csvRows.length === 0) continue;
@@ -406,23 +425,44 @@ function readAnnualFinancials(stockCode, files) {
       annualRowsByYear.get(year).push(row);
     }
     for (const [year, annualRows] of annualRowsByYear.entries()) {
+      const availability = availabilityByYear.get(year);
+      // Period end is an economic label, never an availability timestamp.
+      // Missing disclosure metadata abstains instead of leaking future facts.
+      if (!availability) continue;
       const grouped = new Map();
       for (const row of annualRows) {
         const account = row.canonical_account_id;
         if (!account || account === "UNMAPPED") continue;
         if (!grouped.has(account)) grouped.set(account, []);
-        grouped.get(account).push(num(row.normalized_amount));
+        grouped.get(account).push(row);
       }
       const values = {};
-      for (const [account, accountValues] of grouped.entries()) {
-        values[account] = pickLargestAbs(accountValues);
+      for (const [account, accountRows] of grouped.entries()) {
+        let candidates = accountRows;
+        if (account === "CAPEX_PPE" || account === "CAPEX_INTANG") {
+          const outflows = accountRows.filter(
+            (row) => String(row.cash_direction || "").toLowerCase() === "outflow",
+          );
+          if (outflows.length > 0) candidates = outflows;
+          else if (
+            accountRows.some(
+              (row) => String(row.cash_direction || "").toLowerCase() === "inflow",
+            )
+          ) {
+            continue;
+          }
+        }
+        values[account] = pickLargestAbs(
+          candidates.map((row) => num(row.normalized_amount)),
+        );
       }
       values.stock_code = stockCode;
       values.security_id = securityId(stockCode);
       values.fiscal_year = year;
-      values.financial_period_ts = Date.parse(
-        `${year}-12-31T00:00:00+09:00`,
-      );
+      values.financial_period = availability.financial_period;
+      values.report_date = availability.trade_date;
+      values.rcept_no = availability.rcept_no;
+      values.financial_period_ts = availability._ts;
       rows.push(values);
     }
   }
@@ -795,8 +835,8 @@ function piotroski(r, prev) {
   return score;
 }
 
-// Dividend coverage is read from silver/dart/dividend/kr_dividend_normalized.csv.
-// Legacy bronze dividend JSON helpers were removed from this calculation path.
+// Dividend coverage is read from publication-time-safe DART events.  The
+// fiscal year is never treated as the date on which the value became known.
 async function loadGroupedCsv(filePath, wantedSecurities, columns) {
   const grouped = new Map();
   if (!fs.existsSync(filePath)) {
@@ -1021,7 +1061,7 @@ function mergeStockRows(
     row.market_cap = share.market_cap ?? null;
     row.dvpsx = dividend.dividend ?? null;
     row.dvpsp = null;
-    row.sharehold_div_yield = dividend.dividend_percent ?? null;
+    row.sharehold_div_yield = mul(dividend.dividend ?? null, div(100, row.close));
     if (
       isCovered(row.sharehold_div_yield) &&
       (row.sharehold_div_yield < 0 || row.sharehold_div_yield > 100)
@@ -1089,7 +1129,12 @@ async function main() {
     `[INFO] annual-financial stocks=${financialByStock.size.toLocaleString()}\n`,
   );
 
-  const [priceGroupedRaw, shareGroupedRaw, dividendGroupedRaw] = await Promise.all([
+  const [
+    priceGroupedRaw,
+    shareGroupedRaw,
+    dividendGroupedRaw,
+    availabilityGroupedRaw,
+  ] = await Promise.all([
     loadGroupedCsv(PRICE_PATH, wantedSecurities, [
       "security_id",
       "trade_date",
@@ -1109,6 +1154,13 @@ async function main() {
       "payout_ratio",
       "dividend_percent",
     ]),
+    loadGroupedCsv(FINANCIAL_AVAILABILITY_PATH, wantedSecurities, [
+      "security_id",
+      "fiscal_year",
+      "financial_period",
+      "trade_date",
+      "rcept_no",
+    ]),
   ]);
 
   const coverage = new Map(FACTORS.map((factor) => [factor, 0]));
@@ -1127,7 +1179,11 @@ async function main() {
     try {
       const shareRows = prepareShareRows(shareGroupedRaw.get(sid) ?? []);
       const dividendRows = prepareDividendRows(dividendGroupedRaw.get(sid) ?? []);
-      const financialRows = readAnnualFinancials(stockCode, files);
+      const financialRows = readAnnualFinancials(
+        stockCode,
+        files,
+        availabilityGroupedRaw.get(sid) ?? [],
+      );
       const rows = mergeStockRows(
         stockCode,
         priceRows,
@@ -1176,6 +1232,7 @@ async function main() {
   const totalCells = rowCount * FACTORS.length;
   const coveredCells = rows.reduce((sum, row) => sum + row.covered_count, 0);
   const summary = {
+    semantic_engine_version: 5,
     generated_at: new Date().toISOString(),
     as_of_date: TODAY_TEXT,
     row_count: rowCount,
@@ -1188,6 +1245,12 @@ async function main() {
     missing_cells: totalCells - coveredCells,
     coverage_ratio: totalCells ? coveredCells / totalCells : 0,
     coverage_pct: totalCells ? (coveredCells / totalCells) * 100 : 0,
+    point_in_time_policy: {
+      financial_availability: "latest DART statement report_date; no period-end fallback",
+      dividend_availability: "DART rcept_no report date; common stock only",
+      financial_availability_path: FINANCIAL_AVAILABILITY_PATH,
+      dividend_event_path: DIVIDEND_PATH,
+    },
     errors: errors.slice(0, 20),
   };
 
@@ -1225,9 +1288,17 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  mergeStockRows,
+  prepareDividendRows,
+  readAnnualFinancials,
+};
 
 

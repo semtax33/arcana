@@ -13,6 +13,8 @@ import pandas as pd
 import yaml
 
 from engine.semantic.rules import load_semantic_mapping_rules
+from engine.semantic.manifest import resolve_rule_bundle
+from engine.semantic.quality import CoverageStratifier
 
 
 @dataclass(frozen=True)
@@ -56,7 +58,7 @@ class MigrationCoverage:
 
 
 def migration_coverage(bundle_path: str | Path) -> MigrationCoverage:
-    data = yaml.safe_load(Path(bundle_path).read_text(encoding="utf-8")) or {}
+    data = yaml.safe_load(resolve_rule_bundle(bundle_path).read_text(encoding="utf-8")) or {}
     migration = data.get("migration", {}) or {}
     sign_source = next(
         (
@@ -88,7 +90,7 @@ def migration_integrity(
     *,
     project_root: str | Path,
 ) -> dict[str, Any]:
-    data = yaml.safe_load(Path(bundle_path).read_text(encoding="utf-8")) or {}
+    data = yaml.safe_load(resolve_rule_bundle(bundle_path).read_text(encoding="utf-8")) or {}
     root = Path(project_root)
     rows: list[dict[str, Any]] = []
     for source in (data.get("migration", {}) or {}).get("sources", []) or []:
@@ -185,6 +187,7 @@ def observed_mapping_coverage(
     *,
     legacy_mapping_engine=None,
     max_files: int | None = None,
+    progress: bool = False,
 ) -> dict[str, Any]:
     paths = sorted(Path(input_dir).glob("kr_normalized_*.debug.csv"))
     if max_files is not None:
@@ -199,6 +202,7 @@ def observed_mapping_coverage(
         "v2_mapped_row_count": 0,
         "changed_mapping_count": 0,
         "newly_mapped_row_count": 0,
+        "harmonized_ready_row_count": 0,
     }
     total_amount = Decimal(0)
     baseline_mapped_amount = Decimal(0)
@@ -208,9 +212,11 @@ def observed_mapping_coverage(
     statement_type_counts: dict[str, int] = {}
     regime_counts: dict[str, int] = {}
     dialect_counts: dict[str, int] = {}
+    harmonization_blockers: dict[str, int] = {}
     newly_mapped_examples: list[dict[str, str]] = []
     result_cache: dict[tuple[Any, ...], Any] = {}
     legacy_result_cache: dict[tuple[Any, ...], Any] = {}
+    coverage_stratifier = CoverageStratifier()
     semantic_rules = tuple(mapping_engine.semantic_ruleset.normalization_rules)
     context_tokens = tuple(
         sorted(
@@ -237,7 +243,7 @@ def observed_mapping_coverage(
         for rule in semantic_rules
     )
 
-    for path in paths:
+    for file_index, path in enumerate(paths, start=1):
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             for row in csv.DictReader(handle):
                 baseline = str(row.get("canonical_account_id", "") or "")
@@ -288,6 +294,20 @@ def observed_mapping_coverage(
                             legacy_result_cache.clear()
                         legacy_result_cache[key] = legacy_result
                 mapped = result.canonical_account_id
+                period_value = str(row.get("period", "") or "")
+                year_value = period_value[:4] if len(period_value) >= 4 else "UNKNOWN"
+                coverage_stratifier.add(
+                    {
+                        "year": year_value,
+                        "accounting_regime": row.get("accounting_regime"),
+                        "statement_type": normalized["fs_type"],
+                        "scope": row.get("scope"),
+                        "sector_code": row.get("sector_code"),
+                        "document_dialect": row.get("document_dialect"),
+                    },
+                    mapped=mapped != "UNMAPPED",
+                    amount=parsed_amount,
+                )
                 totals["row_count"] += 1
                 if amount_is_valid:
                     totals["valid_amount_row_count"] += 1
@@ -321,6 +341,30 @@ def observed_mapping_coverage(
                     if amount_is_valid:
                         v2_mapped_amount += magnitude
                     v2_rule_hits[result.rule_id] = v2_rule_hits.get(result.rule_id, 0) + 1
+                    harmonization_blocker = next(
+                        (
+                            reason
+                            for condition, reason in (
+                                (amount_is_valid, "invalid_amount"),
+                                (bool(str(row.get("period") or "")), "missing_period"),
+                                (str(row.get("scope") or "UNKNOWN") != "UNKNOWN", "unknown_scope"),
+                                (regime_value != "UNKNOWN", "unknown_accounting_regime"),
+                                (
+                                    str(result.comparability)
+                                    not in {"UNKNOWN", "MEASUREMENT_DIFFERENCE", "ACCOUNTING_POLICY_BREAK"},
+                                    "non_comparable_accounting_basis",
+                                ),
+                            )
+                            if not condition
+                        ),
+                        None,
+                    )
+                    if harmonization_blocker is None:
+                        totals["harmonized_ready_row_count"] += 1
+                    else:
+                        harmonization_blockers[harmonization_blocker] = (
+                            harmonization_blockers.get(harmonization_blocker, 0) + 1
+                        )
                 if baseline != mapped:
                     totals["changed_mapping_count"] += 1
                 baseline_for_delta = (
@@ -341,10 +385,15 @@ def observed_mapping_coverage(
                                 "rule_id": result.rule_id,
                             }
                         )
+        if progress and file_index % 100 == 0:
+            print(
+                f"[semantic-coverage] files={file_index:,}/{len(paths):,} rows={totals['row_count']:,} mapped={totals['v2_mapped_row_count']:,}",
+                flush=True,
+            )
 
     row_count = totals["row_count"]
     result = {
-        "semantic_engine_version": 3,
+        "semantic_engine_version": 4,
         "input_dir": str(Path(input_dir).resolve()),
         "file_count": len(paths),
         **totals,
@@ -404,6 +453,14 @@ def observed_mapping_coverage(
             )[:50]
         ],
         "newly_mapped_examples": newly_mapped_examples,
+        "coverage_stratification": coverage_stratifier.report(),
+        "harmonized_ready_pct_of_mapped": (
+            100.0 * totals["harmonized_ready_row_count"] / totals["v2_mapped_row_count"]
+            if totals["v2_mapped_row_count"] else 0.0
+        ),
+        "harmonization_blockers": dict(
+            sorted(harmonization_blockers.items(), key=lambda item: (-item[1], item[0]))
+        ),
     }
     # Keep v2 names as compatibility aliases for downstream readers while the
     # v3 report uses version-accurate terminology.
@@ -415,6 +472,12 @@ def observed_mapping_coverage(
                 "v2_mapped_absolute_amount_pct"
             ],
             "top_v3_rule_hits": result["top_v2_rule_hits"],
+            "v4_mapped_row_count": totals["v2_mapped_row_count"],
+            "v4_mapped_row_pct": result["v2_mapped_row_pct"],
+            "v4_mapped_absolute_amount_pct": result[
+                "v2_mapped_absolute_amount_pct"
+            ],
+            "top_v4_rule_hits": result["top_v2_rule_hits"],
         }
     )
     return result
@@ -459,7 +522,7 @@ def build_coverage_report(
     migration = migration_coverage(bundle_path)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "semantic_engine_version": 3,
+        "semantic_engine_version": 4,
         "migration": {**asdict(migration), "coverage_pct": migration.coverage_pct},
         "migration_integrity": migration_integrity(
             bundle_path,

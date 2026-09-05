@@ -45,7 +45,7 @@ MAPPING_RULE_PATH = first_existing_path(
     DATA_LAKE.rules("mapping_common.yaml"),
 )
 SEMANTIC_MAPPING_RULE_PATH = first_existing_path(
-    DATA_LAKE.rules("semantic_kr_v2.yaml"),
+    DATA_LAKE.rules("semantic_kr_current.yaml"),
     MAPPING_RULE_PATH,
 )
 COMMENT_RULE_PATH = (
@@ -55,15 +55,15 @@ COMMENT_RULE_PATH = (
 )
 SIGN_POLICY_PATH = DATA_LAKE.rules("sign_policy_common.yaml")
 SEMANTIC_CONTEXT_RULE_PATH = first_existing_path(
-    DATA_LAKE.rules("semantic_kr_v2.yaml"),
+    DATA_LAKE.rules("semantic_kr_current.yaml"),
     CONTEXT_RULE_PATH,
 )
 SEMANTIC_COMMENT_RULE_PATH = first_existing_path(
-    DATA_LAKE.rules("semantic_kr_v2.yaml"),
+    DATA_LAKE.rules("semantic_kr_current.yaml"),
     COMMENT_RULE_PATH,
 )
 SEMANTIC_SIGN_POLICY_PATH = first_existing_path(
-    DATA_LAKE.rules("semantic_kr_v2.yaml"),
+    DATA_LAKE.rules("semantic_kr_current.yaml"),
     SIGN_POLICY_PATH,
 )
 US_MAPPING_RULE_PATH = first_existing_path(

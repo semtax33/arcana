@@ -23,9 +23,14 @@ from engine.semantic import (
     FactorDependencyGraph,
     HistoricalLexiconMiner,
     InvariantContext,
+    MissingFactCause,
+    CoverageStratifier,
     UnmappedClassifier,
+    cluster_narrative_candidates,
+    classify_missing_fact,
     core_concept_coverage,
     load_semantic_mapping_rules,
+    summarize_invariant_evidence,
 )
 from engine.semantic.integrity import ALL_EXPECTED_CF_DIRECTIONS, VALID_UNIT_FACTORS
 from engine.transformers._internal.dart_filings import (
@@ -37,7 +42,7 @@ from engine.transformers._internal.dart_filings import (
 from engine.transformers._internal.kr_disclosure_normalizer import build_disclosure_parser
 
 
-RULE_PATH = DATA_LAKE.rules("semantic_kr_v2.yaml")
+RULE_PATH = DATA_LAKE.rules("semantic_kr_current.yaml")
 CANONICAL_PATH = DATA_LAKE.canonical_accounts()
 FACTOR_SOURCE = PROJECT_ROOT / "scripts" / "calculate_factor_coverage.js"
 OUTPUT = PROJECT_ROOT / "deliverables" / "historical_semantic_audit_2000_2012.json"
@@ -190,6 +195,7 @@ def audit_statements(
     taxonomy = Counter()
     regimes = Counter()
     dialects = Counter()
+    regime_dialect_matrix = Counter()
     yearly: dict[str, Counter] = {}
     unmapped_rows: list[dict[str, object]] = []
     failures: list[dict[str, str]] = []
@@ -197,6 +203,11 @@ def audit_statements(
     invariant_review_examples: list[dict[str, object]] = []
     direction_mismatches = Counter()
     invalid_unit_count = 0
+    coverage_stratifier = CoverageStratifier()
+    all_invariant_evidence = []
+    missing_fact_cause_counts = Counter(
+        {cause.value: 0 for cause in MissingFactCause}
+    )
 
     for year in range(start_year, end_year + 1):
         population = files_by_year.get(year, [])
@@ -235,8 +246,11 @@ def audit_statements(
             dialect = str(mapped.iloc[0].get("document_dialect", "UNKNOWN")) if not mapped.empty else "UNKNOWN"
             regimes[regime] += 1
             dialects[dialect] += 1
+            regime_dialect_matrix[(year, regime, dialect)] += 1
             stats[f"regime_{regime}"] += 1
+            stats[f"dialect_{dialect}"] += 1
             facts_by_id: dict[str, list[Decimal]] = defaultdict(list)
+            suggested_ids: set[str] = set()
             file_invalid_unit_count = 0
             for _, row in mapped.iterrows():
                 totals["row_count"] += 1
@@ -244,6 +258,18 @@ def audit_statements(
                 canonical_id = str(row.get("canonical_account_id") or "")
                 is_mapped = canonical_id not in {"", "UNMAPPED"}
                 amount = number(row.get("raw_amount"))
+                coverage_stratifier.add(
+                    {
+                        "year": str(year),
+                        "accounting_regime": row.get("accounting_regime"),
+                        "statement_type": row.get("statement_type"),
+                        "scope": row.get("scope"),
+                        "sector_code": row.get("sector_code"),
+                        "document_dialect": row.get("document_dialect"),
+                    },
+                    mapped=is_mapped,
+                    amount=amount,
+                )
                 if amount is not None:
                     monetary_total += abs(amount)
                     stats["monetary_total"] += abs(amount)
@@ -266,6 +292,9 @@ def audit_statements(
                         direction_mismatches[f"{canonical_id}:{actual_direction or '<blank>'}->{expected_direction}"] += 1
                 else:
                     suggestions = miner.suggest(row.get("original_account_name"))
+                    suggested_ids.update(
+                        suggestion.canonical_id for suggestion in suggestions
+                    )
                     assessment = classifier.classify(
                         row.get("original_account_name"),
                         statement_type=str(row.get("statement_type") or "UNKNOWN"),
@@ -321,7 +350,27 @@ def audit_statements(
                 ),
             )
             for item in evidence:
+                all_invariant_evidence.append(item)
                 invariant_counts[item.status] += 1
+                if (
+                    item.status == "NOT_TESTABLE"
+                    and item.not_testable_reason is not None
+                    and item.not_testable_reason.value == "missing_required_fact"
+                ):
+                    missing_ids = set(item.involved_canonical_ids) - set(unique_facts)
+                    expected_statement = item.invariant_id.split("_", 1)[0]
+                    statement_types = {
+                        str(value or "").upper()
+                        for value in mapped.get("statement_type", [])
+                    }
+                    if "CIS" in statement_types:
+                        statement_types.add("IS")
+                    cause = classify_missing_fact(
+                        dialect_supported=dialect not in {"", "UNKNOWN"},
+                        raw_candidate_present=bool(missing_ids & suggested_ids),
+                        statement_complete=expected_statement in statement_types,
+                    )
+                    missing_fact_cause_counts[cause.value] += 1
                 if item.status == "REVIEW" and len(invariant_review_examples) < 200:
                     invariant_review_examples.append(
                         {
@@ -356,6 +405,7 @@ def audit_statements(
             "industry_group_context_file_count": stats["industry_group_context_file_count"],
             **coverage_record(stats["row_count"], stats["mapped_row_count"], monetary_year, mapped_year),
             "regime_file_counts": {key.removeprefix("regime_"): value for key, value in stats.items() if key.startswith("regime_")},
+            "document_dialect_file_counts": {key.removeprefix("dialect_"): value for key, value in stats.items() if key.startswith("dialect_")},
         }
 
     lexicon = miner.aggregate(unmapped_rows)
@@ -392,15 +442,35 @@ def audit_statements(
         "provenance_completeness_pct": 100.0 * totals["provenance_complete_count"] / totals["mapped_row_count"] if totals["mapped_row_count"] else 0.0,
         "regime_file_counts": dict(regimes),
         "document_dialect_file_counts": dict(dialects),
+        "regime_dialect_matrix": [
+            {
+                "year": matrix_year,
+                "accounting_regime": matrix_regime,
+                "document_dialect": matrix_dialect,
+                "file_count": count,
+            }
+            for (matrix_year, matrix_regime, matrix_dialect), count in sorted(
+                regime_dialect_matrix.items()
+            )
+        ],
         "years": yearly_report,
         "unmapped_taxonomy": dict(taxonomy),
         "invariant_status_counts": dict(invariant_counts),
+        "invariant_testability": summarize_invariant_evidence(
+            all_invariant_evidence
+        ),
+        "missing_required_fact_taxonomy": {
+            "total_count": sum(missing_fact_cause_counts.values()),
+            "cause_counts": dict(missing_fact_cause_counts),
+            "classification_policy": "one mutually exclusive root cause per NOT_TESTABLE invariant; source/scope/period gaps precede dialect, mapping, statement, reporting, and transformation gaps",
+        },
         "wrong_semantic_mapping_candidate_count": invariant_counts["REVIEW"],
         "invariant_review_examples": invariant_review_examples,
         "invalid_unit_factor_row_count": invalid_unit_count,
         "canonical_direction_mismatch_count": sum(direction_mismatches.values()),
         "canonical_direction_mismatches": dict(direction_mismatches),
         "ambiguous_auto_emit_count": 0,
+        "coverage_stratification": coverage_stratifier.report(),
         "hierarchical_context": {
             "source_type": DisclosureSourceType.FINANCIAL_STATEMENT.value,
             "sector_context_file_count": totals["sector_context_file_count"],
@@ -433,6 +503,7 @@ def audit_disclosures(
     totals = Counter()
     yearly: dict[str, object] = {}
     failures: list[dict[str, str]] = []
+    narrative_candidates = []
     for year in range(start_year, end_year + 1):
         population = files_by_year.get(year, [])
         selected = stratified_sample(population, files_per_year, min_bytes=1_000)
@@ -460,6 +531,7 @@ def audit_disclosures(
             stats["candidate_count"] += len(document.candidates)
             stats["review_required_count"] += sum(candidate.review_required for candidate in document.candidates)
             stats["ambiguous_auto_emit_count"] += sum(candidate.auto_emit_eligible for candidate in document.candidates if candidate.period_role == "AMBIGUOUS")
+            narrative_candidates.extend(document.candidates)
         yearly[str(year)] = dict(stats)
         totals.update(stats)
     return {
@@ -471,6 +543,7 @@ def audit_disclosures(
             "sector_context_file_count": totals["sector_context_file_count"],
             "industry_group_context_file_count": totals["industry_group_context_file_count"],
         },
+        "ambiguity_clusters": cluster_narrative_candidates(narrative_candidates),
         "failures": failures[:100],
     }
 
@@ -512,7 +585,7 @@ def main() -> None:
     )
     graph = FactorDependencyGraph.from_javascript(FACTOR_SOURCE)
     report = {
-        "semantic_engine_version": 3,
+        "semantic_engine_version": 5,
         "period": {"start_year": args.start_year, "end_year": args.end_year},
         "accounting_regime_policy": "evidence-detected per filing; 2009-2012 are not date-forced and may contain K_GAAP or K_IFRS",
         "hierarchical_context_policy": {

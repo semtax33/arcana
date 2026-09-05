@@ -2187,6 +2187,117 @@ def _clean_dividend_text(value):
     return str(value)
 
 
+def build_kr_dividend_pit_events_dataframe(by_kind_df, company_df):
+    """Build one publication-time-safe dividend event row per DART filing.
+
+    ``bsns_year`` is an economic-period label, not an availability date.  The
+    event therefore becomes available only on the disclosure date encoded in
+    ``rcept_no`` (or, for legacy files, the dated source filename).  Preferred
+    shares and unlabeled share classes are never guessed into common-share DPS.
+    """
+
+    by_kind = by_kind_df.copy() if by_kind_df is not None else pd.DataFrame()
+    company = company_df.copy() if company_df is not None else pd.DataFrame()
+    output_columns = [
+        "security_id",
+        "trade_date",
+        "fiscal_year",
+        "rcept_no",
+        "report_name",
+        "dividend",
+        "payout_ratio",
+        "dividend_payment_amount_krw",
+        "pit_safe",
+    ]
+    event_rows = []
+
+    if not by_kind.empty and "stock_code" in by_kind.columns:
+        by_kind["stock_code"] = by_kind["stock_code"].map(normalize_stock_code)
+        for stock_code, stock_rows in by_kind.groupby("stock_code", sort=False):
+            common_rows = _filter_share_type(stock_rows, "보통주식")
+            for row in common_rows.to_dict("records"):
+                report_date = _dividend_report_date(row)
+                dividend = normalize_decimal_amount(row.get("per_share_cash_dividend_krw"))
+                if report_date is None or dividend is None:
+                    continue
+                event_rows.append(
+                    {
+                        "security_id": f"SEC_KR_{normalize_stock_code(stock_code)}",
+                        "trade_date": report_date.normalize(),
+                        "fiscal_year": int(row["bsns_year"])
+                        if not pd.isna(row.get("bsns_year"))
+                        else None,
+                        "rcept_no": _clean_dividend_text(row.get("rcept_no")),
+                        "report_name": _clean_dividend_text(row.get("report_name")),
+                        "dividend": dividend,
+                        "payout_ratio": None,
+                        "dividend_payment_amount_krw": None,
+                        "pit_safe": True,
+                    }
+                )
+
+    if not company.empty and "stock_code" in company.columns:
+        company["stock_code"] = company["stock_code"].map(normalize_stock_code)
+        for row in company.to_dict("records"):
+            report_date = _dividend_report_date(row)
+            if report_date is None:
+                continue
+            payout_ratio_pct = normalize_decimal_amount(row.get("dividend_payout_ratio_pct"))
+            total_amount = normalize_decimal_amount(row.get("dividend_payment_amount_krw"))
+            if payout_ratio_pct is None and total_amount is None:
+                continue
+            event_rows.append(
+                {
+                    "security_id": f"SEC_KR_{normalize_stock_code(row['stock_code'])}",
+                    "trade_date": report_date.normalize(),
+                    "fiscal_year": int(row["bsns_year"])
+                    if not pd.isna(row.get("bsns_year"))
+                    else None,
+                    "rcept_no": _clean_dividend_text(row.get("rcept_no")),
+                    "report_name": _clean_dividend_text(row.get("report_name")),
+                    "dividend": None,
+                    "payout_ratio": None
+                    if payout_ratio_pct is None
+                    else float(payout_ratio_pct) / 100.0,
+                    "dividend_payment_amount_krw": total_amount,
+                    "pit_safe": True,
+                }
+            )
+
+    if not event_rows:
+        return pd.DataFrame(columns=output_columns)
+
+    events = pd.DataFrame(event_rows)
+    events["_rcept_no_numeric"] = pd.to_numeric(events["rcept_no"], errors="coerce")
+    events = events.sort_values(
+        ["security_id", "trade_date", "_rcept_no_numeric"],
+        kind="stable",
+        na_position="first",
+    )
+    events = (
+        events.groupby(
+            ["security_id", "trade_date", "rcept_no"],
+            as_index=False,
+            dropna=False,
+        )
+        .agg(
+            {
+                "fiscal_year": "last",
+                "report_name": "last",
+                "dividend": "last",
+                "payout_ratio": "last",
+                "dividend_payment_amount_krw": "last",
+                "pit_safe": "all",
+            }
+        )
+        .sort_values(["security_id", "trade_date", "rcept_no"], kind="stable")
+        .reset_index(drop=True)
+    )
+    events["trade_date"] = pd.to_datetime(events["trade_date"]).dt.strftime("%Y-%m-%d")
+    events["fiscal_year"] = pd.to_numeric(events["fiscal_year"], errors="coerce").astype("Int64")
+    return events[output_columns]
+
+
 def silver_dividend_asof_events(stock_code, share_type="보통주식"):
     stock_code = normalize_stock_code(stock_code)
     stock_kind_rows = _silver_stock_kind_rows(stock_code, share_type)

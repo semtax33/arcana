@@ -17,7 +17,7 @@ from engine.semantic import (
 from engine.transformers._internal.dart_filings import normalize_account_name
 
 
-DEFAULT_SEMANTIC_RULE_PATH = DATA_LAKE.rules("semantic_kr_v2.yaml")
+DEFAULT_SEMANTIC_RULE_PATH = DATA_LAKE.rules("semantic_kr_current.yaml")
 
 
 def build_disclosure_parser(rule_path: str | Path = DEFAULT_SEMANTIC_RULE_PATH) -> DisclosureHtmlParser:

@@ -1071,6 +1071,7 @@ def read_annual_financials(
     market="kr",
     use_edgartools=True,
     edgartools_provider=None,
+    require_report_metadata=False,
 ):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
@@ -1088,11 +1089,7 @@ def read_annual_financials(
 
         df["normalized_amount"] = pd.to_numeric(df.get("normalized_amount"), errors="coerce")
         df = df[df["canonical_account_id"].notna()].copy()
-        grouped = (
-            df.groupby("canonical_account_id", as_index=False)["normalized_amount"]
-            .agg(pick_largest_abs)
-        )
-        values = dict(zip(grouped["canonical_account_id"], grouped["normalized_amount"]))
+        values = aggregate_annual_canonical_values(df)
         values.update(extract_fallback_values(df))
         values.update(
             {
@@ -1107,7 +1104,21 @@ def read_annual_financials(
 
     if rows:
         financial_df = pd.DataFrame(rows).sort_values("financial_period").reset_index(drop=True)
-        financial_df = attach_report_metadata(financial_df, report_metadata_path)
+        financial_df = attach_report_metadata(
+            financial_df,
+            report_metadata_path,
+            fallback_to_period_end=not require_report_metadata,
+        )
+        if require_report_metadata:
+            report_dates = pd.to_datetime(financial_df["report_date"], errors="coerce")
+            period_ends = pd.to_datetime(
+                financial_df["financial_period"], errors="coerce"
+            )
+            financial_df = financial_df.loc[
+                report_dates.notna()
+                & period_ends.notna()
+                & report_dates.ge(period_ends)
+            ].copy()
     else:
         financial_df = pd.DataFrame()
     financial_df = fill_missing_financial_values_with_edgartools(
@@ -1121,6 +1132,25 @@ def read_annual_financials(
     if financial_df.empty:
         return financial_df
     return add_annual_financial_factors(financial_df, periods_per_year=1)
+
+
+def aggregate_annual_canonical_values(df):
+    """Aggregate annual facts while respecting typed cash-flow direction."""
+
+    values = {}
+    for canonical_id, account_rows in df.groupby("canonical_account_id", sort=False):
+        candidates = account_rows
+        if canonical_id in {"CAPEX_PPE", "CAPEX_INTANG"} and "cash_direction" in candidates:
+            direction = candidates["cash_direction"].fillna("").astype(str).str.lower()
+            outflows = candidates.loc[direction.eq("outflow")]
+            if not outflows.empty:
+                candidates = outflows
+            elif direction.eq("inflow").any():
+                # A disposal receipt is not a capital expenditure.  With no
+                # disclosed outflow, fail closed instead of re-signing it.
+                continue
+        values[str(canonical_id)] = pick_largest_abs(candidates["normalized_amount"])
+    return values
 
 
 def _periodized_financial_frame_with_edgartools(
@@ -4018,6 +4048,7 @@ def create_stock_factor_dataframe(
     target_price_consensus_path=HANKYUNG_TARGET_PRICE_CONSENSUS_PATH,
     us_consensus_factors_path=US_CONSENSUS_FACTORS_PATH,
     rim_decay_factor=DEFAULT_RIM_DECAY_FACTOR,
+    require_report_metadata=False,
 ):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
@@ -4076,6 +4107,7 @@ def create_stock_factor_dataframe(
             market=market,
             use_edgartools=use_edgartools,
             edgartools_provider=edgartools_provider,
+            require_report_metadata=require_report_metadata,
         )
     else:
         raise ValueError("financial_basis must be 'annual', 'ttm', or 'quarterly'")

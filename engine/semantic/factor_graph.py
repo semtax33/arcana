@@ -20,6 +20,45 @@ CORE_ECONOMIC_CONCEPTS = frozenset(
 )
 
 
+# The factor implementation uses these as executable alternatives, not as
+# simultaneous requirements.  The regex graph intentionally remains a broad
+# dependency inventory; readiness applies the same fallback contracts as the
+# implementation (`first(...)` and explicit `if !isCovered(...)` branches).
+_EQUIVALENT_SOURCE_GROUPS = (
+    frozenset({"LONG_TERM_DEBT", "LONG_TERM_DEBT_FALLBACK"}),
+    frozenset({"RETAINED_EARNINGS", "RETAINED_EARNINGS_FALLBACK"}),
+    frozenset(
+        {
+            "INTEREST_EXPENSE",
+            "INTEREST_EXPENSE_FALLBACK",
+            "INT_PAID",
+            "INTEREST_PAID_FALLBACK",
+            "FINANCE_COST_FALLBACK",
+        }
+    ),
+)
+
+
+def _alternative_paths(dependency: str) -> tuple[frozenset[str], ...]:
+    for group in _EQUIVALENT_SOURCE_GROUPS:
+        if dependency in group:
+            return tuple(frozenset({candidate}) for candidate in sorted(group - {dependency}))
+    if dependency == "EBITDA":
+        return (
+            frozenset({"OPERATING_INCOME", "DNA_IS"}),
+            frozenset({"OPERATING_INCOME", "DEPRECIATION_EXPENSE"}),
+            frozenset({"OPERATING_INCOME", "AMORTIZATION"}),
+        )
+    if dependency == "DEBT_NET_BORROWING":
+        # The JS derives net borrowing when either gross leg is reported; the
+        # absent leg is explicitly zero-filled only inside that disclosed path.
+        return (
+            frozenset({"DEBT_ISSUE"}),
+            frozenset({"DEBT_REPAY"}),
+        )
+    return ()
+
+
 @dataclass(frozen=True)
 class FactorImpact:
     canonical_id: str
@@ -127,10 +166,30 @@ class FactorDependencyGraph:
         available = set(available_canonical_ids)
         factor_rows: list[dict[str, object]] = []
         covered = 0
+        strict_union_covered = 0
         for factor in sorted(self.factors):
             required = self.canonical_dependencies(factor)
             present = required & available
-            is_covered = required.issubset(available)
+            strict_union_available = required.issubset(available)
+            strict_union_covered += int(bool(required) and strict_union_available)
+            missing: set[str] = set()
+            selected_paths: set[tuple[str, ...]] = set()
+            for dependency in required:
+                if dependency in available:
+                    continue
+                selected = next(
+                    (
+                        option
+                        for option in _alternative_paths(dependency)
+                        if option.issubset(available)
+                    ),
+                    None,
+                )
+                if selected is None:
+                    missing.add(dependency)
+                else:
+                    selected_paths.add(tuple(sorted(selected)))
+            is_covered = not missing
             if required:
                 covered += int(is_covered)
             factor_rows.append(
@@ -138,9 +197,13 @@ class FactorDependencyGraph:
                     "factor": factor,
                     "dependency_count": len(required),
                     "present_dependency_count": len(present),
-                    "dependency_coverage_pct": 100.0 * len(present) / len(required) if required else 100.0,
+                    "dependency_coverage_pct": 100.0 * (len(required) - len(missing)) / len(required) if required else 100.0,
+                    "strict_union_dependency_coverage_pct": 100.0 * len(present) / len(required) if required else 100.0,
                     "factor_input_available": is_covered,
-                    "missing_dependencies": sorted(required - available),
+                    "strict_union_factor_input_available": strict_union_available,
+                    "missing_dependencies": sorted(missing),
+                    "strict_union_missing_dependencies": sorted(required - available),
+                    "selected_dependency_paths": [list(path) for path in sorted(selected_paths)],
                 }
             )
         financially_dependent = [row for row in factor_rows if row["dependency_count"]]
@@ -149,6 +212,9 @@ class FactorDependencyGraph:
             "financial_dependency_factor_count": len(financially_dependent),
             "covered_factor_count": covered,
             "factor_input_coverage_pct": 100.0 * covered / len(financially_dependent) if financially_dependent else 100.0,
+            "strict_union_covered_factor_count": strict_union_covered,
+            "strict_union_factor_input_coverage_pct": 100.0 * strict_union_covered / len(financially_dependent) if financially_dependent else 100.0,
+            "availability_contract_version": 1,
             "factors": factor_rows,
         }
 

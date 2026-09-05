@@ -16,7 +16,7 @@ DEFAULT_COMMENT = RULE_ROOT / "comment_kr.yaml"
 DEFAULT_SIGN = RULE_ROOT / "sign_policy_common.yaml"
 DEFAULT_K_GAAP = RULE_ROOT / "k_gaap_historical_v2.yaml"
 DEFAULT_COMMON = RULE_ROOT / "semantic_common_v2.yaml"
-DEFAULT_OUTPUT = RULE_ROOT / "semantic_kr_v2.yaml"
+DEFAULT_OUTPUT = RULE_ROOT / "semantic_kr_next.generated.yaml"
 
 
 def _read(path: Path) -> tuple[bytes, dict[str, Any]]:
