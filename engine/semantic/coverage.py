@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
 from pathlib import Path
+import re
 from typing import Any, Iterable, Mapping
 
 import pandas as pd
@@ -15,6 +16,12 @@ import yaml
 from engine.semantic.rules import load_semantic_mapping_rules
 from engine.semantic.manifest import resolve_rule_bundle
 from engine.semantic.quality import CoverageStratifier
+
+
+def semantic_engine_version(bundle_path: str | Path) -> int:
+    resolved = resolve_rule_bundle(bundle_path)
+    match = re.fullmatch(r"semantic_kr_v(\d+)\.yaml", resolved.name)
+    return int(match.group(1)) if match else 4
 
 
 @dataclass(frozen=True)
@@ -393,7 +400,7 @@ def observed_mapping_coverage(
 
     row_count = totals["row_count"]
     result = {
-        "semantic_engine_version": 4,
+        "semantic_engine_version": engine.semantic_ruleset.engine_version,
         "input_dir": str(Path(input_dir).resolve()),
         "file_count": len(paths),
         **totals,
@@ -522,7 +529,7 @@ def build_coverage_report(
     migration = migration_coverage(bundle_path)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "semantic_engine_version": 4,
+        "semantic_engine_version": semantic_engine_version(bundle_path),
         "migration": {**asdict(migration), "coverage_pct": migration.coverage_pct},
         "migration_integrity": migration_integrity(
             bundle_path,

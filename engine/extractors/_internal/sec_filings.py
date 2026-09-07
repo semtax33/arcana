@@ -10,6 +10,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from time import sleep
 from typing import Any, Callable, Iterable, Mapping, Sequence
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -44,6 +45,16 @@ DEFAULT_SEC_USER_AGENT = "Arcana contact@example.com"
 SEC_PRIMARY_FORMS = ("10-K", "10-Q", "8-K")
 SEC_IR_EXHIBIT_PATTERN = re.compile(r"^EX-99(?:\.\d+)?$", re.IGNORECASE)
 SEC_FILING_SOURCE = "sec-edgartools-filing-html"
+SEC_FILING_BUNDLE_SOURCE = "sec-edgartools-xbrl-bundle"
+SEC_FILING_BUNDLE_SCHEMA_VERSION = 3
+SEC_XBRL_DOCUMENT_ROLES = {
+    "EX-101.INS": "instance",
+    "EX-101.SCH": "schema",
+    "EX-101.LAB": "label",
+    "EX-101.PRE": "presentation",
+    "EX-101.DEF": "definition",
+    "EX-101.CAL": "calculation",
+}
 WINDOWS_RESERVED_PATH_NAMES = {
     "CON",
     "PRN",
@@ -67,7 +78,10 @@ class SecFilingHtmlDownloadSummary:
     symbols_unmapped: int = 0
     filings_seen: int = 0
     primary_html_written: int = 0
+    full_submission_written: int = 0
     ir_html_written: int = 0
+    filing_bundles_written: int = 0
+    xbrl_files_written: int = 0
     existing_files_skipped: int = 0
     non_html_documents_skipped: int = 0
     errors: int = 0
@@ -155,9 +169,20 @@ def download_us_companyfacts(
             continue
 
         print(f"downloading {symbol} ({cik_file_key}, download_offset : {index})....")
+        try:
+            payload = _download_sec_companyfacts(cik, user_agent=user_agent)
+        except HTTPError as exc:
+            if exc.code != 404:
+                raise
+            print(
+                f"[MISSING] SEC Company Facts {symbol} "
+                f"({cik_file_key}, download_offset : {index}, http_status : 404)",
+                flush=True,
+            )
+            continue
         write_source_bytes(
             out_path,
-            _download_sec_companyfacts(cik, user_agent=user_agent),
+            payload,
             source="sec-companyfacts",
             validator=json_source_validator,
             metadata={"ticker": symbol, "cik": cik_file_key},
@@ -182,6 +207,7 @@ def download_us_filing_htmls(
     limit: int | None = None,
     force: bool = False,
     resume: bool = True,
+    verify_resume_files: bool = True,
     ir_only: bool = False,
     workers: int = 1,
     sleep_seconds: float = 0.1,
@@ -239,6 +265,7 @@ def download_us_filing_htmls(
         "start_date": resolved_start,
         "end_date": resolved_end,
         "ir_only": bool(ir_only),
+        "bundle_schema_version": SEC_FILING_BUNDLE_SCHEMA_VERSION,
     }
     query_fingerprint = hashlib.sha256(
         json.dumps(query, sort_keys=True).encode("utf-8")
@@ -264,12 +291,21 @@ def download_us_filing_htmls(
         configure_edgar_identity(set_identity)
         provider = _edgartools_filings_provider
 
+    checkpoint_names = (
+        {path.name for path in checkpoint_dir.glob("*.json")}
+        if resume and not force
+        else set()
+    )
     pending: list[tuple[int, Mapping[str, str], Path]] = []
     for company_index, company_row in enumerate(selected, start=max(0, int(offset))):
         symbol = company_row["ticker"]
         cik_key = _cik_file_key(company_row["cik"])
         checkpoint_path = checkpoint_dir / f"{cik_key}.json"
-        if resume and not force and _completed_filing_checkpoint(checkpoint_path, query_fingerprint):
+        if checkpoint_path.name in checkpoint_names and _completed_filing_checkpoint(
+            checkpoint_path,
+            query_fingerprint,
+            verify_files=verify_resume_files,
+        ):
             summary.symbols_resumed += 1
             print(f"[RESUME] SEC filing HTML {symbol} ({cik_key}, offset={company_index})", flush=True)
             continue
@@ -286,7 +322,10 @@ def download_us_filing_htmls(
         result = {
             "filings_seen": 0,
             "primary_html_written": 0,
+            "full_submission_written": 0,
             "ir_html_written": 0,
+            "filing_bundles_written": 0,
+            "xbrl_files_written": 0,
             "existing_files_skipped": 0,
             "non_html_documents_skipped": 0,
         }
@@ -308,6 +347,8 @@ def download_us_filing_htmls(
                 result["filings_seen"] += 1
                 try:
                     attachments = _safe_attr(filing, "attachments")
+                    primary_target: Path | None = None
+                    primary = None
                     if not ir_only:
                         primary = (
                             _safe_attr(attachments, "primary_html_document")
@@ -315,7 +356,22 @@ def download_us_filing_htmls(
                             else None
                         )
                         if primary is None:
-                            result["non_html_documents_skipped"] += 1
+                            if filing_form in {"10-K", "10-Q"}:
+                                status, target, primary = _save_sec_full_submission(
+                                    filing=filing,
+                                    company_row=company_row,
+                                    output_dir=output,
+                                    retrieved_at=retrieved_at,
+                                    force=force,
+                                )
+                                primary_target = target
+                                symbol_paths.append(target.relative_to(output).as_posix())
+                                if status == "written":
+                                    result["full_submission_written"] += 1
+                                else:
+                                    result["existing_files_skipped"] += 1
+                            else:
+                                result["non_html_documents_skipped"] += 1
                         else:
                             status, target = _save_sec_filing_attachment(
                                 filing=filing,
@@ -326,14 +382,44 @@ def download_us_filing_htmls(
                                 retrieved_at=retrieved_at,
                                 force=force,
                             )
+                            if status == "non_html" and filing_form in {"10-K", "10-Q"}:
+                                status, target, primary = _save_sec_full_submission(
+                                    filing=filing,
+                                    company_row=company_row,
+                                    output_dir=output,
+                                    retrieved_at=retrieved_at,
+                                    force=force,
+                                )
+                                if status == "written":
+                                    result["full_submission_written"] += 1
                             if target is not None:
+                                primary_target = target
                                 symbol_paths.append(target.relative_to(output).as_posix())
-                            if status == "written":
+                            if isinstance(primary, _SecCompleteSubmissionAttachment):
+                                if status == "existing":
+                                    result["existing_files_skipped"] += 1
+                            elif status == "written":
                                 result["primary_html_written"] += 1
                             elif status == "existing":
                                 result["existing_files_skipped"] += 1
                             else:
                                 result["non_html_documents_skipped"] += 1
+
+                    if filing_form in {"10-K", "10-Q"}:
+                        bundle_result = _save_sec_xbrl_bundle(
+                            filing=filing,
+                            attachments=attachments or (),
+                            primary_attachment=primary,
+                            primary_target=primary_target,
+                            company_row=company_row,
+                            output_dir=output,
+                            retrieved_at=retrieved_at,
+                            force=force,
+                        )
+                        result["filing_bundles_written"] += bundle_result["bundles_written"]
+                        result["xbrl_files_written"] += bundle_result["xbrl_files_written"]
+                        result["existing_files_skipped"] += bundle_result["existing_files_skipped"]
+                        symbol_paths.extend(bundle_result["paths"])
 
                     if filing_form == "8-K" and attachments is not None:
                         for attachment in attachments:
@@ -398,7 +484,10 @@ def download_us_filing_htmls(
                     result = {
                         "filings_seen": 0,
                         "primary_html_written": 0,
+                        "full_submission_written": 0,
                         "ir_html_written": 0,
+                        "filing_bundles_written": 0,
+                        "xbrl_files_written": 0,
                         "existing_files_skipped": 0,
                         "non_html_documents_skipped": 0,
                         "errors": [_filing_error(company_row, None, exc)],
@@ -443,7 +532,10 @@ def _merge_sec_company_result(
     for name in (
         "filings_seen",
         "primary_html_written",
+        "full_submission_written",
         "ir_html_written",
+        "filing_bundles_written",
+        "xbrl_files_written",
         "existing_files_skipped",
         "non_html_documents_skipped",
     ):
@@ -454,6 +546,205 @@ def _merge_sec_company_result(
 def is_sec_ir_exhibit(attachment: Any) -> bool:
     document_type = str(_safe_attr(attachment, "document_type") or "").strip().upper()
     return bool(SEC_IR_EXHIBIT_PATTERN.fullmatch(document_type))
+
+
+def sec_xbrl_document_role(attachment: Any) -> str:
+    document_type = str(_safe_attr(attachment, "document_type") or "").strip().upper()
+    if document_type in SEC_XBRL_DOCUMENT_ROLES:
+        return SEC_XBRL_DOCUMENT_ROLES[document_type]
+    document = str(_safe_attr(attachment, "document") or "").strip().lower()
+    if document.endswith(".xsd"):
+        return "schema"
+    for suffix, role in (
+        ("_lab.xml", "label"),
+        ("_pre.xml", "presentation"),
+        ("_def.xml", "definition"),
+        ("_cal.xml", "calculation"),
+    ):
+        if document.endswith(suffix):
+            return role
+    document_name = Path(document).name
+    if document_type == "XML" and (
+        re.fullmatch(r"r\d+\.xml", document_name)
+        or document_name in {"filingsummary.xml", "defnref.xml"}
+    ):
+        # EDGAR adds rendered statement/note reports to older XBRL filings.
+        # They are not instance documents and reading ``content`` here causes
+        # one avoidable network request per rendered report (often dozens).
+        return ""
+    is_instance_candidate = document.endswith("_htm.xml") or (
+        document_type in {"XML", "XBRL INSTANCE DOCUMENT", "XBRL INSTANCE FILE"}
+        and document.endswith((".xml", ".xbrl"))
+    )
+    if is_instance_candidate and _looks_like_xbrl_instance(
+        _content_bytes(_safe_attr(attachment, "content"))
+    ):
+        return "instance"
+    return ""
+
+
+def _save_sec_xbrl_bundle(
+    *,
+    filing: Any,
+    attachments: Iterable[Any],
+    primary_attachment: Any,
+    primary_target: Path | None,
+    company_row: Mapping[str, str],
+    output_dir: Path,
+    retrieved_at: str,
+    force: bool,
+) -> dict[str, Any]:
+    form = str(_safe_attr(filing, "form") or "").strip().upper()
+    accession = str(
+        _safe_attr(filing, "accession_no")
+        or _safe_attr(filing, "accession_number")
+        or "unknown-accession"
+    ).strip()
+    symbol = _safe_path_part(
+        company_row.get("ticker"), fallback=_cik_file_key(company_row["cik"])
+    )
+    bundle_dir = output_dir / _safe_path_part(form) / symbol / _safe_path_part(accession)
+    manifest_path = bundle_dir / "filing.json"
+    manifest_existed = manifest_path.is_file()
+    paths: list[str] = []
+    existing = 0
+    xbrl_written = 0
+    primary_name = ""
+    primary_document_metadata: dict[str, Any] = {}
+
+    if primary_target is not None and primary_target.is_file():
+        primary_name = _safe_path_part(
+            _safe_attr(primary_attachment, "document"), fallback="primary.htm"
+        )
+        bundle_primary = bundle_dir / primary_name
+        status = _link_or_write_sec_bundle_primary(
+            source=primary_target,
+            target=bundle_primary,
+            force=force,
+            metadata={"ticker": symbol, "form": form, "role": "primary"},
+        )
+        existing += int(status == "existing")
+        paths.append(bundle_primary.relative_to(output_dir).as_posix())
+        primary_document_metadata = {
+            "document_name": primary_name,
+            "document_type": str(_safe_attr(primary_attachment, "document_type") or ""),
+            "source_url": str(_safe_attr(primary_attachment, "url") or ""),
+            "storage_role": str(
+                _safe_attr(primary_attachment, "storage_role")
+                or "primary_document_html"
+            ),
+            "byte_size": primary_target.stat().st_size,
+            "sha256": _sha256_path(primary_target),
+        }
+
+    xbrl_documents: list[dict[str, Any]] = []
+    for attachment in attachments:
+        role = sec_xbrl_document_role(attachment)
+        if not role:
+            continue
+        document_name = _safe_path_part(
+            _safe_attr(attachment, "document"), fallback=f"{role}.xml"
+        )
+        target = bundle_dir / document_name
+        payload = _content_bytes(_safe_attr(attachment, "content"))
+        if not payload:
+            continue
+        status = _write_sec_bundle_file(
+            target,
+            payload,
+            force=force,
+            metadata={"ticker": symbol, "form": form, "role": role},
+        )
+        xbrl_written += int(status == "written")
+        existing += int(status == "existing")
+        paths.append(target.relative_to(output_dir).as_posix())
+        xbrl_documents.append(
+            {
+                "role": role,
+                "document_type": str(_safe_attr(attachment, "document_type") or ""),
+                "document_name": document_name,
+                "sequence_number": str(_safe_attr(attachment, "sequence_number") or ""),
+                "source_url": str(_safe_attr(attachment, "url") or ""),
+                "byte_size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+
+    manifest = {
+        "schema_version": SEC_FILING_BUNDLE_SCHEMA_VERSION,
+        "source": SEC_FILING_BUNDLE_SOURCE,
+        "provider": "edgartools",
+        "edgartools_version": _edgartools_version(),
+        "source_authority": "SEC_10K_AUDITED" if form == "10-K" else "SEC_10Q_UNAUDITED",
+        "ticker": company_row.get("ticker", ""),
+        "cik": _cik_file_key(company_row["cik"]),
+        "company_name": company_row.get("title", ""),
+        "form": form,
+        "filing_date": _normalize_sec_filing_date(_safe_attr(filing, "filing_date")),
+        "accepted_at": str(
+            _safe_attr(filing, "acceptance_datetime")
+            or _safe_attr(filing, "accepted_at")
+            or ""
+        ),
+        "period_of_report": str(_safe_attr(filing, "period_of_report") or ""),
+        "accession_number": accession,
+        "primary_document": primary_name,
+        "primary_document_metadata": primary_document_metadata,
+        "xbrl_documents": xbrl_documents,
+        "retrieved_at": retrieved_at,
+    }
+    _write_json_source(manifest_path, manifest, source=SEC_FILING_BUNDLE_SOURCE)
+    paths.append(manifest_path.relative_to(output_dir).as_posix())
+    return {
+        "bundles_written": int(force or not manifest_existed),
+        "xbrl_files_written": xbrl_written,
+        "existing_files_skipped": existing,
+        "paths": paths,
+    }
+
+
+def _link_or_write_sec_bundle_primary(
+    *,
+    source: Path,
+    target: Path,
+    force: bool,
+    metadata: dict[str, Any],
+) -> str:
+    """Store the compatibility bundle path without duplicating primary bytes."""
+    if target.is_file() and target.stat().st_size > 0 and not force:
+        return "existing"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if target.exists():
+            target.unlink()
+        target.hardlink_to(source)
+        return "written"
+    except OSError:
+        return _write_sec_bundle_file(
+            target,
+            source.read_bytes(),
+            force=force,
+            metadata=metadata,
+        )
+
+
+def _write_sec_bundle_file(
+    target: Path,
+    payload: bytes,
+    *,
+    force: bool,
+    metadata: dict[str, Any],
+) -> str:
+    if target.is_file() and target.stat().st_size > 0 and not force:
+        return "existing"
+    write_source_bytes(
+        target,
+        payload,
+        source=SEC_FILING_BUNDLE_SOURCE,
+        validator=validate_nonempty_file,
+        metadata=metadata,
+    )
+    return "written"
 
 
 def _save_sec_filing_attachment(
@@ -531,6 +822,102 @@ def _save_sec_filing_attachment(
     )
     _write_json_source(metadata_path, metadata, source=SEC_FILING_SOURCE)
     return "written", target
+
+
+@dataclass(frozen=True)
+class _SecCompleteSubmissionAttachment:
+    document: str
+    document_type: str
+    sequence_number: str
+    description: str
+    url: str
+    storage_role: str = "complete_submission_text"
+
+
+def _save_sec_full_submission(
+    *,
+    filing: Any,
+    company_row: Mapping[str, str],
+    output_dir: Path,
+    retrieved_at: str,
+    force: bool,
+) -> tuple[str, Path, _SecCompleteSubmissionAttachment]:
+    """Persist the SEC complete submission when no primary HTML is exposed."""
+    filing_form = str(_safe_attr(filing, "form") or "UNKNOWN").upper()
+    filing_date = (
+        _normalize_sec_filing_date(_safe_attr(filing, "filing_date"))
+        or "unknown-date"
+    )
+    accession = str(
+        _safe_attr(filing, "accession_no")
+        or _safe_attr(filing, "accession_number")
+        or "unknown-accession"
+    ).strip()
+    symbol = _safe_path_part(
+        company_row.get("ticker"), fallback=_cik_file_key(company_row["cik"])
+    )
+    attachment = _SecCompleteSubmissionAttachment(
+        document="full-submission.txt",
+        document_type=filing_form,
+        sequence_number="",
+        description="Complete submission text file",
+        url=str(_safe_attr(filing, "text_url") or ""),
+    )
+    target = (
+        output_dir
+        / _safe_path_part(filing_form)
+        / symbol
+        / (
+            f"{filing_date}_{_safe_path_part(accession)}_"
+            f"{attachment.document}"
+        )
+    )
+    metadata_path = target.with_suffix(target.suffix + ".metadata.json")
+
+    if target.is_file() and target.stat().st_size > 0 and not force:
+        status = "existing"
+        byte_size = target.stat().st_size
+        sha256 = _sha256_path(target)
+    else:
+        loader = _safe_attr(filing, "full_text_submission")
+        if not callable(loader):
+            raise RuntimeError(
+                "edgartools filing has neither primary HTML nor complete submission loader"
+            )
+        payload = _content_bytes(loader())
+        if not payload:
+            raise ValueError("SEC complete submission text is empty")
+        write_source_bytes(
+            target,
+            payload,
+            source=SEC_FILING_SOURCE,
+            validator=validate_nonempty_file,
+            metadata={
+                "ticker": company_row.get("ticker", ""),
+                "form": filing_form,
+                "category": "primary",
+                "storage_role": attachment.storage_role,
+            },
+        )
+        status = "written"
+        byte_size = len(payload)
+        sha256 = hashlib.sha256(payload).hexdigest()
+
+    if status == "written" or not metadata_path.exists():
+        metadata = _sec_attachment_metadata(
+            filing=filing,
+            attachment=attachment,
+            company_row=company_row,
+            category="primary",
+            target=target,
+            output_dir=output_dir,
+            retrieved_at=retrieved_at,
+            byte_size=byte_size,
+            sha256=sha256,
+        )
+        metadata["storage_role"] = attachment.storage_role
+        _write_json_source(metadata_path, metadata, source=SEC_FILING_SOURCE)
+    return status, target, attachment
 
 
 def _sec_attachment_metadata(
@@ -688,7 +1075,12 @@ def _resolve_sec_filing_companies(
     return resolved, len(missing)
 
 
-def _completed_filing_checkpoint(path: Path, query_fingerprint: str) -> bool:
+def _completed_filing_checkpoint(
+    path: Path,
+    query_fingerprint: str,
+    *,
+    verify_files: bool = True,
+) -> bool:
     if not path.exists():
         return False
     try:
@@ -699,10 +1091,29 @@ def _completed_filing_checkpoint(path: Path, query_fingerprint: str) -> bool:
         return False
     root = path.parent.parent
     files = payload.get("files", [])
-    return isinstance(files, list) and all(
-        (root / str(relative)).is_file() and (root / str(relative)).stat().st_size > 0
-        for relative in files
-    )
+    if not isinstance(files, list):
+        return False
+    if not verify_files:
+        return True
+    for relative in files:
+        artifact = root / str(relative)
+        if not artifact.is_file() or artifact.stat().st_size <= 0:
+            return False
+        if artifact.name.lower() != "filing.json":
+            continue
+        try:
+            manifest = json.loads(artifact.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
+        if str(manifest.get("form") or "").upper() not in {"10-K", "10-Q"}:
+            continue
+        primary_name = str(manifest.get("primary_document") or "").strip()
+        if not primary_name or Path(primary_name).name != primary_name:
+            return False
+        primary = artifact.parent / primary_name
+        if not primary.is_file() or primary.stat().st_size <= 0:
+            return False
+    return True
 
 
 def _write_json_source(path: Path, payload: Mapping[str, Any], *, source: str) -> Path:
@@ -763,6 +1174,13 @@ def _looks_like_html(payload: bytes) -> bool:
         marker in sample
         for marker in (b"<!doctype html", b"<html", b"<head", b"<body", b"<table", b"<div", b"<ix:header")
     )
+
+
+def _looks_like_xbrl_instance(payload: bytes) -> bool:
+    sample = payload[:16384].lstrip().lower()
+    if sample.startswith(b"\xef\xbb\xbf"):
+        sample = sample[3:].lstrip()
+    return b"<xbrl" in sample or b":xbrl" in sample
 
 
 def _safe_attr(value: Any, name: str) -> Any:

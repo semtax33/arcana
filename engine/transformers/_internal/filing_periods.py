@@ -243,6 +243,7 @@ def read_period_snapshots(
     report_metadata_path: str | Path = REPORT_METADATA_PATH,
     *,
     market: str = "kr",
+    fallback_to_period_end: bool = True,
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     stock_code = normalize_symbol_for_market(stock_code, market)
@@ -288,7 +289,11 @@ def read_period_snapshots(
         return pd.DataFrame()
 
     result = pd.DataFrame(rows).sort_values("financial_period").reset_index(drop=True)
-    return attach_report_metadata(result, report_metadata_path)
+    return attach_report_metadata(
+        result,
+        report_metadata_path,
+        fallback_to_period_end=fallback_to_period_end,
+    )
 
 
 def infer_account_statement_types(snapshot_df: pd.DataFrame) -> dict[str, str]:
@@ -383,9 +388,16 @@ def ttm_financial_frame(
     cumulative_statement_types: set[str] | None = None,
     report_metadata_path: str | Path = REPORT_METADATA_PATH,
     market: str = "kr",
+    fallback_to_period_end: bool = True,
 ) -> pd.DataFrame:
     periodized = add_quarter_and_ttm_amounts(
-        read_period_snapshots(stock_code, financial_dir, report_metadata_path, market=market),
+        read_period_snapshots(
+            stock_code,
+            financial_dir,
+            report_metadata_path,
+            market=market,
+            fallback_to_period_end=fallback_to_period_end,
+        ),
         cumulative_statement_types=cumulative_statement_types,
     )
     if periodized.empty:
@@ -412,9 +424,16 @@ def quarterly_financial_frame(
     cumulative_statement_types: set[str] | None = None,
     report_metadata_path: str | Path = REPORT_METADATA_PATH,
     market: str = "kr",
+    fallback_to_period_end: bool = True,
 ) -> pd.DataFrame:
     periodized = add_quarter_and_ttm_amounts(
-        read_period_snapshots(stock_code, financial_dir, report_metadata_path, market=market),
+        read_period_snapshots(
+            stock_code,
+            financial_dir,
+            report_metadata_path,
+            market=market,
+            fallback_to_period_end=fallback_to_period_end,
+        ),
         cumulative_statement_types=cumulative_statement_types,
     )
     if periodized.empty:

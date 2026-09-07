@@ -46,10 +46,13 @@ TARGET_DATES = tuple(
     ).split(",")
     if value.strip()
 )
-if len(TARGET_DATES) != 2:
-    raise RuntimeError("ARCANA_US_FACTOR_BACKFILL_DATES must contain exactly two dates")
-for target_date in TARGET_DATES:
-    date.fromisoformat(target_date)
+if not TARGET_DATES:
+    raise RuntimeError("ARCANA_US_FACTOR_BACKFILL_DATES must contain at least one date")
+parsed_target_dates = tuple(date.fromisoformat(target_date) for target_date in TARGET_DATES)
+if parsed_target_dates != tuple(sorted(set(parsed_target_dates))):
+    raise RuntimeError(
+        "ARCANA_US_FACTOR_BACKFILL_DATES must contain unique dates in ascending order"
+    )
 BASELINE_DATE = os.getenv("ARCANA_US_FACTOR_BASELINE_DATE", "2026-08-21")
 WARMUP_START_DATE = os.getenv("ARCANA_US_FACTOR_WARMUP_START_DATE", "2015-08-24")
 YAHOO_END_DATE = (date.fromisoformat(TARGET_DATES[-1]) + timedelta(days=1)).isoformat()

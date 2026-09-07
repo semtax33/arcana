@@ -278,6 +278,29 @@ def test_reported_canonical_layers_keep_raw_fact_and_pit_identity():
     assert canonical.identity.revision_id == "R-1"
 
 
+@pytest.mark.parametrize(
+    "label",
+    (
+        "사업양수에의한현금증가",
+        "사업양수로인한현금의증가",
+        "사업양수로인한현금의감소",
+    ),
+)
+def test_v6_business_transfer_cash_aliases_preserve_native_mapping(label):
+    normalizer = FinancialSemanticNormalizer(_engine().semantic_engine)
+    reported = normalizer.reported_fact_from_row(
+        {
+            "statement_type": "CF",
+            "original_account_name": label,
+            "amount_raw": "1",
+            "unit": "원",
+            "period": "2012.12",
+        }
+    )
+
+    assert normalizer.normalize(reported).canonical_id == "SPECIAL_CASH_CHANGE"
+
+
 def test_pre_scaled_raw_amount_is_not_scaled_twice():
     normalizer = FinancialSemanticNormalizer(_engine().semantic_engine)
     reported = normalizer.reported_fact_from_row(

@@ -53,6 +53,41 @@ accuracy and is therefore not an acceptable improvement.
    date of each calendar month and reconstructs the full KR universe: unaffected
    current rows stand in for their unchanged old values, while affected old rows
    come from the verified backup.
+10. The 2002–2012 KR historical load freezes its target universe as every
+    `SEC_KR_*` security with at least one `price_daily` row inside the date
+    interval. The manifest stores sorted security and factor SHA-256 hashes. All
+    293 current preferred factors are attempted independently for annual,
+    quarterly, and TTM bases; a processed target may still have no materialized
+    row when every requested value is undefined.
+11. Historical snapshots are exact finite-row copies of the rebuilt daily factor
+    source. `source_trade_date` equals the source row's `trade_date`; value,
+    fiscal metadata, currency, and `updated_at` are preserved. Each year/basis is
+    deleted before retry and accepted only after source/snapshot counts match.
+12. Historical load coverage reports three separate measures per year/basis:
+    security coverage uses securities with price rows as its denominator, factor
+    ID coverage uses the 293-factor contract, and factor-cell coverage uses
+    `price_daily rows × 293`. Processing completion is reported separately and
+    is never substituted for finite-value coverage.
+13. When strict PIT metadata proves that a security has no report available by
+    the requested end date, its annual, quarterly, and TTM financial inputs are
+    all empty. Its finite non-financial factor rows are therefore basis-invariant
+    and may be copied from the completed annual result. Any security with a
+    usable report remains on the normal basis-specific calculation path. The
+    initial 2002–2012 load observed zero usable reports because historical DART
+    metadata had not been ingested; that observation is source incompleteness,
+    not evidence that the filings do not exist. The optimization is therefore
+    permitted only per security after a completed, checkpointed metadata search
+    records either usable reports or an explicit terminal no-data result.
+14. Vertically packed legacy DART statement cells are expanded by preserving
+    blank `<br>` positions across account, detail, and subtotal columns. Within
+    that dialect, parentheses in the packed subtotal column are aggregation
+    markers; economic negatives remain identified by minus or triangle markers.
+    Expanded mappings are accepted only as candidates and accounting identities
+    remain independent validation evidence.
+15. v6 preserves signed tax benefits, includes legacy outside-shareholder
+    interest and special/translation cash changes in their applicable accounting
+    identities, and marks structurally misaligned packed statements NOT_TESTABLE.
+    Accounting identities remain review evidence and never auto-remap facts.
 
 ## Rejected alternatives
 
@@ -65,6 +100,14 @@ accuracy and is therefore not an acceptable improvement.
 - Letting accounting-equation residuals auto-remap accounts: a residual is only
   review evidence and can be caused by scope, period, currency, unit, dimensions,
   or incomplete presentation.
+- Defining “all securities” from currently listed master data: excludes delisted
+  and historical securities that are present in the requested interval.
+- Treating an undefined requested factor as zero or as a failed batch: creates a
+  false financial fact or makes a resumable load retry forever.
+- Copying annual rows for a security with any report available in the interval:
+  could erase legitimate quarterly or TTM differences.
+- Treating an empty or partially collected historical metadata cache as proof of
+  no filings: silently converts a source-recovery failure into basis-invariance.
 
 ## Consequences
 

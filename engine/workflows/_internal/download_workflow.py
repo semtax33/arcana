@@ -168,8 +168,23 @@ def download_us_benchmarks(args: argparse.Namespace) -> None:
 
 
 def download_all_us_statements(args: argparse.Namespace) -> None:
+    symbols = _parse_symbols(args.symbols)
+    download_us_filing_htmls(
+        symbols=symbols,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        forms=["10-K", "10-Q"],
+        offset=args.offset,
+        limit=args.limit,
+        force=args.force,
+        resume=not args.no_resume,
+        workers=args.workers,
+        sleep_seconds=args.sleep_seconds if args.sleep_seconds > 0 else 0.1,
+        retries=args.stock_retries,
+        retry_backoff_seconds=args.stock_retry_backoff,
+    )
     download_us_companyfacts(
-        symbols=_parse_symbols(args.symbols),
+        symbols=symbols,
         offset=args.offset,
         limit=args.limit,
         force=args.force,

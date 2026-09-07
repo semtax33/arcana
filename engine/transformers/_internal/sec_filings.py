@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import codecs
 import contextlib
 import functools
 import io
@@ -10,7 +11,7 @@ import os
 import re
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date as date_type, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -21,12 +22,13 @@ import yaml
 from engine.core.identifiers import security_id_of
 from engine.core.paths import DATA_LAKE, first_existing_path, statement_symbol_name
 from engine.markets.us import US_MARKET_CONFIG
+from engine.semantic.us_dsl import load_us_semantic_rules
 from engine.transformers._internal.statement_files import (
     add_statement_period_columns,
     consolidated_statement_path,
     legacy_statement_snapshot_files,
 )
-from engine.transformers._internal.dart_filings import (
+from engine.transformers._internal.filing_common import (
     DEBUG_COLUMNS,
     EXPECTED_HEADER,
     apply_cash_direction,
@@ -39,23 +41,28 @@ from engine.transformers._internal.edgar_identity import (
 
 
 US_MAPPING_RULE_PATH = first_existing_path(
+    DATA_LAKE.rules("semantic_us_rule_manifest.json"),
+    DATA_LAKE.rules("semantic_us_v2.arcana"),
     DATA_LAKE.rules("us_mapping.yaml"),
     DATA_LAKE.rules("mapping_us.yaml"),
 )
+US_FILINGS_DIR = DATA_LAKE.bronze("sec", "fillings")
 US_COMPANYFACTS_DIR = DATA_LAKE.bronze("sec", "companyfacts")
 US_NOTES_DATASET_DIR = DATA_LAKE.bronze("sec", "financial-statement-and-notes-data-set")
 US_NORMALIZED_DIR = DATA_LAKE.silver("sec", "normalized")
 US_TICKER_MAP_PATH = DATA_LAKE.meta("sec_company_tickers.csv")
+US_TICKER_ALIASES_PATH = DATA_LAKE.meta("sec_ticker_aliases.csv")
 US_REPORT_METADATA_PATH = DATA_LAKE.silver("sec", "us_report_metadata.csv")
 
 ALLOWED_SEC_FORMS = {"10-K", "10-K/A", "10-Q", "10-Q/A"}
 SOURCE_PRIORITY = {
-    "companyfacts_primary": 0,
-    "companyfacts_alternate": 1,
-    "companyfacts_label": 2,
-    "notes": 3,
-    "edgartools": 4,
-    "derived_formula": 5,
+    "filing_xbrl": 0,
+    "companyfacts_primary": 1,
+    "companyfacts_alternate": 2,
+    "companyfacts_label": 3,
+    "notes": 4,
+    "edgartools": 5,
+    "derived_formula": 6,
 }
 EPS_CANONICAL_IDS = {"BASIC_EPS", "DILUTED_EPS"}
 SHARE_CANONICAL_IDS = {
@@ -64,6 +71,7 @@ SHARE_CANONICAL_IDS = {
     "COMMON_SHARES_OUTSTANDING",
 }
 DEFAULT_LABEL_EXCLUDE_NAMESPACES = {"us-gaap", "srt", "dei", "country", "exch"}
+MAX_FILING_XBRL_WARNING_EXAMPLES = 10
 
 
 @dataclass(frozen=True)
@@ -89,6 +97,17 @@ class SecFactCandidate:
     original_account_name: str
     amount_policy: str
     cash_direction: str = ""
+    source_authority: str = ""
+    accepted_at: str = ""
+    context_ref: str = ""
+    unit: str = ""
+    dimensions: str = "{}"
+    taxonomy_version: str = ""
+    period_semantic: str = ""
+    duration_days: int | None = None
+    source_path: str = ""
+    graph_evidence: str = ""
+    match_rank: int = 0
 
     @property
     def period(self) -> str:
@@ -110,6 +129,72 @@ class CompanyFactsExtractResult:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class SecFilingBundleDescriptor:
+    path: Path
+    manifest: dict[str, Any]
+
+    @property
+    def symbol(self) -> str:
+        return US_MARKET_CONFIG.normalize_symbol(self.manifest.get("ticker"))
+
+    @property
+    def cik(self) -> str:
+        return normalize_cik(self.manifest.get("cik"))
+
+    @property
+    def accession(self) -> str:
+        return safe_str(self.manifest.get("accession_number")).strip()
+
+
+@dataclass(frozen=True)
+class FilingXbrlExtractResult:
+    candidates: list[SecFactCandidate]
+    authoritative_periods: set[tuple[str, int, int]]
+    authoritative_accessions: set[tuple[str, str]]
+    descriptors: list[SecFilingBundleDescriptor]
+
+
+@dataclass(frozen=True)
+class FilingXbrlDescriptorExtractResult:
+    path: str
+    candidates: list[SecFactCandidate]
+    authoritative_period: tuple[str, int, int] | None = None
+    error: str = ""
+
+
+def fan_out_sec_candidates(
+    candidates: list[SecFactCandidate],
+    *,
+    symbols_by_cik: dict[str, tuple[str, ...]],
+) -> list[SecFactCandidate]:
+    expanded: list[SecFactCandidate] = []
+    for candidate in candidates:
+        target_symbols = symbols_by_cik.get(normalize_cik(candidate.cik))
+        if not target_symbols:
+            expanded.append(candidate)
+            continue
+        expanded.extend(replace(candidate, symbol=symbol) for symbol in target_symbols)
+    return expanded
+
+
+def fan_out_sec_authority_keys(
+    keys: set[tuple[Any, ...]],
+    *,
+    symbol_to_cik: dict[str, str],
+    symbols_by_cik: dict[str, tuple[str, ...]],
+) -> set[tuple[Any, ...]]:
+    expanded: set[tuple[Any, ...]] = set()
+    for key in keys:
+        if not key:
+            continue
+        symbol = US_MARKET_CONFIG.normalize_symbol(key[0])
+        cik = normalize_cik(symbol_to_cik.get(symbol))
+        target_symbols = symbols_by_cik.get(cik) or (symbol,)
+        expanded.update((target_symbol, *key[1:]) for target_symbol in target_symbols)
+    return expanded
+
+
 EdgarToolsProvider = Callable[
     [str, str, str, list[dict[str, Any]], int, int],
     list[dict[str, Any]],
@@ -119,9 +204,15 @@ _COMPANYFACTS_WORKER_RULES: list[dict[str, Any]] = []
 _COMPANYFACTS_WORKER_CANONICAL_NAMES: dict[str, str] = {}
 _COMPANYFACTS_WORKER_START_YEAR = 0
 _COMPANYFACTS_WORKER_END_YEAR = 0
+_FILING_XBRL_WORKER_RULES: list[dict[str, Any]] = []
+_FILING_XBRL_WORKER_CANONICAL_NAMES: dict[str, str] = {}
+_FILING_XBRL_WORKER_START_YEAR = 0
+_FILING_XBRL_WORKER_END_YEAR = 0
 
 
 def load_us_mapping_rules(path: str | Path = US_MAPPING_RULE_PATH) -> dict[str, Any]:
+    if Path(path).suffix.lower() in {".arcana", ".json"}:
+        return load_us_semantic_rules(path).to_legacy_rule_groups()
     with Path(path).open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
@@ -133,8 +224,29 @@ def load_us_mapping_rules(path: str | Path = US_MAPPING_RULE_PATH) -> dict[str, 
     return data
 
 
-def load_sec_ticker_map(path: str | Path = US_TICKER_MAP_PATH) -> pd.DataFrame:
+def load_sec_ticker_map(
+    path: str | Path = US_TICKER_MAP_PATH,
+    *,
+    aliases_path: str | Path | None = None,
+) -> pd.DataFrame:
     path = Path(path)
+    if aliases_path is None and path.resolve() == Path(US_TICKER_MAP_PATH).resolve():
+        aliases_path = US_TICKER_ALIASES_PATH
+    frames = [_read_sec_ticker_map(path)]
+    if aliases_path is not None:
+        frames.insert(0, _read_sec_ticker_map(Path(aliases_path)))
+    frames = [frame for frame in frames if not frame.empty]
+    if not frames:
+        return pd.DataFrame(columns=["cik", "ticker", "title"])
+    return (
+        pd.concat(frames, ignore_index=True)
+        .drop_duplicates("ticker", keep="first")
+        .sort_values("ticker", kind="stable")
+        .reset_index(drop=True)
+    )
+
+
+def _read_sec_ticker_map(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=["cik", "ticker", "title"])
 
@@ -694,6 +806,8 @@ def extract_companyfacts_candidates_from_data(
             accession_period_ends=accession_period_ends,
             allow_non_period_end=canonical_id == "COMMON_SHARES_OUTSTANDING",
         ):
+            if not _companyfacts_period_matches_fiscal_year(unit_row):
+                continue
             candidate = _candidate_from_companyfacts_unit(
                 symbol=symbol,
                 cik=cik,
@@ -729,6 +843,15 @@ def _companyfacts_unit_in_year_range(
     return start_year <= fiscal_year <= end_year
 
 
+def _companyfacts_period_matches_fiscal_year(unit_row: dict[str, Any]) -> bool:
+    try:
+        fiscal_year = int(unit_row.get("fy"))
+    except (TypeError, ValueError):
+        return False
+    period_end = _companyfacts_date(unit_row.get("end") or unit_row.get("ddate"))
+    return period_end is not None and abs(period_end.year - fiscal_year) <= 1
+
+
 def companyfacts_data_has_usable_facts(data: dict[str, Any]) -> bool:
     facts = data.get("facts")
     if not isinstance(facts, dict):
@@ -747,6 +870,684 @@ def companyfacts_has_usable_facts(companyfacts_path: str | Path) -> bool:
         return False
 
     return companyfacts_data_has_usable_facts(data)
+
+
+def resolve_sec_filing_bundles(
+    filings_dir: str | Path,
+    *,
+    symbols: list[str] | None = None,
+) -> list[SecFilingBundleDescriptor]:
+    root = Path(filings_dir)
+    if not root.is_dir():
+        return []
+    wanted = {
+        US_MARKET_CONFIG.normalize_symbol(symbol)
+        for symbol in (symbols or [])
+        if safe_str(symbol).strip()
+    }
+    descriptors: list[SecFilingBundleDescriptor] = []
+    for form in ("10-K", "10-Q"):
+        form_root = root / form
+        if not form_root.is_dir():
+            continue
+        manifests: Iterable[Path]
+        if wanted and not any(symbol.startswith("CIK") for symbol in wanted):
+            manifests = (
+                manifest
+                for symbol in sorted(wanted)
+                for manifest in (form_root / symbol).glob("*/filing.json")
+            )
+        else:
+            manifests = form_root.glob("*/*/filing.json")
+        for manifest_path in manifests:
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                print(f"[WARN] invalid SEC filing bundle manifest: {manifest_path} ({exc})")
+                continue
+            descriptor = SecFilingBundleDescriptor(manifest_path.parent, manifest)
+            if wanted and descriptor.symbol not in wanted and cik_file_key(descriptor.cik) not in wanted:
+                continue
+            if safe_str(manifest.get("form")).upper() not in ALLOWED_SEC_FORMS:
+                continue
+            descriptors.append(descriptor)
+    return sorted(
+        descriptors,
+        key=lambda item: (
+            item.symbol,
+            safe_str(item.manifest.get("filing_date")),
+            safe_str(item.manifest.get("accession_number")),
+        ),
+    )
+
+
+_MANIFEST_XBRL_DOCUMENT_TYPES = {
+    "instance": "EX-101.INS",
+    "schema": "EX-101.SCH",
+    "label": "EX-101.LAB",
+    "presentation": "EX-101.PRE",
+    "calculation": "EX-101.CAL",
+    "definition": "EX-101.DEF",
+}
+
+
+def _decode_sec_xml(payload: bytes, *, path: Path) -> str:
+    if payload.startswith(codecs.BOM_UTF8):
+        return payload.decode("utf-8-sig")
+    if payload.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return payload.decode("utf-16")
+    if payload.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        return payload.decode("utf-32")
+    declaration = re.search(
+        br"<\?xml[^>]*encoding=[\"']\s*([^\"']+?)\s*[\"']",
+        payload[:512],
+        flags=re.IGNORECASE,
+    )
+    encoding = declaration.group(1).decode("ascii") if declaration else "utf-8"
+    try:
+        return payload.decode(encoding)
+    except (LookupError, UnicodeDecodeError) as exc:
+        raise ValueError(f"cannot decode SEC XBRL XML {path} as {encoding}") from exc
+
+
+def _manifest_xbrl_documents(
+    descriptor: SecFilingBundleDescriptor,
+) -> dict[str, tuple[Path, str]]:
+    root = descriptor.path.resolve()
+    candidates: dict[str, list[tuple[int, str, Path, str]]] = {}
+    documents = descriptor.manifest.get("xbrl_documents") or []
+    if not isinstance(documents, list):
+        raise ValueError("filing manifest xbrl_documents must be a list")
+    for index, item in enumerate(documents):
+        if not isinstance(item, dict):
+            continue
+        role = safe_str(item.get("role")).strip().lower()
+        if role not in _MANIFEST_XBRL_DOCUMENT_TYPES:
+            continue
+        document_name = safe_str(item.get("document_name")).strip()
+        if not document_name or Path(document_name).name != document_name:
+            continue
+        path = (root / document_name).resolve()
+        if path.parent != root or not path.is_file():
+            continue
+        payload = path.read_bytes()
+        content = _decode_sec_xml(payload, path=path)
+        if role == "instance" and not re.search(r"<(?:(?:[A-Za-z_][\w.-]*):)?xbrl(?:\s|>)", content[:16384], re.IGNORECASE):
+            continue
+        document_type = safe_str(item.get("document_type")).strip().upper()
+        exact_type = _MANIFEST_XBRL_DOCUMENT_TYPES[role]
+        rank = 0 if document_type == exact_type else 1
+        candidates.setdefault(role, []).append((rank, f"{index:08d}", path, content))
+    selected: dict[str, tuple[Path, str]] = {}
+    for role, role_candidates in candidates.items():
+        ranked = sorted(
+            role_candidates,
+            key=lambda candidate: (candidate[0], candidate[1], candidate[2].name),
+        )
+        if ranked:
+            selected[role] = (ranked[0][2], ranked[0][3])
+    return selected
+
+
+def load_manifest_xbrl(descriptor: SecFilingBundleDescriptor) -> Any:
+    """Parse only the XBRL documents explicitly selected by a filing manifest."""
+    try:
+        from edgar.xbrl.xbrl import XBRL  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("edgartools is required to parse local SEC XBRL bundles") from exc
+
+    documents = _manifest_xbrl_documents(descriptor)
+    if "instance" not in documents:
+        raise ValueError("filing bundle has no valid XBRL instance document")
+    xbrl = XBRL()
+    parse_order = (
+        ("schema", "parse_schema_content"),
+        ("label", "parse_labels_content"),
+        ("presentation", "parse_presentation_content"),
+        ("calculation", "parse_calculation_content"),
+        ("definition", "parse_definition_content"),
+        ("instance", "parse_instance_content"),
+    )
+    for role, method_name in parse_order:
+        selected = documents.get(role)
+        if selected is not None:
+            getattr(xbrl.parser, method_name)(selected[1])
+    return xbrl
+
+
+def _extract_filing_xbrl_descriptor(
+    descriptor: SecFilingBundleDescriptor,
+    *,
+    rules: list[dict[str, Any]],
+    canonical_names: dict[str, str],
+    start_year: int,
+    end_year: int,
+) -> FilingXbrlDescriptorExtractResult:
+    manifest = descriptor.manifest
+    form = safe_str(manifest.get("form")).upper()
+    try:
+        xbrl = load_manifest_xbrl(descriptor)
+        facts = xbrl.facts.to_dataframe()
+        entity_info = dict(xbrl.entity_info or {})
+        fiscal_year = _filing_fiscal_year(entity_info, manifest)
+        fp = _filing_fiscal_period(entity_info, form, manifest)
+        fiscal_month = fiscal_month_from_fp(fp)
+        if fiscal_year is None or fiscal_month is None:
+            raise ValueError("filing bundle has no deterministic fiscal year/period")
+        if not (int(start_year) <= fiscal_year <= int(end_year)):
+            return FilingXbrlDescriptorExtractResult(str(descriptor.path), [])
+        period_key = (descriptor.symbol, fiscal_year, fiscal_month)
+        if facts.empty:
+            return FilingXbrlDescriptorExtractResult(
+                str(descriptor.path),
+                [],
+                authoritative_period=period_key,
+                error="filing bundle contains no XBRL facts",
+            )
+        return FilingXbrlDescriptorExtractResult(
+            str(descriptor.path),
+            _candidates_from_filing_facts(
+                descriptor=descriptor,
+                xbrl=xbrl,
+                facts=facts,
+                rules=rules,
+                canonical_names=canonical_names,
+                fiscal_year=fiscal_year,
+                fiscal_month=fiscal_month,
+                fp=fp,
+            ),
+            authoritative_period=period_key,
+        )
+    except Exception as exc:
+        fallback_period = _manifest_period_key(descriptor)
+        if fallback_period is not None and not (
+            start_year <= fallback_period[1] <= end_year
+        ):
+            fallback_period = None
+        return FilingXbrlDescriptorExtractResult(
+            str(descriptor.path),
+            [],
+            authoritative_period=fallback_period,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+
+def _init_filing_xbrl_worker(
+    rules: list[dict[str, Any]],
+    canonical_names: dict[str, str],
+    start_year: int,
+    end_year: int,
+) -> None:
+    global _FILING_XBRL_WORKER_RULES
+    global _FILING_XBRL_WORKER_CANONICAL_NAMES
+    global _FILING_XBRL_WORKER_START_YEAR
+    global _FILING_XBRL_WORKER_END_YEAR
+
+    _FILING_XBRL_WORKER_RULES = rules
+    _FILING_XBRL_WORKER_CANONICAL_NAMES = canonical_names
+    _FILING_XBRL_WORKER_START_YEAR = start_year
+    _FILING_XBRL_WORKER_END_YEAR = end_year
+
+
+def _extract_filing_xbrl_group_worker(
+    descriptors: list[SecFilingBundleDescriptor],
+) -> list[FilingXbrlDescriptorExtractResult]:
+    return [
+        _extract_filing_xbrl_descriptor(
+            descriptor,
+            rules=_FILING_XBRL_WORKER_RULES,
+            canonical_names=_FILING_XBRL_WORKER_CANONICAL_NAMES,
+            start_year=_FILING_XBRL_WORKER_START_YEAR,
+            end_year=_FILING_XBRL_WORKER_END_YEAR,
+        )
+        for descriptor in descriptors
+    ]
+
+
+def extract_filing_xbrl_candidates(
+    descriptors: list[SecFilingBundleDescriptor],
+    *,
+    rules: list[dict[str, Any]],
+    canonical_names: dict[str, str],
+    start_year: int,
+    end_year: int,
+    workers: int = 1,
+    log_progress: bool = True,
+    progress_interval: int = 100,
+) -> FilingXbrlExtractResult:
+    authoritative_accessions = {
+        (descriptor.symbol, descriptor.accession)
+        for descriptor in descriptors
+        if descriptor.accession
+    }
+    if not descriptors:
+        return FilingXbrlExtractResult(
+            [],
+            set(),
+            authoritative_accessions,
+            descriptors,
+        )
+
+    started_at = time.monotonic()
+    groups_by_symbol: dict[str, list[SecFilingBundleDescriptor]] = {}
+    for descriptor in descriptors:
+        groups_by_symbol.setdefault(descriptor.symbol, []).append(descriptor)
+    groups = list(groups_by_symbol.values())
+    worker_count = min(_resolve_worker_count(workers), len(groups))
+    if log_progress:
+        mode = "multiprocess" if worker_count > 1 else "single-process"
+        print(
+            "[INFO] filing XBRL extraction start "
+            f"bundles={len(descriptors)}, symbols={len(groups)}, "
+            f"workers={worker_count}, mode={mode}"
+        )
+
+    results_by_path: dict[str, FilingXbrlDescriptorExtractResult] = {}
+    processed_count = 0
+    candidate_count = 0
+    failed_count = 0
+    warning_examples_emitted = 0
+
+    def collect(results: list[FilingXbrlDescriptorExtractResult]) -> None:
+        nonlocal processed_count, candidate_count, failed_count, warning_examples_emitted
+        for result in results:
+            results_by_path[result.path] = result
+            processed_count += 1
+            candidate_count += len(result.candidates)
+            if result.error:
+                failed_count += 1
+                if (
+                    log_progress
+                    and warning_examples_emitted < MAX_FILING_XBRL_WARNING_EXAMPLES
+                ):
+                    print(
+                        "[WARN] SEC filing bundle parse failed and lower-authority "
+                        f"fallback is blocked: {result.path} ({result.error})"
+                    )
+                    warning_examples_emitted += 1
+        if log_progress and _should_log_progress(
+            processed_count,
+            len(descriptors),
+            progress_interval,
+        ):
+            elapsed = time.monotonic() - started_at
+            print(
+                "[PROGRESS] filing XBRL "
+                f"processed={processed_count}/{len(descriptors)}, "
+                f"candidates={candidate_count}, failed={failed_count}, "
+                f"elapsed={elapsed:.1f}s"
+            )
+
+    if worker_count <= 1:
+        for group in groups:
+            collect(
+                [
+                    _extract_filing_xbrl_descriptor(
+                        descriptor,
+                        rules=rules,
+                        canonical_names=canonical_names,
+                        start_year=start_year,
+                        end_year=end_year,
+                    )
+                    for descriptor in group
+                ]
+            )
+    else:
+        with ProcessPoolExecutor(
+            max_workers=worker_count,
+            initializer=_init_filing_xbrl_worker,
+            initargs=(rules, canonical_names, start_year, end_year),
+        ) as executor:
+            futures = [
+                executor.submit(_extract_filing_xbrl_group_worker, group)
+                for group in groups
+            ]
+            for future in as_completed(futures):
+                collect(future.result())
+
+    candidates: list[SecFactCandidate] = []
+    authoritative_periods: set[tuple[str, int, int]] = set()
+    for descriptor in descriptors:
+        result = results_by_path[str(descriptor.path)]
+        candidates.extend(result.candidates)
+        if result.authoritative_period is not None:
+            authoritative_periods.add(result.authoritative_period)
+    if log_progress:
+        elapsed = time.monotonic() - started_at
+        print(
+            "[INFO] filing XBRL extraction done "
+            f"bundles={len(descriptors)}, candidates={len(candidates)}, "
+            f"failed={failed_count}, "
+            f"warnings_suppressed={max(0, failed_count - warning_examples_emitted)}, "
+            f"elapsed={elapsed:.1f}s"
+        )
+    return FilingXbrlExtractResult(
+        candidates,
+        authoritative_periods,
+        authoritative_accessions,
+        descriptors,
+    )
+
+
+def _filing_fiscal_year(entity_info: dict[str, Any], manifest: dict[str, Any]) -> int | None:
+    value = entity_info.get("fiscal_year")
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        period = normalize_sec_date(manifest.get("period_of_report"))
+        if not period:
+            return None
+        fiscal_year = int(period[:4])
+        form = safe_str(manifest.get("form")).strip().upper()
+        try:
+            fiscal_year_end_month = int(entity_info.get("fiscal_year_end_month"))
+        except (TypeError, ValueError):
+            fiscal_year_end_month = 0
+        if (
+            form.startswith("10-Q")
+            and 1 <= fiscal_year_end_month <= 12
+            and int(period[5:7]) > fiscal_year_end_month
+        ):
+            fiscal_year += 1
+        return fiscal_year
+
+
+def _filing_fiscal_period(
+    entity_info: dict[str, Any],
+    form: str,
+    manifest: dict[str, Any] | None = None,
+) -> str:
+    value = safe_str(entity_info.get("fiscal_period")).strip().upper()
+    if value in {"FY", "Q1", "Q2", "Q3", "Q4"}:
+        return value
+    if form.startswith("10-K"):
+        return "FY"
+    if not form.startswith("10-Q") or manifest is None:
+        return ""
+    period = normalize_sec_date(manifest.get("period_of_report"))
+    try:
+        fiscal_year_end_month = int(entity_info.get("fiscal_year_end_month"))
+    except (TypeError, ValueError):
+        return ""
+    if not period or not 1 <= fiscal_year_end_month <= 12:
+        return ""
+    months_after_year_end = (int(period[5:7]) - fiscal_year_end_month) % 12
+    return {3: "Q1", 6: "Q2", 9: "Q3"}.get(months_after_year_end, "")
+
+
+def _manifest_period_key(
+    descriptor: SecFilingBundleDescriptor,
+) -> tuple[str, int, int] | None:
+    manifest = descriptor.manifest
+    period = normalize_sec_date(manifest.get("period_of_report"))
+    form = safe_str(manifest.get("form")).upper()
+    if not period or form.startswith("10-Q"):
+        return None
+    return descriptor.symbol, int(period[:4]), 12
+
+
+def _candidates_from_filing_facts(
+    *,
+    descriptor: SecFilingBundleDescriptor,
+    xbrl: Any,
+    facts: pd.DataFrame,
+    rules: list[dict[str, Any]],
+    canonical_names: dict[str, str],
+    fiscal_year: int,
+    fiscal_month: int,
+    fp: str,
+) -> list[SecFactCandidate]:
+    manifest = descriptor.manifest
+    form = safe_str(manifest.get("form")).upper()
+    report_period = normalize_sec_date(
+        manifest.get("period_of_report") or xbrl.entity_info.get("document_period_end_date")
+    )
+    taxonomy_version = _filing_taxonomy_version(descriptor.path)
+    output: list[SecFactCandidate] = []
+    records = facts.to_dict("records")
+    for rule in rules:
+        matches: list[tuple[dict[str, Any], int, str]] = []
+        for row in records:
+            matched = _match_filing_fact_rule(row, rule, xbrl=xbrl)
+            if matched is not None:
+                match_rank, graph_evidence = matched
+                matches.append((row, match_rank, graph_evidence))
+        selected = _select_current_filing_fact(
+            matches,
+            report_period=report_period,
+            form=form,
+            statement_type=safe_str(rule.get("fs_type")),
+        )
+        if selected is None:
+            continue
+        row, match_rank, graph_evidence, period_semantic, duration_days = selected
+        raw_value = row.get("numeric_value")
+        if raw_value is None or (isinstance(raw_value, float) and math.isnan(raw_value)):
+            raw_value = row.get("value")
+        try:
+            numeric_value = float(str(raw_value).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+        canonical_id = safe_str(rule.get("canonical_id"))
+        amount_policy = safe_str(rule.get("amount_policy")) or "as_reported"
+        concept = _filing_concept_qname(row.get("concept"))
+        context_ref = safe_str(row.get("context_ref"))
+        dimensions = _filing_context_dimensions(xbrl, context_ref)
+        output.append(
+            SecFactCandidate(
+                symbol=descriptor.symbol,
+                cik=descriptor.cik,
+                entity_name=safe_str(
+                    manifest.get("company_name") or xbrl.entity_info.get("entity_name")
+                ),
+                canonical_id=canonical_id,
+                canonical_name=canonical_names.get(canonical_id, "미매핑"),
+                statement_type=safe_str(rule.get("fs_type")) or "UNKNOWN",
+                fiscal_year=fiscal_year,
+                fiscal_month=fiscal_month,
+                value=apply_amount_policy_numeric(numeric_value, amount_policy),
+                raw_value=numeric_value,
+                period_end=_filing_fact_end(row),
+                filed=normalize_sec_date(manifest.get("filing_date")),
+                accn=safe_str(manifest.get("accession_number")),
+                form=form,
+                fp=fp,
+                source="filing_xbrl",
+                rule_id=f"semantic_us_v2:{canonical_id}:{concept}",
+                reason=f"local filing XBRL {('graph-supported ' if graph_evidence else '')}concept match: {concept}",
+                original_account_name=safe_str(row.get("original_label") or row.get("label")) or concept,
+                amount_policy=amount_policy,
+                cash_direction=safe_str(rule.get("cash_direction")),
+                source_authority=safe_str(manifest.get("source_authority")),
+                accepted_at=safe_str(manifest.get("accepted_at")),
+                context_ref=context_ref,
+                unit=safe_str(row.get("unit") or row.get("unit_ref")),
+                dimensions=json.dumps(dimensions, ensure_ascii=False, sort_keys=True),
+                taxonomy_version=taxonomy_version,
+                period_semantic=period_semantic,
+                duration_days=duration_days,
+                source_path=str(descriptor.path),
+                graph_evidence=graph_evidence,
+                match_rank=match_rank,
+            )
+        )
+    return output
+
+
+def _match_filing_fact_rule(
+    row: dict[str, Any],
+    rule: dict[str, Any],
+    *,
+    xbrl: Any,
+) -> tuple[int, str] | None:
+    concept = _filing_concept_qname(row.get("concept"))
+    namespace, tag = split_tag_spec(concept)
+    for rank, key in enumerate(("primary_tags", "alternate_tags")):
+        if any(_tag_spec_matches(spec, namespace, tag) for spec in rule.get(key, []) or []):
+            return rank, ""
+
+    label_patterns = _compile_patterns(rule.get("label_patterns", []))
+    if not label_patterns or (namespace or "").lower() in DEFAULT_LABEL_EXCLUDE_NAMESPACES:
+        return None
+    label = safe_str(row.get("original_label") or row.get("label") or tag)
+    excludes = _compile_patterns(rule.get("label_exclude_patterns", []))
+    if excludes and any(pattern.search(label) for pattern in excludes):
+        return None
+    if not any(pattern.search(label) for pattern in label_patterns):
+        return None
+    graph_evidence = _filing_graph_evidence(xbrl, concept, rule)
+    if not graph_evidence:
+        return None
+    return 2, graph_evidence
+
+
+def _tag_spec_matches(spec: Any, namespace: str | None, tag: str) -> bool:
+    expected_namespace, expected_tag = split_tag_spec(spec)
+    return expected_tag == tag and (
+        expected_namespace is None or (namespace or "").lower() == expected_namespace.lower()
+    )
+
+
+def _filing_graph_evidence(xbrl: Any, concept: str, rule: dict[str, Any]) -> str:
+    targets = {
+        _filing_element_id(tag)
+        for key in ("primary_tags", "alternate_tags")
+        for tag in (rule.get(key, []) or [])
+    }
+    element_id = _filing_element_id(concept)
+    evidence: list[str] = []
+    try:
+        calculation = xbrl.calculation_linkbase(include_abstract=True)
+        if not calculation.empty:
+            for row in calculation.to_dict("records"):
+                if _filing_element_id(row.get("concept")) != element_id:
+                    continue
+                if _filing_element_id(row.get("parent_concept")) in targets:
+                    evidence.append(
+                        f"calculation_parent={row.get('parent_concept')};weight={row.get('weight')}"
+                    )
+                    break
+    except Exception:
+        pass
+    try:
+        for tree in xbrl.presentation_trees.values():
+            node = tree.all_nodes.get(element_id)
+            seen: set[str] = set()
+            while node is not None and node.parent and node.parent not in seen:
+                parent = _filing_element_id(node.parent)
+                if parent in targets:
+                    evidence.append(f"presentation_ancestor={node.parent}")
+                    break
+                seen.add(parent)
+                node = tree.all_nodes.get(parent)
+            if evidence:
+                break
+    except Exception:
+        pass
+    return ";".join(evidence)
+
+
+def _filing_concept_qname(value: Any) -> str:
+    concept = safe_str(value).strip()
+    if ":" not in concept and "_" in concept:
+        prefix, local = concept.split("_", 1)
+        if prefix in {"us-gaap", "ifrs-full", "dei", "srt"} or "-" not in local:
+            return f"{prefix}:{local}"
+    return concept
+
+
+def _filing_element_id(value: Any) -> str:
+    return _filing_concept_qname(value).replace(":", "_", 1)
+
+
+def _select_current_filing_fact(
+    matches: list[tuple[dict[str, Any], int, str]],
+    *,
+    report_period: str,
+    form: str,
+    statement_type: str,
+) -> tuple[dict[str, Any], int, str, str, int | None] | None:
+    if not matches:
+        return None
+    non_dimensioned = [item for item in matches if not bool(item[0].get("is_dimensioned"))]
+    if non_dimensioned:
+        matches = non_dimensioned
+    if report_period:
+        current = [item for item in matches if _filing_fact_end(item[0]) == report_period]
+        if current:
+            matches = current
+
+    want_instant = statement_type == "BS"
+    typed = [
+        item
+        for item in matches
+        if (safe_str(item[0].get("period_type")).lower() == "instant") == want_instant
+    ]
+    if typed:
+        matches = typed
+
+    ranked: list[tuple[int, int, int, dict[str, Any], int, str, int | None]] = []
+    for row, match_rank, graph_evidence in matches:
+        duration_days = _filing_duration_days(row)
+        duration_score = duration_days if duration_days is not None else -1
+        if form.startswith("10-Q") and duration_score > 310:
+            duration_score = -1
+        primary_score = -match_rank
+        ranked.append(
+            (
+                primary_score if want_instant else duration_score,
+                0 if want_instant else primary_score,
+                int(not bool(row.get("is_dimensioned"))),
+                row,
+                match_rank,
+                graph_evidence,
+                duration_days,
+            )
+        )
+    _, _, _, row, match_rank, graph_evidence, duration_days = max(
+        ranked, key=lambda item: item[:3]
+    )
+    if want_instant:
+        period_semantic = "INSTANT"
+    elif form.startswith("10-K"):
+        period_semantic = "FY"
+    elif duration_days is not None and duration_days <= 120:
+        period_semantic = "QTD"
+    else:
+        period_semantic = "YTD"
+    return row, match_rank, graph_evidence, period_semantic, duration_days
+
+
+def _filing_fact_end(row: dict[str, Any]) -> str:
+    return normalize_sec_date(row.get("period_end")) or normalize_sec_date(
+        row.get("period_instant")
+    )
+
+
+def _filing_duration_days(row: dict[str, Any]) -> int | None:
+    start = _companyfacts_date(row.get("period_start"))
+    end = _companyfacts_date(row.get("period_end"))
+    return (end - start).days if start is not None and end is not None else None
+
+
+def _filing_context_dimensions(xbrl: Any, context_ref: str) -> dict[str, str]:
+    context = xbrl.contexts.get(context_ref)
+    dimensions = getattr(context, "dimensions", {}) if context is not None else {}
+    return {str(key): str(value) for key, value in dict(dimensions or {}).items()}
+
+
+def _filing_taxonomy_version(bundle_path: Path) -> str:
+    for path in sorted(bundle_path.glob("*")):
+        if not path.is_file() or path.suffix.lower() not in {".xml", ".xsd", ".htm", ".html"}:
+            continue
+        try:
+            sample = path.read_text(encoding="utf-8", errors="ignore")[:131072]
+        except OSError:
+            continue
+        match = re.search(r"(?:fasb\.org/us-gaap|xbrl\.sec\.gov/dei)/(20\d{2})", sample)
+        if match:
+            return match.group(1)
+    return ""
 
 
 def extract_companyfacts_file(
@@ -1585,6 +2386,16 @@ def candidate_to_rows(candidate: SecFactCandidate) -> tuple[dict[str, Any], dict
             "form": candidate.form,
             "fp": candidate.fp,
             "source": candidate.source,
+            "source_authority": candidate.source_authority,
+            "accepted_at": candidate.accepted_at,
+            "context_ref": candidate.context_ref,
+            "unit": candidate.unit,
+            "dimensions": candidate.dimensions,
+            "taxonomy_version": candidate.taxonomy_version,
+            "period_semantic": candidate.period_semantic,
+            "duration_days": candidate.duration_days,
+            "source_path": candidate.source_path,
+            "graph_evidence": candidate.graph_evidence,
         }
     )
     return base, debug
@@ -1654,6 +2465,16 @@ def write_symbol_outputs(
                 "form",
                 "fp",
                 "source",
+                "source_authority",
+                "accepted_at",
+                "context_ref",
+                "unit",
+                "dimensions",
+                "taxonomy_version",
+                "period_semantic",
+                "duration_days",
+                "source_path",
+                "graph_evidence",
             ]
             debug_columns = list(dict.fromkeys(debug_columns))
             debug_path = output_path.with_suffix(".debug.csv")
@@ -1899,8 +2720,31 @@ def resolve_companyfacts_files(
         if safe_str(symbol).strip()
     }
 
+    root = Path(companyfacts_dir)
+    if wanted_symbols:
+        wanted_ciks = {
+            normalize_cik(row.cik)
+            for row in ticker_map.itertuples(index=False)
+            if (
+                US_MARKET_CONFIG.normalize_symbol(row.ticker) in wanted_symbols
+                or cik_file_key(normalize_cik(row.cik)) in wanted_symbols
+            )
+        }
+        wanted_ciks.update(
+            normalize_cik(symbol)
+            for symbol in wanted_symbols
+            if symbol.startswith("CIK")
+        )
+        direct_files: list[tuple[Path, str, str]] = []
+        for cik in sorted(value for value in wanted_ciks if value):
+            path = root / f"{cik_file_key(cik)}.json"
+            if not path.exists():
+                continue
+            direct_files.append((path, cik_to_symbol.get(cik) or cik_file_key(cik), cik))
+        return direct_files
+
     files: list[tuple[Path, str, str]] = []
-    for path in sorted(Path(companyfacts_dir).glob("CIK*.json")):
+    for path in sorted(root.glob("CIK*.json")):
         cik = normalize_cik(path.stem)
         symbol = cik_to_symbol.get(cik) or cik_file_key(cik)
         if wanted_symbols and symbol not in wanted_symbols and cik_file_key(cik) not in wanted_symbols:
@@ -1914,6 +2758,7 @@ def normalize_us_sec_filings(
     symbols: list[str] | None = None,
     start_year: int,
     end_year: int,
+    filings_dir: str | Path = US_FILINGS_DIR,
     companyfacts_dir: str | Path = US_COMPANYFACTS_DIR,
     notes_root: str | Path = US_NOTES_DATASET_DIR,
     output_dir: str | Path = US_NORMALIZED_DIR,
@@ -1922,8 +2767,9 @@ def normalize_us_sec_filings(
     canonical_csv_path: str | Path | None = None,
     report_metadata_path: str | Path = US_REPORT_METADATA_PATH,
     save_debug: bool = True,
+    use_filings: bool = True,
     use_notes: bool = True,
-    use_edgartools: bool = True,
+    use_edgartools: bool = False,
     edgartools_provider: EdgarToolsProvider | None = None,
     workers: int = 1,
     log_progress: bool = True,
@@ -1931,17 +2777,22 @@ def normalize_us_sec_filings(
     replace_existing: bool = False,
 ) -> list[Path]:
     started_at = time.monotonic()
+    use_edgartools = bool(use_edgartools or edgartools_provider is not None)
     rules = load_us_mapping_rules(mapping_rule_path)
     canonical_names = canonical_name_map(canonical_csv_path)
     ticker_map = load_sec_ticker_map(ticker_map_path)
     files = resolve_companyfacts_files(companyfacts_dir, symbols=symbols, ticker_map=ticker_map)
+    filing_descriptors = (
+        resolve_sec_filing_bundles(filings_dir, symbols=symbols) if use_filings else []
+    )
     worker_count = min(_resolve_worker_count(workers), len(files) or 1)
     if log_progress:
         print(
             "[INFO] US SEC normalize start "
             f"symbols={len(symbols) if symbols else 'ALL'}, "
-            f"companyfacts_files={len(files)}, years={start_year}-{end_year}, "
-            f"workers={worker_count}, notes={use_notes}, edgartools={use_edgartools}"
+            f"filing_bundles={len(filing_descriptors)}, companyfacts_files={len(files)}, "
+            f"years={start_year}-{end_year}, workers={worker_count}, "
+            f"notes={use_notes}, edgartools={use_edgartools}"
         )
     if ticker_map.empty:
         print(
@@ -1949,8 +2800,8 @@ def normalize_us_sec_filings(
             "Run `python -m engine.workflows.download --market us sec-tickers` first, "
             "or pass CIK000... symbols."
         )
-    if symbols and not files:
-        print(f"[WARN] no SEC companyfacts files matched symbols={symbols}")
+    if symbols and not files and not filing_descriptors:
+        print(f"[WARN] no local SEC filing bundles or companyfacts files matched symbols={symbols}")
 
     candidates: list[SecFactCandidate] = []
     cik_to_symbol: dict[str, str] = {}
@@ -1958,6 +2809,84 @@ def normalize_us_sec_filings(
     symbol_to_cik: dict[str, str] = {}
     symbol_to_name: dict[str, str] = {}
     symbols_with_local_facts: set[str] = set()
+    wanted_symbols = {
+        US_MARKET_CONFIG.normalize_symbol(symbol)
+        for symbol in (symbols or [])
+        if safe_str(symbol).strip()
+    }
+    for ticker_row in ticker_map.itertuples(index=False):
+        cik = normalize_cik(ticker_row.cik)
+        symbol = US_MARKET_CONFIG.normalize_symbol(ticker_row.ticker)
+        if not cik or not symbol:
+            continue
+        if (
+            wanted_symbols
+            and symbol not in wanted_symbols
+            and cik_file_key(cik) not in wanted_symbols
+        ):
+            continue
+        entity_name = safe_str(ticker_row.title)
+        cik_to_symbol.setdefault(cik, symbol)
+        symbol_to_cik.setdefault(symbol, cik)
+        if entity_name:
+            cik_to_name.setdefault(cik, entity_name)
+            symbol_to_name.setdefault(symbol, entity_name)
+    for descriptor in filing_descriptors:
+        symbol = descriptor.symbol
+        cik = descriptor.cik
+        entity_name = safe_str(descriptor.manifest.get("company_name"))
+        cik_to_symbol[cik] = symbol
+        symbol_to_cik[symbol] = cik
+        if entity_name:
+            cik_to_name[cik] = entity_name
+            symbol_to_name[symbol] = entity_name
+
+    symbols_by_cik: dict[str, tuple[str, ...]] = {}
+    if wanted_symbols:
+        grouped_symbols: dict[str, set[str]] = {}
+        for symbol, cik in symbol_to_cik.items():
+            if symbol in wanted_symbols:
+                grouped_symbols.setdefault(normalize_cik(cik), set()).add(symbol)
+        symbols_by_cik = {
+            cik: tuple(sorted(group))
+            for cik, group in grouped_symbols.items()
+            if cik and group
+        }
+
+    filing_result = extract_filing_xbrl_candidates(
+        filing_descriptors,
+        rules=rules.get("companyfacts_rules", []),
+        canonical_names=canonical_names,
+        start_year=start_year,
+        end_year=end_year,
+        workers=worker_count,
+        log_progress=log_progress,
+        progress_interval=progress_interval,
+    )
+    candidates.extend(filing_result.candidates)
+    authoritative_periods = fan_out_sec_authority_keys(
+        filing_result.authoritative_periods,
+        symbol_to_cik=symbol_to_cik,
+        symbols_by_cik=symbols_by_cik,
+    )
+    authoritative_accessions = fan_out_sec_authority_keys(
+        filing_result.authoritative_accessions,
+        symbol_to_cik=symbol_to_cik,
+        symbols_by_cik=symbols_by_cik,
+    )
+
+    def lower_authority_is_allowed(candidate: SecFactCandidate) -> bool:
+        period_is_authoritative = (
+            candidate.symbol,
+            candidate.fiscal_year,
+            candidate.fiscal_month,
+        ) in authoritative_periods
+        accession = safe_str(candidate.accn).strip()
+        accession_is_authoritative = bool(accession) and (
+            candidate.symbol,
+            accession,
+        ) in authoritative_accessions
+        return not period_is_authoritative and not accession_is_authoritative
 
     companyfacts_results = extract_companyfacts_files(
         files,
@@ -1976,7 +2905,11 @@ def normalize_us_sec_filings(
         if result.has_usable_facts:
             symbols_with_local_facts.add(result.symbol)
         if result.candidates:
-            candidates.extend(result.candidates)
+            candidates.extend(
+                candidate
+                for candidate in result.candidates
+                if lower_authority_is_allowed(candidate)
+            )
         cik_to_symbol[result.cik] = result.symbol
         symbol_to_cik[result.symbol] = result.cik
         if result.entity_name:
@@ -1999,6 +2932,11 @@ def normalize_us_sec_filings(
             start_year=start_year,
             end_year=end_year,
         )
+        notes_candidates = [
+            candidate
+            for candidate in notes_candidates
+            if lower_authority_is_allowed(candidate)
+        ]
         candidates.extend(notes_candidates)
         if log_progress:
             elapsed = time.monotonic() - notes_started_at
@@ -2036,6 +2974,11 @@ def normalize_us_sec_filings(
             log_progress=log_progress,
             progress_interval=progress_interval,
         )
+        edgartools_candidates = [
+            candidate
+            for candidate in edgartools_candidates
+            if lower_authority_is_allowed(candidate)
+        ]
         candidates.extend(edgartools_candidates)
         if log_progress:
             elapsed = time.monotonic() - edgartools_started_at
@@ -2044,6 +2987,11 @@ def normalize_us_sec_filings(
                 f"candidates={len(edgartools_candidates)}, elapsed={elapsed:.1f}s"
             )
 
+    if symbols_by_cik:
+        candidates = fan_out_sec_candidates(
+            candidates,
+            symbols_by_cik=symbols_by_cik,
+        )
     if log_progress:
         print(f"[INFO] dedupe start candidates={len(candidates)}")
     deduped = dedupe_candidates(candidates)
@@ -2058,7 +3006,11 @@ def normalize_us_sec_filings(
     if log_progress:
         print(f"[INFO] dedupe done candidates={len(deduped)}, derived_formula={derived_count}")
         print(f"[INFO] write outputs start output_dir={output_dir}")
-    processed_symbols = sorted({symbol for _, symbol, _ in files})
+    processed_symbols = sorted(
+        {symbol for _, symbol, _ in files}
+        | {descriptor.symbol for descriptor in filing_descriptors}
+        | {candidate.symbol for candidate in deduped}
+    )
     replace_year_range = (int(start_year), int(end_year))
     written = write_symbol_outputs(
         deduped,

@@ -26,3 +26,8 @@
 | company-year completeness | 회사·회계연도별 BS/IS/CF 존재, 핵심 사실, 팩터 입력, 항등식 시험 가능성을 분리한 상태. |
 | golden contract corpus | 이관된 원천 규칙의 실행 계약을 확인하는 회귀 사례. 독립 라벨 정확도 corpus와는 다르다. |
 | portfolio drift | 규칙 변경 전후의 값·백분위·decile·포트폴리오 편입·IC·long-short·turnover 변화. |
+| historical backfill contract | 요청 기간에 가격행이 있는 종목, 시도할 팩터, 재무 기준, 시작·종료일을 정렬된 목록과 SHA-256으로 고정한 재개 가능 적재 계약. |
+| processed target | 계산 파이프라인을 오류 없이 통과해 체크포인트된 종목·재무기준. 유한 팩터값이 반드시 존재한다는 뜻은 아니다. |
+| materialized factor | 계산 결과가 유한값이어서 `fact_daily_factors`에 실제 행으로 저장된 팩터. 정의 불가능한 값은 0으로 저장하지 않는다. |
+| snapshot equality | 계약 범위에서 source와 snapshot의 연도·기준별 행 수와 행 내용 체크섬이 같은 상태. |
+| basis-invariant security | strict PIT 종료일까지 사용 가능한 재무 공시가 없어 annual·quarterly·TTM 모두 재무 입력이 비는 종목. 유한 비재무 팩터 행은 기준 간 동일하다. |

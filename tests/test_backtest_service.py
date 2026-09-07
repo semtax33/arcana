@@ -258,6 +258,28 @@ class MultiRebalanceFakeClickHouseClient(FakeClickHouseClient):
         return pd.DataFrame()
 
 
+class LatePositionsFakeClickHouseClient(MultiRebalanceFakeClickHouseClient):
+    """Selects no positions at the first rebalance and one position at the second."""
+
+    def query_df(self, query, parameters=None, external_data=None, **kwargs):
+        parameters = parameters or {}
+        if "wide_latest_factor_values AS" in query:
+            self.queries.append((query, parameters))
+            base = FakeClickHouseClient.query_df(
+                self,
+                "latest_factor_values AS",
+                parameters,
+            )
+            self.queries.pop()
+            return base.assign(signal_date=date(2026, 3, 31))
+        return super().query_df(
+            query,
+            parameters,
+            external_data=external_data,
+            **kwargs,
+        )
+
+
 class SnapshotAvailableMultiRebalanceFakeClickHouseClient(MultiRebalanceFakeClickHouseClient):
     def query(self, query, parameters=None):
         self.queries.append((query, parameters or {}))
@@ -798,6 +820,39 @@ class BacktestServiceTest(unittest.TestCase):
         self.assertEqual(result.summary.cumulative_return, 0.0)
         self.assertEqual(len(result.rebalance_history[0].positions), 1)
         self.assertTrue(any("usable price returns" in warning for warning in result.warnings))
+
+    def test_factor_backtest_keeps_cash_days_before_first_investable_rebalance(self):
+        client = LatePositionsFakeClickHouseClient()
+        request = FactorBacktestRequestDto(
+            conditions=[
+                FactorConditionDto(factor_id="roe", mode="top_percent", top_percent=100),
+                FactorConditionDto(factor_id="per", mode="top_percent", top_percent=100),
+            ],
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 4, 3),
+            rebalance_frequency="quarterly",
+            max_positions=1,
+        )
+
+        result = BacktestService(client_factory=lambda: client).run_factor_backtest(request)
+
+        self.assertEqual(
+            [point.trade_date for point in result.equity_curve],
+            [
+                date(2026, 1, 2),
+                date(2026, 1, 3),
+                date(2026, 3, 31),
+                date(2026, 4, 1),
+                date(2026, 4, 2),
+                date(2026, 4, 3),
+            ],
+        )
+        self.assertEqual(
+            [point.strategy_nav for point in result.equity_curve[:4]],
+            [1.0, 1.0, 1.0, 1.0],
+        )
+        self.assertAlmostEqual(result.equity_curve[-1].strategy_nav, 1.1)
+        self.assertEqual(result.summary.return_observations, 5)
 
     def test_factor_backtest_resolves_default_style_profile_for_style_score_conditions(self):
         client = FakeClickHouseClient()

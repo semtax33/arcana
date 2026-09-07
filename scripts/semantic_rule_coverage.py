@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import csv
 from decimal import Decimal
 import json
 from pathlib import Path
+import re
 import sys
 
 
@@ -13,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from engine.semantic.coverage import (
+    MAX_COVERAGE_AMOUNT_MAGNITUDE,
     build_coverage_report,
     load_factor_coverage,
     observed_mapping_coverage,
@@ -44,6 +47,108 @@ HISTORICAL_SAMPLE = (
     / "017670"
     / "finance_statement_(2008.12).html"
 )
+
+
+def _finite_absolute_amount(value: object) -> Decimal | None:
+    text = str(value or "").strip().replace(",", "")
+    if not text or text in {"-", "--"}:
+        return None
+    if text.startswith("(") and text.endswith(")"):
+        text = f"-{text[1:-1]}"
+    try:
+        amount = Decimal(text)
+    except Exception:
+        return None
+    magnitude = abs(amount)
+    if not amount.is_finite() or magnitude > MAX_COVERAGE_AMOUNT_MAGNITUDE:
+        return None
+    return magnitude
+
+
+def materialized_mapping_coverage(
+    input_dir: str | Path,
+    *,
+    start_year: int | None = None,
+    end_year: int | None = None,
+    max_files: int | None = None,
+) -> dict[str, object]:
+    """Measure current canonical outputs without replaying potentially stale debug rows."""
+    paths = sorted(
+        path
+        for path in Path(input_dir).glob("kr_normalized_*.csv")
+        if not path.name.endswith(".debug.csv")
+    )
+    if max_files is not None:
+        paths = paths[:max_files]
+    row_count = 0
+    valid_amount_row_count = 0
+    excluded_invalid_amount_row_count = 0
+    mapped_row_count = 0
+    total_amount = Decimal(0)
+    mapped_amount = Decimal(0)
+    statement_type_counts: Counter[str] = Counter()
+    year_counts: Counter[str] = Counter()
+    for path in paths:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                period = str(row.get("period", "") or "")
+                match = re.match(r"^(\d{4})", period)
+                year = int(match.group(1)) if match else None
+                if start_year is not None and (year is None or year < start_year):
+                    continue
+                if end_year is not None and (year is None or year > end_year):
+                    continue
+                row_count += 1
+                year_counts[str(year) if year is not None else "UNKNOWN"] += 1
+                statement_type_counts[str(row.get("statement_type", "UNKNOWN") or "UNKNOWN")] += 1
+                mapped = str(row.get("canonical_account_id", "") or "") not in {
+                    "",
+                    "UNMAPPED",
+                }
+                if mapped:
+                    mapped_row_count += 1
+                amount = _finite_absolute_amount(
+                    row.get("raw_amount", row.get("amount", ""))
+                )
+                if amount is None:
+                    excluded_invalid_amount_row_count += 1
+                    continue
+                valid_amount_row_count += 1
+                total_amount += amount
+                if mapped:
+                    mapped_amount += amount
+    row_pct = 100.0 * mapped_row_count / row_count if row_count else 0.0
+    amount_pct = (
+        float(Decimal(100) * mapped_amount / total_amount) if total_amount else 0.0
+    )
+    return {
+        "coverage_input_kind": "materialized_canonical",
+        "input_dir": str(Path(input_dir).resolve()),
+        "start_year": start_year,
+        "end_year": end_year,
+        "file_count": len(paths),
+        "row_count": row_count,
+        "valid_amount_row_count": valid_amount_row_count,
+        "excluded_invalid_amount_row_count": excluded_invalid_amount_row_count,
+        "baseline_mapped_row_count": mapped_row_count,
+        "v2_mapped_row_count": mapped_row_count,
+        "baseline_mapped_row_pct": row_pct,
+        "v2_mapped_row_pct": row_pct,
+        "total_absolute_amount": str(total_amount),
+        "baseline_mapped_absolute_amount_pct": amount_pct,
+        "v2_mapped_absolute_amount_pct": amount_pct,
+        "statement_type_row_counts": dict(sorted(statement_type_counts.items())),
+        "year_row_counts": dict(sorted(year_counts.items())),
+        "legacy_replay_mapped_row_count": None,
+        "legacy_replay_mapped_row_pct": None,
+        "legacy_replay_mapped_absolute_amount_pct": None,
+        "changed_mapping_count": None,
+        "newly_mapped_row_count": None,
+        "provenance_note": (
+            "Counts materialized canonical outputs for the requested period; "
+            "legacy replay requires fresh debug rows and is intentionally omitted."
+        ),
+    }
 
 
 def historical_k_gaap_validation(
@@ -131,6 +236,13 @@ def main() -> None:
     parser.add_argument("--historical-sample", type=Path, default=HISTORICAL_SAMPLE)
     parser.add_argument("--max-files", type=int)
     parser.add_argument("--skip-observed", action="store_true")
+    parser.add_argument(
+        "--materialized-normalized",
+        action="store_true",
+        help="Measure canonical CSV outputs and ignore potentially stale debug files.",
+    )
+    parser.add_argument("--start-year", type=int)
+    parser.add_argument("--end-year", type=int)
     args = parser.parse_args()
 
     engine = RuleEngine.from_files(
@@ -143,22 +255,38 @@ def main() -> None:
         rule_paths=[LEGACY_RULES],
         sign_policy_path=SIGN_POLICY,
     )
+    if (
+        args.start_year is not None
+        and args.end_year is not None
+        and args.start_year > args.end_year
+    ):
+        raise ValueError("start-year must not exceed end-year")
     observed = {}
     if not args.skip_observed:
-        observed = observed_mapping_coverage(
-            args.normalized_dir,
-            engine,
-            legacy_mapping_engine=legacy_engine,
-            max_files=args.max_files,
-            progress=True,
-        )
+        if args.materialized_normalized:
+            observed = materialized_mapping_coverage(
+                args.normalized_dir,
+                start_year=args.start_year,
+                end_year=args.end_year,
+                max_files=args.max_files,
+            )
+        else:
+            observed = observed_mapping_coverage(
+                args.normalized_dir,
+                engine,
+                legacy_mapping_engine=legacy_engine,
+                max_files=args.max_files,
+                progress=True,
+            )
     resolved_rules = resolve_rule_bundle(args.rules)
-    semantic_engine_version = 5 if resolved_rules.name == "semantic_kr_v5.yaml" else 4
-    if semantic_engine_version == 5 and observed:
-        observed["semantic_engine_version"] = 5
-        observed["v5_mapped_row_count"] = observed["v2_mapped_row_count"]
-        observed["v5_mapped_row_pct"] = observed["v2_mapped_row_pct"]
-        observed["v5_mapped_absolute_amount_pct"] = observed[
+    version_match = re.fullmatch(r"semantic_kr_v(\d+)\.yaml", resolved_rules.name)
+    semantic_engine_version = int(version_match.group(1)) if version_match else 4
+    version_prefix = f"v{semantic_engine_version}"
+    if semantic_engine_version >= 5 and observed:
+        observed["semantic_engine_version"] = semantic_engine_version
+        observed[f"{version_prefix}_mapped_row_count"] = observed["v2_mapped_row_count"]
+        observed[f"{version_prefix}_mapped_row_pct"] = observed["v2_mapped_row_pct"]
+        observed[f"{version_prefix}_mapped_absolute_amount_pct"] = observed[
             "v2_mapped_absolute_amount_pct"
         ]
     factor = load_factor_coverage(args.factor_summary, args.factor_detail)
@@ -187,10 +315,16 @@ def main() -> None:
                 "migration_coverage_pct": migration["coverage_pct"],
                 "canonical_rule_coverage_pct": canonical["coverage_pct"],
                 "observed_mapping_pct": observed.get(
-                    "v5_mapped_row_pct",
+                    f"{version_prefix}_mapped_row_pct",
                     observed.get(
-                        "v4_mapped_row_pct",
-                        observed.get("v3_mapped_row_pct", observed.get("v2_mapped_row_pct")),
+                        "v5_mapped_row_pct",
+                        observed.get(
+                            "v4_mapped_row_pct",
+                            observed.get(
+                                "v3_mapped_row_pct",
+                                observed.get("v2_mapped_row_pct"),
+                            ),
+                        ),
                     ),
                 ),
                 "factor_coverage_pct": factor_report.get("coverage_pct"),

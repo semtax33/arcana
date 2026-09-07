@@ -61,6 +61,44 @@ class DartBusinessInfoExtractionTest(unittest.TestCase):
         self.assertEqual(node.eleId, "9")
         self.assertEqual(node.length, "246377")
 
+    def test_selects_legacy_node1_financial_statements_section(self):
+        script = "\n".join(
+            [
+                _node_script(
+                    "III. 재무에 관한 사항",
+                    name="node",
+                    ele_id="11",
+                    length="108934",
+                ),
+                _node_script(
+                    "XI. 재무제표 등",
+                    name="node1",
+                    ele_id="25",
+                    length="265761",
+                ),
+            ]
+        )
+
+        node = dart_filings.select_financial_statement_position(script)
+
+        self.assertIsNotNone(node)
+        self.assertEqual(node.text, "XI. 재무제표 등")
+        self.assertEqual(node.eleId, "25")
+
+    def test_selects_legacy_financial_matters_when_no_statement_node_exists(self):
+        node = dart_filings.select_financial_statement_position(
+            _node_script(
+                "III. 재무에 관한 사항",
+                name="node",
+                ele_id="11",
+                length="46789",
+            )
+        )
+
+        self.assertIsNotNone(node)
+        self.assertEqual(node.text, "III. 재무에 관한 사항")
+        self.assertEqual(node.eleId, "11")
+
     def test_parses_node_suffix_variants(self):
         script = "\n".join(
             [
@@ -196,12 +234,20 @@ class DartBusinessInfoExtractionTest(unittest.TestCase):
         sleep_mock.assert_not_called()
 
     def test_fetch_statements_skips_existing_output_before_main_request(self):
+        class CountingThrottle:
+            def __init__(self):
+                self.wait_count = 0
+
+            def wait(self):
+                self.wait_count += 1
+
         search_html = """
         <html><body>
           <a href="/dsaf001/main.do?rcpNo=20260515001799">Samsung Electronics (2026.03)</a>
         </body></html>
         """
         calls = []
+        throttle = CountingThrottle()
 
         def fake_request(session, method, url, **kwargs):
             calls.append((method, url, kwargs))
@@ -216,14 +262,18 @@ class DartBusinessInfoExtractionTest(unittest.TestCase):
                 patch.object(dart_filings, "request_with_retry", side_effect=fake_request),
                 patch.object(dart_filings.time, "sleep") as sleep_mock,
             ):
-                dart_filings.fetch_dart_search(
+                result = dart_filings.fetch_dart_search(
                     "005930",
                     tmp_dir,
                     start_date="20260101",
                     end_date="20260331",
+                    throttle=throttle,
                 )
 
         self.assertEqual(len(calls), 1)
+        self.assertEqual(throttle.wait_count, 1)
+        self.assertEqual(result[0]["status"], "skipped_existing")
+        self.assertEqual(result[0]["rcept_no"], "20260515001799")
         sleep_mock.assert_not_called()
     def test_fetch_dividends_skips_existing_output_before_viewer_request(self):
         search_html = """
@@ -398,6 +448,50 @@ class DartBusinessInfoExtractionTest(unittest.TestCase):
             throttle.wait()
 
         sleep_mock.assert_called_once_with(10.0)
+
+    def test_request_retry_broadcasts_cooldown_to_shared_throttle(self):
+        events = []
+
+        class RecordingThrottle:
+            def cooldown(self, seconds):
+                events.append(("cooldown", seconds))
+
+            def wait(self):
+                events.append(("wait", None))
+
+        class FakeResponse:
+            status_code = 200
+            headers = {}
+
+            def raise_for_status(self):
+                return None
+
+        class FlakySession:
+            def __init__(self):
+                self.calls = 0
+
+            def request(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise dart_filings.requests.ConnectionError("remote closed")
+                return FakeResponse()
+
+        with (
+            patch.object(dart_filings.random, "uniform", return_value=0.0),
+            patch.object(dart_filings.time, "sleep") as sleep_mock,
+        ):
+            response = dart_filings.request_with_retry(
+                FlakySession(),
+                "GET",
+                "https://dart.example.test",
+                max_retries=1,
+                base_backoff=2.0,
+                throttle=RecordingThrottle(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(events, [("cooldown", 2.0), ("wait", None)])
+        sleep_mock.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
+import io
 from pathlib import Path
+from contextlib import redirect_stdout
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -6,6 +8,203 @@ from engine.transformers._internal.dart_filings import extract_rows_from_dart_ht
 
 
 class DartStatementPeriodTest(unittest.TestCase):
+    def test_legacy_packed_statement_cells_are_exploded_into_account_rows(self):
+        html = """
+        <html><body>
+          <p class="table-group-1">연결대차대조표</p>
+          <table border="1">
+            <tr>
+              <td>과 목</td>
+              <td colspan="2">제 35 기</td>
+              <td colspan="2">제 34 기</td>
+            </tr>
+            <tr>
+              <td>자산<br/>현금및현금등가물<br/>자산총계</td>
+              <td><br/>100<br/></td>
+              <td>1,000<br/><br/>1,000</td>
+              <td><br/>90<br/></td>
+              <td>900<br/><br/>900</td>
+            </tr>
+          </table>
+        </body></html>
+        """
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "statement.html"
+            path.write_text(html, encoding="utf-8")
+
+            rows = extract_rows_from_dart_html(path, "005930", "2004.6")
+
+        amounts = {
+            row["original_account_name"]: row["raw_amount"] for row in rows
+        }
+        self.assertEqual(amounts["자산"], "1000")
+        self.assertEqual(amounts["현금및현금등가물"], "100")
+        self.assertEqual(amounts["자산총계"], "1000")
+        self.assertTrue(all(row["parse_alignment_complete"] for row in rows))
+
+    def test_legacy_packed_statement_marks_incomplete_segment_alignment(self):
+        html = """
+        <html><body>
+          <p class="table-group-1">연결대차대조표</p>
+          <table border="1">
+            <tr><td>과 목</td><td colspan="2">제 3 기</td></tr>
+            <tr>
+              <td>자산<br/>유동자산<br/>부채<br/>자본</td>
+              <td><br/></td>
+              <td>100<br/>60<br/>40<br/>20</td>
+            </tr>
+          </table>
+        </body></html>
+        """
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "misaligned.html"
+            path.write_text(html, encoding="utf-8")
+            rows = extract_rows_from_dart_html(path, "020760", "2002.12")
+
+        self.assertTrue(rows)
+        self.assertTrue(any(not row["parse_alignment_complete"] for row in rows))
+
+    def test_legacy_packed_subtotal_parentheses_do_not_reverse_the_sign(self):
+        html = """
+        <html><body>
+          <p class="table-group-1">연결대차대조표</p>
+          <table border="1">
+            <tr>
+              <td>과 목</td>
+              <td colspan="2">제 35 기</td>
+              <td colspan="2">제 34 기</td>
+            </tr>
+            <tr>
+              <td>유동자산<br/>현금및현금등가물<br/>자산총계</td>
+              <td><br/>100<br/></td>
+              <td>(1,000)<br/><br/>1,000</td>
+              <td><br/>90<br/></td>
+              <td>(900)<br/><br/>900</td>
+            </tr>
+          </table>
+        </body></html>
+        """
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "statement.html"
+            path.write_text(html, encoding="utf-8")
+
+            rows = extract_rows_from_dart_html(path, "005930", "2004.6")
+
+        current_assets = next(
+            row for row in rows if row["original_account_name"] == "유동자산"
+        )
+        self.assertEqual(current_assets["raw_amount"], "1000")
+
+    def test_legacy_packed_cash_flow_parentheses_preserve_outflow_direction(self):
+        html = """
+        <html><body>
+          <p class="table-group-1">연결현금흐름표</p>
+          <table border="1">
+            <tr>
+              <td>과 목</td>
+              <td colspan="2">제 35 기</td>
+              <td colspan="2">제 34 기</td>
+            </tr>
+            <tr>
+              <td>영업활동으로 인한 현금흐름<br/>투자활동으로 인한 현금흐름<br/>재무활동으로 인한 현금흐름</td>
+              <td><br/><br/></td>
+              <td>100<br/>(40)<br/>(20)</td>
+              <td><br/><br/></td>
+              <td>90<br/>(30)<br/>(10)</td>
+            </tr>
+          </table>
+        </body></html>
+        """
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cash-flow.html"
+            path.write_text(html, encoding="utf-8")
+
+            rows = extract_rows_from_dart_html(path, "005930", "2004.6")
+
+        amounts = {
+            row["original_account_name"]: row["raw_amount"] for row in rows
+        }
+        self.assertEqual(amounts["영업활동으로 인한 현금흐름"], "100")
+        self.assertEqual(amounts["투자활동으로 인한 현금흐름"], "-40")
+        self.assertEqual(amounts["재무활동으로 인한 현금흐름"], "-20")
+
+    def test_wrapped_account_label_is_not_mistaken_for_a_packed_statement(self):
+        html = """
+        <html><body>
+          <p class="table-group-1">연결손익계산서</p>
+          <table border="1">
+            <tr>
+              <td>과 목</td>
+              <td colspan="2">제 35 기 반기</td>
+              <td colspan="2">제 34 기 반기</td>
+            </tr>
+            <tr>
+              <td>지배기업의 소유주에게 귀속되는<br/>반기<br/>순이익</td>
+              <td>100</td><td>200</td><td>90</td><td>180</td>
+            </tr>
+          </table>
+        </body></html>
+        """
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "statement.html"
+            path.write_text(html, encoding="utf-8")
+
+            rows = extract_rows_from_dart_html(path, "005930", "2004.6")
+
+        matching = [
+            row
+            for row in rows
+            if "지배기업의소유주에게귀속되는반기순이익"
+            in row["normalized_name"]
+        ]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0]["raw_amount"], "200")
+
+    def test_legacy_parenthesized_minus_marker_is_parsed_as_negative(self):
+        html = """
+        <html><body>
+          <p class="table-group-1">손익계산서</p>
+          <table border="1">
+            <tr><td>과 목</td><td>제 35 기</td><td>제 34 기</td></tr>
+            <tr><td>매출총이익</td><td>(-)55,121,175,232</td><td>1</td></tr>
+          </table>
+        </body></html>
+        """
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "statement.html"
+            path.write_text(html, encoding="utf-8")
+
+            rows = extract_rows_from_dart_html(path, "020180", "2001.12")
+
+        gross_profit = next(
+            row for row in rows if row["original_account_name"] == "매출총이익"
+        )
+        self.assertEqual(gross_profit["raw_amount"], "-55121175232")
+
+    def test_unencodable_source_text_does_not_abort_parsing_on_cp949_console(self):
+        html = """
+        <html><body>
+          <table class="nb"><tr><td>※ 비교표시된 2002년 12월 31일로 종료되는 회계연도의 연결손익계산서는 기업회계기준서 적용에 따른 회계정책 변경으로 인해\u00a0제36기 반기 재무제표와의 비교를 위하여 재작성되었음.</td></tr></table>
+        </body></html>
+        """
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "statement.html"
+            path.write_text(html, encoding="utf-8")
+            raw_console = io.BytesIO()
+            cp949_console = io.TextIOWrapper(
+                raw_console,
+                encoding="cp949",
+                errors="strict",
+            )
+            try:
+                with redirect_stdout(cp949_console):
+                    rows = extract_rows_from_dart_html(path, "005930", "2004.6")
+                cp949_console.flush()
+            finally:
+                cp949_console.detach()
+
+        self.assertEqual(rows, [])
+
     def test_interim_income_statement_uses_current_ytd_column(self):
         html = """
         <html><body>

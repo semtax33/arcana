@@ -166,7 +166,10 @@ class AccountingRegimeDetector:
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0].value))
         top_family, top_score = ranked[0]
         second_score = ranked[1][1] if len(ranked) > 1 else 0
-        if top_score <= 0:
+        substantive_evidence = any(
+            item.kind != "filing_year_hint" for item in evidence
+        )
+        if top_score <= 0 or not substantive_evidence:
             top_family = AccountingRegimeFamily.UNKNOWN
             confidence = 0.0
         else:

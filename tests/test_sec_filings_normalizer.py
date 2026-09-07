@@ -19,6 +19,7 @@ from engine.transformers._internal.sec_filings import (
     _notes_rule_matches_tag,
     add_formula_derived_candidates,
     dedupe_candidates,
+    load_us_mapping_rules,
     normalize_sec_date,
 )
 from engine.workflows._internal.normalize_workflow import MAPPING_RULE_PATH
@@ -131,6 +132,76 @@ def fact(label: str, value: float, tag: str) -> dict:
             ]
         },
     }
+
+
+def write_filing_bundle(
+    filings_root: Path,
+    *,
+    symbol: str = "AAPL",
+    cik: str = "320193",
+    accession: str = "0000320193-26-000001",
+    form: str = "10-K",
+    fiscal_year: int = 2025,
+    fiscal_period: str = "FY",
+    period_start: str = "2025-01-01",
+    period_end: str = "2025-12-31",
+    facts: dict[str, float] | None = None,
+) -> Path:
+    bundle = filings_root / form / symbol / accession
+    bundle.mkdir(parents=True)
+    fact_xml = "".join(
+        f'<us-gaap:{tag} contextRef="duration" unitRef="USD" decimals="-6">{value}</us-gaap:{tag}>'
+        for tag, value in (facts or {}).items()
+    )
+    (bundle / "issuer-2025_htm.xml").write_text(
+        f'''<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl
+  xmlns:xbrli="http://www.xbrl.org/2003/instance"
+  xmlns:iso4217="http://www.xbrl.org/2003/iso4217"
+  xmlns:dei="http://xbrl.sec.gov/dei/2025"
+  xmlns:us-gaap="http://fasb.org/us-gaap/2025">
+  <xbrli:context id="instant">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">{cik}</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:instant>{period_end}</xbrli:instant></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="duration">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">{cik}</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:startDate>{period_start}</xbrli:startDate><xbrli:endDate>{period_end}</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+  <xbrli:unit id="USD"><xbrli:measure>iso4217:USD</xbrli:measure></xbrli:unit>
+  <dei:EntityRegistrantName contextRef="instant">Apple Inc.</dei:EntityRegistrantName>
+  <dei:DocumentFiscalYearFocus contextRef="instant">{fiscal_year}</dei:DocumentFiscalYearFocus>
+  <dei:DocumentFiscalPeriodFocus contextRef="instant">{fiscal_period}</dei:DocumentFiscalPeriodFocus>
+  <dei:DocumentPeriodEndDate contextRef="instant">{period_end}</dei:DocumentPeriodEndDate>
+  {fact_xml}
+</xbrli:xbrl>
+''',
+        encoding="utf-8",
+    )
+    (bundle / "filing.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "source": "sec-edgartools-xbrl-bundle",
+                "provider": "edgartools",
+                "source_authority": "SEC_10K_AUDITED" if form == "10-K" else "SEC_10Q_UNAUDITED",
+                "ticker": symbol,
+                "cik": f"CIK{int(cik):010d}",
+                "company_name": "Apple Inc.",
+                "form": form,
+                "filing_date": "2026-01-30",
+                "accepted_at": "2026-01-30T16:30:00-05:00",
+                "period_of_report": period_end,
+                "accession_number": accession,
+                "primary_document": "",
+                "xbrl_documents": [
+                    {"role": "instance", "document_name": "issuer-2025_htm.xml"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return bundle
 
 
 class SecFilingsNormalizerTest(unittest.TestCase):
@@ -513,7 +584,7 @@ class SecFilingsNormalizerTest(unittest.TestCase):
 
     def test_market_mapping_rule_paths_prefer_prefixed_files(self):
         self.assertEqual(MAPPING_RULE_PATH.name, "kr_mapping.yaml")
-        self.assertEqual(US_MAPPING_RULE_PATH.name, "us_mapping.yaml")
+        self.assertEqual(US_MAPPING_RULE_PATH.name, "semantic_us_rule_manifest.json")
 
     def test_statement_snapshot_name_keeps_us_ticker(self):
         name = statement_snapshot_name("AAPL", 2025, 12, market="us")
@@ -708,7 +779,7 @@ class SecFilingsNormalizerTest(unittest.TestCase):
         )
 
     def test_us_notes_rules_reject_noisy_observed_tags(self):
-        rules = yaml.safe_load(US_MAPPING_RULE_PATH.read_text(encoding="utf-8"))
+        rules = load_us_mapping_rules(US_MAPPING_RULE_PATH)
         notes_by_id = {rule["id"]: rule for rule in rules["notes_rules"]}
 
         self.assertFalse(
@@ -743,7 +814,7 @@ class SecFilingsNormalizerTest(unittest.TestCase):
         )
 
     def test_us_notes_rules_accept_safe_observed_tags(self):
-        rules = yaml.safe_load(US_MAPPING_RULE_PATH.read_text(encoding="utf-8"))
+        rules = load_us_mapping_rules(US_MAPPING_RULE_PATH)
         notes_by_id = {rule["id"]: rule for rule in rules["notes_rules"]}
 
         safe_tags = [
@@ -1135,6 +1206,263 @@ class SecFilingsNormalizerTest(unittest.TestCase):
                 )
 
             self.assertEqual(written, [])
+
+    def test_live_edgartools_normalization_fallback_is_opt_in(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            companyfacts = root / "companyfacts"
+            output = root / "out"
+            companyfacts.mkdir()
+            canonical = root / "canonical.csv"
+            ticker_map = root / "tickers.csv"
+            metadata = root / "metadata.csv"
+            write_canonical(canonical)
+            write_ticker_map(ticker_map)
+            write_companyfacts(
+                companyfacts / "CIK0000320193.json",
+                {"Revenues": fact("Revenue", 100, "revenue")},
+            )
+
+            with patch(
+                "engine.transformers._internal.sec_filings.default_edgartools_provider",
+                side_effect=AssertionError("live normalization fallback must be opt-in"),
+            ):
+                normalize_us_sec_filings(
+                    symbols=["AAPL"],
+                    start_year=2025,
+                    end_year=2025,
+                    filings_dir=root / "missing-filings",
+                    companyfacts_dir=companyfacts,
+                    notes_root=root / "missing-notes",
+                    output_dir=output,
+                    ticker_map_path=ticker_map,
+                    canonical_csv_path=canonical,
+                    report_metadata_path=metadata,
+                )
+
+            debug = pd.read_csv(output / "us_normalized_AAPL.debug.csv")
+            self.assertTrue(debug["source"].iat[0].startswith("companyfacts_"))
+
+    def test_local_filing_xbrl_is_authoritative_and_blocks_period_fallback_sources(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            filings = root / "fillings"
+            companyfacts = root / "companyfacts"
+            output = root / "out"
+            companyfacts.mkdir()
+            canonical = root / "canonical.csv"
+            ticker_map = root / "tickers.csv"
+            metadata = root / "metadata.csv"
+            write_canonical(canonical)
+            write_ticker_map(ticker_map)
+            write_filing_bundle(
+                filings,
+                facts={"ResearchAndDevelopmentExpense": 75},
+            )
+            write_companyfacts(
+                companyfacts / "CIK0000320193.json",
+                {
+                    "ResearchAndDevelopmentExpense": fact("R&D", 10, "rnd"),
+                    "RevenueFromContractWithCustomerExcludingAssessedTax": fact(
+                        "Revenue", 100, "revenue"
+                    ),
+                },
+            )
+
+            normalize_us_sec_filings(
+                symbols=["AAPL"],
+                start_year=2025,
+                end_year=2025,
+                filings_dir=filings,
+                companyfacts_dir=companyfacts,
+                notes_root=root / "missing-notes",
+                output_dir=output,
+                ticker_map_path=ticker_map,
+                canonical_csv_path=canonical,
+                report_metadata_path=metadata,
+                use_edgartools=False,
+            )
+
+            df = pd.read_csv(output / "us_normalized_AAPL.csv")
+            debug = pd.read_csv(output / "us_normalized_AAPL.debug.csv")
+
+            self.assertEqual(df["canonical_account_id"].tolist(), ["RND"])
+            self.assertEqual(float(df["normalized_amount"].iat[0]), 75)
+            self.assertEqual(debug["source"].iat[0], "filing_xbrl")
+            self.assertEqual(debug["source_authority"].iat[0], "SEC_10K_AUDITED")
+            self.assertEqual(debug["context_ref"].iat[0], "duration")
+            self.assertEqual(debug["period_semantic"].iat[0], "FY")
+            self.assertEqual(int(debug["duration_days"].iat[0]), 364)
+            self.assertEqual(debug["taxonomy_version"].astype(str).iat[0], "2025")
+
+    def test_ten_q_prefers_ytd_context_over_qtd_context(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            filings = root / "filings"
+            output = root / "out"
+            canonical = root / "canonical.csv"
+            ticker_map = root / "tickers.csv"
+            metadata = root / "metadata.csv"
+            write_canonical(canonical)
+            write_ticker_map(ticker_map)
+            bundle = write_filing_bundle(
+                filings,
+                form="10-Q",
+                fiscal_period="Q3",
+                period_start="2025-01-01",
+                period_end="2025-09-30",
+                facts={},
+            )
+            instance = bundle / "issuer-2025_htm.xml"
+            xml = instance.read_text(encoding="utf-8")
+            xml = xml.replace(
+                "</xbrli:xbrl>",
+                '''
+  <xbrli:context id="qtd">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">320193</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2025-07-01</xbrli:startDate><xbrli:endDate>2025-09-30</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+  <us-gaap:ResearchAndDevelopmentExpense contextRef="qtd" unitRef="USD" decimals="-6">30</us-gaap:ResearchAndDevelopmentExpense>
+  <us-gaap:ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost contextRef="duration" unitRef="USD" decimals="-6">90</us-gaap:ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost>
+</xbrli:xbrl>
+''',
+            )
+            instance.write_text(xml, encoding="utf-8")
+
+            normalize_us_sec_filings(
+                symbols=["AAPL"],
+                start_year=2025,
+                end_year=2025,
+                filings_dir=filings,
+                companyfacts_dir=root / "missing-companyfacts",
+                notes_root=root / "missing-notes",
+                output_dir=output,
+                ticker_map_path=ticker_map,
+                canonical_csv_path=canonical,
+                report_metadata_path=metadata,
+                use_edgartools=False,
+            )
+
+            df = pd.read_csv(output / "us_normalized_AAPL.csv")
+            debug = pd.read_csv(output / "us_normalized_AAPL.debug.csv")
+            rnd = df.loc[df["canonical_account_id"].eq("RND")]
+            rnd_debug = debug.loc[debug["canonical_account_id"].eq("RND")]
+
+            self.assertEqual(float(rnd["normalized_amount"].iat[0]), 90)
+            self.assertEqual(rnd_debug["period_semantic"].iat[0], "YTD")
+            self.assertEqual(int(rnd_debug["duration_days"].iat[0]), 272)
+
+    def test_unparseable_ten_q_blocks_same_accession_fallback(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            filings = root / "filings"
+            companyfacts = root / "companyfacts"
+            output = root / "out"
+            companyfacts.mkdir()
+            canonical = root / "canonical.csv"
+            ticker_map = root / "tickers.csv"
+            metadata = root / "metadata.csv"
+            write_canonical(canonical)
+            write_ticker_map(ticker_map)
+            accession = "0000320193-25-000001"
+            bundle = write_filing_bundle(
+                filings,
+                accession=accession,
+                form="10-Q",
+                fiscal_period="Q3",
+                period_start="2025-01-01",
+                period_end="2025-09-30",
+                facts={"ResearchAndDevelopmentExpense": 90},
+            )
+            (bundle / "issuer-2025_htm.xml").write_text("<broken", encoding="utf-8")
+            fallback = fact("R&D", 10, "rnd")
+            fallback_row = fallback["units"]["USD"][0]
+            fallback_row.update(
+                {
+                    "start": "2025-01-01",
+                    "end": "2025-09-30",
+                    "accn": accession,
+                    "fp": "Q3",
+                    "form": "10-Q",
+                    "frame": "CY2025Q3",
+                }
+            )
+            write_companyfacts(
+                companyfacts / "CIK0000320193.json",
+                {"ResearchAndDevelopmentExpense": fallback},
+            )
+
+            written = normalize_us_sec_filings(
+                symbols=["AAPL"],
+                start_year=2025,
+                end_year=2025,
+                filings_dir=filings,
+                companyfacts_dir=companyfacts,
+                notes_root=root / "missing-notes",
+                output_dir=output,
+                ticker_map_path=ticker_map,
+                canonical_csv_path=canonical,
+                report_metadata_path=metadata,
+                use_edgartools=False,
+            )
+
+            self.assertEqual(written, [])
+
+    def test_notes_are_used_when_filing_and_companyfacts_files_do_not_exist(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            notes = root / "notes" / "2025_12_notes"
+            output = root / "out"
+            notes.mkdir(parents=True)
+            canonical = root / "canonical.csv"
+            ticker_map = root / "tickers.csv"
+            metadata = root / "metadata.csv"
+            write_canonical(canonical)
+            write_ticker_map(ticker_map)
+            (notes / "sub.tsv").write_text(
+                "adsh\tcik\tname\tform\tperiod\tfy\tfp\tfiled\n"
+                "0000320193-26-000001\t320193\tApple Inc.\t10-K\t20251231\t2025\tFY\t20260130\n",
+                encoding="utf-8",
+            )
+            (notes / "num.tsv").write_text(
+                "adsh\ttag\tversion\tddate\tuom\tdimh\tvalue\n"
+                "0000320193-26-000001\tResearchAndDevelopmentExpense\tus-gaap/2025\t20251231\tUSD\t0x00000000\t40\n",
+                encoding="utf-8",
+            )
+            (notes / "tag.tsv").write_text(
+                "tag\tversion\tcustom\tabstract\tdatatype\tiord\tcrdr\ttlabel\tdoc\n"
+                "ResearchAndDevelopmentExpense\tus-gaap/2025\t0\t0\tmonetaryItemType\tI\tD\tResearch and Development\tR&D\n",
+                encoding="utf-8",
+            )
+            (notes / "pre.tsv").write_text(
+                "adsh\treport\tline\tstmt\tinpth\ttag\tversion\tprole\tplabel\tnegating\n"
+                "0000320193-26-000001\t2\t1\tIS\t0\tResearchAndDevelopmentExpense\tus-gaap/2025\tterseLabel\tResearch and Development\t0\n",
+                encoding="utf-8",
+            )
+            (notes / "ren.tsv").write_text(
+                "adsh\treport\trfile\tmenucat\tshortname\tlongname\troleuri\tparentroleuri\tparentreport\tultparentrpt\n"
+                "0000320193-26-000001\t2\tH\tS\tStatement of Operations\tStatement of Operations\trole\t\t\t\n",
+                encoding="utf-8",
+            )
+
+            normalize_us_sec_filings(
+                symbols=["AAPL"],
+                start_year=2025,
+                end_year=2025,
+                filings_dir=root / "missing-filings",
+                companyfacts_dir=root / "missing-companyfacts",
+                notes_root=root / "notes",
+                output_dir=output,
+                ticker_map_path=ticker_map,
+                canonical_csv_path=canonical,
+                report_metadata_path=metadata,
+                use_edgartools=False,
+            )
+
+            df = pd.read_csv(output / "us_normalized_AAPL.csv")
+            debug = pd.read_csv(output / "us_normalized_AAPL.debug.csv")
+            self.assertEqual(float(df["normalized_amount"].iat[0]), 40)
+            self.assertEqual(debug["source"].iat[0], "notes")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from engine.semantic import (
+    AccountingInvariantAuditor,
     CompanyYearCompletenessAuditor,
     FactorDependencyGraph,
     GoldenCorpusEvaluator,
@@ -19,8 +20,18 @@ from engine.semantic import (
     resolve_rule_bundle,
     validate_rule_manifest,
 )
+from engine.transformers.filings import RuleEngine
+from engine.workflows._internal.normalize_workflow import (
+    CANONICAL_CSV_PATH,
+    SEMANTIC_MAPPING_RULE_PATH,
+    SEMANTIC_SIGN_POLICY_PATH,
+)
 from engine.transformers.dividends import build_kr_dividend_pit_events_dataframe
-from engine.transformers.factors import read_annual_financials
+from engine.transformers.factors import (
+    read_annual_financials,
+    read_quarterly_financials,
+    read_ttm_financials,
+)
 
 
 pytestmark = pytest.mark.semantic
@@ -434,18 +445,92 @@ def test_strict_point_in_time_annual_input_rejects_pre_period_report_date(
     assert result.empty
 
 
-def test_v5_manifest_carries_reproducibility_hashes_and_resolves_bundle() -> None:
+@pytest.mark.parametrize("reader", [read_quarterly_financials, read_ttm_financials])
+def test_strict_point_in_time_periodic_input_abstains_without_report_metadata(
+    tmp_path: Path,
+    reader,
+) -> None:
+    financial_dir = tmp_path / "financials"
+    financial_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "canonical_account_id": "REVENUE",
+                "canonical_account_name": "매출액",
+                "original_account_name": "매출액",
+                "statement_type": "IS",
+                "period": "2020.3",
+                "normalized_amount": 100,
+                "fiscal_year": 2020,
+                "fiscal_month": 3,
+                "fiscal_quarter": 1,
+            }
+        ]
+    ).to_csv(financial_dir / "kr_normalized_005930.csv", index=False)
+
+    result = reader(
+        "005930",
+        financial_dir=financial_dir,
+        report_metadata_path=tmp_path / "missing.csv",
+        require_report_metadata=True,
+    )
+
+    assert result.empty
+
+
+def test_v6_manifest_carries_reproducibility_hashes_and_resolves_bundle() -> None:
     manifest_path = Path("data-lake/meta/rules/semantic_rule_manifest.json")
     manifest = __import__("json").loads(manifest_path.read_text(encoding="utf-8"))
 
     validate_rule_manifest(manifest, path=manifest_path)
 
-    assert manifest["bundle_id"] == "arcana.semantic.kr.v5"
+    assert manifest["bundle_id"] == "arcana.semantic.kr.v6"
     assert manifest["schema"] == "arcana.semantic-rules/v4"
-    assert manifest["engine"] == "arcana-financial-semantic-v5"
+    assert manifest["engine"] == "arcana-financial-semantic-v6"
     assert manifest["golden_corpus_hash"].startswith("sha256:")
     assert manifest["test_suite_hash"].startswith("sha256:")
-    assert resolve_rule_bundle(manifest_path).name == "semantic_kr_v5.yaml"
+    assert resolve_rule_bundle(manifest_path).name == "semantic_kr_v6.yaml"
+
+
+def test_v6_preserves_signed_tax_benefit_and_identity_passes() -> None:
+    engine = RuleEngine.from_files(
+        canonical_csv_path=CANONICAL_CSV_PATH,
+        rule_paths=[SEMANTIC_MAPPING_RULE_PATH],
+        sign_policy_path=SEMANTIC_SIGN_POLICY_PATH,
+    )
+    mapped = engine.map_rows(
+        [
+            {
+                "company_name": "006920",
+                "statement_type": "IS",
+                "period": "2008.12",
+                "original_account_name": "법인세비용(수익)",
+                "raw_account_name": "법인세비용(수익)",
+                "raw_amount": "-157234785",
+                "amount_raw": "(-)157,234,785",
+                "unit_factor": "1",
+            }
+        ],
+        include_debug_cols=True,
+    )
+
+    assert mapped["canonical_account_id"].iat[0] == "TAX_EXPENSE"
+    assert mapped["normalized_amount"].iat[0] == "-157234785"
+    assert mapped["semantic_engine_version"].iat[0] == "6"
+    evidence = AccountingInvariantAuditor().audit(
+        {
+            "PBT": 241_878_238,
+            "TAX_EXPENSE": -157_234_785,
+            "NET_INCOME": 399_113_023,
+        }
+    )
+    income_identity = next(
+        item
+        for item in evidence
+        if item.invariant_id == "IS_PBT_MINUS_TAX_EQUALS_NET_INCOME"
+    )
+    assert income_identity.status == "PASS"
+    assert income_identity.residual == 0
 
 
 def test_factor_coverage_javascript_applies_dividend_only_after_disclosure_date() -> None:

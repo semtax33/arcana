@@ -12,11 +12,14 @@ from typing import Any, Iterable
 import yaml
 
 from engine.core.paths import DATA_LAKE, first_existing_path
+from engine.semantic.us_dsl import load_us_semantic_rules
 
 
 DEFAULT_INPUT_DIR = DATA_LAKE.silver("sec", "normalized")
 DEFAULT_OUT_DIR = DATA_LAKE.silver("sec", "mapping_coverage")
 DEFAULT_RULE_PATH = first_existing_path(
+    DATA_LAKE.rules("semantic_us_rule_manifest.json"),
+    DATA_LAKE.rules("semantic_us_v2.arcana"),
     DATA_LAKE.rules("us_mapping.yaml"),
     DATA_LAKE.rules("mapping_us.yaml"),
 )
@@ -193,6 +196,8 @@ def _annual_key(
 
 
 def load_mapping_rules(path: str | Path) -> dict[str, Any]:
+    if Path(path).suffix.lower() in {".arcana", ".json"}:
+        return load_us_semantic_rules(path).to_legacy_rule_groups()
     with Path(path).open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     for key in RULE_GROUPS:

@@ -312,8 +312,11 @@ kr_normalized_benchmark_price.csv
 `normalized_005930_2025.12.csv`.
 
 캐노니컬 매핑 룰은 시장별로 분리합니다. KR은 `kr_mapping.yaml`,
-`context_kr.yaml`, `comment_kr.yaml`을 사용하고, US는 `us_mapping.yaml`의
-`companyfacts_rules`, `notes_rules`, `edgartools_fallback_rules`를 사용합니다.
+`context_kr.yaml`, `comment_kr.yaml`을 사용합니다. US는 YAML 대신 HMRB형
+`semantic_us_v2.arcana`의 `applies → match fact → capture → constraint → emit`
+문법을 사용하며, `semantic_us_rule_manifest.json`이 활성 bundle의 SHA-256을
+검증합니다. v1 `us_mapping.yaml`의 104개 룰은 v2 bundle에 무손실 이관되어
+호환 회귀 테스트의 기준으로만 남습니다.
 이전 파일명인 `mapping_kr.yaml`, `mapping_us.yaml`은 호환 fallback으로만
 참조합니다.
 기존 `*_common.yaml` 파일은 호환 fallback으로 유지합니다.
@@ -363,24 +366,32 @@ python -m engine.loaders.consensus --market kr
 날짜 범위로 확장됩니다. DART 재무제표·주석·사업 정보 검색은 10년을 초과하는 범위를
 여러 DART 검색 요청으로 자동 분할하므로 과거 20~30년 구간도 다운로드할 수 있습니다.
 
-### SEC EDGAR 원문 HTML 및 IR 첨부 수집
+### SEC EDGAR filing bundle 및 IR 첨부 수집
 
 `sec-filings`는 `edgartools`를 사용해 10-K, 10-Q, 8-K의 주 공시 문서 원문 HTML을
-그대로 보존합니다. 8-K 첨부 중 document type이 `EX-99`, `EX-99.1`, `EX-99.2`처럼
-숫자형 `EX-99.x`인 HTML은 IR 자료로 분리합니다. PDF, XML, `EX-101` 등은 저장하지
-않습니다.
+그대로 보존합니다. 10-K/10-Q는 accession별 bundle을 추가로 만들고 XBRL instance,
+extension schema, label/presentation/definition/calculation linkbase를 함께 저장합니다.
+8-K 첨부 중 document type이 `EX-99`, `EX-99.1`, `EX-99.2`처럼 숫자형 `EX-99.x`인
+HTML은 IR 자료로 분리합니다. 일반 PDF와 비대상 첨부는 저장하지 않습니다.
 
 ```text
 data-lake/bronze/sec/fillings/10-K/{ticker}/*.htm[l]
+data-lake/bronze/sec/fillings/10-K/{ticker}/{accession}/filing.json
+data-lake/bronze/sec/fillings/10-K/{ticker}/{accession}/*.{htm,html,xml,xsd}
 data-lake/bronze/sec/fillings/10-Q/{ticker}/*.htm[l]
+data-lake/bronze/sec/fillings/10-Q/{ticker}/{accession}/filing.json
+data-lake/bronze/sec/fillings/10-Q/{ticker}/{accession}/*.{htm,html,xml,xsd}
 data-lake/bronze/sec/fillings/8-K/{ticker}/*.htm[l]
 data-lake/bronze/sec/fillings/ir/{ticker}/*.htm[l]
 ```
 
-각 HTML 옆에는 accession number, filing date, SEC URL, SHA-256, byte size,
-`edgartools` 버전이 들어 있는 `.metadata.json` 파일이 생성됩니다. 종목별 완료 상태는
+각 HTML 옆의 `.metadata.json`과 bundle의 `filing.json`에는 accession number,
+filing/accepted time, SEC URL, 문서별 SHA-256·byte size, source authority,
+`edgartools` 버전이 기록됩니다. 종목별 완료 상태는
 `fillings/_checkpoints/`에 기록되므로 같은 조건으로 다시 실행하면 완료 종목을 건너뜁니다.
 `--no-resume`은 checkpoint만 무시하고, `--force`는 기존 파일까지 다시 씁니다.
+bundle schema version이 query fingerprint에 포함되므로 과거 HTML-only 체크포인트는
+자동으로 다시 수집됩니다.
 
 `--symbols`를 생략하면 `data-lake/bronze/yfinance/universe/us_equity_universe.csv`의
 미국 개별주식 전체를 대상으로 하며 `--offset`과 `--limit`으로 배치를 나눌 수 있습니다.
@@ -396,6 +407,9 @@ Arcana는 edgartools의 데이터 및 HTTP 캐시 경로를 프로젝트 내부
 대규모 backfill은 파일 용량과 SEC 호출량이 크므로 작은 배치로 시작해 checkpoint를
 확인하면서 확장하는 것을 권장합니다. SEC의 fair-access 정책에 맞게 실행 프로세스에
 실제 연락 가능한 `EDGAR_IDENTITY`를 반드시 설정하십시오.
+
+US `statements` 다운로드는 10-K/10-Q bundle을 먼저 수집한 다음 companyfacts를
+폴백 캐시로 받습니다. 8-K/IR까지 함께 수집하려면 `sec-filings`를 사용합니다.
 
 Hankyung 컨센서스 다운로드는 원본 JSON 파일을
 `data-lake/bronze/consensus/hankyung/`에 저장합니다. ValueFinder와 EQUITY의 애널리스트
@@ -657,15 +671,19 @@ python -m engine.workflows.normalize
 python -m engine.workflows.normalize --market kr
 python -m engine.workflows.normalize --market kr --target statements --start-year 2021 --end-year 2026
 python -m engine.workflows.normalize --market us --symbols AAPL,MSFT --start-year 2020 --end-year 2025
+python -m engine.workflows.normalize --market us --symbols AAPL --start-year 2025 --end-year 2025 --use-edgartools
 python -m engine.workflows.normalize --target business-info
 python -m engine.workflows.normalize --target business-info --symbols 005930,105560 --start-year 2026 --end-year 2026 --workers 8
 python -m engine.workflows.normalize --target all --workers 8
 ```
 
 KR은 DART HTML 재무제표를 canonical account 기준 CSV로 정규화합니다.
-산출물은 `data-lake/silver/dart/normalized/` 아래에 저장됩니다. US는 SEC
-companyfacts, SEC Notes Data Sets, edgartools fallback 순서로 값을 채워
-`data-lake/silver/sec/normalized/` 아래에 저장합니다.
+산출물은 `data-lake/silver/dart/normalized/` 아래에 저장됩니다. US는 로컬
+10-K/10-Q XBRL bundle을 먼저 파싱합니다. 해당 종목·기간의 filing bundle이 없을 때만
+SEC companyfacts를, 그것도 없을 때만 Financial Statement and Notes Data Set을
+사용해 `data-lake/silver/sec/normalized/` 아래에 저장합니다. filing이 존재하지만
+파싱할 수 없으면 하위 원천으로 조용히 대체하지 않고 경고와 abstention을 남깁니다.
+10-Q duration fact는 `QTD`와 `YTD`를 구분하며 현재 YTD context를 우선합니다.
 
 `--target` 기본값은 `statements`이며 기존처럼 재무제표만 파싱합니다.
 `--target business-info`는 이미 다운로드된
@@ -711,9 +729,9 @@ data-lake/gold/estimates/{stock_code}/arcana_estimate_component.csv
 data-lake/gold/estimates/{stock_code}/arcana_estimate_consensus.csv
 ```
 
-US fallback 값은 선택 의존성인 edgartools 패키지를 사용합니다. 패키지가
-설치되지 않았거나 SEC 조회가 실패하면 edgartools fallback만 건너뛰고
-companyfacts/Notes 기반 정규화는 계속 진행합니다. US 가격과 주식수 다운로드는
+edgartools 패키지는 SEC filing bundle 다운로드와 로컬 XBRL/DTS 파싱에 필요합니다.
+라이브 edgartools company-facts 정규화 폴백은 기본적으로 꺼져 있고
+`--use-edgartools`를 명시한 경우에만 로컬 원천 뒤에서 동작합니다. US 가격과 주식수 다운로드는
 이 workflow에 포함되지 않으므로, 팩터 계산에는 별도 silver price/share 파일이
 필요합니다.
 
@@ -1367,11 +1385,11 @@ python -m scripts.verify_us_earnings_call_transcripts `
 US 매핑 커버리지 검증기:
 
 ```powershell
-python -m engine.us_mapping_coverage_validator --input-dir data-lake\silver\sec\normalized --rules data-lake\meta\rules\us_mapping.yaml --out-dir data-lake\silver\sec\mapping_coverage --start-year 2020 --end-year 2025
+python -m engine.us_mapping_coverage_validator --input-dir data-lake\silver\sec\normalized --rules data-lake\meta\rules\semantic_us_rule_manifest.json --out-dir data-lake\silver\sec\mapping_coverage --start-year 2020 --end-year 2025
 python -m engine.us_mapping_coverage_validator --symbols AAPL,MSFT --min-required-coverage-pct 80 --min-rule-hit-pct 10 --progress-interval 1 --strict
 ```
 
-`us_mapping.yaml`의 companyfacts/notes/edgartools rule을 SEC normalized/debug
+manifest가 검증한 `semantic_us_v2.arcana`의 filing/companyfacts/notes rule을 SEC normalized/debug
 CSV output과 비교하고 `mapping_coverage_validation.json`,
 `canonical_coverage.csv`, `source_contribution.csv`, `rule_coverage.csv`를
 생성합니다. 진행상황은 stderr에 출력되며 `--progress-interval 0`으로 끌 수

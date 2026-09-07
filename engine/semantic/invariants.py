@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import Enum
 from typing import Iterable, Mapping
@@ -44,6 +44,10 @@ class InvariantContext:
     aggregation_complete: bool = False
     contra_relations_resolved: bool = True
     statement_structure_sufficient: bool = True
+    balance_sheet_structure_sufficient: bool = True
+    income_statement_structure_sufficient: bool = True
+    income_tax_bridge_sufficient: bool = True
+    cash_flow_statement_structure_sufficient: bool = True
     qualifiers: tuple[str, ...] = ()
 
 
@@ -165,50 +169,134 @@ class AccountingInvariantAuditor:
         pbt = self._value(facts, "PBT")
         tax_expense = self._value(facts, "TAX_EXPENSE")
         net_income = self._value(facts, "NET_INCOME")
+        outside_shareholder_interest = self._value(facts, "NEAOP")
+        translation_difference = self._value(facts, "CF_TRANSLATION_DIFFERENCE")
+        special_cash_change = self._value(facts, "SPECIAL_CASH_CHANGE")
+
+        balance_context = replace(
+            context,
+            statement_structure_sufficient=(
+                context.statement_structure_sufficient
+                and context.balance_sheet_structure_sufficient
+            ),
+        )
+        income_context = replace(
+            context,
+            statement_structure_sufficient=(
+                context.statement_structure_sufficient
+                and context.income_statement_structure_sufficient
+            ),
+        )
+        income_tax_context = replace(
+            context,
+            statement_structure_sufficient=(
+                context.statement_structure_sufficient
+                and context.income_statement_structure_sufficient
+                and context.income_tax_bridge_sufficient
+            ),
+        )
+        cash_context = replace(
+            context,
+            statement_structure_sufficient=(
+                context.statement_structure_sufficient
+                and context.cash_flow_statement_structure_sufficient
+            ),
+        )
+
+        balance_right = (
+            liabilities + equity
+            if liabilities is not None and equity is not None
+            else None
+        )
+        balance_involved = ("TOTAL_ASSETS", "TOTAL_LIABILITIES", "TOTAL_EQUITY")
+        if (
+            assets is not None
+            and balance_right is not None
+            and outside_shareholder_interest is not None
+        ):
+            legacy_right = balance_right + outside_shareholder_interest
+            # Pre-IFRS consolidated balance sheets may present outside/minority
+            # shareholder interest between liabilities and equity.  Prefer that
+            # recognized equation only when it improves the reported residual.
+            if abs(assets - legacy_right) < abs(assets - balance_right):
+                balance_right = legacy_right
+                balance_involved += ("NEAOP",)
+
+        translation_component = translation_difference or Decimal(0)
+        special_component = special_cash_change or Decimal(0)
+        operating_investing_financing = self._sum((cfo, cfi, cff))
+        cash_bridge_involved = (
+            "CF_CASH_BEGIN",
+            "CFO",
+            "CFI",
+            "CFF",
+            "FX_EFFECT_CASH",
+            "CF_CASH_END",
+        )
+        if translation_difference is not None:
+            cash_bridge_involved += ("CF_TRANSLATION_DIFFERENCE",)
+        if special_cash_change is not None:
+            cash_bridge_involved += ("SPECIAL_CASH_CHANGE",)
         evidence = [
             self._compare(
                 "BS_ASSETS_EQUALS_LIABILITIES_PLUS_EQUITY",
                 assets,
-                liabilities + equity if liabilities is not None and equity is not None else None,
-                ("TOTAL_ASSETS", "TOTAL_LIABILITIES", "TOTAL_EQUITY"),
-                context,
+                balance_right,
+                balance_involved,
+                balance_context,
             ),
             self._compare(
                 "IS_REVENUE_MINUS_COGS_EQUALS_GROSS_PROFIT",
                 revenue - abs(cogs) if revenue is not None and cogs is not None else None,
                 gross_profit,
                 ("REVENUE", "COGS", "GROSS_PROFIT"),
-                context,
+                income_context,
             ),
             self._compare(
                 "IS_PBT_MINUS_TAX_EQUALS_NET_INCOME",
-                pbt - abs(tax_expense) if pbt is not None and tax_expense is not None else None,
+                pbt - tax_expense if pbt is not None and tax_expense is not None else None,
                 net_income,
                 ("PBT", "TAX_EXPENSE", "NET_INCOME"),
-                context,
+                income_tax_context,
             ),
             self._compare(
                 "CF_OPERATING_PLUS_INVESTING_PLUS_FINANCING_EQUALS_CHANGE_BEFORE_FX",
-                self._sum((cfo, cfi, cff)),
+                (
+                    operating_investing_financing + translation_component
+                    if operating_investing_financing is not None
+                    else None
+                ),
                 cash_change_before_fx,
-                ("CFO", "CFI", "CFF", "CF_CASH_CHANGE_BEFORE_FX"),
-                context,
+                (
+                    "CFO",
+                    "CFI",
+                    "CFF",
+                    "CF_CASH_CHANGE_BEFORE_FX",
+                    *(("CF_TRANSLATION_DIFFERENCE",) if translation_difference is not None else ()),
+                ),
+                cash_context,
             ),
             self._compare(
                 "CF_END_MINUS_BEGIN_EQUALS_CASH_CHANGE",
                 end_cash - begin_cash if end_cash is not None and begin_cash is not None else None,
                 cash_change,
                 ("CF_CASH_BEGIN", "CF_CASH_END", "CF_CASH_CHANGE"),
-                context,
+                cash_context,
             ),
             self._compare(
                 "CF_BEGIN_PLUS_FLOWS_EQUALS_END",
-                begin_cash + cfo + cfi + cff + fx
+                begin_cash
+                + cfo
+                + cfi
+                + cff
+                + fx
+                + translation_component
+                + special_component
                 if all(value is not None for value in (begin_cash, cfo, cfi, cff, fx))
                 else None,
                 end_cash,
-                ("CF_CASH_BEGIN", "CFO", "CFI", "CFF", "FX_EFFECT_CASH", "CF_CASH_END"),
-                context,
+                cash_bridge_involved,
+                cash_context,
             ),
         ]
         # Component-sum equations are only valid when the extraction explicitly

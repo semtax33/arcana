@@ -647,16 +647,30 @@ def run_us_filing_refresh(
     from engine.extractors.sec_filings import (
         download_sec_company_tickers,
         download_us_companyfacts,
+        download_us_filing_htmls,
     )
     from engine.transformers.sec_filings import normalize_us_sec_filings
 
     download_sec_company_tickers()
+    end_iso = _to_iso_date(end_date)
+    end_year = int(end_iso[:4])
+    start_iso = f"{end_year - 10:04d}-01-01"
+    download_us_filing_htmls(
+        symbols=symbols,
+        start_date=start_iso,
+        end_date=end_iso,
+        forms=["10-K", "10-Q"],
+        force=True,
+        workers=args.workers,
+        sleep_seconds=max(0.1, float(args.sleep_seconds or 0.0)),
+        retries=int(getattr(args, "stock_retries", 3)),
+        retry_backoff_seconds=float(getattr(args, "stock_retry_backoff", 30.0)),
+    )
     download_us_companyfacts(
         symbols=symbols,
         force=True,
         sleep_seconds=max(0.1, float(args.sleep_seconds or 0.0)),
     )
-    end_year = int(end_date[:4])
     written = normalize_us_sec_filings(
         symbols=symbols,
         start_year=end_year - 10,

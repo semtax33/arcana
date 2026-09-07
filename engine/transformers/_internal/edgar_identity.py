@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from engine.core.paths import DATA_LAKE
 
@@ -47,6 +48,30 @@ def configure_edgar_identity(set_identity: Callable[[str], object]) -> str:
     identity = resolve_edgar_identity()
     set_identity(identity)
     return identity
+
+
+def configure_edgar_http_cache(
+    *,
+    enabled: bool,
+    httpclient_module: Any | None = None,
+) -> object:
+    """Replace edgartools' process-local HTTP manager with explicit cache policy.
+
+    Historical filing downloads persist the authoritative primary and XBRL
+    documents below the data lake. Disabling edgartools' forever-cache for SEC
+    Archive responses avoids retaining a second copy of every full submission.
+    """
+    if httpclient_module is None:
+        from edgar import httpclient as httpclient_module  # type: ignore
+
+    old_manager = httpclient_module.HTTP_MGR
+    new_manager = httpclient_module.get_http_mgr(
+        cache_enabled=bool(enabled),
+        request_per_sec_limit=httpclient_module.get_edgar_rate_limit_per_sec(),
+    )
+    old_manager.close()
+    httpclient_module.HTTP_MGR = new_manager
+    return new_manager
 
 
 # Every Arcana module that imports edgartools imports this module first. Set the

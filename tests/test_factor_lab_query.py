@@ -313,6 +313,7 @@ class FactorLabQueryTest(unittest.TestCase):
             result.query,
         )
         self.assertIn("s.trade_date, s.is_observed, s.value", result.query)
+        self.assertIn("true AS is_valid", result.query)
         self.assertIn("rank() OVER", result.query)
         self.assertNotIn(
             "ORDER BY s.value DESC, s.security_id ASC",
@@ -394,11 +395,61 @@ class FactorLabQueryTest(unittest.TestCase):
         self.assertEqual(specs["greater_than"].inputs, ["left", "right"])
         self.assertEqual(specs["condition"].inputs, ["condition", "if_true", "if_false"])
         self.assertEqual(specs["condition_score"].inputs, ["condition", "score"])
+        self.assertEqual(specs["date_fallback"].inputs, ["primary", "fallback"])
         self.assertEqual(specs["lag"].config_schema, {"period": "positive integer"})
         self.assertEqual(specs["rolling_max"].config_schema, {"window": "positive integer"})
         self.assertEqual(specs["dense_score"].config_schema["tie_method"], "ordinal|average")
         self.assertIsNone(specs["dense_score"].config_schema["missing_score"])
         self.assertFalse(specs["weighted_score"].config_schema["missing_weight_renormalize"])
+
+    def test_date_fallback_selects_one_source_for_the_whole_trade_date(self):
+        graph = nested_graph()
+        graph["nodes"] = [
+            {
+                "id": "primary_score",
+                "type": "factor_input",
+                "config": {"factor_id": "primary_lab", "financial_basis": "lab"},
+            },
+            {
+                "id": "fallback_score",
+                "type": "factor_input",
+                "config": {"factor_id": "fallback_lab", "financial_basis": "lab"},
+            },
+            {"id": "portfolio_policy", "type": "date_fallback", "config": {}},
+        ]
+        graph["edges"] = [
+            {
+                "source": "primary_score",
+                "target": "portfolio_policy",
+                "target_handle": "primary",
+            },
+            {
+                "source": "fallback_score",
+                "target": "portfolio_policy",
+                "target_handle": "fallback",
+            },
+        ]
+        graph["outputs"] = {"final_node_id": "portfolio_policy"}
+
+        result = compile_factor_lab_graph(
+            graph,
+            known_factor_ids={"primary_lab", "fallback_lab"},
+        )
+
+        self.assertTrue(
+            validate_factor_lab_graph(
+                graph,
+                known_factor_ids={"primary_lab", "fallback_lab"},
+            ).valid
+        )
+        self.assertIn("node_portfolio_policy AS", result.query)
+        self.assertIn("countIf(is_valid) > 0 AS use_primary", result.query)
+        self.assertIn("WHERE availability.use_primary", result.query)
+        self.assertIn("WHERE NOT ifNull(availability.use_primary, false)", result.query)
+        self.assertLess(
+            result.query.index("node_primary_score AS"),
+            result.query.index("node_portfolio_policy AS"),
+        )
 
     def test_lab_factor_input_reads_persisted_factor_lab_values(self):
         graph = nested_graph()
@@ -425,6 +476,15 @@ class FactorLabQueryTest(unittest.TestCase):
         self.assertIn("f.is_valid AND f.factor_value IS NOT NULL", result.query)
         self.assertEqual(result.parameters["node_materialized_financial_basis"], "lab")
         self.assertNotIn("FROM fact_daily_factors AS f", result.query)
+        insert_query, _ = build_factor_lab_insert_query(
+            result,
+            factor_id="lab_22222222222222222222222222222222",
+            run_id="22222222-2222-2222-2222-222222222222",
+        )
+        self.assertIn(
+            "SETTINGS query_plan_enable_optimizations = 0",
+            insert_query,
+        )
 
     def test_logic_condition_and_condition_score_compile_with_exact_handles(self):
         graph = nested_graph()

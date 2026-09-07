@@ -18,10 +18,54 @@ from engine.transformers.factors import (
     read_stock_dividends,
     read_stock_prices,
     read_stock_shares,
+    us_filing_share_fallback_is_unambiguous,
 )
 
 
 class FactorNormalizerTest(unittest.TestCase):
+    def test_us_filing_share_fallback_rejects_multi_ticker_cik(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            current = root / "current.csv"
+            aliases = root / "aliases.csv"
+            current.write_text(
+                "cik,ticker,title\n320193,AAPL,Apple\n1652044,GOOG,Alphabet\n",
+                encoding="utf-8",
+            )
+            aliases.write_text(
+                "cik,ticker,title\n1652044,GOOGL,Alphabet Class A\n",
+                encoding="utf-8",
+            )
+
+            self.assertTrue(
+                us_filing_share_fallback_is_unambiguous(
+                    "AAPL",
+                    ticker_map_path=current,
+                    aliases_path=aliases,
+                )
+            )
+            self.assertFalse(
+                us_filing_share_fallback_is_unambiguous(
+                    "GOOG",
+                    ticker_map_path=current,
+                    aliases_path=aliases,
+                )
+            )
+            self.assertFalse(
+                us_filing_share_fallback_is_unambiguous(
+                    "GOOGL",
+                    ticker_map_path=current,
+                    aliases_path=aliases,
+                )
+            )
+            self.assertFalse(
+                us_filing_share_fallback_is_unambiguous(
+                    "UNKNOWN",
+                    ticker_map_path=current,
+                    aliases_path=aliases,
+                )
+            )
+
     def test_add_consensus_factors_uses_report_dates_for_expected_growth_and_surprise(self):
         with TemporaryDirectory() as temp_dir:
             estimate_dir = Path(temp_dir) / "005930"
@@ -158,6 +202,8 @@ class FactorNormalizerTest(unittest.TestCase):
                     "TOTAL_EQUITY": 500,
                     "PPE": 500,
                     "EAOP": 500,
+                    "SHORT_TERM_DEBT": 0,
+                    "CASH_AND_EQUIVALENTS": 0,
                     "REVENUE": 1_000,
                     "GROSS_PROFIT": 400,
                     "OPERATING_INCOME": 200,
@@ -174,6 +220,8 @@ class FactorNormalizerTest(unittest.TestCase):
                     "TOTAL_EQUITY": 500,
                     "PPE": 500,
                     "EAOP": 500,
+                    "SHORT_TERM_DEBT": 0,
+                    "CASH_AND_EQUIVALENTS": 0,
                     "REVENUE": 1_000,
                     "GROSS_PROFIT": 400,
                     "OPERATING_INCOME": 200,
@@ -265,6 +313,8 @@ class FactorNormalizerTest(unittest.TestCase):
                     "TOTAL_EQUITY": 500,
                     "PPE": 500,
                     "EAOP": 500,
+                    "SHORT_TERM_DEBT": 0,
+                    "CASH_AND_EQUIVALENTS": 0,
                     "REVENUE": 1_000,
                     "OPERATING_INCOME": 100,
                     "NET_INCOME": 75,
@@ -280,6 +330,8 @@ class FactorNormalizerTest(unittest.TestCase):
                     "TOTAL_EQUITY": 500,
                     "PPE": 500,
                     "EAOP": 500,
+                    "SHORT_TERM_DEBT": 0,
+                    "CASH_AND_EQUIVALENTS": 0,
                     "REVENUE": 1_000,
                     "OPERATING_INCOME": 200,
                     "NET_INCOME": 100,
@@ -800,6 +852,12 @@ class FactorNormalizerTest(unittest.TestCase):
                 financial_df = pd.DataFrame(
                     [
                         {
+                            "fiscal_year": 2024,
+                            "financial_period": "2024-12-31",
+                            "CURRENT_ASSETS": 200,
+                            "CURRENT_LIABILITIES": 100,
+                        },
+                        {
                             "fiscal_year": 2025,
                             "financial_period": "2025-12-31",
                             "REVENUE": 1_000,
@@ -909,6 +967,67 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(result["rpr"].iat[0], 0.05)
         self.assertAlmostEqual(result["rnd_to_market_cap"].iat[0], 5.0)
 
+    def test_missing_financial_and_shareholder_inputs_are_not_imputed_as_zero(self):
+        daily_df = pd.DataFrame(
+            {
+                "trade_date": pd.to_datetime(["2002-12-30"]),
+                "close": [360_000],
+                "volume": [100],
+                "shares": [10],
+                "market_cap": [3_600_000],
+            }
+        )
+
+        result = add_daily_market_valuation_factors(daily_df)
+
+        evidence_required = [
+            "bps",
+            "sps",
+            "cps",
+            "fcff",
+            "fcfe",
+            "bpr",
+            "spr",
+            "cpr",
+            "fcfpr",
+            "sharehold_net_buyback_yield",
+            "sharehold_return",
+            "shareholder_yield",
+        ]
+        self.assertTrue(result[evidence_required].isna().all(axis=None))
+
+    def test_partial_financial_statement_does_not_impute_absent_components(self):
+        financial_df = pd.DataFrame(
+            [
+                {
+                    "fiscal_year": 2025,
+                    "financial_period": "2025-12-31",
+                    "TOTAL_ASSETS": 1_000,
+                    "TOTAL_EQUITY": 600,
+                    "REVENUE": 800,
+                    "NET_INCOME": 80,
+                    "OPERATING_INCOME": 100,
+                    "CFO": 150,
+                    "CAPEX_PPE": 50,
+                }
+            ]
+        )
+
+        result = add_annual_financial_factors(financial_df).iloc[0]
+
+        evidence_required = [
+            "che",
+            "ffo",
+            "net_borrowing",
+            "debt",
+            "net_debt",
+            "fcff",
+            "fcfe",
+            "fcf_after_dividends",
+            "f_score",
+        ]
+        self.assertTrue(result[evidence_required].isna().all())
+
     def test_ev_to_ebitda_requires_positive_ev_and_nonzero_ebitda(self):
         daily_df = pd.DataFrame(
             {
@@ -940,6 +1059,8 @@ class FactorNormalizerTest(unittest.TestCase):
                 "volume": [100],
                 "shares": [100],
                 "market_cap": [1_000],
+                "debt": [0],
+                "che": [0],
                 "oibdp": [-100],
             }
         )
@@ -1010,8 +1131,8 @@ class FactorNormalizerTest(unittest.TestCase):
 
         result = add_daily_market_valuation_factors(daily_df)
 
-        self.assertAlmostEqual(result["enterprise_value"].iat[0], 1_000.0)
-        self.assertAlmostEqual(result["ev_to_nopat"].iat[0], 10.0)
+        self.assertTrue(pd.isna(result["enterprise_value"].iat[0]))
+        self.assertTrue(pd.isna(result["ev_to_nopat"].iat[0]))
         self.assertEqual(result["ev_nopat_quality_flag"].iat[0], "missing_enterprise_value_inputs")
 
     def test_daily_fcf_shareholder_return_factors_use_cash_dividends(self):
@@ -1324,6 +1445,9 @@ class FactorNormalizerTest(unittest.TestCase):
                 "financial_period": pd.to_datetime(["2024-12-31"]),
                 "report_date": pd.to_datetime(["2025-01-01"]),
                 "oibdp": [200],
+                "debt": [0],
+                "che": [0],
+                "COMMON_SHARES_OUTSTANDING": [999],
             }
         )
 
@@ -1340,6 +1464,45 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertEqual(result["enterprise_value"].iat[0], 2_000)
         self.assertAlmostEqual(result["ev_to_ebitda"].iat[0], 10.0)
 
+    def test_us_market_cap_uses_disclosed_common_shares_after_report_date(self):
+        price_df = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_AAPL"] * 2,
+                "trade_date": pd.to_datetime(["2015-02-02", "2015-02-03"]),
+                "close": [20, 21],
+                "volume": [1_000, 1_000],
+                "currency": ["USD", "USD"],
+            }
+        )
+        financial_df = pd.DataFrame(
+            {
+                "stock_code": ["AAPL"],
+                "security_id": ["SEC_US_AAPL"],
+                "financial_period": pd.to_datetime(["2014-12-31"]),
+                "report_date": pd.to_datetime(["2015-02-03"]),
+                "COMMON_SHARES_OUTSTANDING": [100],
+            }
+        )
+
+        with (
+            patch("engine.transformers.factors.read_stock_prices", return_value=price_df),
+            patch("engine.transformers.factors.read_stock_shares", return_value=pd.DataFrame()),
+            patch("engine.transformers.factors.read_annual_financials", return_value=financial_df),
+            patch("engine.transformers.factors.add_dividend_factors", side_effect=lambda df, stock_code, **kwargs: df),
+            patch("engine.transformers.factors.add_price_momentum_factors", side_effect=lambda df: df),
+        ):
+            result = create_stock_factor_dataframe(
+                "AAPL",
+                financial_basis="annual",
+                market="us",
+                require_report_metadata=True,
+            )
+
+        self.assertTrue(pd.isna(result["shares"].iat[0]))
+        self.assertTrue(pd.isna(result["market_cap"].iat[0]))
+        self.assertEqual(result["shares"].iat[1], 100)
+        self.assertEqual(result["market_cap"].iat[1], 2_100)
+
     def test_create_stock_factor_dataframe_skips_financial_read_when_prices_are_missing(self):
         with (
             patch("engine.transformers.factors.read_stock_prices", return_value=pd.DataFrame()),
@@ -1351,6 +1514,56 @@ class FactorNormalizerTest(unittest.TestCase):
         self.assertTrue(result.empty)
         read_shares.assert_not_called()
         read_financials.assert_not_called()
+
+    def test_strict_point_in_time_keeps_market_factors_when_financials_abstain(self):
+        price_df = pd.DataFrame(
+            {
+                "security_id": ["SEC_US_GAP"] * 60,
+                "trade_date": pd.date_range("2016-01-04", periods=60, freq="B"),
+                "open": range(100, 160),
+                "high": range(101, 161),
+                "low": range(99, 159),
+                "close": range(100, 160),
+                "volume": [1_000] * 60,
+                "currency": ["USD"] * 60,
+            }
+        )
+
+        identity = lambda df, *args, **kwargs: df
+        with (
+            patch("engine.transformers.factors.read_stock_prices", return_value=price_df),
+            patch("engine.transformers.factors.read_stock_shares", return_value=pd.DataFrame()),
+            patch(
+                "engine.transformers.factors.read_annual_financials",
+                return_value=pd.DataFrame(),
+            ) as read_financials,
+            patch("engine.transformers.factors.add_dividend_factors", side_effect=identity),
+            patch("engine.transformers.factors.add_daily_market_valuation_factors", side_effect=identity),
+            patch("engine.transformers.factors.add_consensus_factors", side_effect=identity),
+            patch("engine.transformers.factors.add_real_consensus_factors", side_effect=identity),
+            patch("engine.transformers.factors.add_kr_target_price_factor", side_effect=identity),
+            patch("engine.transformers.factors.add_us_consensus_factors", side_effect=identity),
+            patch(
+                "engine.transformers.factors.add_eps_implied_operating_income_surprise_factor",
+                side_effect=identity,
+            ),
+            patch("engine.transformers.factors.add_rim_historical_roe_fallback", side_effect=identity),
+            patch("engine.transformers.factors.add_wacc_factors", side_effect=identity),
+            patch("engine.transformers.factors.add_pvgo_factors", side_effect=identity),
+            patch("engine.transformers.factors.add_equity_valuation_factors", side_effect=identity),
+        ):
+            result = create_stock_factor_dataframe(
+                "GAP",
+                financial_basis="annual",
+                market="us",
+                require_report_metadata=True,
+            )
+
+        self.assertEqual(len(result), len(price_df))
+        self.assertTrue(result["financial_period"].isna().all())
+        self.assertAlmostEqual(result["ma_50"].iat[-1], 134.5)
+        self.assertGreater(result["ret_1m"].iat[-1], 0)
+        self.assertTrue(read_financials.call_args.kwargs["require_report_metadata"])
 
     def test_read_annual_financials_includes_fiscal_month_for_report_metadata_join(self):
         with TemporaryDirectory() as temp_dir:

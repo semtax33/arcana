@@ -1,0 +1,3520 @@
+ruleset "semantic_us_v2" {
+  schema = "arcana.sec-semantic/v2"
+  version = 2
+  authority = ["FILING_XBRL", "COMPANYFACTS", "FINANCIAL_STATEMENT_NOTES"]
+}
+
+rule "concept_000_total_assets" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:Assets"]
+    concept.alternate = ["ifrs-full:Assets"]
+    label.matches = ["(?i)\\btotal\\s+assets\\b"]
+    label.excludes = ["(?i)\\bunder\\s+management\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "TOTAL_ASSETS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 0
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_001_total_equity" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:StockholdersEquity"]
+    concept.alternate = ["us-gaap:StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest","us-gaap:PartnersCapital","us-gaap:CommonStocksIncludingAdditionalPaidInCapital"]
+    label.matches = ["(?i)\\b(stockholders'?|shareholders'?|partners')\\s+equity\\b","(?i)\\bmembers'\\s+equity\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "TOTAL_EQUITY"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 1
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_002_total_liabilities" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:Liabilities"]
+    concept.alternate = ["ifrs-full:Liabilities"]
+    label.matches = ["(?i)\\btotal\\s+liabilities\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "TOTAL_LIABILITIES"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 2
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_003_current_assets" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:AssetsCurrent"]
+    label.matches = ["(?i)\\bcurrent\\s+assets\\b"]
+    label.excludes = ["(?i)\\bnon[- ]current\\b","(?i)\\btotal\\s+assets\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CURRENT_ASSETS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 3
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_004_non_current_assets" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:AssetsNoncurrent"]
+    label.matches = ["(?i)\\bnon[- ]current\\s+assets\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "NON_CURRENT_ASSETS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 4
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns"]
+  }
+}
+
+rule "concept_005_current_liabilities" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:LiabilitiesCurrent"]
+    label.matches = ["(?i)\\bcurrent\\s+liabilities\\b"]
+    label.excludes = ["(?i)\\bnon[- ]current\\b","(?i)\\btotal\\s+liabilities\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CURRENT_LIABILITIES"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 5
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_006_non_current_liabilities" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:LiabilitiesNoncurrent"]
+    label.matches = ["(?i)\\bnon[- ]current\\s+liabilities\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "NON_CURRENT_LIABILITIES"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 6
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns"]
+  }
+}
+
+rule "concept_007_cash_and_equivalents" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:CashAndCashEquivalentsAtCarryingValue"]
+    concept.alternate = ["us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents","us-gaap:CashCashEquivalentsAndShortTermInvestments","ifrs-full:CashAndCashEquivalents"]
+    label.matches = ["(?i)\\bcash\\s+and\\s+cash\\s+equivalents\\b","(?i)\\bcash,\\s*cash\\s+equivalents\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CASH_AND_EQUIVALENTS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 7
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_008_inventories" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:InventoryNet"]
+    concept.alternate = ["us-gaap:InventoryFinishedGoodsNetOfReserves","ifrs-full:Inventories"]
+    label.matches = ["(?i)\\binventor(y|ies)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "INVENTORIES"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 8
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_009_trade_receivables" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:AccountsReceivableNetCurrent"]
+    concept.alternate = ["us-gaap:ReceivablesNetCurrent","ifrs-full:TradeAndOtherCurrentReceivables"]
+    label.matches = ["(?i)\\baccounts?\\s+receivable\\b","(?i)\\btrade\\s+receivables?\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "TRADE_RECEIVABLES"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 9
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_010_trade_payables" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:AccountsPayableCurrent"]
+    concept.alternate = ["us-gaap:AccountsPayableAndAccruedLiabilitiesCurrent","ifrs-full:TradeAndOtherCurrentPayables"]
+    label.matches = ["(?i)\\baccounts?\\s+payable\\b","(?i)\\btrade\\s+payables?\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "TRADE_PAYABLES"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 10
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_011_ppe" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:PropertyPlantAndEquipmentNet"]
+    concept.alternate = ["ifrs-full:PropertyPlantAndEquipment"]
+    label.matches = ["(?i)\\bproperty,\\s*plant,?\\s+and\\s+equipment\\b","(?i)\\bproperty\\s+and\\s+equipment\\b"]
+    label.excludes = ["(?i)\\bpayments?\\s+to\\s+acquire\\b","(?i)\\bproceeds?\\s+from\\s+sale\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "PPE"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 11
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_012_intangible_assets" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:FiniteLivedIntangibleAssetsNet"]
+    concept.alternate = ["us-gaap:IntangibleAssetsNetExcludingGoodwill","us-gaap:OtherIntangibleAssetsNet","ifrs-full:IntangibleAssetsOtherThanGoodwill"]
+    label.matches = ["(?i)\\bintangible\\s+assets?\\b"]
+    label.excludes = ["(?i)\\bgoodwill\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "INTANGIBLE_ASSETS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 12
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_013_goodwill" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:Goodwill"]
+    concept.alternate = ["ifrs-full:Goodwill"]
+    label.matches = ["(?i)\\bgoodwill\\b"]
+    label.excludes = ["(?i)\\bimpairment\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "GOODWILL"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 13
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_014_short_term_debt" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:DebtCurrent"]
+    concept.alternate = ["us-gaap:ShortTermBorrowings","us-gaap:NotesPayableCurrent","us-gaap:LoansPayableCurrent","us-gaap:LongTermDebtCurrent","us-gaap:LongTermDebtAndCapitalLeaseObligationsCurrent","us-gaap:CommercialPaper","us-gaap:OtherShortTermBorrowings","us-gaap:ShortTermBankLoansAndNotesPayable","us-gaap:OtherLongTermDebtCurrent","ifrs-full:CurrentPortionOfLongtermBorrowings"]
+    label.matches = ["(?i)\\b(short[- ]term|current)\\s+(debt|borrowings?)\\b","(?i)\\bcurrent\\s+portion\\s+of\\s+long[- ]term\\s+(debt|borrowings?)\\b"]
+    label.excludes = ["(?i)\\binterest\\s+rates?\\b","(?i)\\brate\\s+range\\b","(?i)\\bweighted[- ]average\\s+rate\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "SHORT_TERM_DEBT"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 14
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_015_long_term_debt" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:LongTermDebtNoncurrent"]
+    concept.alternate = ["us-gaap:LongTermDebt","us-gaap:LongTermNotesPayable","us-gaap:OtherLongTermDebtNoncurrent","us-gaap:LongTermDebtAndCapitalLeaseObligations","ifrs-full:LongtermBorrowings"]
+    label.matches = ["(?i)\\blong[- ]term\\s+(debt|borrowings?)\\b","(?i)\\bnon[- ]current\\s+(debt|borrowings?)\\b","(?i)\\b(long[- ]term|non[- ]current)\\s+notes?\\s+payable\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "LONG_TERM_DEBT"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 15
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_016_lease_liability" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:OperatingLeaseLiability","us-gaap:FinanceLeaseLiability"]
+    concept.alternate = ["us-gaap:OperatingLeaseLiabilityCurrent","us-gaap:OperatingLeaseLiabilityNoncurrent","us-gaap:FinanceLeaseLiabilityCurrent","us-gaap:FinanceLeaseLiabilityNoncurrent","ifrs-full:LeaseLiabilities"]
+    label.matches = ["(?i)\\blease\\s+liabilit(y|ies)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "LEASE_LIABILITY"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 16
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_017_contract_assets" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:ContractWithCustomerAsset"]
+    concept.alternate = ["us-gaap:ContractWithCustomerAssetCurrent","us-gaap:ContractWithCustomerAssetNet","ifrs-full:ContractAssets"]
+    label.matches = ["(?i)\\bcontract\\s+assets?\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CONTRACT_ASSETS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 17
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_018_contract_liabilities" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:ContractWithCustomerLiability"]
+    concept.alternate = ["us-gaap:ContractWithCustomerLiabilityCurrent","us-gaap:DeferredRevenueCurrent","us-gaap:DeferredRevenueAndCreditsCurrent","ifrs-full:ContractLiabilities"]
+    label.matches = ["(?i)\\bcontract\\s+liabilit(y|ies)\\b","(?i)\\bdeferred\\s+revenue\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CONTRACT_LIABILITIES"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 18
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_019_advances_from_customers" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:CustomerAdvancesAndDepositsCurrent"]
+    concept.alternate = ["us-gaap:AdvancesFromCustomers","ifrs-full:AdvancesReceived"]
+    label.matches = ["(?i)\\bcustomer\\s+(advances|deposits)\\b","(?i)\\badvances\\s+from\\s+customers\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "ADVANCES_FROM_CUSTOMERS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 19
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_020_other_current_assets" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:OtherCurrentAssets"]
+    concept.alternate = ["us-gaap:PrepaidExpenseAndOtherAssetsCurrent","ifrs-full:OtherCurrentAssets"]
+    label.matches = ["(?i)\\bother\\s+current\\s+assets?\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OTHER_CURRENT_ASSETS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 20
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_021_other_non_current_assets" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:OtherAssetsNoncurrent"]
+    concept.alternate = ["us-gaap:OtherAssetsCurrentAndNoncurrent"]
+    label.matches = ["(?i)\\bother\\s+non[- ]current\\s+assets?\\b","(?i)\\bother\\s+long[- ]term\\s+assets?\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OTHER_NON_CURRENT_ASSETS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 21
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_022_other_current_liabilities" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:OtherCurrentLiabilities"]
+    concept.alternate = ["us-gaap:AccruedLiabilitiesCurrent","us-gaap:AccruedIncomeTaxesCurrent"]
+    label.matches = ["(?i)\\bother\\s+current\\s+liabilit(y|ies)\\b","(?i)\\baccrued\\s+liabilit(y|ies)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OTHER_CURRENT_LIABILITIES"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 22
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_023_other_non_current_liabilities" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:OtherLiabilitiesNoncurrent"]
+    label.matches = ["(?i)\\bother\\s+non[- ]current\\s+liabilit(y|ies)\\b","(?i)\\bother\\s+long[- ]term\\s+liabilit(y|ies)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OTHER_NON_CURRENT_LIABILITIES"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 23
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns"]
+  }
+}
+
+rule "concept_024_retained_earnings" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:RetainedEarningsAccumulatedDeficit"]
+    concept.alternate = ["us-gaap:RetainedEarningsMember"]
+    label.matches = ["(?i)\\bretained\\s+earnings\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "RETAINED_EARNINGS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 24
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_025_revenue" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"]
+    concept.alternate = ["us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax","us-gaap:Revenues","us-gaap:SalesRevenueNet","us-gaap:SalesRevenueGoodsNet","us-gaap:SalesRevenueServicesNet","ifrs-full:Revenue"]
+    label.matches = ["(?i)\\b(total\\s+)?(net\\s+)?(revenue|sales)\\b"]
+    label.excludes = ["(?i)\\bcost\\b","(?i)\\bdeferred\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "REVENUE"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 25
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_026_cogs" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:CostOfRevenue"]
+    concept.alternate = ["us-gaap:CostOfGoodsAndServicesSold","us-gaap:CostOfGoodsSold","us-gaap:CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization","ifrs-full:CostOfSales"]
+    label.matches = ["(?i)\\bcost\\s+of\\s+(revenue|sales|goods|services)\\b","(?i)\\bcost\\s+of\\s+products?\\s+sold\\b","(?i)\\bcosts?\\s+and\\s+expenses?\\s+applicable\\s+to\\s+revenue\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "COGS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 26
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_027_gross_profit" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:GrossProfit"]
+    concept.alternate = ["ifrs-full:GrossProfit"]
+    label.matches = ["(?i)\\bgross\\s+profit\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "GROSS_PROFIT"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 27
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_028_sgna" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:SellingGeneralAndAdministrativeExpense"]
+    concept.alternate = ["us-gaap:SellingAndMarketingExpense","us-gaap:GeneralAndAdministrativeExpense","ifrs-full:SellingGeneralAndAdministrativeExpense"]
+    label.matches = ["(?i)\\bselling,\\s*general\\s+and\\s+administrative\\b","(?i)\\bSG&A\\b","(?i)\\bgeneral\\s+and\\s+administrative\\b"]
+    label.excludes = ["(?i)\\bmember\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "SGNA"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 28
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_029_rnd" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:ResearchAndDevelopmentExpense"]
+    concept.alternate = ["us-gaap:ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost","us-gaap:InProcessResearchAndDevelopmentExpense","us-gaap:ResearchAndDevelopmentExpenseSoftwareExcludingAcquiredInProcessCost","us-gaap:OtherResearchAndDevelopmentExpense"]
+    label.matches = ["(?i)\\bresearch\\s+and\\s+development\\b","(?i)\\bR&D\\b","(?i)\\b(product|technology|software)\\s+development\\s+(expense|costs?)\\b","(?i)\\bresearch\\s+and\\s+product\\s+development\\b"]
+    label.excludes = ["(?i)\\bpolicy\\b","(?i)\\bmember\\b","(?i)\\btable\\b","(?i)\\bschedule\\b","(?i)\\brollforward\\b","(?i)\\breserve\\b","(?i)\\boil\\s+and\\s+gas\\s+reserves\\b","(?i)\\bfuture\\s+net\\s+cash\\s+flows\\b","(?i)\\bdeferred\\s+tax\\b","(?i)\\bcapitalized\\b","(?i)\\bsoftware\\s+development\\s+costs?\\b","(?i)\\bamortization\\b","(?i)\\bstock[- ]based\\s+compensation\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "RND"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 29
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_030_operating_income" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:OperatingIncomeLoss"]
+    concept.alternate = ["ifrs-full:ProfitLossFromOperatingActivities"]
+    label.matches = ["(?i)\\boperating\\s+income\\s*(\\(loss\\))?\\b","(?i)\\bincome\\s+from\\s+operations\\b","(?i)\\boperating\\s+profit\\s*(\\(loss\\))?\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OPERATING_INCOME"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 30
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_031_ebitda" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:EarningsBeforeInterestTaxesDepreciationAmortization","us-gaap:EarningsBeforeInterestTaxesDepreciationAndAmortization"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "EBITDA"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 31
+    fields = ["canonical_id","fs_type","primary_tags"]
+  }
+}
+
+rule "concept_032_pbt" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest"]
+    concept.alternate = ["us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments","us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest","ifrs-full:ProfitLossBeforeTax"]
+    label.matches = ["(?i)\\b(income|loss|profit)\\s+before\\s+(income\\s+)?tax(es)?\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "PBT"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 32
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_033_tax_expense" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:IncomeTaxExpenseBenefit"]
+    concept.alternate = ["ifrs-full:TaxExpenseIncome"]
+    label.matches = ["(?i)\\bincome\\s+tax\\s+(expense|benefit)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "TAX_EXPENSE"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 33
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_034_net_income" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:NetIncomeLoss"]
+    concept.alternate = ["us-gaap:NetIncomeLossIncludingPortionAttributableToNoncontrollingInterest","us-gaap:ProfitLoss","ifrs-full:ProfitLoss"]
+    label.matches = ["(?i)\\bnet\\s+(income|loss|earnings)\\b","(?i)\\bprofit\\s+\\(loss\\)\\b"]
+    label.excludes = ["(?i)\\battributable\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "NET_INCOME"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 34
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_035_net_income_parent" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:NetIncomeLossAvailableToCommonStockholdersBasic","us-gaap:NetIncomeLossAttributableToParent"]
+    concept.alternate = ["us-gaap:ProfitLoss"]
+    label.matches = ["(?i)\\bnet\\s+(income|loss)\\s+attributable\\s+to\\s+(parent|common\\s+stockholders?)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "NET_INCOME_PARENT"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 35
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_036_net_income_nci" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:NetIncomeLossAttributableToNoncontrollingInterest"]
+    concept.alternate = ["us-gaap:NetIncomeLossAttributableToNonredeemableNoncontrollingInterest"]
+    label.matches = ["(?i)\\bnet\\s+(income|loss)\\s+attributable\\s+to\\s+noncontrolling\\s+interest\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "NET_INCOME_NCI"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 36
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_037_continuing_operations_income" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:IncomeLossFromContinuingOperations","us-gaap:IncomeLossFromContinuingOperationsIncludingPortionAttributableToNoncontrollingInterest"]
+    label.matches = ["(?i)\\b(income|loss)\\s+from\\s+continuing\\s+operations\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CONTINUING_OPERATIONS_INCOME"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 37
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns"]
+  }
+}
+
+rule "concept_038_discontinued_operations_income" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:IncomeLossFromDiscontinuedOperationsNetOfTax","us-gaap:DiscontinuedOperationIncomeLossFromDiscontinuedOperationNetOfTax"]
+    label.matches = ["(?i)\\b(income|loss)\\s+from\\s+discontinued\\s+operations\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "DISCONTINUED_OPERATIONS_INCOME"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 38
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns"]
+  }
+}
+
+rule "concept_039_operating_expenses_total" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:OperatingExpenses"]
+    label.matches = ["(?i)\\b(total\\s+)?operating\\s+expenses\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OPERATING_EXPENSES_TOTAL"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 39
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns"]
+  }
+}
+
+rule "concept_040_other_operating_income" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:OtherOperatingIncome"]
+    concept.alternate = ["us-gaap:OtherOperatingIncomeExpenseNet"]
+    label.matches = ["(?i)\\bother\\s+operating\\s+income\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OTHER_OPERATING_INCOME"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 40
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","label_patterns"]
+  }
+}
+
+rule "concept_041_other_operating_expenses" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:OtherOperatingExpenses"]
+    concept.alternate = ["us-gaap:OtherCostAndExpenseOperating"]
+    label.matches = ["(?i)\\bother\\s+operating\\s+(expenses?|loss)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OTHER_OPERATING_EXPENSES"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 41
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","label_patterns"]
+  }
+}
+
+rule "concept_042_other_non_operating_income" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:NonoperatingIncomeExpense","us-gaap:OtherNonoperatingIncomeExpense"]
+    label.matches = ["(?i)\\bother\\s+non[- ]operating\\s+income\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OTHER_NON_OPERATING_INCOME"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 42
+    fields = ["canonical_id","fs_type","primary_tags","amount_policy","label_patterns"]
+  }
+}
+
+rule "concept_043_other_non_operating_expenses" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:OtherNonoperatingExpense"]
+    label.matches = ["(?i)\\bother\\s+non[- ]operating\\s+expenses?\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OTHER_NON_OPERATING_EXPENSES"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 43
+    fields = ["canonical_id","fs_type","primary_tags","amount_policy","label_patterns"]
+  }
+}
+
+rule "concept_044_basic_eps" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:EarningsPerShareBasic"]
+    concept.alternate = ["ifrs-full:BasicEarningsLossPerShare"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "BASIC_EPS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 44
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags"]
+  }
+}
+
+rule "concept_045_diluted_eps" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:EarningsPerShareDiluted"]
+    concept.alternate = ["ifrs-full:DilutedEarningsLossPerShare"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "DILUTED_EPS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 45
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags"]
+  }
+}
+
+rule "concept_046_basic_shares" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:WeightedAverageNumberOfSharesOutstandingBasic"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "BASIC_SHARES"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 46
+    fields = ["canonical_id","fs_type","primary_tags"]
+  }
+}
+
+rule "concept_047_diluted_shares" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "DILUTED_SHARES"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 47
+    fields = ["canonical_id","fs_type","primary_tags"]
+  }
+}
+
+rule "concept_048_common_shares_outstanding" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["dei:EntityCommonStockSharesOutstanding"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "BS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "COMMON_SHARES_OUTSTANDING"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 48
+    fields = ["canonical_id","fs_type","primary_tags"]
+  }
+}
+
+rule "concept_049_other_comprehensive_income" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:OtherComprehensiveIncomeLossNetOfTax","us-gaap:OtherComprehensiveIncomeLossBeforeTax"]
+    label.matches = ["(?i)\\bother\\s+comprehensive\\s+(income|loss)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OTHER_COMPREHENSIVE_INCOME"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 49
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns"]
+  }
+}
+
+rule "concept_050_total_comprehensive_income" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:ComprehensiveIncomeNetOfTax","us-gaap:ComprehensiveIncomeNetOfTaxIncludingPortionAttributableToNoncontrollingInterest"]
+    label.matches = ["(?i)\\btotal\\s+comprehensive\\s+(income|loss)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "TOTAL_COMPREHENSIVE_INCOME"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 50
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns"]
+  }
+}
+
+rule "concept_051_comprehensive_income_parent" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:ComprehensiveIncomeNetOfTaxAttributableToParent"]
+    label.matches = ["(?i)\\bcomprehensive\\s+(income|loss).+attributable\\s+to\\s+parent\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "COMPREHENSIVE_INCOME_PARENT"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 51
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns"]
+  }
+}
+
+rule "concept_052_comprehensive_income_nci" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:ComprehensiveIncomeNetOfTaxAttributableToNoncontrollingInterest"]
+    label.matches = ["(?i)\\bcomprehensive\\s+(income|loss).+noncontrolling\\s+interest\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "COMPREHENSIVE_INCOME_NCI"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 52
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns"]
+  }
+}
+
+rule "concept_053_cfo" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:NetCashProvidedByUsedInOperatingActivities"]
+    concept.alternate = ["us-gaap:NetCashProvidedByUsedInOperatingActivitiesContinuingOperations","ifrs-full:CashFlowsFromUsedInOperatingActivities"]
+    label.matches = ["(?i)\\bnet\\s+cash\\s+(provided\\s+by|used\\s+in)\\s+operating\\s+activities\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CFO"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 53
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_054_cfi" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:NetCashProvidedByUsedInInvestingActivities"]
+    concept.alternate = ["ifrs-full:CashFlowsFromUsedInInvestingActivities"]
+    label.matches = ["(?i)\\bnet\\s+cash\\s+(provided\\s+by|used\\s+in)\\s+investing\\s+activities\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CFI"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 54
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_055_cff" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:NetCashProvidedByUsedInFinancingActivities"]
+    concept.alternate = ["ifrs-full:CashFlowsFromUsedInFinancingActivities"]
+    label.matches = ["(?i)\\bnet\\s+cash\\s+(provided\\s+by|used\\s+in)\\s+financing\\s+activities\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CFF"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 55
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_056_cf_cash_change" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect","us-gaap:CashAndCashEquivalentsPeriodIncreaseDecrease"]
+    concept.alternate = ["ifrs-full:IncreaseDecreaseInCashAndCashEquivalents"]
+    label.matches = ["(?i)\\b(increase|decrease).+cash\\s+and\\s+cash\\s+equivalents\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CF_CASH_CHANGE"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 56
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_057_cf_cash_begin" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:CashAndCashEquivalentsAtCarryingValue","us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"]
+    label.matches = ["(?i)\\bcash.+beginning\\s+of\\s+(period|year)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CF_CASH_BEGIN"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 57
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns"]
+  }
+}
+
+rule "concept_058_cf_cash_end" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:CashAndCashEquivalentsAtCarryingValue","us-gaap:CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"]
+    label.matches = ["(?i)\\bcash.+end\\s+of\\s+(period|year)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CF_CASH_END"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 58
+    fields = ["canonical_id","fs_type","primary_tags","label_patterns"]
+  }
+}
+
+rule "concept_059_fx_effect_cash" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents","us-gaap:EffectOfExchangeRateOnCashAndCashEquivalents"]
+    concept.alternate = ["ifrs-full:EffectOfExchangeRateChangesOnCashAndCashEquivalents"]
+    label.matches = ["(?i)\\beffect\\s+of\\s+exchange\\s+rate\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "FX_EFFECT_CASH"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 59
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","label_patterns"]
+  }
+}
+
+rule "concept_060_capex_ppe" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:PaymentsToAcquirePropertyPlantAndEquipment"]
+    concept.alternate = ["us-gaap:PaymentsToAcquireProductiveAssets","us-gaap:PaymentsToAcquirePropertyPlantAndEquipmentAndIntangibleAssets","ifrs-full:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"]
+    label.matches = ["(?i)\\b(payments?|cash\\s+paid|purchase)\\s+(to\\s+acquire|for|of)\\s+property,\\s*plant,?\\s+and\\s+equipment\\b","(?i)\\bcapital\\s+expenditures?\\b"]
+    label.excludes = ["(?i)\\bproceeds?\\b","(?i)\\bdisposals?\\b","(?i)\\badditions?\\s+through\\s+business\\s+combinations\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CAPEX_PPE"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 60
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","cash_direction","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_061_capex_intang" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:PaymentsToAcquireIntangibleAssets"]
+    concept.alternate = ["ifrs-full:PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities"]
+    label.matches = ["(?i)\\b(payments?|purchase)\\s+(to\\s+acquire|for|of)\\s+intangible\\s+assets?\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CAPEX_INTANG"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 61
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","cash_direction","label_patterns"]
+  }
+}
+
+rule "concept_062_depreciation_expense" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:DepreciationDepletionAndAmortization"]
+    concept.alternate = ["us-gaap:Depreciation","us-gaap:DepreciationDepletionAndAmortizationExpense","us-gaap:DepreciationAndAmortization"]
+    label.matches = ["(?i)\\bdepreciation\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "DEPRECIATION_EXPENSE"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 62
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","label_patterns"]
+  }
+}
+
+rule "concept_063_amortization" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:AmortizationOfIntangibleAssets"]
+    concept.alternate = ["us-gaap:FiniteLivedIntangibleAssetsAmortizationExpense","us-gaap:AmortizationOfAcquiredIntangibleAssets","us-gaap:AmortizationOfFinancingCosts"]
+    label.matches = ["(?i)\\bamortization\\b"]
+    label.excludes = ["(?i)\\bdepreciation\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "AMORTIZATION"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 63
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_064_ppe_disposal_proceeds" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:ProceedsFromSaleOfPropertyPlantAndEquipment","us-gaap:ProceedsFromSaleOfProductiveAssets"]
+    concept.alternate = ["ifrs-full:ProceedsFromSalesOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"]
+    label.matches = ["(?i)\\bproceeds?\\s+from\\s+(sale|disposal).+property,\\s*plant,?\\s+and\\s+equipment\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "PPE_DISPOSAL_PROCEEDS"
+    amount = "abs"
+    cash_direction = "inflow"
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 64
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","cash_direction","label_patterns"]
+  }
+}
+
+rule "concept_065_intangible_disposal_proceeds" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:ProceedsFromSaleOfIntangibleAssets"]
+    label.matches = ["(?i)\\bproceeds?\\s+from\\s+(sale|disposal).+intangible\\s+assets?\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "INTANGIBLE_DISPOSAL_PROCEEDS"
+    amount = "abs"
+    cash_direction = "inflow"
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 65
+    fields = ["canonical_id","fs_type","primary_tags","amount_policy","cash_direction","label_patterns"]
+  }
+}
+
+rule "concept_066_int_paid" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:InterestPaidNet"]
+    concept.alternate = ["us-gaap:InterestPaid"]
+    label.matches = ["(?i)\\binterest\\s+paid\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "INT_PAID"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 66
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","cash_direction","label_patterns"]
+  }
+}
+
+rule "concept_067_interest_expense" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:InterestExpenseNonoperating","us-gaap:InterestExpenseNonOperating"]
+    concept.alternate = ["us-gaap:InterestAndDebtExpense","us-gaap:InterestExpenseDebtExcludingAmortization","us-gaap:InterestExpense"]
+    label.matches = ["(?i)\\binterest(?:\\s+and\\s+debt)?\\s+expense\\b"]
+    label.excludes = ["(?i)\\binterest\\s+paid\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "INTEREST_EXPENSE"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 67
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_068_tax_paid" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:IncomeTaxesPaidNet"]
+    concept.alternate = ["us-gaap:IncomeTaxesPaid"]
+    label.matches = ["(?i)\\bincome\\s+tax(es)?\\s+paid\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "TAX_PAID"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 68
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","cash_direction","label_patterns"]
+  }
+}
+
+rule "concept_069_div_paid" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:PaymentsOfDividends"]
+    concept.alternate = ["us-gaap:PaymentsOfDividendsCommonStock","us-gaap:PaymentsOfOrdinaryDividends","us-gaap:PaymentsOfDividendsPreferredStockAndPreferenceStock","ifrs-full:DividendsPaidClassifiedAsFinancingActivities"]
+    label.matches = ["(?i)\\bdividends?\\s+paid\\b","(?i)\\bpayments?\\s+of\\s+(ordinary\\s+)?dividends?\\b","(?i)\\bcash\\s+dividends?\\s+paid\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "DIV_PAID"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 69
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","cash_direction","label_patterns"]
+  }
+}
+
+rule "concept_070_debt_issue" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:ProceedsFromIssuanceOfLongTermDebt"]
+    concept.alternate = ["us-gaap:ProceedsFromBorrowings","us-gaap:ProceedsFromIssuanceOfDebt","us-gaap:ProceedsFromShortTermDebt","ifrs-full:ProceedsFromBorrowingsClassifiedAsFinancingActivities"]
+    label.matches = ["(?i)\\bproceeds?\\s+from\\s+(issuance\\s+of\\s+)?(debt|borrowings?)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "DEBT_ISSUE"
+    amount = "abs"
+    cash_direction = "inflow"
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 70
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","cash_direction","label_patterns"]
+  }
+}
+
+rule "concept_071_debt_repay" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:RepaymentsOfLongTermDebt"]
+    concept.alternate = ["us-gaap:RepaymentsOfDebt","us-gaap:RepaymentsOfShortTermDebt","ifrs-full:RepaymentsOfBorrowingsClassifiedAsFinancingActivities"]
+    label.matches = ["(?i)\\b(repayments?|payments?)\\s+of\\s+(debt|borrowings?)\\b","(?i)\\bprincipal\\s+payments?\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "DEBT_REPAY"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 71
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","cash_direction","label_patterns"]
+  }
+}
+
+rule "concept_072_eq_issue" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:ProceedsFromIssuanceOfCommonStock"]
+    concept.alternate = ["us-gaap:ProceedsFromStockOptionsExercised"]
+    label.matches = ["(?i)\\bproceeds?\\s+from\\s+(issuance\\s+of\\s+)?(common\\s+)?stock\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "EQ_ISSUE"
+    amount = "abs"
+    cash_direction = "inflow"
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 72
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","cash_direction","label_patterns"]
+  }
+}
+
+rule "concept_073_buyback" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:PaymentsForRepurchaseOfCommonStock"]
+    concept.alternate = ["us-gaap:PaymentsForRepurchaseOfEquity","us-gaap:PaymentsForRepurchaseOfCommonStock","us-gaap:PaymentsForRepurchaseOfPreferredStockAndPreferenceStock","us-gaap:PaymentsForRepurchaseOfRedeemablePreferredStock"]
+    label.matches = ["(?i)\\bpayments?\\s+for\\s+repurchase\\s+of\\s+(common\\s+)?stock\\b","(?i)\\bpayments?\\s+for\\s+repurchase\\s+of\\s+.*stock\\b","(?i)\\bpayments?\\s+for\\s+repurchase\\s+of\\s+(equity|shares?)\\b","(?i)\\brepurchase\\s+of\\s+(common\\s+)?(stock|shares?)\\b","(?i)\\brepurchase\\s+of\\s+.*stock\\b","(?i)\\btreasury\\s+stock\\s+(purchase|repurchase|acquired)\\b"]
+    label.excludes = ["(?i)\\bauthorized\\b","(?i)\\bnumber\\s+of\\s+shares\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "BUYBACK"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 73
+    fields = ["canonical_id","fs_type","primary_tags","alternate_tags","amount_policy","cash_direction","label_patterns","label_exclude_patterns"]
+  }
+}
+
+rule "concept_074_lease_repayment" {
+  version = 2
+  applies {
+    source = ["FILING_XBRL","COMPANYFACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.primary = ["us-gaap:RepaymentsOfFinanceLeaseObligations","us-gaap:PaymentsOfFinanceLeaseLiabilities"]
+    label.matches = ["(?i)\\b(payments?|repayments?)\\s+of\\s+(finance\\s+)?lease\\s+(obligations|liabilities)\\b"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "LEASE_REPAYMENT"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "companyfacts_rules"
+    index = 74
+    fields = ["canonical_id","fs_type","primary_tags","amount_policy","cash_direction","label_patterns"]
+  }
+}
+
+rule "notes_rnd" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["ResearchAndDevelopmentExpense","ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost","InProcessResearchAndDevelopmentExpense","ResearchAndDevelopmentExpenseSoftwareExcludingAcquiredInProcessCost","ResearchDevelopmentAndEngineeringExpenseNet","ResearchAndDevelopmentExpenseNet","OtherResearchAndDevelopmentExpense","ProductDevelopmentExpense","ResearchAndDevelopmentExpenses","ResearchAndDevelopmentAndEngineeringExpense","ResearchDevelopmentAndPatentExpense","ResearchAndDevelopmentExpenseNetOfGrantReimbursement","ResearchAndDevelopmentExcludingInProcessExpense","ResearchAndDevelopmentExpenseExcludingInProgressResearchAndDevelopment","ResearchAndDevelopmentExpenseNetOfAdjustments","EngineeringAndProductDevelopmentExpense","ResearchAndDevelopmentCosts","ResearchDevelopmentAndEngineeringExpenses","ResearchDevelopmentAndEngineeringExpenseNet","ResearchAndDevelopmentExpenseNet","ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCostNet","ResearchAndDevelopmentInOperatingExpense","ResearchAndDevelopmentExpensesNet"]
+    concept.matches = ["(?i)(researchanddevelopment|researchdevelopment).*(expense|cost)","(?i)(product|technology|software)development(expense|cost)"]
+    concept.excludes = ["(?i)deferredtax","(?i)capitalized","(?i)softwaredevelopment","(?i)siteandsoftware","(?i)propertyplantandequipment","(?i)amortiz","(?i)stockbasedcompensation","(?i)transitiontax","(?i)taxcuts","(?i)reversal","(?i)increaseanddecrease","(?i)incomeexpense","(?i)benefit","(?i)accrued","(?i)(selling|administrative|costofrevenue).*(researchanddevelopment|researchdevelopment)","(?i)(researchanddevelopment|researchdevelopment).*(selling|administrative|costofrevenue)"]
+    label.matches = ["(?i)research\\s+and\\s+development","(?i)\\bR&D\\b","(?i)\\b(product|technology|software)\\s+development\\s+(expense|costs?)\\b"]
+    label.excludes = ["(?i)\\bpolicy\\b","(?i)\\bmember\\b","(?i)\\btable\\b","(?i)\\bschedule\\b","(?i)\\brollforward\\b","(?i)\\breserve\\b","(?i)\\boil\\s+and\\s+gas\\s+reserves\\b","(?i)\\bfuture\\s+net\\s+cash\\s+flows\\b","(?i)\\bdeferred\\s+tax\\b","(?i)\\bcapitalized\\b","(?i)\\bsoftware\\s+development\\s+costs?\\b","(?i)\\bamortization\\b","(?i)\\bstock[- ]based\\s+compensation\\b"]
+    report.matches = ["(?i)statement","(?i)operations","(?i)income"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "RND"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "notes_rules"
+    index = 0
+    id = "notes_rnd"
+    fields = ["id","canonical_id","fs_type","tags","tag_patterns","tag_exclude_patterns","label_patterns","label_exclude_patterns","report_name_patterns","amount_policy"]
+  }
+}
+
+rule "notes_revenue" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["RevenueFromContractWithCustomerExcludingAssessedTax","RevenueFromContractWithCustomerIncludingAssessedTax","Revenues","SalesRevenueNet","SalesRevenueGoodsNet","SalesRevenueServicesNet"]
+    label.matches = ["(?i)\\b(total\\s+)?(net\\s+)?(revenue|sales)\\b"]
+    label.excludes = ["(?i)\\bcost\\b","(?i)\\bdeferred\\b"]
+    report.matches = ["(?i)statement","(?i)operations","(?i)income"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "REVENUE"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "notes_rules"
+    index = 1
+    id = "notes_revenue"
+    fields = ["id","canonical_id","fs_type","tags","label_patterns","label_exclude_patterns","report_name_patterns"]
+  }
+}
+
+rule "notes_cogs" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["CostOfRevenue","CostOfGoodsAndServicesSold","CostOfGoodsSold","CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization"]
+    label.matches = ["(?i)\\bcost\\s+of\\s+(revenue|sales|goods|services)\\b"]
+    report.matches = ["(?i)statement","(?i)operations","(?i)income"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "COGS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "notes_rules"
+    index = 2
+    id = "notes_cogs"
+    fields = ["id","canonical_id","fs_type","tags","label_patterns","report_name_patterns"]
+  }
+}
+
+rule "notes_gross_profit" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["GrossProfit"]
+    label.matches = ["(?i)\\bgross\\s+profit\\b"]
+    report.matches = ["(?i)statement","(?i)operations","(?i)income"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "GROSS_PROFIT"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "notes_rules"
+    index = 3
+    id = "notes_gross_profit"
+    fields = ["id","canonical_id","fs_type","tags","label_patterns","report_name_patterns"]
+  }
+}
+
+rule "notes_operating_income" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["OperatingIncomeLoss"]
+    label.matches = ["(?i)\\boperating\\s+income\\s*(\\(loss\\))?\\b","(?i)\\bincome\\s+from\\s+operations\\b"]
+    report.matches = ["(?i)statement","(?i)operations","(?i)income"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OPERATING_INCOME"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "notes_rules"
+    index = 4
+    id = "notes_operating_income"
+    fields = ["id","canonical_id","fs_type","tags","label_patterns","report_name_patterns"]
+  }
+}
+
+rule "notes_cfo" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["NetCashProvidedByUsedInOperatingActivities","NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"]
+    label.matches = ["(?i)\\bnet\\s+cash\\s+(provided\\s+by|used\\s+in)\\s+operating\\s+activities\\b"]
+    report.matches = ["(?i)cash\\s+flows?"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CFO"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "notes_rules"
+    index = 5
+    id = "notes_cfo"
+    fields = ["id","canonical_id","fs_type","tags","label_patterns","report_name_patterns","amount_policy"]
+  }
+}
+
+rule "notes_capex_ppe" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["PaymentsToAcquirePropertyPlantAndEquipment","PaymentsToAcquireProductiveAssets","PaymentsToAcquirePropertyPlantAndEquipmentAndIntangibleAssets","PaymentsToAcquirePropertyPlantAndEquipmentAndOtherAssets","PaymentsToAcquireProductiveAssetsExcludingDevelopSoftwareAndAcquireIntangibleAssets","PaymentsToAcquireOtherPropertyPlantAndEquipment","PaymentsToAcquireOtherProductiveAssets","PaymentsToAcquirePropertyPlantAndEquipmentNet","PaymentsToAcquirePropertyPlantandEquipmentandSoftware","PaymentsToAcquirePropertyPlantAndEquipmentIncludingSoftware","PaymentsToAcquirePropertyPlantAndEquipmentAndInternalUseSoftware","PaymentsToAcquirePropertyPlantAndEquipmentExcludingConstructionInProcess","PaymentsToAcquirePropertyPlantAndEquipmentExcludingConstructionInProgress","PaymentstoAcquirePropertyPlantandEquipmentNet","PaymentsToAcquirePropertyPlantAndEquipmentIncludingDiscontinuedOperations","PaymentsToAcquirePropertyPlantAndEquipmentExcludingCapitalizedCost","PaymentsToAcquirePropertyPlantAndEquipmentAndOther","PaymentsToAcquirePropertyPlantAndEquipmentAndOtherAssets","PaymentsToAcquireProductiveAssetsExcludingDevelopSoftwareAndAcquireIntangibleAssets","PaymentsToAcquirePropertyPlantAndEquipmentExcludingOilAndGas","PaymentsToAcquirePropertyPlantAndEquipmentExcludingRealEstate"]
+    concept.matches = ["(?i)paymentstoacquire.*(propertyplantandequipment|productiveassets)"]
+    concept.excludes = ["(?i)businesses","(?i)deferredlegalfees","(?i)mineralrights","(?i)fixedassetsotherthanpropertyplantandequipment","(?i)relatedparties","(?i)jvcompany"]
+    label.matches = ["(?i)\\b(payments?|cash\\s+paid|purchase)\\s+(to\\s+acquire|for|of)\\s+property,\\s*plant,?\\s+and\\s+equipment\\b","(?i)\\bcapital\\s+expenditures?\\b","(?i)\\b(acquisition|purchase)\\s+of\\s+property\\s+and\\s+equipment\\b","(?i)\\bpurchases?\\s+of\\s+property,\\s*plant\\s+and\\s+equipment\\b"]
+    label.excludes = ["(?i)\\bproceeds?\\b","(?i)\\bdisposals?\\b","(?i)\\badditions?\\s+through\\s+business\\s+combinations\\b"]
+    report.matches = ["(?i)cash\\s+flows?","(?i)investing"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CAPEX_PPE"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "notes_rules"
+    index = 6
+    id = "notes_capex_ppe"
+    fields = ["id","canonical_id","fs_type","tags","tag_patterns","tag_exclude_patterns","label_patterns","label_exclude_patterns","report_name_patterns","amount_policy","cash_direction"]
+  }
+}
+
+rule "notes_amortization" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["AmortizationOfIntangibleAssets","FiniteLivedIntangibleAssetsAmortizationExpense","AmortizationOfAcquiredIntangibleAssets"]
+    label.matches = ["(?i)amortization"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "AMORTIZATION"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "notes_rules"
+    index = 7
+    id = "notes_amortization"
+    fields = ["id","canonical_id","fs_type","tags","label_patterns","amount_policy"]
+  }
+}
+
+rule "notes_depreciation" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["DepreciationDepletionAndAmortization","Depreciation"]
+    label.matches = ["(?i)depreciation"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "DEPRECIATION_EXPENSE"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "notes_rules"
+    index = 8
+    id = "notes_depreciation"
+    fields = ["id","canonical_id","fs_type","tags","label_patterns","amount_policy"]
+  }
+}
+
+rule "notes_interest_paid" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["InterestPaidNet","InterestPaid"]
+    label.matches = ["(?i)\\binterest\\s+paid\\b","(?i)\\bcash\\s+paid\\s+for\\s+interest\\b","(?i)\\binterest\\s+payments?\\b"]
+    report.matches = ["(?i)cash\\s+flows?","(?i)supplemental"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "INT_PAID"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "notes_rules"
+    index = 9
+    id = "notes_interest_paid"
+    fields = ["id","canonical_id","fs_type","tags","label_patterns","report_name_patterns","amount_policy","cash_direction"]
+  }
+}
+
+rule "notes_tax_paid" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["IncomeTaxesPaidNet","IncomeTaxesPaid"]
+    label.matches = ["(?i)\\bincome\\s+tax(es)?\\s+paid\\b","(?i)\\bcash\\s+paid\\s+for\\s+(income\\s+)?tax(es)?\\b","(?i)\\b(income\\s+)?tax\\s+payments?\\b"]
+    report.matches = ["(?i)cash\\s+flows?","(?i)supplemental"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "TAX_PAID"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "notes_rules"
+    index = 10
+    id = "notes_tax_paid"
+    fields = ["id","canonical_id","fs_type","tags","label_patterns","report_name_patterns","amount_policy","cash_direction"]
+  }
+}
+
+rule "notes_dividends_paid" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["PaymentsOfDividends","PaymentsOfDividendsCommonStock","PaymentsOfOrdinaryDividends","PaymentsOfDividendsPreferredStockAndPreferenceStock","PaymentsOfOrdinaryDividendsCommonStockAndPreferredStock","PaymentsOfOrdinaryDividendsAndSpecialDividends","PaymentsOfDividendsCommonAndPreferredStock","PaymentsOfOrdinaryDividendsCommonAndPreferredShareholders","PaymentsOfOrdinaryDividendsCommonAndPreferred","PaymentsOfDividendsIncludingExpenses","PaymentsOfDividendsRedeemablePreferredStock","PaymentsOfDividendsToShareholders","PaymentsOfDividendsAndDistributions","PaymentsOfOrdinaryDividendsCommonAndPreferredStock"]
+    concept.matches = ["(?i)paymentsof.*dividends"]
+    concept.excludes = ["(?i)(minority|noncontrolling)","(?i)dividendequivalent","(?i)equitableadjust","(?i)proceeds","(?i)jointventures","(?i)partnership","(?i)operating"]
+    label.matches = ["(?i)\\bdividends?\\s+paid\\b","(?i)\\bpayments?\\s+of\\s+dividends?\\b","(?i)\\bcash\\s+dividends?\\s+paid\\b","(?i)\\bpayments?\\s+of\\s+(ordinary\\s+)?dividends?\\b"]
+    label.excludes = ["(?i)\\bdeclared\\b","(?i)\\bpayable\\b","(?i)\\bper\\s+share\\b"]
+    report.matches = ["(?i)cash\\s+flows?","(?i)financing"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "DIV_PAID"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "notes_rules"
+    index = 11
+    id = "notes_dividends_paid"
+    fields = ["id","canonical_id","fs_type","tags","tag_patterns","tag_exclude_patterns","label_patterns","label_exclude_patterns","report_name_patterns","amount_policy","cash_direction"]
+  }
+}
+
+rule "notes_buyback" {
+  version = 2
+  applies {
+    source = ["FINANCIAL_STATEMENT_NOTES"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["PaymentsForRepurchaseOfCommonStock","PaymentsForRepurchaseOfEquity","PaymentsForRepurchaseOfPreferredStockAndPreferenceStock","PaymentsForRepurchaseOfRedeemablePreferredStock","PaymentsForRepurchaseOfRedeemableConvertiblePreferredStock","PaymentsForRepurchaseOfConvertiblePreferredStock","PaymentsForRepurchaseOfOtherEquity","PaymentsForRepurchaseOfTreasuryStock","PaymentsForRepurchaseOfCommonStockAndOtherRelatedCosts","NetPaymentsForRepurchaseOfCommonStock","PaymentsForRepurchaseOfCommonStockShareRepurchaseProgram","PaymentsForRepurchaseOfCommonStockAndWarrants","PaymentsForRepurchaseOfCommonStockIncludingRelatedExpenses","PaymentsForRepurchaseOfStockAndCancellationOfShares","PaymentsForRepurchaseOfCommonStockOpenMarket","PaymentsForRepurchaseOfCommonStockInTheOpenMarket","PaymentsForRepurchaseOfRedeemableCommonStock","PaymentsforRepurchaseofRedeemableCommonStock","PaymentsForRepurchaseOfCommonStockUnderShareRepurchaseProgram","PaymentsForRepurchaseOfCommonStockTreasuryShares","PaymentsForRepurchaseOfCommonStockForTreasury","PaymentsForRepurchaseOfCommonStockAsTreasuryStock","PaymentsforRepurchaseofCommonStockintheOpenMarket","PaymentsForRepurchaseOfStockHeldInTreasury","PaymentsForRepurchaseOfTresuryStock"]
+    concept.matches = ["(?i)paymentsforrepurchaseof.*(stock|equity)"]
+    concept.excludes = ["(?i)taxwithholding","(?i)taxes","(?i)withheld","(?i)surrendered","(?i)equityaward","(?i)restrictedstock","(?i)stockoptions?","(?i)deferredcompensation","(?i)payrolltax","(?i)noncontrolling","(?i)subsidiar","(?i)federaldepositinsurance","(?i)insurancecorporation"]
+    label.matches = ["(?i)\\bpayments?\\s+for\\s+repurchase\\s+of\\s+(common\\s+)?stock\\b","(?i)\\bpayments?\\s+for\\s+repurchase\\s+of\\s+.*stock\\b","(?i)\\bpayments?\\s+for\\s+repurchase\\s+of\\s+(equity|shares?)\\b","(?i)\\brepurchase\\s+of\\s+(common\\s+)?(stock|shares?)\\b","(?i)\\brepurchase\\s+of\\s+.*stock\\b","(?i)\\btreasury\\s+stock\\s+(purchase|repurchase|acquired)\\b"]
+    label.excludes = ["(?i)\\bauthorized\\b","(?i)\\bnumber\\s+of\\s+shares\\b","(?i)\\bshares\\s+repurchased\\b"]
+    report.matches = ["(?i)cash\\s+flows?","(?i)financing"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "BUYBACK"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "notes_rules"
+    index = 12
+    id = "notes_buyback"
+    fields = ["id","canonical_id","fs_type","tags","tag_patterns","tag_exclude_patterns","label_patterns","label_exclude_patterns","report_name_patterns","amount_policy","cash_direction"]
+  }
+}
+
+rule "legacy_edgartools_000_revenue" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["RevenueFromContractWithCustomerExcludingAssessedTax","RevenueFromContractWithCustomerIncludingAssessedTax","Revenues","SalesRevenueNet"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "REVENUE"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 0
+    fields = ["canonical_id","fs_type","tags"]
+  }
+}
+
+rule "legacy_edgartools_001_cogs" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["CostOfRevenue","CostOfGoodsAndServicesSold","CostOfGoodsSold","CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "COGS"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 1
+    fields = ["canonical_id","fs_type","tags"]
+  }
+}
+
+rule "legacy_edgartools_002_gross_profit" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["GrossProfit"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "GROSS_PROFIT"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 2
+    fields = ["canonical_id","fs_type","tags"]
+  }
+}
+
+rule "legacy_edgartools_003_rnd" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["ResearchAndDevelopmentExpense","ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost","InProcessResearchAndDevelopmentExpense","ResearchAndDevelopmentExpenseSoftwareExcludingAcquiredInProcessCost"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "RND"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 3
+    fields = ["canonical_id","fs_type","tags","amount_policy"]
+  }
+}
+
+rule "legacy_edgartools_004_operating_income" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["OperatingIncomeLoss"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "OPERATING_INCOME"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 4
+    fields = ["canonical_id","fs_type","tags"]
+  }
+}
+
+rule "legacy_edgartools_005_tax_expense" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["IncomeTaxExpenseBenefit"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "TAX_EXPENSE"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 5
+    fields = ["canonical_id","fs_type","tags"]
+  }
+}
+
+rule "legacy_edgartools_006_pbt" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest","IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "PBT"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 6
+    fields = ["canonical_id","fs_type","tags"]
+  }
+}
+
+rule "legacy_edgartools_007_net_income" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["NetIncomeLoss","NetIncomeLossIncludingPortionAttributableToNoncontrollingInterest"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "IS"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "NET_INCOME"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 7
+    fields = ["canonical_id","fs_type","tags"]
+  }
+}
+
+rule "legacy_edgartools_008_cfo" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["NetCashProvidedByUsedInOperatingActivities","NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CFO"
+    amount = "as_reported"
+    cash_direction = ""
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 8
+    fields = ["canonical_id","fs_type","tags"]
+  }
+}
+
+rule "legacy_edgartools_009_capex_ppe" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["PaymentsToAcquirePropertyPlantAndEquipment","PaymentsToAcquireProductiveAssets","PaymentsToAcquirePropertyPlantAndEquipmentAndIntangibleAssets"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "CAPEX_PPE"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 9
+    fields = ["canonical_id","fs_type","tags","amount_policy","cash_direction"]
+  }
+}
+
+rule "legacy_edgartools_010_amortization" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["AmortizationOfIntangibleAssets","FiniteLivedIntangibleAssetsAmortizationExpense","AmortizationOfAcquiredIntangibleAssets"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "AMORTIZATION"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 10
+    fields = ["canonical_id","fs_type","tags","amount_policy"]
+  }
+}
+
+rule "legacy_edgartools_011_depreciation_expense" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["DepreciationDepletionAndAmortization","Depreciation"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "DEPRECIATION_EXPENSE"
+    amount = "abs"
+    cash_direction = ""
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 11
+    fields = ["canonical_id","fs_type","tags","amount_policy"]
+  }
+}
+
+rule "legacy_edgartools_012_int_paid" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["InterestPaidNet","InterestPaid"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "INT_PAID"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 12
+    fields = ["canonical_id","fs_type","tags","amount_policy","cash_direction"]
+  }
+}
+
+rule "legacy_edgartools_013_tax_paid" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["IncomeTaxesPaidNet","IncomeTaxesPaid"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "TAX_PAID"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 13
+    fields = ["canonical_id","fs_type","tags","amount_policy","cash_direction"]
+  }
+}
+
+rule "legacy_edgartools_014_div_paid" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["PaymentsOfDividends","PaymentsOfDividendsCommonStock","PaymentsOfOrdinaryDividends","PaymentsOfDividendsPreferredStockAndPreferenceStock"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "DIV_PAID"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 14
+    fields = ["canonical_id","fs_type","tags","amount_policy","cash_direction"]
+  }
+}
+
+rule "legacy_edgartools_015_buyback" {
+  version = 2
+  applies {
+    source = ["EDGARTOOLS_COMPANY_FACTS"]
+    form = ["10-K","10-Q","10-K/A","10-Q/A"]
+    accounting = "US_GAAP"
+  }
+  match fact {
+    concept.exact = ["PaymentsForRepurchaseOfCommonStock","PaymentsForRepurchaseOfEquity","PaymentsForRepurchaseOfPreferredStockAndPreferenceStock","PaymentsForRepurchaseOfRedeemablePreferredStock"]
+  }
+  capture {
+    value = "fact.numeric_value"
+    period = "context.period"
+    dimensions = "context.dimensions"
+  }
+  constraint {
+    statement = "CF"
+    entity = "filing.entity"
+    dimensions = "CONSOLIDATED_OR_NONE"
+  }
+  emit {
+    canonical = "BUYBACK"
+    amount = "abs"
+    cash_direction = "outflow"
+  }
+  legacy {
+    group = "edgartools_fallback_rules"
+    index = 15
+    fields = ["canonical_id","fs_type","tags","amount_policy","cash_direction"]
+  }
+}

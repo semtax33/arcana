@@ -14,14 +14,16 @@ from engine.semantic import (
     FactorDependencyGraph,
     MissingFactCause,
     summarize_company_year_completeness,
+    resolve_rule_bundle,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = ROOT / "data-lake" / "silver" / "dart" / "normalized"
-DEFAULT_CSV = ROOT / "deliverables" / "company_year_financial_completeness_v5.csv"
-DEFAULT_JSON = ROOT / "deliverables" / "company_year_financial_completeness_v5.json"
+DEFAULT_CSV = ROOT / "deliverables" / "company_year_financial_completeness_v6.csv"
+DEFAULT_JSON = ROOT / "deliverables" / "company_year_financial_completeness_v6.json"
 FACTOR_SOURCE = ROOT / "scripts" / "calculate_factor_coverage.js"
+RULE_ALIAS = ROOT / "data-lake" / "meta" / "rules" / "semantic_kr_current.yaml"
 _FILE_RE = re.compile(r"^kr_normalized_(\d{6})\.csv$")
 
 
@@ -157,8 +159,11 @@ def build_report(input_dir: Path) -> tuple[pd.DataFrame, dict[str, object]]:
                     ),
                 }
             )
+    resolved_rule_path = resolve_rule_bundle(RULE_ALIAS)
+    version_match = re.fullmatch(r"semantic_kr_v(\d+)\.yaml", resolved_rule_path.name)
+    semantic_engine_version = int(version_match.group(1)) if version_match else 4
     report = {
-        "semantic_engine_version": 5,
+        "semantic_engine_version": semantic_engine_version,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "input_dir": str(input_dir),
         "input_file_count": input_file_count,

@@ -1,17 +1,88 @@
 import unittest
 from datetime import datetime
+from unittest.mock import patch
 
 import pandas as pd
 
 from engine.extractors.filings import (
     deduplicate_report_metadata,
     extract_dart_report_metadata_from_search_html,
+    fetch_dart_report_metadata,
     parse_report_period_from_title,
     report_date_from_rcept_no,
 )
 
 
 class ReportMetadataTest(unittest.TestCase):
+    def test_fetch_report_metadata_splits_long_ranges_and_merges_windows(self):
+        class CountingThrottle:
+            def __init__(self):
+                self.wait_count = 0
+
+            def wait(self):
+                self.wait_count += 1
+
+        class FakeResponse:
+            status_code = 200
+            headers = {}
+            apparent_encoding = "utf-8"
+            encoding = "utf-8"
+
+            def __init__(self, text: str):
+                self.text = text
+
+            def raise_for_status(self):
+                return None
+
+        class FakeSession:
+            def __init__(self):
+                self.windows = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def request(self, _method, _url, **kwargs):
+                fields = dict(kwargs["data"])
+                window = (fields["startDate"], fields["endDate"])
+                self.windows.append(window)
+                report_year = int(fields["endDate"][:4])
+                rcept_no = f"{report_year}0315000001"
+                return FakeResponse(
+                    '<a href="/dsaf001/main.do?rcpNo='
+                    f'{rcept_no}">annual report ({report_year - 1}.12)</a>'
+                )
+
+        session = FakeSession()
+        throttle = CountingThrottle()
+        with patch(
+            "engine.extractors._internal.dart_filings.requests.Session",
+            return_value=session,
+        ):
+            result = fetch_dart_report_metadata(
+                "005930",
+                start_date="20000101",
+                end_date="20251231",
+                throttle=throttle,
+            )
+
+        self.assertEqual(
+            session.windows,
+            [
+                ("20000101", "20091231"),
+                ("20100101", "20191231"),
+                ("20200101", "20251231"),
+            ],
+        )
+        self.assertEqual(len(result), 3)
+        self.assertEqual(throttle.wait_count, 3)
+        self.assertEqual(
+            result["report_date"].tolist(),
+            ["2009-03-15", "2019-03-15", "2025-03-15"],
+        )
+
     def test_parse_search_html_extracts_period_rcept_no_and_report_date(self):
         html = """
         <html><body>

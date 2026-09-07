@@ -1,9 +1,14 @@
 from decimal import Decimal
+from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+import pandas as pd
+
 from engine.semantic import (
+    AccountingRegimeDetector,
+    AccountingRegimeFamily,
     AccountingInvariantAuditor,
     DisclosureHtmlParser,
     DisclosureSourceType,
@@ -16,11 +21,13 @@ from engine.semantic import (
     UnmappedClassifier,
     capex_direction_correction,
 )
-from engine.semantic import InvariantContext
+from engine.semantic import InvariantContext, NotTestableReason
 from engine.transformers.filings import normalize_account_name
 from engine.transformers.filings import RuleEngine
 from scripts.audit_historical_semantic_parsing import (
+    aggregate_invariant_facts,
     has_explicit_source_amount,
+    income_identity_bridge_complete,
     load_security_context,
 )
 
@@ -33,6 +40,67 @@ class SemanticRuleEngineV3Test(unittest.TestCase):
             rule_paths=[Path("data-lake/meta/rules/semantic_kr_v2.yaml")],
             sign_policy_path=Path("data-lake/meta/rules/semantic_kr_v2.yaml"),
         )
+
+    def test_transition_year_does_not_determine_accounting_regime_without_evidence(self):
+        detector = AccountingRegimeDetector()
+
+        for year in range(2009, 2013):
+            result = detector.detect("재무제표", filing_date=date(year, 12, 31))
+            self.assertEqual(
+                result.regime.family,
+                AccountingRegimeFamily.UNKNOWN,
+                f"filing year alone must not force a regime for {year}",
+            )
+
+        self.assertEqual(
+            detector.detect(
+                "한국채택국제회계기준에 따라 작성",
+                filing_date=date(2009, 12, 31),
+            ).regime.family,
+            AccountingRegimeFamily.K_IFRS,
+        )
+        self.assertEqual(
+            detector.detect(
+                "대한민국의 기업회계기준에 따라 작성",
+                filing_date=date(2012, 12, 31),
+            ).regime.family,
+            AccountingRegimeFamily.K_GAAP,
+        )
+
+    def test_materialized_coverage_uses_canonical_csv_and_period_filter(self):
+        from scripts.semantic_rule_coverage import materialized_mapping_coverage
+
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "kr_normalized_000001.csv").write_text(
+                "canonical_account_id,statement_type,period,raw_amount\n"
+                "ASSETS,BS,2008.12,100\n"
+                "UNMAPPED,BS,2008.12,-50\n"
+                "REVENUE,IS,2018.12,900\n"
+                "UNMAPPED,IS,2009.12,not-a-number\n"
+                "UNMAPPED,IS,2010.12,1000000000000000001\n",
+                encoding="utf-8",
+            )
+            (root / "kr_normalized_000001.debug.csv").write_text(
+                "canonical_account_id,statement_type,period,raw_amount\n"
+                "REVENUE,IS,2008.12,999999\n",
+                encoding="utf-8",
+            )
+
+            result = materialized_mapping_coverage(
+                root,
+                start_year=2000,
+                end_year=2012,
+            )
+
+        self.assertEqual(result["coverage_input_kind"], "materialized_canonical")
+        self.assertEqual(result["file_count"], 1)
+        self.assertEqual(result["row_count"], 4)
+        self.assertEqual(result["valid_amount_row_count"], 2)
+        self.assertEqual(result["excluded_invalid_amount_row_count"], 2)
+        self.assertEqual(result["v2_mapped_row_count"], 1)
+        self.assertAlmostEqual(result["v2_mapped_row_pct"], 25)
+        self.assertAlmostEqual(result["v2_mapped_absolute_amount_pct"], 100 / 1.5)
 
     def test_historical_financial_sector_and_gross_flow_concepts_stay_distinct(self):
         engine = self.mapping_engine()
@@ -282,6 +350,128 @@ class SemanticRuleEngineV3Test(unittest.TestCase):
         )
         self.assertEqual(cash.status, "NOT_TESTABLE")
         self.assertEqual(cash.reason, "required_fact_missing")
+
+    def test_cash_invariant_includes_translation_and_special_cash_changes(self):
+        result = AccountingInvariantAuditor().audit(
+            {
+                "CF_CASH_BEGIN": 100,
+                "CFO": 20,
+                "CFI": -10,
+                "CFF": -5,
+                "FX_EFFECT_CASH": 1,
+                "CF_TRANSLATION_DIFFERENCE": 2,
+                "SPECIAL_CASH_CHANGE": 3,
+                "CF_CASH_END": 111,
+            }
+        )
+
+        cash = next(
+            item
+            for item in result
+            if item.invariant_id == "CF_BEGIN_PLUS_FLOWS_EQUALS_END"
+        )
+        self.assertEqual(cash.status, "PASS")
+        self.assertEqual(cash.left_value, Decimal(111))
+
+    def test_balance_sheet_identity_accepts_legacy_outside_shareholder_interest(self):
+        result = AccountingInvariantAuditor().audit(
+            {
+                "TOTAL_ASSETS": 100,
+                "TOTAL_LIABILITIES": 40,
+                "TOTAL_EQUITY": 50,
+                "NEAOP": 10,
+            }
+        )
+
+        balance_sheet = next(
+            item
+            for item in result
+            if item.invariant_id == "BS_ASSETS_EQUALS_LIABILITIES_PLUS_EQUITY"
+        )
+        self.assertEqual(balance_sheet.status, "PASS")
+        self.assertEqual(balance_sheet.right_value, Decimal(100))
+        self.assertIn("NEAOP", balance_sheet.involved_canonical_ids)
+
+    def test_statement_structure_gate_only_blocks_its_own_statement(self):
+        result = AccountingInvariantAuditor().audit(
+            {
+                "TOTAL_ASSETS": 100,
+                "TOTAL_LIABILITIES": 40,
+                "TOTAL_EQUITY": 60,
+                "PBT": 20,
+                "TAX_EXPENSE": 5,
+                "NET_INCOME": 15,
+            },
+            context=InvariantContext(balance_sheet_structure_sufficient=False),
+        )
+
+        balance_sheet = next(
+            item
+            for item in result
+            if item.invariant_id == "BS_ASSETS_EQUALS_LIABILITIES_PLUS_EQUITY"
+        )
+        income = next(
+            item
+            for item in result
+            if item.invariant_id == "IS_PBT_MINUS_TAX_EQUALS_NET_INCOME"
+        )
+        self.assertEqual(balance_sheet.status, "NOT_TESTABLE")
+        self.assertEqual(
+            balance_sheet.not_testable_reason,
+            NotTestableReason.INSUFFICIENT_STATEMENT_STRUCTURE,
+        )
+        self.assertEqual(income.status, "PASS")
+
+    def test_historical_audit_sums_additive_special_cash_components(self):
+        facts = aggregate_invariant_facts(
+            {
+                "SPECIAL_CASH_CHANGE": [Decimal(4), Decimal(9)],
+                "CFO": [Decimal(20)],
+                "PBT": [Decimal(10), Decimal(11)],
+            }
+        )
+
+        self.assertEqual(facts["SPECIAL_CASH_CHANGE"], Decimal(13))
+        self.assertEqual(facts["CFO"], Decimal(20))
+        self.assertNotIn("PBT", facts)
+
+    def test_historical_audit_abstains_when_income_bridge_has_extra_operand(self):
+        mapped = pd.DataFrame(
+            [
+                {"canonical_account_id": "PBT", "raw_amount": "20", "amount_raw": "20"},
+                {"canonical_account_id": "TAX_EXPENSE", "raw_amount": "5", "amount_raw": "5"},
+                {"canonical_account_id": "UNMAPPED", "raw_amount": "2", "amount_raw": "2"},
+                {"canonical_account_id": "NET_INCOME", "raw_amount": "13", "amount_raw": "13"},
+            ]
+        )
+
+        self.assertFalse(income_identity_bridge_complete(mapped))
+
+    def test_income_tax_bridge_gate_does_not_block_gross_profit_identity(self):
+        result = AccountingInvariantAuditor().audit(
+            {
+                "REVENUE": 100,
+                "COGS": 60,
+                "GROSS_PROFIT": 40,
+                "PBT": 20,
+                "TAX_EXPENSE": 5,
+                "NET_INCOME": 13,
+            },
+            context=InvariantContext(income_tax_bridge_sufficient=False),
+        )
+
+        gross_profit = next(
+            item
+            for item in result
+            if item.invariant_id == "IS_REVENUE_MINUS_COGS_EQUALS_GROSS_PROFIT"
+        )
+        income_tax = next(
+            item
+            for item in result
+            if item.invariant_id == "IS_PBT_MINUS_TAX_EQUALS_NET_INCOME"
+        )
+        self.assertEqual(gross_profit.status, "PASS")
+        self.assertEqual(income_tax.status, "NOT_TESTABLE")
 
     def test_capex_semantic_correction_has_distinct_pit_identity(self):
         base = {

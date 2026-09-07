@@ -66,6 +66,36 @@ class KrxMarketPricesTest(unittest.TestCase):
         self.assertEqual(result.loc[0, marcap_market_prices.CLOSE_COLUMN], 142000)
         self.assertEqual(result.loc[0, marcap_market_prices.CHANGE_RATE_COLUMN], 3.65)
 
+    def test_marcap_shares_normalizer_preserves_historical_stocks_and_market_cap(self):
+        source = pd.DataFrame(
+            {
+                "Date": pd.to_datetime(["2002-01-02", "2002-01-03", "2005-08-29"]),
+                "Code": [5930, 5930, 83350],
+                "Stocks": [151_328_350, 151_328_350, 1_585_660],
+                "Marcap": [46_609_131_800_000, 47_000_000_000_000, 0],
+            }
+        )
+
+        result = marcap_market_prices.normalize_marcap_shares_frame(source)
+
+        self.assertEqual(
+            result["security_id"].tolist(),
+            ["SEC_KR_005930", "SEC_KR_005930", "SEC_KR_083350"],
+        )
+        self.assertEqual(
+            result["trade_date"].tolist(),
+            ["2002-01-02", "2002-01-03", "2005-08-29"],
+        )
+        self.assertEqual(
+            result["shares"].tolist(),
+            [151_328_350, 151_328_350, 1_585_660],
+        )
+        self.assertEqual(
+            result["market_cap"].iloc[:2].tolist(),
+            [46_609_131_800_000, 47_000_000_000_000],
+        )
+        self.assertTrue(pd.isna(result["market_cap"].iat[2]))
+
     def test_finance_datareader_normalizer_converts_fractional_change_to_percent(self):
         source = pd.DataFrame(
             {

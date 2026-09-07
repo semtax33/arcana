@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from api.model.backtest import BacktestSummary, FactorBacktestResult
+from api.model.backtest import (
+    BacktestEquityCurvePoint,
+    BacktestPosition,
+    BacktestRebalance,
+    BacktestSummary,
+    FactorBacktestResult,
+)
 from api.service.dto import (
     FactorLabBacktestRequestDto,
     FactorLabExperimentSaveRequestDto,
@@ -639,6 +645,57 @@ class FactorLabServiceTest(unittest.TestCase):
         self.assertEqual(30, request.max_positions)
         self.assertEqual(5, request.transaction_cost_bps)
 
+    def test_run_backtest_dispatches_a_saved_date_fallback_composite(self):
+        client = FakeFactorLabClient()
+        run_id = str(uuid.UUID("33333333-3333-3333-3333-333333333333"))
+        request = FactorLabBacktestRequestDto(
+            top_percent=5,
+            start_date=date(2016, 1, 4),
+            end_date=date(2026, 9, 4),
+            rebalance_frequency="quarterly",
+            market="US",
+            benchmarks=["US_QQQ", "US_SP500"],
+            max_positions=20,
+            transaction_cost_bps=50,
+        )
+        result = FactorBacktestResult(
+            summary=BacktestSummary(
+                start_date=request.start_date,
+                end_date=request.end_date,
+                rebalance_frequency="quarterly",
+            ),
+            equity_curve=[],
+            rebalance_history=[],
+            annual_returns=[],
+        )
+        blend_config = {
+            "policy": "when_primary_has_no_positions",
+            "primary_run_id": "primary-run",
+            "fallback_run_id": "fallback-run",
+        }
+        service = FactorLabService(client_factory=lambda: client)
+
+        with (
+            patch(
+                "api.service.factor_lab_service._load_blended_run_config",
+                return_value=blend_config,
+            ),
+            patch.object(
+                service,
+                "run_blended_backtest",
+                return_value=result,
+            ) as blended,
+        ):
+            response = service.run_backtest(run_id, request)
+
+        self.assertIs(response, result)
+        blended.assert_called_once_with(
+            "primary-run",
+            "fallback-run",
+            policy="when_primary_has_no_positions",
+            request=request,
+        )
+
     def test_run_backtest_missing_run_raises_key_error(self):
         client = FakeFactorLabClient()
         client.run_exists = False
@@ -666,6 +723,119 @@ class FactorLabServiceTest(unittest.TestCase):
                     rebalance_frequency="quarterly",
                 ),
             )
+
+    def test_run_blended_backtest_uses_fallback_only_when_primary_has_no_positions(self):
+        primary_position = BacktestPosition(
+            security_id="SEC_US_PRIMARY",
+            ticker="PRI",
+            stock_name="Primary",
+            weight=1.0,
+            score=90.0,
+        )
+        fallback_position = BacktestPosition(
+            security_id="SEC_US_FALLBACK",
+            ticker="FBK",
+            stock_name="Fallback",
+            weight=1.0,
+            score=80.0,
+        )
+        trading_days = [
+            date(2026, 1, 2),
+            date(2026, 1, 3),
+            date(2026, 4, 1),
+            date(2026, 4, 2),
+            date(2026, 7, 1),
+            date(2026, 7, 2),
+        ]
+
+        def result(navs, rebalances):
+            return FactorBacktestResult(
+                summary=BacktestSummary(
+                    start_date=trading_days[0],
+                    end_date=trading_days[-1],
+                    rebalance_frequency="quarterly",
+                ),
+                equity_curve=[
+                    BacktestEquityCurvePoint(
+                        trade_date=trade_date,
+                        strategy_nav=nav,
+                        benchmark_navs={"US_QQQ": 1.0 + index * 0.01},
+                    )
+                    for index, (trade_date, nav) in enumerate(zip(trading_days, navs))
+                ],
+                rebalance_history=rebalances,
+                annual_returns=[],
+            )
+
+        primary = result(
+            [1.0, 1.0, 1.0, 1.2, 1.2, 1.44],
+            [
+                BacktestRebalance(date(2026, 1, 2), date(2026, 1, 1), []),
+                BacktestRebalance(
+                    date(2026, 4, 1),
+                    date(2026, 3, 31),
+                    [primary_position],
+                ),
+                BacktestRebalance(date(2026, 7, 1), date(2026, 6, 30), []),
+            ],
+        )
+        fallback = result(
+            [1.0, 1.1, 1.1, 1.1, 1.1, 1.32],
+            [
+                BacktestRebalance(
+                    date(2026, 1, 2),
+                    date(2026, 1, 1),
+                    [fallback_position],
+                ),
+                BacktestRebalance(
+                    date(2026, 4, 1),
+                    date(2026, 3, 31),
+                    [fallback_position],
+                ),
+                BacktestRebalance(date(2026, 7, 1), date(2026, 6, 30), []),
+            ],
+        )
+        request = FactorLabBacktestRequestDto(
+            top_percent=5,
+            start_date=trading_days[0],
+            end_date=trading_days[-1],
+            rebalance_frequency="quarterly",
+            market="US",
+            benchmarks=["US_QQQ"],
+            transaction_cost_bps=50,
+        )
+        service = FactorLabService(client_factory=FakeFactorLabClient)
+
+        with patch.object(service, "run_backtest", side_effect=[primary, fallback]) as run:
+            blended = service.run_blended_backtest(
+                "primary-run",
+                "fallback-run",
+                policy="when_primary_has_no_positions",
+                request=request,
+            )
+
+        self.assertEqual(
+            run.call_args_list[0].args,
+            ("primary-run", request),
+        )
+        self.assertEqual(
+            run.call_args_list[1].args,
+            ("fallback-run", request),
+        )
+        self.assertEqual(
+            [point.trade_date for point in blended.equity_curve],
+            trading_days,
+        )
+        self.assertAlmostEqual(blended.summary.cumulative_return, 0.32)
+        self.assertEqual(
+            [
+                [position.security_id for position in rebalance.positions]
+                for rebalance in blended.rebalance_history
+            ],
+            [["SEC_US_FALLBACK"], ["SEC_US_PRIMARY"], []],
+        )
+        self.assertEqual(blended.equity_curve[-1].benchmark_navs["US_QQQ"], 1.05)
+        self.assertIn("when_primary_has_no_positions", " ".join(blended.warnings))
 
     def test_validation_reports_unknown_factor_without_running(self):
         client = FakeFactorLabClient()

@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 import pandas as pd
@@ -25,8 +26,8 @@ from engine.transformers.filings import normalize_account_name
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RULES = ROOT / "data-lake" / "meta" / "rules" / "semantic_kr_current.yaml"
 DEFAULT_CANONICAL = ROOT / "data-lake" / "meta" / "CanonicalAccount.csv"
-DEFAULT_CORPUS = ROOT / "data-lake" / "meta" / "rules" / "semantic_golden_contract_v5.jsonl"
-DEFAULT_REPORT = ROOT / "deliverables" / "semantic_golden_contract_v5_evaluation.json"
+DEFAULT_CORPUS = ROOT / "data-lake" / "meta" / "rules" / "semantic_golden_contract_v6.jsonl"
+DEFAULT_REPORT = ROOT / "deliverables" / "semantic_golden_contract_v6_evaluation.json"
 
 
 def _context_text(predicate) -> str:
@@ -57,6 +58,8 @@ def _test_suite_hash() -> str:
 
 def build_corpus(rule_path: Path, canonical_path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     resolved_rule_path = resolve_rule_bundle(rule_path)
+    version_match = re.fullmatch(r"semantic_kr_v(\d+)\.yaml", resolved_rule_path.name)
+    semantic_engine_version = int(version_match.group(1)) if version_match else 4
     catalog = pd.read_csv(canonical_path, dtype=str).fillna("")
     canonical_names = dict(zip(catalog["canonical_id"], catalog["canonical_nm"]))
     statement_by_id = dict(zip(catalog["canonical_id"], catalog["fs_type"]))
@@ -156,7 +159,7 @@ def build_corpus(rule_path: Path, canonical_path: Path) -> tuple[list[dict[str, 
 
     evaluation = GoldenCorpusEvaluator().evaluate(cases, predict)
     report = {
-        "semantic_engine_version": 5,
+        "semantic_engine_version": semantic_engine_version,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "corpus_kind": "deterministic rule-contract regression corpus",
         "independently_human_labelled": False,
@@ -171,7 +174,7 @@ def build_corpus(rule_path: Path, canonical_path: Path) -> tuple[list[dict[str, 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build and evaluate the semantic v5 rule-contract golden corpus."
+        description="Build and evaluate the active semantic rule-contract golden corpus."
     )
     parser.add_argument("--rules", type=Path, default=DEFAULT_RULES)
     parser.add_argument("--canonical", type=Path, default=DEFAULT_CANONICAL)

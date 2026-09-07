@@ -7,6 +7,7 @@ import pandas as pd
 from engine.transformers.factors import add_wacc_factors
 from engine.transformers.wacc import (
     calculate_rolling_beta,
+    equity_risk_premium_series_for_market,
     normalize_benchmark_weekly_returns,
     normalize_market_benchmark_weekly_returns,
     normalize_weekly_returns_from_prices,
@@ -14,6 +15,38 @@ from engine.transformers.wacc import (
 
 
 class WaccInputsTest(unittest.TestCase):
+    def test_country_erp_is_point_in_time_and_rejects_implausible_percent_values(self):
+        erp = pd.DataFrame(
+            {
+                "country_code": ["KR", "KR"],
+                "source_date": ["2025-01-01", "2026-01-01"],
+                "equity_risk_premium": [6.0, 65.75527310879217],
+            }
+        )
+        assumptions = pd.DataFrame(
+            {
+                "market": ["kr"],
+                "country_code": ["KR"],
+                "risk_free_rate": [3.0],
+                "equity_risk_premium": [5.0],
+                "credit_spread": [2.0],
+                "default_beta": [1.0],
+            }
+        )
+        dates = pd.Series(
+            pd.to_datetime(["2005-01-03", "2025-06-01", "2026-06-01"])
+        )
+
+        result = equity_risk_premium_series_for_market(
+            erp,
+            "kr",
+            dates.index,
+            dates,
+            assumptions,
+        )
+
+        self.assertEqual(result.tolist(), [5.0, 6.0, 6.0])
+
     def test_weekly_returns_use_friday_week_last_adjusted_close(self):
         prices = pd.DataFrame(
             {
@@ -93,6 +126,48 @@ class WaccInputsTest(unittest.TestCase):
         self.assertAlmostEqual(result["wacc"].iat[0], 8.6)
         self.assertAlmostEqual(result["economic_profit"].iat[0], (12.0 - 8.6) / 100 * 500.0)
         self.assertAlmostEqual(result["economic_profit_yield"].iat[0], (12.0 - 8.6) * 500.0 / 1_000.0)
+
+    def test_missing_debt_does_not_impute_an_all_equity_capital_structure(self):
+        daily = pd.DataFrame(
+            {
+                "security_id": ["SEC_KR_005930"],
+                "trade_date": pd.to_datetime(["2005-01-03"]),
+                "close": [10.0],
+                "market_cap": [1_000.0],
+            }
+        )
+        risk_free = pd.DataFrame(
+            {
+                "market": ["kr"],
+                "date": pd.to_datetime(["2005-01-01"]),
+                "risk_free_rate": [4.0],
+            }
+        )
+        erp = pd.DataFrame(
+            {"country_code": ["KR"], "equity_risk_premium": [5.0]}
+        )
+        assumptions = pd.DataFrame(
+            {
+                "market": ["kr"],
+                "country_code": ["KR"],
+                "risk_free_rate": [4.0],
+                "equity_risk_premium": [5.0],
+                "credit_spread": [2.0],
+                "default_beta": [1.0],
+            }
+        )
+
+        result = add_wacc_factors(
+            daily,
+            market="kr",
+            market_data_cache=_WaccCache(
+                risk_free=risk_free,
+                erp=erp,
+                assumptions=assumptions,
+            ),
+        )
+
+        self.assertTrue(result[["wacc_equity_weight", "wacc_debt_weight", "wacc"]].isna().all(axis=None))
 
     def test_add_wacc_factors_calculates_roic_wacc_spread_growth(self):
         row_count = 253

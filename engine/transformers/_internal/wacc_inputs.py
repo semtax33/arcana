@@ -44,6 +44,7 @@ WACC_ASSUMPTION_COLUMNS = [
     "source",
     "updated_at",
 ]
+MAX_EQUITY_RISK_PREMIUM_PCT = 25.0
 
 DEFAULT_WACC_ASSUMPTIONS = {
     "kr": {
@@ -334,10 +335,96 @@ def latest_country_erp(frame: pd.DataFrame, market: str, assumptions: pd.DataFra
     if frame is not None and not frame.empty and "country_code" in frame.columns:
         rows = frame.loc[frame["country_code"].astype(str).str.upper() == country_code]
         if not rows.empty:
-            values = pd.to_numeric(rows["equity_risk_premium"], errors="coerce").dropna()
+            values = pd.to_numeric(
+                rows["equity_risk_premium"], errors="coerce"
+            ).dropna()
+            values = values.loc[
+                values.gt(0) & values.le(MAX_EQUITY_RISK_PREMIUM_PCT)
+            ]
             if not values.empty:
                 return float(values.iloc[-1])
     return market_assumption(assumptions, market, "equity_risk_premium")
+
+
+def equity_risk_premium_series_for_market(
+    frame: pd.DataFrame,
+    market: str,
+    index: pd.Index,
+    trade_dates: pd.Series,
+    assumptions: pd.DataFrame | None = None,
+) -> pd.Series:
+    """Return ERP values that were observable by each trade date.
+
+    Rows with no dated source retain the legacy timeless-input behavior used
+    by explicit caller fixtures.  Dated production sources are backward-asof
+    joined; pre-source dates use the declared model assumption, never a future
+    observation.  Economically implausible percentage values are rejected.
+    """
+
+    default_value = market_assumption(
+        assumptions,
+        market,
+        "equity_risk_premium",
+    )
+    if frame is None or frame.empty or "country_code" not in frame.columns:
+        return pd.Series(default_value, index=index, dtype="float64")
+
+    country_code = str(default_wacc_assumptions(market)["country_code"])
+    rows = frame.loc[
+        frame["country_code"].astype(str).str.upper() == country_code
+    ].copy()
+    if rows.empty or "equity_risk_premium" not in rows.columns:
+        return pd.Series(default_value, index=index, dtype="float64")
+    rows["equity_risk_premium"] = pd.to_numeric(
+        rows["equity_risk_premium"], errors="coerce"
+    )
+    rows = rows.loc[
+        rows["equity_risk_premium"].gt(0)
+        & rows["equity_risk_premium"].le(MAX_EQUITY_RISK_PREMIUM_PCT)
+    ].copy()
+    if rows.empty:
+        return pd.Series(default_value, index=index, dtype="float64")
+
+    date_column = next(
+        (
+            column
+            for column in ("source_date", "as_of_date", "date")
+            if column in rows.columns
+        ),
+        None,
+    )
+    if date_column is None:
+        return pd.Series(
+            float(rows["equity_risk_premium"].iloc[-1]),
+            index=index,
+            dtype="float64",
+        )
+
+    rows[date_column] = pd.to_datetime(rows[date_column], errors="coerce")
+    rows = (
+        rows.dropna(subset=[date_column])
+        .sort_values(date_column)
+        .drop_duplicates(date_column, keep="last")
+    )
+    if rows.empty:
+        return pd.Series(default_value, index=index, dtype="float64")
+
+    left = pd.DataFrame(
+        {"trade_date": pd.to_datetime(trade_dates, errors="coerce")},
+        index=index,
+    )
+    merged = pd.merge_asof(
+        left.sort_values("trade_date"),
+        rows[[date_column, "equity_risk_premium"]].sort_values(date_column),
+        left_on="trade_date",
+        right_on=date_column,
+        direction="backward",
+    )
+    merged.index = left.sort_values("trade_date").index
+    return pd.to_numeric(
+        merged["equity_risk_premium"].reindex(index),
+        errors="coerce",
+    ).fillna(default_value)
 
 
 def risk_free_series_for_market(

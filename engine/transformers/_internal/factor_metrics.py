@@ -35,7 +35,7 @@ from engine.transformers._internal.wacc_inputs import (
     SILVER_COUNTRY_ERP_PATH,
     SILVER_RISK_FREE_RATE_PATH,
     calculate_rolling_beta,
-    latest_country_erp,
+    equity_risk_premium_series_for_market,
     market_assumption,
     normalize_weekly_returns_from_prices,
     read_wacc_assumptions,
@@ -200,6 +200,25 @@ EPS_IMPLIED_OPERATING_INCOME_SURPRISE_FACTOR = "eps_implied_operating_income_sur
 KR_PRICE_TO_TARGET_PRICE_FACTOR = "kr_price_to_target_price"
 US_PRICE_TO_TARGET_PRICE_FACTOR = "us_price_to_target_price"
 
+KR_EXPLICITLY_INAPPLICABLE_FACTOR_COLUMNS = frozenset(
+    {
+        "us_eps_consensus",
+        "us_revenue_consensus",
+        "us_eps_revision_7d_pct",
+        "us_eps_revision_30d_pct",
+        "us_eps_revision_60d_pct",
+        "us_eps_revision_90d_pct",
+        "us_eps_revision_breadth_30d_pct",
+        "us_eps_revision_acceleration_30d_pct",
+        "us_eps_dispersion_pct",
+        "us_revenue_dispersion_pct",
+        "us_eps_surprise_pct",
+        US_PRICE_TO_TARGET_PRICE_FACTOR,
+        EPS_IMPLIED_OPERATING_INCOME_SURPRISE_FACTOR,
+        "us_consensus_analyst_count",
+    }
+)
+
 DEFAULT_FORWARD_CONSENSUS_STALE_DAYS = 180
 MIN_KR_TARGET_PRICE_ANALYSTS = 3
 DEFAULT_RIM_DECAY_FACTOR = 0.8
@@ -323,6 +342,71 @@ def shares_path_for_market(market="kr"):
     if market == "kr":
         return first_existing_path(SHARES_PATH, *LEGACY_SHARES_PATHS)
     return DATA_LAKE.silver(market, "shares", market_csv_name("normalized_shares", market=market))
+
+
+def us_filing_share_fallback_is_unambiguous(
+    symbol,
+    *,
+    ticker_map_path=None,
+    aliases_path=None,
+):
+    """Allow issuer-level filing shares only for a one-ticker CIK mapping.
+
+    A reported issuer share count cannot be assigned safely to either leg of
+    a dual-class or otherwise multi-ticker CIK. Historical aliases are treated
+    conservatively in the same way because the map does not encode effective
+    dates.
+    """
+
+    ticker_map_path = Path(
+        ticker_map_path or DATA_LAKE.meta("sec_company_tickers.csv")
+    ).resolve()
+    aliases_path = Path(
+        aliases_path or DATA_LAKE.meta("sec_ticker_aliases.csv")
+    ).resolve()
+    normalized_symbol = normalize_symbol_for_market(symbol, "us")
+    return _us_filing_share_fallback_is_unambiguous_cached(
+        normalized_symbol,
+        str(ticker_map_path),
+        str(aliases_path),
+    )
+
+
+@lru_cache(maxsize=512)
+def _us_filing_share_fallback_is_unambiguous_cached(
+    symbol: str,
+    ticker_map_path: str,
+    aliases_path: str,
+) -> bool:
+    ticker_to_ciks: dict[str, set[str]] = {}
+    cik_to_tickers: dict[str, set[str]] = {}
+    for raw_path in (aliases_path, ticker_map_path):
+        path = Path(raw_path)
+        if not path.exists():
+            continue
+        try:
+            frame = pd.read_csv(
+                path,
+                usecols=lambda column: column in {"cik", "ticker"},
+                dtype={"cik": "string", "ticker": "string"},
+            )
+        except (OSError, ValueError, pd.errors.EmptyDataError):
+            continue
+        if not {"cik", "ticker"}.issubset(frame.columns):
+            continue
+        for cik_value, ticker_value in frame[["cik", "ticker"]].itertuples(index=False, name=None):
+            digits = "".join(character for character in str(cik_value) if character.isdigit())
+            ticker = normalize_symbol_for_market(ticker_value, "us")
+            if not digits or not ticker:
+                continue
+            cik = str(int(digits))
+            ticker_to_ciks.setdefault(ticker, set()).add(cik)
+            cik_to_tickers.setdefault(cik, set()).add(ticker)
+    ciks = ticker_to_ciks.get(symbol, set())
+    if len(ciks) != 1:
+        return False
+    cik = next(iter(ciks))
+    return len(cik_to_tickers.get(cik, set())) == 1
 
 
 def resolve_price_path(path=None, market="kr"):
@@ -1110,15 +1194,7 @@ def read_annual_financials(
             fallback_to_period_end=not require_report_metadata,
         )
         if require_report_metadata:
-            report_dates = pd.to_datetime(financial_df["report_date"], errors="coerce")
-            period_ends = pd.to_datetime(
-                financial_df["financial_period"], errors="coerce"
-            )
-            financial_df = financial_df.loc[
-                report_dates.notna()
-                & period_ends.notna()
-                & report_dates.ge(period_ends)
-            ].copy()
+            financial_df = _strictly_disclosed_financial_rows(financial_df)
     else:
         financial_df = pd.DataFrame()
     financial_df = fill_missing_financial_values_with_edgartools(
@@ -1151,6 +1227,16 @@ def aggregate_annual_canonical_values(df):
                 continue
         values[str(canonical_id)] = pick_largest_abs(candidates["normalized_amount"])
     return values
+
+
+def _strictly_disclosed_financial_rows(frame):
+    if frame.empty or not {"report_date", "financial_period"}.issubset(frame.columns):
+        return frame.iloc[0:0].copy()
+    report_dates = pd.to_datetime(frame["report_date"], errors="coerce")
+    period_ends = pd.to_datetime(frame["financial_period"], errors="coerce")
+    return frame.loc[
+        report_dates.notna() & period_ends.notna() & report_dates.ge(period_ends)
+    ].copy()
 
 
 def _periodized_financial_frame_with_edgartools(
@@ -1216,6 +1302,7 @@ def read_ttm_financials(
     market="kr",
     use_edgartools=True,
     edgartools_provider=None,
+    require_report_metadata=False,
 ):
     financial_dir = financial_dir if financial_dir is not None else financial_dir_for_market(market)
     if str(market or "kr").strip().lower() == "us" and use_edgartools:
@@ -1236,7 +1323,12 @@ def read_ttm_financials(
             cumulative_statement_types=cumulative_statement_types,
             report_metadata_path=report_metadata_path,
             market=market,
+            fallback_to_period_end=not require_report_metadata,
         )
+    if financial_df.empty:
+        return financial_df
+    if require_report_metadata:
+        financial_df = _strictly_disclosed_financial_rows(financial_df)
     if financial_df.empty:
         return financial_df
     return add_annual_financial_factors(
@@ -1255,6 +1347,7 @@ def read_quarterly_financials(
     market="kr",
     use_edgartools=True,
     edgartools_provider=None,
+    require_report_metadata=False,
 ):
     financial_dir = financial_dir if financial_dir is not None else financial_dir_for_market(market)
     if str(market or "kr").strip().lower() == "us" and use_edgartools:
@@ -1275,7 +1368,12 @@ def read_quarterly_financials(
             cumulative_statement_types=cumulative_statement_types,
             report_metadata_path=report_metadata_path,
             market=market,
+            fallback_to_period_end=not require_report_metadata,
         )
+    if financial_df.empty:
+        return financial_df
+    if require_report_metadata:
+        financial_df = _strictly_disclosed_financial_rows(financial_df)
     if financial_df.empty:
         return financial_df
     return add_annual_financial_factors(
@@ -1351,7 +1449,7 @@ def add_annual_financial_factors(
         cash_and_equivalents.fillna(0) + short_term_financial_assets.fillna(0)
     ).where(cash_and_equivalents.notna() | short_term_financial_assets.notna())
     df["che"] = bound_by_reference(
-        disclosed_cash_assets.fillna(0),
+        disclosed_cash_assets,
         df["at"],
         1.5,
     )
@@ -1416,7 +1514,7 @@ def add_annual_financial_factors(
         capex_ppe.notna() | capex_intang.notna()
     )
     df["fcf"] = df["oancf"] - df["capx"]
-    df["ffo"] = df["ni"] + df["dp"].fillna(0)
+    df["ffo"] = df["ni"] + df["dp"]
     df["sstk"] = numeric_column(df, "EQ_ISSUE")
     df["prstkc"] = numeric_column(df, "BUYBACK")
     df["div_paid"] = numeric_column(df, "DIV_PAID").abs()
@@ -1427,10 +1525,7 @@ def add_annual_financial_factors(
         df["debt_issue"].fillna(0) - df["debt_repay"].fillna(0)
     ).where(df["debt_issue"].notna() | df["debt_repay"].notna())
     strict_net_borrowing = reported_net_borrowing.fillna(derived_net_borrowing)
-    df["net_borrowing"] = reported_net_borrowing
-    df["net_borrowing"] = df["net_borrowing"].fillna(
-        df["debt_issue"].fillna(0) - df["debt_repay"].fillna(0)
-    )
+    df["net_borrowing"] = strict_net_borrowing
 
     df["avg_assets"] = (df["at"] + df["at"].shift(lag)) / 2
     df["avg_equity"] = (df["seq"] + df["seq"].shift(lag)) / 2
@@ -1613,10 +1708,12 @@ def add_annual_financial_factors(
     # Keep the established IROE factor id, but correct its former one-period
     # R&D add-back so existing graphs receive the audited adjusted definition.
     df["iroe"] = df["intangible_adjusted_roe_pct"]
-    df["debt"] = df["dltt"].fillna(0) + df["dlc"].fillna(0)
+    df["debt"] = (
+        df["dltt"].fillna(0) + df["dlc"].fillna(0)
+    ).where(df["dltt"].notna() | df["dlc"].notna())
     df["avg_debt"] = ((df["debt"] + df["debt"].shift(lag)) / 2).fillna(df["debt"])
-    df["net_debt"] = df["debt"] - df["che"].fillna(0)
-    df["invested_capital_financial"] = df["seq"] + df["debt"] - df["che"].fillna(0)
+    df["net_debt"] = df["debt"] - df["che"]
+    df["invested_capital_financial"] = df["seq"] + df["debt"] - df["che"]
     df["invested_capital_operational"] = (
         df["rect"].fillna(0)
         + df["invt"].fillna(0)
@@ -1697,16 +1794,14 @@ def add_annual_financial_factors(
     df["working_capital_turnover"] = df["sale"] / df["working_capital"]
     df["fcff"] = (
         df["nopat"]
-        + df["dp"].fillna(0)
-        - df["capx"].fillna(0)
-        - (df["working_capital"] - df["working_capital"].shift(lag)).fillna(0)
+        + df["dp"]
+        - df["capx"]
+        - (df["working_capital"] - df["working_capital"].shift(lag))
     )
-    fcfe = df["fcf"] + df["net_borrowing"].fillna(0)
-    shareholder_return_amount = df["div_paid"].fillna(0) + (
-        df["prstkc"].fillna(0) - df["sstk"].fillna(0)
-    )
+    fcfe = df["fcf"] + df["net_borrowing"]
+    shareholder_return_amount = df["div_paid"] + df["prstkc"] - df["sstk"]
     positive_shareholder_return = shareholder_return_amount.where(shareholder_return_amount > 0)
-    fcf_after_dividends = df["fcf"] - df["div_paid"].fillna(0)
+    fcf_after_dividends = df["fcf"] - df["div_paid"]
     diluted_shares = first_positive_value_frame(
         df,
         "DILUTED_SHARES",
@@ -1841,10 +1936,28 @@ def calculate_piotroski_f_score(df, periods=1):
     score += (df["oancf"] > df["ni"]).fillna(False).astype(int)
     score += (df["debt_to_equity"] < df["debt_to_equity"].shift(periods)).fillna(False).astype(int)
     score += (df["current_ratio"] > df["current_ratio"].shift(periods)).fillna(False).astype(int)
-    score += (df["sstk"].fillna(0) <= 0).astype(int)
+    score += (df["sstk"] <= 0).fillna(False).astype(int)
     score += (df["gpm"] > df["gpm"].shift(periods)).fillna(False).astype(int)
     score += (df["asset_turnover"] > df["asset_turnover"].shift(periods)).fillna(False).astype(int)
-    return score
+    required = pd.concat(
+        [
+            df["roa"],
+            df["roa"].shift(periods),
+            df["oancf"],
+            df["ni"],
+            df["debt_to_equity"],
+            df["debt_to_equity"].shift(periods),
+            df["current_ratio"],
+            df["current_ratio"].shift(periods),
+            df["sstk"],
+            df["gpm"],
+            df["gpm"].shift(periods),
+            df["asset_turnover"],
+            df["asset_turnover"].shift(periods),
+        ],
+        axis=1,
+    ).notna().all(axis=1)
+    return score.where(required)
 
 
 DIVIDEND_FACTOR_COLUMNS = [
@@ -3445,11 +3558,11 @@ def add_daily_market_valuation_factors(daily_df):
     df["trading_value"] = close * volume
     df["csho"] = shares
     df["eps"] = numeric_column(df, "eps").fillna(ni_parent / shares)
-    df["bps"] = (ceq / shares).fillna(0)
-    df["sps"] = (sale / shares).fillna(0)
-    df["cps"] = (oancf / shares).fillna(0)
-    df["fcff"] = numeric_column(df, "fcff").fillna(0)
-    df["fcfe"] = numeric_column(df, "fcfe").fillna(0)
+    df["bps"] = ceq / shares
+    df["sps"] = sale / shares
+    df["cps"] = oancf / shares
+    df["fcff"] = numeric_column(df, "fcff")
+    df["fcfe"] = numeric_column(df, "fcfe")
 
     if "altman_z_score" in df.columns:
         df["altman_z_score"] = df["altman_z_score"] + 0.6 * (
@@ -3467,8 +3580,8 @@ def add_daily_market_valuation_factors(daily_df):
     df["npr"] = (che - debt) / market_cap
     df["rpr"] = xrd / market_cap
     df["rnd_to_market_cap"] = xrd / market_cap * 100
-    ev_input_missing = market_cap.isna() | (debt.isna() & che.isna())
-    df["enterprise_value"] = market_cap + debt.fillna(0) - che.fillna(0)
+    ev_input_missing = market_cap.isna() | debt.isna() | che.isna()
+    df["enterprise_value"] = (market_cap + debt - che).where(~ev_input_missing)
     valid_ev = df["enterprise_value"].where(df["enterprise_value"] > 0)
     valid_oibdp = nonzero_denominator(oibdp)
     df["ev_ebitda_quality_flag"] = pd.Series(pd.NA, index=df.index, dtype="object")
@@ -3500,17 +3613,24 @@ def add_daily_market_valuation_factors(daily_df):
     df["earnings_payout_ratio"] = tdpr
     df["peg"] = df["per"] / eps_yoy_pct
     df.loc[eps_yoy_pct <= 0, "peg"] = math.nan
-    df["sharehold_net_buyback_yield"] = (
-        (prstkc.fillna(0) - sstk.fillna(0)) / market_cap * 100
+    buyback_evidence = prstkc.notna() | sstk.notna()
+    net_buyback_amount = (prstkc.fillna(0) - sstk.fillna(0)).where(
+        buyback_evidence
     )
-    df["sharehold_return"] = sharehold_div_yield.fillna(0) + df["sharehold_net_buyback_yield"].fillna(0)
+    df["sharehold_net_buyback_yield"] = net_buyback_amount / market_cap * 100
+    df["sharehold_return"] = pd.concat(
+        [sharehold_div_yield, df["sharehold_net_buyback_yield"]],
+        axis=1,
+    ).sum(axis=1, min_count=1)
     df["shareholder_yield"] = df["sharehold_return"]
-    net_buyback_amount = prstkc.fillna(0) - sstk.fillna(0)
-    shareholder_return_amount = cash_dividends.fillna(0) + net_buyback_amount
+    shareholder_return_amount = pd.concat(
+        [cash_dividends, net_buyback_amount],
+        axis=1,
+    ).sum(axis=1, min_count=1)
     positive_shareholder_return = shareholder_return_amount.where(shareholder_return_amount > 0)
     df["fcf_payout_ratio"] = cash_dividends / positive_denominator(fcf) * 100
     df["fcf_dividend_coverage"] = fcf / positive_denominator(cash_dividends)
-    df["fcf_after_dividends"] = fcf - cash_dividends.fillna(0)
+    df["fcf_after_dividends"] = fcf - cash_dividends
     df["fcf_after_dividends_to_sales_pct"] = df["fcf_after_dividends"] / sale_for_fcf * 100
     df["fcf_after_dividends_to_assets_pct"] = df["fcf_after_dividends"] / at * 100
     df["fcf_after_dividends_to_market_cap_pct"] = (
@@ -3574,11 +3694,19 @@ def add_wacc_factors(
         df["trade_date"] if "trade_date" in df.columns else pd.Series(pd.NaT, index=df.index),
         assumptions,
     )
-    equity_risk_premium = latest_country_erp(country_erps, market, assumptions)
+    equity_risk_premium = equity_risk_premium_series_for_market(
+        country_erps,
+        market,
+        df.index,
+        df["trade_date"]
+        if "trade_date" in df.columns
+        else pd.Series(pd.NaT, index=df.index),
+        assumptions,
+    )
     credit_spread = market_assumption(assumptions, market, "credit_spread")
 
     market_cap = positive_denominator(numeric_column(df, "market_cap"))
-    debt = numeric_column(df, "debt").fillna(0).clip(lower=0)
+    debt = numeric_column(df, "debt").clip(lower=0)
     total_capital = market_cap + debt
     df["wacc_equity_weight"] = market_cap / positive_denominator(total_capital) * 100
     df["wacc_debt_weight"] = debt / positive_denominator(total_capital) * 100
@@ -4049,6 +4177,7 @@ def create_stock_factor_dataframe(
     us_consensus_factors_path=US_CONSENSUS_FACTORS_PATH,
     rim_decay_factor=DEFAULT_RIM_DECAY_FACTOR,
     require_report_metadata=False,
+    requested_factor_ids=None,
 ):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
@@ -4059,6 +4188,19 @@ def create_stock_factor_dataframe(
     output_start_date = pd.Timestamp(start_date) if start_date is not None else None
     output_end_date = pd.Timestamp(end_date) if end_date is not None else None
     security_id = security_id_for_market(stock_code, market)
+    requested_factor_ids = {
+        str(value).strip().lower()
+        for value in (requested_factor_ids or [])
+        if str(value).strip()
+    }
+    pvgo_only_profile = bool(requested_factor_ids) and requested_factor_ids.issubset(
+        {
+            "pvgo_gap_pct",
+            "roiic_wacc_spread",
+            "pvgo_compression_pct",
+            "pvgo_pct",
+        }
+    )
     if market_data_cache is not None:
         price_df = market_data_cache.prices(security_id, stock_code=stock_code)
     else:
@@ -4088,6 +4230,7 @@ def create_stock_factor_dataframe(
             market=market,
             use_edgartools=use_edgartools,
             edgartools_provider=edgartools_provider,
+            require_report_metadata=require_report_metadata,
         )
     elif financial_basis == "ttm":
         financial_df = read_ttm_financials(
@@ -4098,6 +4241,7 @@ def create_stock_factor_dataframe(
             market=market,
             use_edgartools=use_edgartools,
             edgartools_provider=edgartools_provider,
+            require_report_metadata=require_report_metadata,
         )
     elif financial_basis == "annual":
         financial_df = read_annual_financials(
@@ -4125,15 +4269,6 @@ def create_stock_factor_dataframe(
         daily_df["shares"] = math.nan
         daily_df["market_cap"] = math.nan
 
-    if "market_cap" in daily_df.columns and "shares" in daily_df.columns:
-        derived_market_cap = pd.to_numeric(daily_df["close"], errors="coerce") * pd.to_numeric(
-            daily_df["shares"],
-            errors="coerce",
-        )
-        daily_df["market_cap"] = pd.to_numeric(daily_df["market_cap"], errors="coerce").fillna(
-            derived_market_cap,
-        )
-
     if not financial_df.empty:
         financial_df = financial_df.copy()
         financial_df["financial_period"] = pd.to_datetime(financial_df["financial_period"], errors="coerce")
@@ -4153,53 +4288,81 @@ def create_stock_factor_dataframe(
         daily_df["financial_period"] = pd.NaT
         daily_df["report_date"] = pd.NaT
 
+    if (
+        market == "us"
+        and "COMMON_SHARES_OUTSTANDING" in daily_df.columns
+        and us_filing_share_fallback_is_unambiguous(stock_code)
+    ):
+        disclosed_shares = pd.to_numeric(
+            daily_df["COMMON_SHARES_OUTSTANDING"],
+            errors="coerce",
+        ).where(lambda values: values > 0)
+        # The filing value enters only after its report_date through the
+        # backward as-of merge above.  Prefer the dedicated shares dataset and
+        # use the directly disclosed point-in-time value only for its gaps.
+        daily_df["shares"] = pd.to_numeric(
+            daily_df["shares"],
+            errors="coerce",
+        ).fillna(disclosed_shares)
+
+    if "market_cap" in daily_df.columns and "shares" in daily_df.columns:
+        derived_market_cap = pd.to_numeric(daily_df["close"], errors="coerce") * pd.to_numeric(
+            daily_df["shares"],
+            errors="coerce",
+        )
+        daily_df["market_cap"] = pd.to_numeric(daily_df["market_cap"], errors="coerce").fillna(
+            derived_market_cap,
+        )
+
     daily_df = daily_df.drop(columns=["security_id_fin", "stock_code_fin"], errors="ignore")
     daily_df["stock_code"] = stock_code
-    daily_df = add_dividend_factors(
-        daily_df,
-        stock_code,
-        market=market,
-        market_data_cache=market_data_cache,
-    )
+    if not pvgo_only_profile:
+        daily_df = add_dividend_factors(
+            daily_df,
+            stock_code,
+            market=market,
+            market_data_cache=market_data_cache,
+        )
     daily_df = add_daily_market_valuation_factors(daily_df)
-    daily_df = add_consensus_factors(
-        daily_df,
-        financial_df,
-        stock_code,
-        estimate_gold_root=estimate_gold_root,
-        market=market,
-    )
-    daily_df = add_real_consensus_factors(
-        daily_df,
-        financial_df,
-        stock_code,
-        real_consensus_daily_path=real_consensus_daily_path,
-        market=market,
-    )
-    daily_df = add_kr_target_price_factor(
-        daily_df,
-        stock_code,
-        target_price_consensus_path=target_price_consensus_path,
-        market=market,
-    )
-    daily_df = add_us_consensus_factors(
-        daily_df,
-        stock_code,
-        us_consensus_factors_path=us_consensus_factors_path,
-        market=market,
-    )
-    daily_df = add_eps_implied_operating_income_surprise_factor(
-        daily_df,
-        market=market,
-    )
-    if market in {"kr", "us"} and financial_basis == "annual":
-        daily_df = add_rim_historical_roe_fallback(daily_df, financial_df)
-    elif market == "us" and financial_basis == "ttm":
-        daily_df = add_rim_historical_roe_fallback(
+    if not pvgo_only_profile:
+        daily_df = add_consensus_factors(
             daily_df,
             financial_df,
-            periods_per_year=4,
+            stock_code,
+            estimate_gold_root=estimate_gold_root,
+            market=market,
         )
+        daily_df = add_real_consensus_factors(
+            daily_df,
+            financial_df,
+            stock_code,
+            real_consensus_daily_path=real_consensus_daily_path,
+            market=market,
+        )
+        daily_df = add_kr_target_price_factor(
+            daily_df,
+            stock_code,
+            target_price_consensus_path=target_price_consensus_path,
+            market=market,
+        )
+        daily_df = add_us_consensus_factors(
+            daily_df,
+            stock_code,
+            us_consensus_factors_path=us_consensus_factors_path,
+            market=market,
+        )
+        daily_df = add_eps_implied_operating_income_surprise_factor(
+            daily_df,
+            market=market,
+        )
+        if market in {"kr", "us"} and financial_basis == "annual":
+            daily_df = add_rim_historical_roe_fallback(daily_df, financial_df)
+        elif market == "us" and financial_basis == "ttm":
+            daily_df = add_rim_historical_roe_fallback(
+                daily_df,
+                financial_df,
+                periods_per_year=4,
+            )
     daily_df = add_wacc_factors(
         daily_df,
         market=market,
@@ -4211,12 +4374,13 @@ def create_stock_factor_dataframe(
         wacc_benchmark_path=wacc_benchmark_path,
     )
     daily_df = add_pvgo_factors(daily_df)
-    daily_df = add_equity_valuation_factors(
-        daily_df,
-        rim_decay_factor=rim_decay_factor,
-        market=market,
-    )
-    daily_df = add_price_momentum_factors(daily_df)
+    if not pvgo_only_profile:
+        daily_df = add_equity_valuation_factors(
+            daily_df,
+            rim_decay_factor=rim_decay_factor,
+            market=market,
+        )
+        daily_df = add_price_momentum_factors(daily_df)
     daily_df["updated_at"] = datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
     daily_df["currency"] = market_config(market).currency
 
@@ -4525,6 +4689,21 @@ def preferred_factor_columns():
         "beneish_m_score",
         "f_score",
     ]
+
+
+def market_applicable_factor_columns(market: str) -> list[str]:
+    """Return the explicit factor contract for a supported market scope."""
+    normalized_market = str(market).strip().lower()
+    global_contract = preferred_factor_columns()
+    if normalized_market in {"all", "global"}:
+        return global_contract
+    if normalized_market == "kr":
+        return [
+            factor_id
+            for factor_id in global_contract
+            if factor_id not in KR_EXPLICITLY_INAPPLICABLE_FACTOR_COLUMNS
+        ]
+    raise ValueError(f"Unsupported market for factor applicability: {market}")
 
 
 def order_factor_columns(df):

@@ -41,6 +41,58 @@ class FakeClickHouseClient:
 
 
 class RefreshWorkflowTest(unittest.TestCase):
+    def test_us_filing_refresh_downloads_filings_before_local_fallbacks(self):
+        args = argparse.Namespace(
+            dry_run=False,
+            skip_clickhouse=True,
+            sleep_seconds=0.0,
+            workers=2,
+            progress_interval=10,
+            stock_retries=4,
+            stock_retry_backoff=7.0,
+        )
+
+        with (
+            patch("engine.extractors.sec_filings.download_sec_company_tickers") as tickers,
+            patch("engine.extractors.sec_filings.download_us_filing_htmls") as filings,
+            patch("engine.extractors.sec_filings.download_us_companyfacts") as facts,
+            patch(
+                "engine.transformers.sec_filings.normalize_us_sec_filings",
+                return_value=[Path("us_normalized_AAPL.csv")],
+            ) as normalize,
+        ):
+            refresh_workflow.run_us_filing_refresh(
+                args,
+                ["AAPL"],
+                "2026-09-06",
+                client=None,
+            )
+
+        tickers.assert_called_once_with()
+        filings.assert_called_once_with(
+            symbols=["AAPL"],
+            start_date="2016-01-01",
+            end_date="2026-09-06",
+            forms=["10-K", "10-Q"],
+            force=True,
+            workers=2,
+            sleep_seconds=0.1,
+            retries=4,
+            retry_backoff_seconds=7.0,
+        )
+        facts.assert_called_once_with(
+            symbols=["AAPL"],
+            force=True,
+            sleep_seconds=0.1,
+        )
+        normalize.assert_called_once_with(
+            symbols=["AAPL"],
+            start_year=2016,
+            end_year=2026,
+            workers=2,
+            progress_interval=10,
+        )
+
     def test_us_consensus_refresh_passes_finnworlds_resume_controls(self):
         args = argparse.Namespace(
             market="us",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 import pandas as pd
 
@@ -24,6 +26,13 @@ class FakeAttachments:
         return iter(self._attachments)
 
 
+class FakeSubmissionOnlyAttachments:
+    primary_html_document = None
+
+    def __iter__(self):
+        return iter(())
+
+
 class SecFilingsDownloadTest(unittest.TestCase):
     @staticmethod
     def _attachment(document_type, document, content, *, sequence="1", description=""):
@@ -36,6 +45,72 @@ class SecFilingsDownloadTest(unittest.TestCase):
             url=f"https://www.sec.gov/Archives/{document}",
             is_html=lambda: document.lower().endswith((".htm", ".html")),
         )
+
+    def test_complete_checkpoint_can_be_trusted_without_restat_for_audited_resume(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "fillings"
+            checkpoint = root / "_checkpoints" / "CIK0000320193.json"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_text(
+                json.dumps(
+                    {
+                        "status": "complete",
+                        "query_fingerprint": "frozen-query",
+                        "files": ["10-K/AAPL/missing-after-checkpoint.htm"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertFalse(
+                sec_filings._completed_filing_checkpoint(
+                    checkpoint,
+                    "frozen-query",
+                )
+            )
+            self.assertTrue(
+                sec_filings._completed_filing_checkpoint(
+                    checkpoint,
+                    "frozen-query",
+                    verify_files=False,
+                )
+            )
+
+    def test_complete_checkpoint_rejects_10k_bundle_without_primary_document(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "fillings"
+            bundle = root / "10-K" / "AAPL" / "0000320193-06-000001"
+            bundle.mkdir(parents=True)
+            manifest = bundle / "filing.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "form": "10-K",
+                        "primary_document": "",
+                        "xbrl_documents": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            checkpoint = root / "_checkpoints" / "CIK0000320193.json"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_text(
+                json.dumps(
+                    {
+                        "status": "complete",
+                        "query_fingerprint": "frozen-query",
+                        "files": [manifest.relative_to(root).as_posix()],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertFalse(
+                sec_filings._completed_filing_checkpoint(
+                    checkpoint,
+                    "frozen-query",
+                )
+            )
 
     @staticmethod
     def _filing(form, filing_date, accession, attachments):
@@ -96,7 +171,36 @@ class SecFilingsDownloadTest(unittest.TestCase):
             download_tickers.assert_not_called()
             download_companyfacts.assert_not_called()
 
-    def test_download_workflow_routes_us_statements_to_sec_companyfacts(self):
+    def test_download_us_companyfacts_skips_missing_cik_and_continues(self):
+        with TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "companyfacts"
+            missing = HTTPError(
+                "https://data.sec.gov/api/xbrl/companyfacts/CIK0000000001.json",
+                404,
+                "Not Found",
+                hdrs=None,
+                fp=None,
+            )
+
+            with patch.object(
+                sec_filings,
+                "_download_sec_companyfacts",
+                side_effect=[missing, b'{"cik":2,"facts":{}}'],
+            ) as download:
+                written = sec_filings.download_us_companyfacts(
+                    symbols=["CIK0000000001", "CIK0000000002"],
+                    output_dir=output_dir,
+                    ticker_map_path=Path(tmpdir) / "missing.csv",
+                    sleep_seconds=0,
+                )
+
+            expected = output_dir / "CIK0000000002.json"
+            self.assertEqual(written, [expected])
+            self.assertFalse((output_dir / "CIK0000000001.json").exists())
+            self.assertEqual(download.call_count, 2)
+
+    def test_download_workflow_routes_us_statements_to_filings_then_companyfacts(self):
+        summary = SimpleNamespace(to_dict=lambda: {})
         with (
             patch.object(
                 sys,
@@ -115,11 +219,30 @@ class SecFilingsDownloadTest(unittest.TestCase):
                     "statements",
                 ],
             ),
-            patch.object(download_workflow, "download_us_companyfacts") as download,
+            patch.object(
+                download_workflow,
+                "download_us_filing_htmls",
+                return_value=summary,
+            ) as download_filings,
+            patch.object(download_workflow, "download_us_companyfacts") as download_facts,
         ):
             download_workflow.main()
 
-        download.assert_called_once_with(
+        download_filings.assert_called_once_with(
+            symbols=["AAPL", "MSFT"],
+            start_date=None,
+            end_date=None,
+            forms=["10-K", "10-Q"],
+            offset=5,
+            limit=2,
+            force=True,
+            resume=True,
+            workers=1,
+            sleep_seconds=0.1,
+            retries=3,
+            retry_backoff_seconds=30.0,
+        )
+        download_facts.assert_called_once_with(
             symbols=["AAPL", "MSFT"],
             offset=5,
             limit=2,
@@ -207,12 +330,213 @@ class SecFilingsDownloadTest(unittest.TestCase):
             )
             self.assertEqual(resumed.symbols_resumed, 1)
 
+    def test_download_us_filing_htmls_persists_complete_xbrl_bundle_by_accession(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ticker_map = root / "sec_company_tickers.csv"
+            output_dir = root / "fillings"
+            pd.DataFrame([{"cik": "320193", "ticker": "AAPL", "title": "Apple Inc."}]).to_csv(
+                ticker_map,
+                index=False,
+            )
+            documents = [
+                self._attachment("10-K", "aapl-2025.htm", b"<html><ix:header></ix:header></html>"),
+                self._attachment("EX-101.INS", "aapl-2025_htm.xml", b"<xbrl></xbrl>", sequence="2"),
+                self._attachment("EX-101.SCH", "aapl-2025.xsd", b"<schema></schema>", sequence="3"),
+                self._attachment("EX-101.LAB", "aapl-2025_lab.xml", b"<linkbase></linkbase>", sequence="4"),
+                self._attachment("EX-101.PRE", "aapl-2025_pre.xml", b"<linkbase></linkbase>", sequence="5"),
+                self._attachment("EX-101.DEF", "aapl-2025_def.xml", b"<linkbase></linkbase>", sequence="6"),
+                self._attachment("EX-101.CAL", "aapl-2025_cal.xml", b"<linkbase></linkbase>", sequence="7"),
+            ]
+
+            summary = sec_filings.download_us_filing_htmls(
+                symbols=["AAPL"],
+                start_date="2025-01-01",
+                end_date="2025-12-31",
+                forms=["10-K", "10-Q"],
+                output_dir=output_dir,
+                ticker_map_path=ticker_map,
+                filings_provider=lambda *_: [
+                    self._filing("10-K", "2025-10-31", "0000320193-25-000001", documents)
+                ],
+                sleep_seconds=0,
+            )
+
+            bundle = output_dir / "10-K" / "AAPL" / "0000320193-25-000001"
+            manifest = json.loads((bundle / "filing.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(summary.filing_bundles_written, 1)
+            self.assertEqual(summary.xbrl_files_written, 6)
+            self.assertEqual((bundle / "aapl-2025.htm").read_bytes(), documents[0].content)
+            primary = (
+                output_dir
+                / "10-K"
+                / "AAPL"
+                / "2025-10-31_0000320193-25-000001_aapl-2025.htm"
+            )
+            self.assertTrue(os.path.samefile(primary, bundle / "aapl-2025.htm"))
+            self.assertEqual((bundle / "aapl-2025_htm.xml").read_bytes(), documents[1].content)
+            self.assertEqual(manifest["schema_version"], 3)
+            self.assertEqual(manifest["source_authority"], "SEC_10K_AUDITED")
+            self.assertEqual(manifest["primary_document"], "aapl-2025.htm")
+            self.assertEqual(
+                manifest["primary_document_metadata"]["sha256"],
+                hashlib.sha256(documents[0].content).hexdigest(),
+            )
+            self.assertEqual(
+                {item["role"] for item in manifest["xbrl_documents"]},
+                {"instance", "schema", "label", "presentation", "definition", "calculation"},
+            )
+            checkpoint = json.loads(
+                (output_dir / "_checkpoints" / "CIK0000320193.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(checkpoint["query"]["bundle_schema_version"], 3)
+
+    def test_download_us_filing_htmls_falls_back_to_complete_submission_text(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ticker_map = root / "sec_company_tickers.csv"
+            output_dir = root / "fillings"
+            pd.DataFrame(
+                [{"cik": "2098", "ticker": "ACU", "title": "Acme United Corp."}]
+            ).to_csv(ticker_map, index=False)
+            submission = (
+                "<SEC-DOCUMENT>0001026608-06-000045.txt\n"
+                "<DOCUMENT><TYPE>10-K<TEXT><html><body>legacy filing</body></html>"
+                "</TEXT></DOCUMENT>"
+            )
+            filing = SimpleNamespace(
+                form="10-K",
+                filing_date="2006-03-16",
+                accession_no="0001026608-06-000045",
+                period_of_report="2005-12-31",
+                attachments=FakeSubmissionOnlyAttachments(),
+                text_url=(
+                    "https://www.sec.gov/Archives/edgar/data/2098/"
+                    "000102660806000045/0001026608-06-000045.txt"
+                ),
+                full_text_submission=lambda: submission,
+            )
+
+            summary = sec_filings.download_us_filing_htmls(
+                symbols=["ACU"],
+                start_date="2006-01-01",
+                end_date="2006-12-31",
+                forms=["10-K", "10-Q"],
+                output_dir=output_dir,
+                ticker_map_path=ticker_map,
+                filings_provider=lambda *_: [filing],
+                sleep_seconds=0,
+            )
+
+            bundle = output_dir / "10-K" / "ACU" / "0001026608-06-000045"
+            manifest = json.loads((bundle / "filing.json").read_text(encoding="utf-8"))
+            primary = bundle / "full-submission.txt"
+            compatibility = (
+                output_dir
+                / "10-K"
+                / "ACU"
+                / "2006-03-16_0001026608-06-000045_full-submission.txt"
+            )
+
+            self.assertEqual(summary.full_submission_written, 1)
+            self.assertEqual(summary.non_html_documents_skipped, 0)
+            self.assertEqual(primary.read_text(encoding="utf-8"), submission)
+            self.assertTrue(os.path.samefile(primary, compatibility))
+            self.assertEqual(manifest["primary_document"], "full-submission.txt")
+            self.assertEqual(
+                manifest["primary_document_metadata"]["storage_role"],
+                "complete_submission_text",
+            )
+            self.assertEqual(
+                manifest["primary_document_metadata"]["source_url"],
+                filing.text_url,
+            )
+
+    def test_download_us_filing_htmls_falls_back_when_primary_is_not_html(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            ticker_map = root / "sec_company_tickers.csv"
+            output_dir = root / "fillings"
+            pd.DataFrame(
+                [{"cik": "2098", "ticker": "ACU", "title": "Acme United Corp."}]
+            ).to_csv(ticker_map, index=False)
+            non_html_primary = self._attachment(
+                "10-K",
+                "legacy-document.txt",
+                b"legacy document without html tags",
+            )
+            filing = SimpleNamespace(
+                form="10-K",
+                filing_date="2006-03-16",
+                accession_no="0001026608-06-000045",
+                period_of_report="2005-12-31",
+                attachments=FakeAttachments([non_html_primary]),
+                text_url="https://www.sec.gov/Archives/legacy-submission.txt",
+                full_text_submission=lambda: "<SEC-DOCUMENT>complete submission",
+            )
+
+            summary = sec_filings.download_us_filing_htmls(
+                symbols=["ACU"],
+                start_date="2006-01-01",
+                end_date="2006-12-31",
+                forms=["10-K", "10-Q"],
+                output_dir=output_dir,
+                ticker_map_path=ticker_map,
+                filings_provider=lambda *_: [filing],
+                sleep_seconds=0,
+            )
+
+            manifest_path = (
+                output_dir
+                / "10-K"
+                / "ACU"
+                / "0001026608-06-000045"
+                / "filing.json"
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary.full_submission_written, 1)
+            self.assertEqual(summary.non_html_documents_skipped, 0)
+            self.assertEqual(manifest["primary_document"], "full-submission.txt")
+
     def test_sec_ir_exhibit_matching_accepts_99x_only(self):
         self.assertTrue(sec_filings.is_sec_ir_exhibit(SimpleNamespace(document_type="EX-99")))
         self.assertTrue(sec_filings.is_sec_ir_exhibit(SimpleNamespace(document_type="ex-99.01")))
         self.assertTrue(sec_filings.is_sec_ir_exhibit(SimpleNamespace(document_type="EX-99.9")))
         self.assertFalse(sec_filings.is_sec_ir_exhibit(SimpleNamespace(document_type="EX-101.INS")))
         self.assertFalse(sec_filings.is_sec_ir_exhibit(SimpleNamespace(document_type="EX-9.9")))
+
+    def test_generic_sec_xml_is_not_misclassified_as_xbrl_instance(self):
+        report_xml = self._attachment(
+            "XML",
+            "R1.xml",
+            b'<?xml version="1.0"?><Report><Row>not an XBRL instance</Row></Report>',
+        )
+        actual_instance = self._attachment(
+            "XML",
+            "issuer-2025.xml",
+            b'<?xml version="1.0"?><xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance"/>',
+        )
+
+        self.assertEqual(sec_filings.sec_xbrl_document_role(report_xml), "")
+        self.assertEqual(sec_filings.sec_xbrl_document_role(actual_instance), "instance")
+
+    def test_sec_render_report_xml_is_rejected_without_fetching_content(self):
+        class RenderReportAttachment:
+            document_type = "XML"
+            document = "R142.xml"
+            content_accessed = False
+
+            @property
+            def content(self):
+                self.content_accessed = True
+                return b'<?xml version="1.0"?><Report />'
+
+        attachment = RenderReportAttachment()
+        self.assertEqual(sec_filings.sec_xbrl_document_role(attachment), "")
+        self.assertFalse(attachment.content_accessed)
 
     def test_safe_path_part_prefixes_windows_reserved_names(self):
         self.assertEqual(sec_filings._safe_path_part("CON"), "_CON")

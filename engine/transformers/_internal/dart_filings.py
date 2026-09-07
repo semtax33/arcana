@@ -5,6 +5,7 @@ from datetime import date
 import json
 import math
 import re
+import sys
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
@@ -13,7 +14,7 @@ from typing import Any
 
 import pandas as pd
 import yaml
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 from engine.core.paths import parse_statement_snapshot_filename
 from engine.semantic import (
@@ -66,6 +67,7 @@ DEBUG_COLUMNS = [
     "context_reason",
     "amount_raw",
     "unit_factor",
+    "parse_alignment_complete",
     "semantic_engine_version",
     "accounting_regime",
     "accounting_regime_confidence",
@@ -80,6 +82,23 @@ DEBUG_COLUMNS = [
     "comparability",
     "semantic_provenance",
 ]
+
+
+def _console_safe_text(value: Any) -> str:
+    """Render source-controlled diagnostics without making parsing depend on stdout."""
+    text = str(value)
+    encoding = getattr(sys.stdout, "encoding", None)
+    if not encoding:
+        return text
+    try:
+        text.encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        return text.encode(encoding, errors="backslashreplace").decode(encoding)
+    return text
+
+
+def _safe_print(*values: Any, **kwargs: Any) -> None:
+    print(*(_console_safe_text(value) for value in values), **kwargs)
 
 UNITS = {
     "조원": 1_000_000_000_000,
@@ -427,7 +446,11 @@ def parse_amount(value: Any, unit_factor: int = 1) -> int:
 
     sign = 1
 
-    if len(s) >= 2 and s[0] == "(" and s[-1] == ")":
+    legacy_minus = re.match(r"^\(\s*[-−－]\s*\)\s*", s)
+    if legacy_minus is not None:
+        sign = -1
+        s = s[legacy_minus.end() :].strip()
+    elif len(s) >= 2 and s[0] == "(" and s[-1] == ")":
         sign = -1
         s = s[1:-1].strip()
 
@@ -831,6 +854,35 @@ def current_statement_amount_column(
     return 1
 
 
+def _cell_break_segments(cell: Tag) -> list[str]:
+    """Return cell text split at ``br`` tags without losing blank lines.
+
+    Early DART documents encode an entire statement column vertically inside
+    one ``td``.  Empty segments are significant because they align detail and
+    subtotal columns with the corresponding account-name line.
+    """
+
+    segments = [""]
+    for descendant in cell.descendants:
+        if isinstance(descendant, Tag) and descendant.name == "br":
+            segments.append("")
+        elif isinstance(descendant, NavigableString):
+            segments[-1] += str(descendant)
+    return [segment.strip() for segment in segments]
+
+
+def _packed_current_period_columns(body_table: Tag) -> list[int]:
+    """Find physical cells for the first/current period's packed columns."""
+
+    for tr in body_table.find_all("tr")[:4]:
+        cells = tr.find_all(["td", "th"], recursive=False)
+        for cell_index, cell in enumerate(cells):
+            colspan = _positive_span(cell, "colspan")
+            if cell_index > 0 and colspan >= 2:
+                return list(range(cell_index, cell_index + colspan))
+    return []
+
+
 def extract_rows_from_dart_html(
     html_path: str | Path,
     company_name: str,
@@ -865,7 +917,7 @@ def extract_rows_from_dart_html(
         body_table, supporting_text = find_next_data_table(header_table)
 
         if body_table is None:
-            print(f"[WARN] 본문 테이블을 찾지 못함: {header_text[:80]}")
+            _safe_print(f"[WARN] 본문 테이블을 찾지 못함: {header_text[:80]}")
             continue
 
         body_table_key = id(body_table)
@@ -880,6 +932,7 @@ def extract_rows_from_dart_html(
             statement_type=fs_type,
             period=period,
         )
+        packed_amount_columns = _packed_current_period_columns(body_table)
 
         for row_index, tr in enumerate(body_table.find_all("tr")):
             tds = tr.find_all("td")
@@ -897,6 +950,94 @@ def extract_rows_from_dart_html(
                 continue
 
             td_style = safe_str(account_td.get("style", ""))
+            account_segments = _cell_break_segments(account_td)
+            packed_columns_available = bool(packed_amount_columns) and all(
+                column < len(tds) for column in packed_amount_columns
+            )
+            candidate_amount_segments = (
+                [
+                    _cell_break_segments(tds[column])
+                    for column in packed_amount_columns
+                ]
+                if packed_columns_available
+                else []
+            )
+            packed_row = (
+                len(account_segments) >= 3
+                and any(
+                    len(segments) >= len(account_segments)
+                    for segments in candidate_amount_segments
+                )
+            )
+
+            if packed_row:
+                amount_segments = candidate_amount_segments
+                parse_alignment_complete = all(
+                    len(segments) == len(account_segments)
+                    for segments in amount_segments
+                )
+                for line_index, account_segment in enumerate(account_segments):
+                    if not account_segment:
+                        continue
+                    selected_amount = next(
+                        (
+                            (column, segments[line_index])
+                            for column, segments in zip(
+                                packed_amount_columns,
+                                amount_segments,
+                            )
+                            if line_index < len(segments) and segments[line_index]
+                        ),
+                        None,
+                    )
+                    selected_column, amount_raw = (
+                        selected_amount
+                        if selected_amount is not None
+                        else (packed_amount_columns[0], "")
+                    )
+                    row_unit_factor = (
+                        1 if is_eps_account_name(account_segment) else unit_factor
+                    )
+                    amount_for_parse = amount_raw
+                    if (
+                        fs_type == "BS"
+                        and
+                        selected_column != packed_amount_columns[0]
+                        and re.fullmatch(r"\(\s*[\d,.]+\s*\)", amount_raw)
+                    ):
+                        # In vertically packed legacy DART balance sheets the
+                        # aggregate column encloses positive subtotals in
+                        # parentheses.  This convention is statement-specific:
+                        # income and cash-flow parentheses retain their normal
+                        # negative/outflow meaning.
+                        amount_for_parse = amount_raw[1:-1]
+                    raw_amount = (
+                        parse_amount(amount_for_parse, row_unit_factor)
+                        if amount_raw
+                        else ""
+                    )
+                    rows.append(
+                        {
+                            "company_name": company_name,
+                            "statement_type": fs_type,
+                            "period": period,
+                            "table_index": table_index,
+                            "row_index": row_index * 1000 + line_index,
+                            "raw_account_name": account_segment,
+                            "original_account_name": account_segment,
+                            "normalized_name": normalize_account_name(account_segment),
+                            "indent_level": detect_indent_level(account_segment, td_style),
+                            "amount": safe_str(raw_amount),
+                            "raw_amount": safe_str(raw_amount),
+                            "amount_raw": amount_raw,
+                            "unit_factor": safe_str(row_unit_factor),
+                            "parse_alignment_complete": parse_alignment_complete,
+                            "table_title": combined_header_text,
+                            **document_semantics,
+                        }
+                    )
+                continue
+
             amount_raw = amount_td.get_text(" ", strip=True)
             row_unit_factor = 1 if is_eps_account_name(original_account_name) else unit_factor
             raw_amount = parse_amount(amount_raw, row_unit_factor)
@@ -916,6 +1057,7 @@ def extract_rows_from_dart_html(
                     "raw_amount": safe_str(raw_amount),
                     "amount_raw": amount_raw,
                     "unit_factor": safe_str(row_unit_factor),
+                    "parse_alignment_complete": True,
                     "table_title": combined_header_text,
                     **document_semantics,
                 }
@@ -2022,7 +2164,7 @@ class SignPolicyEngine:
 
         p = Path(path)
         if not p.exists():
-            print(f"[WARN] sign policy file not found: {p}; using defaults")
+            _safe_print(f"[WARN] sign policy file not found: {p}; using defaults")
             return cls({})
 
         p = resolve_rule_bundle(p)
@@ -2287,6 +2429,7 @@ class RuleEngine:
                     )
                     for index, rule in enumerate(rules)
                 ),
+                engine_version=4,
                 declared_source_rule_count=len(rules),
             )
         self.semantic_ruleset = semantic_ruleset
@@ -2524,7 +2667,12 @@ class RuleEngine:
                         "context_reason": safe_str(row.get("context_reason")),
                         "amount_raw": safe_str(row.get("amount_raw")),
                         "unit_factor": "1" if result.canonical_account_id in EPS_CANONICAL_IDS else safe_str(row.get("unit_factor")),
-                        "semantic_engine_version": safe_str(row.get("semantic_engine_version", "4")),
+                        "parse_alignment_complete": safe_str(
+                            row.get("parse_alignment_complete", True)
+                        ),
+                        "semantic_engine_version": safe_str(
+                            self.semantic_ruleset.engine_version
+                        ),
                         "accounting_regime": safe_str(row.get("accounting_regime", "UNKNOWN")),
                         "accounting_regime_confidence": safe_str(row.get("accounting_regime_confidence")),
                         "accounting_regime_evidence": safe_str(row.get("accounting_regime_evidence")),
@@ -3148,9 +3296,9 @@ def normalize_financial_statement_rule_based(
                 )
                 mapped_df = apply_is_cis_priority(mapped_df)
             elif verbose:
-                print(f"[WARN] 주석 HTML 파일을 찾을 수 없습니다: {resolved_comment_html_path}")
+                _safe_print(f"[WARN] 주석 HTML 파일을 찾을 수 없습니다: {resolved_comment_html_path}")
     except Exception as e:
-        print(
+        _safe_print(
             "[WARN] 주석 HTML 파싱/정규화 실패로 주석 결과를 건너뜁니다: "
             f"{resolved_comment_html_path} ({type(e).__name__}: {e})"
         )
@@ -3182,9 +3330,9 @@ def normalize_financial_statement_rule_based(
     errors = validate_mapped_df(mapped_df, canonical_df)
 
     if verbose and errors:
-        print("[WARN] 매핑 검증 경고")
+        _safe_print("[WARN] 매핑 검증 경고")
         for error in errors:
-            print(" -", error)
+            _safe_print(" -", error)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -3206,7 +3354,7 @@ def normalize_financial_statement_rule_based(
     )
 
     if verbose:
-        print(f"[SAVED] {output_path}")
+        _safe_print(f"[SAVED] {output_path}")
 
     if save_debug:
         debug_path = output_path.with_suffix(".debug.csv")
@@ -3217,6 +3365,6 @@ def normalize_financial_statement_rule_based(
             quoting=csv.QUOTE_ALL,
         )
         if verbose:
-            print(f"[SAVED] {debug_path}")
+            _safe_print(f"[SAVED] {debug_path}")
 
     return final_df

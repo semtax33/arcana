@@ -144,6 +144,7 @@ def request_with_retry(
     base_backoff: float = 0.7,
     max_backoff: float = 20.0,
     retry_statuses: set[int] = RETRY_STATUS,
+    throttle: DartRequestThrottle | None = None,
     **kwargs,
 ) -> requests.Response:
     for attempt in range(max_retries + 1):
@@ -185,7 +186,14 @@ def request_with_retry(
         if sleep_s is None:
             sleep_s = min(max_backoff, base_backoff * (2 ** attempt)) + random.uniform(0, 0.3)
 
-        time.sleep(sleep_s)
+        if throttle is not None:
+            # A transient disconnect or 429 is a service-level signal.  Share
+            # the cooldown with every worker instead of letting each thread
+            # retry independently and amplify the rate-limit condition.
+            throttle.cooldown(sleep_s)
+            throttle.wait()
+        else:
+            time.sleep(sleep_s)
 
     raise RuntimeError("request_with_retry: unexpected fallthrough")
 
@@ -525,6 +533,44 @@ def select_financial_statement_position(html_or_js: str) -> Optional[NodeMatch]:
         if _is_statement_body_node(node):
             return node
 
+    # DART 3.x filings (notably 2009-2012) often expose the complete statement
+    # body as a node/node1 captioned "재무제표 등" instead of a node2/node3
+    # captioned "연결재무제표".  The generic node parser is deliberately used
+    # only after the more precise consolidated/individual selectors above.
+    legacy_positions: list[NodeMatch] = []
+    for block in _iter_node_blocks(html_or_js):
+        node = _node_match_from_block(block)
+        if (
+            node is not None
+            and _is_valid_node(node)
+            and _is_statement_body_node(node)
+            and "재무제표" in node.text
+        ):
+            legacy_positions.append(node)
+    if legacy_positions:
+        return max(
+            legacy_positions,
+            key=lambda node: (
+                "재무제표등" in re.sub(r"\s+", "", node.text),
+                _node_length(node),
+            ),
+        )
+
+    # Earlier DART 3.x interim reports embed the statements directly under
+    # "재무에 관한 사항" and expose no separate statement node at all.
+    financial_matter_positions: list[NodeMatch] = []
+    for block in _iter_node_blocks(html_or_js):
+        node = _node_match_from_block(block)
+        if (
+            node is not None
+            and _is_valid_node(node)
+            and _is_statement_body_node(node)
+            and "재무에관한사항" in re.sub(r"\s+", "", node.text)
+        ):
+            financial_matter_positions.append(node)
+    if financial_matter_positions:
+        return max(financial_matter_positions, key=_node_length)
+
     return None
 
 
@@ -841,17 +887,25 @@ def fetch_dart_search(
     start_date: str | None = None,
     end_date: str | None = None,
     force: bool = False,
+    sleep_seconds: float = 0.5,
+    throttle: DartRequestThrottle | None = None,
 ):
+    results: list[dict[str, str]] = []
     for window_start, window_end in iter_dart_search_date_windows(start_date, end_date):
         print(f"searching DART statements {ticker}: {window_start}-{window_end}")
-        _fetch_dart_search_window(
-            ticker,
-            save_dir,
-            save_filename,
-            start_date=window_start,
-            end_date=window_end,
-            force=force,
+        results.extend(
+            _fetch_dart_search_window(
+                ticker,
+                save_dir,
+                save_filename,
+                start_date=window_start,
+                end_date=window_end,
+                force=force,
+                sleep_seconds=sleep_seconds,
+                throttle=throttle,
+            )
         )
+    return results
 
 
 def _fetch_dart_search_window(
@@ -862,6 +916,8 @@ def _fetch_dart_search_window(
     start_date: str | None = None,
     end_date: str | None = None,
     force: bool = False,
+    sleep_seconds: float = 0.5,
+    throttle: DartRequestThrottle | None = None,
 ):
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
@@ -886,9 +942,15 @@ def _fetch_dart_search_window(
         ("publicType", "A004"),
     ]
 
+    results: list[dict[str, str]] = []
     with requests.Session() as s:
         # 1) 검색 POST (재시도 적용)
-        resp = request_with_retry(s, "POST", url, headers=headers, data=data, timeout=30)
+        if throttle is not None:
+            _wait_for_dart_request(throttle, 0)
+        resp = request_with_retry(
+            s, "POST", url, headers=headers, data=data, timeout=30,
+            throttle=throttle,
+        )
         resp.encoding = resp.apparent_encoding
         html = resp.text
 
@@ -910,6 +972,7 @@ def _fetch_dart_search_window(
             seen_hrefs.add(href)
 
             title = _safe_title_from_anchor(a)
+            rcept_no = _extract_rcept_no_from_href(href) or ""
             safe_title = title.strip()
             if len(safe_title.split("\n")) >= 2:
                 safe_title_line = safe_title.split("\n")[1].strip()
@@ -920,12 +983,25 @@ def _fetch_dart_search_window(
             out_path = Path(save_dir) / _safe_filename(out_name)
             if out_path.exists() and not force:
                 print(f"[SKIP] statement exists: {out_path}")
+                results.append(
+                    {
+                        "ticker": str(ticker),
+                        "rcept_no": rcept_no,
+                        "title": title,
+                        "status": "skipped_existing",
+                        "output_path": str(out_path),
+                    }
+                )
                 continue
 
             page_url = f"https://dart.fss.or.kr{href}"
 
             # 2) 공시 페이지 GET
-            page_resp = request_with_retry(s, "GET", page_url, timeout=30)
+            if throttle is not None:
+                _wait_for_dart_request(throttle, 0)
+            page_resp = request_with_retry(
+                s, "GET", page_url, timeout=30, throttle=throttle,
+            )
             page_resp.encoding = page_resp.apparent_encoding
             page_soup = BeautifulSoup(page_resp.text, "lxml")
 
@@ -938,6 +1014,15 @@ def _fetch_dart_search_window(
                     break
 
             if not statement_position:
+                results.append(
+                    {
+                        "ticker": str(ticker),
+                        "rcept_no": rcept_no,
+                        "title": title,
+                        "status": "statement_section_not_found",
+                        "output_path": "",
+                    }
+                )
                 continue
 
             params = {
@@ -951,8 +1036,10 @@ def _fetch_dart_search_window(
             report_viewer_url = f"https://dart.fss.or.kr/report/viewer.do?{urlencode(params)}"
 
             # 3) viewer GET
-            time.sleep(0.5)
-            viewer_resp = request_with_retry(s, "GET", report_viewer_url, timeout=30)
+            _wait_for_dart_request(throttle, sleep_seconds)
+            viewer_resp = request_with_retry(
+                s, "GET", report_viewer_url, timeout=30, throttle=throttle,
+            )
             viewer_resp.encoding = viewer_resp.apparent_encoding
             statement_content = viewer_resp.text
 
@@ -967,6 +1054,17 @@ def _fetch_dart_search_window(
             out_name = f"finance_statement_{safe_title_line}.html"
 
             _write_text(statement_content, save_dir, out_name)
+            results.append(
+                {
+                    "ticker": str(ticker),
+                    "rcept_no": rcept_no,
+                    "title": title,
+                    "status": "downloaded",
+                    "output_path": str(Path(save_dir) / _safe_filename(out_name)),
+                }
+            )
+
+    return results
 
 
 def fetch_dart_business_info_search(
@@ -1036,7 +1134,10 @@ def _fetch_dart_business_info_search_window(
 
     with requests.Session() as s:
         _wait_for_dart_request(throttle, sleep_seconds)
-        resp = request_with_retry(s, "POST", url, headers=headers, data=data, timeout=30)
+        resp = request_with_retry(
+            s, "POST", url, headers=headers, data=data, timeout=30,
+            throttle=throttle,
+        )
         resp.encoding = resp.apparent_encoding
         soup = BeautifulSoup(resp.text, "lxml")
         anchors = soup.find_all("a", href=True)
@@ -1062,7 +1163,9 @@ def _fetch_dart_business_info_search_window(
             page_url = urljoin("https://dart.fss.or.kr", href)
 
             _wait_for_dart_request(throttle, sleep_seconds)
-            page_resp = request_with_retry(s, "GET", page_url, timeout=30)
+            page_resp = request_with_retry(
+                s, "GET", page_url, timeout=30, throttle=throttle,
+            )
             page_resp.encoding = page_resp.apparent_encoding
             page_soup = BeautifulSoup(page_resp.text, "lxml")
 
@@ -1092,7 +1195,9 @@ def _fetch_dart_business_info_search_window(
             report_viewer_url = f"https://dart.fss.or.kr/report/viewer.do?{urlencode(params)}"
 
             _wait_for_dart_request(throttle, sleep_seconds)
-            viewer_resp = request_with_retry(s, "GET", report_viewer_url, timeout=30)
+            viewer_resp = request_with_retry(
+                s, "GET", report_viewer_url, timeout=30, throttle=throttle,
+            )
             viewer_resp.encoding = viewer_resp.apparent_encoding
             business_content = viewer_resp.text
 
@@ -1105,38 +1210,60 @@ def fetch_dart_report_metadata(
     source_type: str = "statement",
     start_date: str | None = None,
     end_date: str | None = None,
+    years_per_window: int = 10,
+    sleep_seconds: float = 0.0,
+    throttle: DartRequestThrottle | None = None,
 ) -> pd.DataFrame:
     url = "https://dart.fss.or.kr/dsab001/search.ax"
 
     headers = _dart_html_headers()
-
-    data = [
-        ("currentPage", "1"),
-        ("maxResults", "100"),
-        ("maxLinks", "10"),
-        ("sort", "date"),
-        ("series", "desc"),
-        ("pageGubun", "corp"),
-        ("attachDocNmPopYn", ""),
-        ("textCrpNm", ticker),
-        ("startDate", start_date or _default_dart_start_date()),
-        ("endDate", end_date or _default_dart_end_date()),
-        ("decadeType", ""),
-        ("publicType", "A001"),
-        ("publicType", "A002"),
-        ("publicType", "A003"),
-        ("publicType", "A005"),
-        ("publicType", "A004"),
-    ]
-
+    frames: list[pd.DataFrame] = []
     with requests.Session() as session:
-        resp = request_with_retry(session, "POST", url, headers=headers, data=data, timeout=30)
-        resp.encoding = resp.apparent_encoding
-        return extract_dart_report_metadata_from_search_html(
-            resp.text,
-            ticker,
-            source_type=source_type,
-        )
+        for window_start, window_end in iter_dart_search_date_windows(
+            start_date,
+            end_date,
+            years_per_window=years_per_window,
+        ):
+            _wait_for_dart_request(throttle, sleep_seconds)
+            data = [
+                ("currentPage", "1"),
+                ("maxResults", "100"),
+                ("maxLinks", "10"),
+                ("sort", "date"),
+                ("series", "desc"),
+                ("pageGubun", "corp"),
+                ("attachDocNmPopYn", ""),
+                ("textCrpNm", ticker),
+                ("startDate", window_start),
+                ("endDate", window_end),
+                ("decadeType", ""),
+                ("publicType", "A001"),
+                ("publicType", "A002"),
+                ("publicType", "A003"),
+                ("publicType", "A005"),
+                ("publicType", "A004"),
+            ]
+            resp = request_with_retry(
+                session,
+                "POST",
+                url,
+                headers=headers,
+                data=data,
+                timeout=30,
+                throttle=throttle,
+            )
+            resp.encoding = resp.apparent_encoding
+            frame = extract_dart_report_metadata_from_search_html(
+                resp.text,
+                ticker,
+                source_type=source_type,
+            )
+            if not frame.empty:
+                frames.append(frame)
+
+    if not frames:
+        return pd.DataFrame(columns=REPORT_METADATA_COLUMNS)
+    return deduplicate_report_metadata(pd.concat(frames, ignore_index=True))
 
 
 def collect_dart_report_metadata(

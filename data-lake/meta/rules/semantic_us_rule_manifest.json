@@ -1,0 +1,24 @@
+{
+  "manifest_version": 2,
+  "bundle_id": "arcana.semantic.us.v2",
+  "schema": "arcana.sec-semantic/v2",
+  "engine": "arcana-sec-semantic-v2",
+  "version": 2,
+  "hash": "sha256:61505ec4587bc6d751e4e6c1f7314c3dff121cb6ca407d528b9bec52ce294e0c",
+  "created_at": "2026-09-07T07:34:11.7865078Z",
+  "parent": {
+    "bundle_id": "arcana.semantic.us.v1",
+    "hash": "sha256:8c4d198137df03689a20254883efeecb363a0618f5c37850b604caa474f0db94"
+  },
+  "golden_corpus_hash": "sha256:8c4d198137df03689a20254883efeecb363a0618f5c37850b604caa474f0db94",
+  "test_suite_hash": "sha256:32a8167d1dafbca6852836d68a7e9c21be4368355f0efd8ddba75c1e01f3f440",
+  "active_bundle": "semantic_us_v2.arcana",
+  "sha256": "61505ec4587bc6d751e4e6c1f7314c3dff121cb6ca407d528b9bec52ce294e0c",
+  "rule_count": 104,
+  "rule_group_counts": {
+    "companyfacts_rules": 75,
+    "notes_rules": 13,
+    "edgartools_fallback_rules": 16
+  },
+  "immutability_policy": "A published US bundle is never edited in place; create a new version and update this manifest after migration and tests pass."
+}

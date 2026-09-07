@@ -5,6 +5,7 @@ from datetime import date
 from enum import Enum
 from hashlib import sha256
 from pathlib import Path
+import re
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import yaml
@@ -107,6 +108,7 @@ class SemanticRuleSet:
     schema_version: int
     profile: str
     rules: tuple[SemanticRule, ...]
+    engine_version: int = 4
     sources: tuple[RuleSource, ...] = ()
     declared_source_rule_count: int | None = None
 
@@ -471,6 +473,7 @@ def load_semantic_mapping_rules(
     sources: list[RuleSource] = []
     schema_version = 2
     profile = "mixed"
+    engine_version = 4
     declared_source_count = 0
 
     for raw_path in paths:
@@ -478,6 +481,11 @@ def load_semantic_mapping_rules(
         raw = path.read_bytes()
         data = yaml.safe_load(raw) or {}
         source_hash = sha256(raw).hexdigest()
+        engine_match = re.search(
+            r"(?:^|[-_])v(?P<version>\d+)$", str(data.get("engine") or "")
+        )
+        if engine_match:
+            engine_version = max(engine_version, int(engine_match.group("version")))
 
         if int(data.get("schema_version", 1) or 1) >= 2:
             schema_version = max(schema_version, int(data["schema_version"]))
@@ -538,6 +546,7 @@ def load_semantic_mapping_rules(
         schema_version=schema_version,
         profile=profile,
         rules=tuple(compiled),
+        engine_version=engine_version,
         sources=tuple(sources),
         declared_source_rule_count=declared_source_count,
     )

@@ -19,6 +19,7 @@ MARCAP_DATA_URL = (
 MARCAP_CACHE_DIR = DATA_LAKE.bronze("marcap", "data")
 MARCAP_FIRST_YEAR = 1995
 MARCAP_REQUIRED_COLUMNS = ("Date", "Code", "Open", "High", "Low", "Close", "Volume")
+MARCAP_SHARES_REQUIRED_COLUMNS = ("Date", "Code", "Stocks", "Marcap")
 
 DATE_COLUMN = "날짜"
 OPEN_COLUMN = "시가"
@@ -128,6 +129,46 @@ def normalize_marcap_price_frame(
     else:
         result[CHANGE_RATE_COLUMN] = pd.NA
     return result.reset_index(drop=True)
+
+
+def normalize_marcap_shares_frame(
+    source: pd.DataFrame,
+    *,
+    start_date=None,
+    end_date=None,
+) -> pd.DataFrame:
+    """Normalize the point-in-time shares and market cap embedded in marcap."""
+    missing = sorted(set(MARCAP_SHARES_REQUIRED_COLUMNS) - set(source.columns))
+    if missing:
+        raise ValueError(f"marcap frame is missing shares columns: {missing}")
+
+    dates = pd.to_datetime(source["Date"], errors="coerce")
+    valid = dates.notna()
+    if start_date is not None:
+        valid &= dates >= pd.Timestamp(start_date)
+    if end_date is not None:
+        valid &= dates <= pd.Timestamp(end_date)
+
+    filtered = source.loc[valid].copy()
+    if filtered.empty:
+        return pd.DataFrame(
+            columns=["security_id", "trade_date", "shares", "market_cap"]
+        )
+
+    result = pd.DataFrame(index=filtered.index)
+    result["security_id"] = filtered["Code"].map(
+        lambda value: f"SEC_KR_{_normalize_stock_code(value)}"
+    )
+    result["trade_date"] = dates.loc[filtered.index].dt.strftime("%Y-%m-%d")
+    result["shares"] = pd.to_numeric(filtered["Stocks"], errors="coerce")
+    result["market_cap"] = pd.to_numeric(filtered["Marcap"], errors="coerce")
+    result["market_cap"] = result["market_cap"].where(result["market_cap"].gt(0))
+    result = result.loc[result["shares"].gt(0)]
+    return (
+        result.drop_duplicates(["security_id", "trade_date"], keep="last")
+        .sort_values(["security_id", "trade_date"], kind="stable")
+        .reset_index(drop=True)
+    )
 
 
 def ensure_marcap_year_file(

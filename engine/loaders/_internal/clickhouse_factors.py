@@ -893,6 +893,7 @@ def _prepare_daily_factor_rows_for_stock(
         end_date=end_date,
         market=market,
         market_data_cache=market_data_cache,
+        requested_factor_ids=factor_ids,
         **stock_kwargs,
     )
     factor_df = prepare_daily_factor_rows(

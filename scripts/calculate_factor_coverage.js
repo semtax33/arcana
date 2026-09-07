@@ -49,7 +49,23 @@ const DIVIDEND_DIR = path.join(ROOT, "data-lake", "bronze", "dart", "dividend");
 const OUT_DIR = path.join(ROOT, "data-lake", "gold", "factor_coverage");
 const OUT_CSV = path.join(OUT_DIR, "kr_factor_coverage_all_stocks.csv");
 const OUT_SUMMARY = path.join(OUT_DIR, "factor_coverage_summary.json");
+const SEMANTIC_MANIFEST_PATH = path.join(
+  ROOT,
+  "data-lake",
+  "meta",
+  "rules",
+  "semantic_rule_manifest.json",
+);
 const DEFAULT_NOPAT_TAX_RATE = 0.21;
+
+function activeSemanticEngineVersion() {
+  const manifest = JSON.parse(fs.readFileSync(SEMANTIC_MANIFEST_PATH, "utf8"));
+  const version = Number(manifest.engine_version);
+  if (!Number.isInteger(version) || version <= 0) {
+    throw new Error("semantic rule manifest has no valid engine_version");
+  }
+  return version;
+}
 
 function todaySeoulText() {
   const parts = new Intl.DateTimeFormat("en", {
@@ -1232,7 +1248,7 @@ async function main() {
   const totalCells = rowCount * FACTORS.length;
   const coveredCells = rows.reduce((sum, row) => sum + row.covered_count, 0);
   const summary = {
-    semantic_engine_version: 5,
+    semantic_engine_version: activeSemanticEngineVersion(),
     generated_at: new Date().toISOString(),
     as_of_date: TODAY_TEXT,
     row_count: rowCount,
@@ -1296,6 +1312,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  activeSemanticEngineVersion,
   mergeStockRows,
   prepareDividendRows,
   readAnnualFinancials,

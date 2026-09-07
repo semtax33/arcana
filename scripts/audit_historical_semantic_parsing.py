@@ -30,6 +30,7 @@ from engine.semantic import (
     classify_missing_fact,
     core_concept_coverage,
     load_semantic_mapping_rules,
+    resolve_rule_bundle,
     summarize_invariant_evidence,
 )
 from engine.semantic.integrity import ALL_EXPECTED_CF_DIRECTIONS, VALID_UNIT_FACTORS
@@ -153,6 +154,63 @@ def has_explicit_source_amount(value: object) -> bool:
     """Distinguish a reported zero from a blank coerced to zero for compatibility."""
 
     return bool(re.search(r"\d", str(value or "")))
+
+
+ADDITIVE_INVARIANT_FACT_IDS = frozenset(
+    {"CF_TRANSLATION_DIFFERENCE", "SPECIAL_CASH_CHANGE"}
+)
+
+
+def aggregate_invariant_facts(
+    facts_by_id: dict[str, list[Decimal]],
+) -> dict[str, Decimal]:
+    """Keep unique facts and sum only canonicals whose semantics are additive."""
+
+    return {
+        canonical_id: (
+            sum(values, Decimal(0))
+            if canonical_id in ADDITIVE_INVARIANT_FACT_IDS
+            else values[0]
+        )
+        for canonical_id, values in facts_by_id.items()
+        if len(values) == 1 or canonical_id in ADDITIVE_INVARIANT_FACT_IDS
+    }
+
+
+def statement_alignment_complete(mapped, statement_types: set[str]) -> bool:
+    if "parse_alignment_complete" not in mapped.columns:
+        return True
+    statement_values = mapped["statement_type"].fillna("").astype(str).str.upper()
+    values = mapped.loc[
+        statement_values.isin(statement_types), "parse_alignment_complete"
+    ]
+    return not any(str(value).strip().lower() in {"false", "0"} for value in values)
+
+
+def income_identity_bridge_complete(mapped) -> bool:
+    """Require no unmodelled non-zero subtotal between PBT, tax and net income."""
+
+    required = {"PBT", "TAX_EXPENSE", "NET_INCOME"}
+    positions: dict[str, list[int]] = defaultdict(list)
+    rows = list(mapped.iterrows())
+    for position, (_, row) in enumerate(rows):
+        canonical_id = str(row.get("canonical_account_id") or "")
+        if canonical_id in required:
+            positions[canonical_id].append(position)
+    if any(len(positions[canonical_id]) != 1 for canonical_id in required):
+        return True
+    lower = min(positions[canonical_id][0] for canonical_id in required)
+    upper = max(positions[canonical_id][0] for canonical_id in required)
+    for _, row in rows[lower : upper + 1]:
+        canonical_id = str(row.get("canonical_account_id") or "")
+        if canonical_id in required:
+            continue
+        amount = number(row.get("raw_amount"))
+        if amount not in {None, Decimal(0)} and has_explicit_source_amount(
+            row.get("amount_raw")
+        ):
+            return False
+    return True
 
 
 def coverage_record(row_count: int, mapped_count: int, monetary_total: Decimal, monetary_mapped: Decimal) -> dict[str, object]:
@@ -323,7 +381,7 @@ def audit_statements(
                     invalid_unit_count += 1
                     file_invalid_unit_count += 1
 
-            unique_facts = {canonical_id: values[0] for canonical_id, values in facts_by_id.items() if len(values) == 1}
+            unique_facts = aggregate_invariant_facts(facts_by_id)
             scopes = {str(value) for value in mapped.get("scope", []) if str(value)}
             periods = {str(value) for value in mapped.get("period", []) if str(value)}
             currencies = {
@@ -347,6 +405,16 @@ def audit_statements(
                     # Duplicated canonical IDs are removed from unique_facts;
                     # only equations needing those IDs become NOT_TESTABLE.
                     has_dimensional_duplicates=False,
+                    balance_sheet_structure_sufficient=statement_alignment_complete(
+                        mapped, {"BS"}
+                    ),
+                    income_statement_structure_sufficient=statement_alignment_complete(
+                        mapped, {"IS", "CIS"}
+                    ),
+                    income_tax_bridge_sufficient=income_identity_bridge_complete(mapped),
+                    cash_flow_statement_structure_sufficient=statement_alignment_complete(
+                        mapped, {"CF"}
+                    ),
                 ),
             )
             for item in evidence:
@@ -584,8 +652,11 @@ def main() -> None:
         industry_group_codes=industry_group_codes,
     )
     graph = FactorDependencyGraph.from_javascript(FACTOR_SOURCE)
+    resolved_rule_path = resolve_rule_bundle(RULE_PATH)
+    version_match = re.fullmatch(r"semantic_kr_v(\d+)\.yaml", resolved_rule_path.name)
+    semantic_engine_version = int(version_match.group(1)) if version_match else 4
     report = {
-        "semantic_engine_version": 5,
+        "semantic_engine_version": semantic_engine_version,
         "period": {"start_year": args.start_year, "end_year": args.end_year},
         "accounting_regime_policy": "evidence-detected per filing; 2009-2012 are not date-forced and may contain K_GAAP or K_IFRS",
         "hierarchical_context_policy": {

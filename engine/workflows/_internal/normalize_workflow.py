@@ -67,6 +67,8 @@ SEMANTIC_SIGN_POLICY_PATH = first_existing_path(
     SIGN_POLICY_PATH,
 )
 US_MAPPING_RULE_PATH = first_existing_path(
+    DATA_LAKE.rules("semantic_us_rule_manifest.json"),
+    DATA_LAKE.rules("semantic_us_v2.arcana"),
     DATA_LAKE.rules("us_mapping.yaml"),
     DATA_LAKE.rules("mapping_us.yaml"),
 )
@@ -103,6 +105,7 @@ def finance_notes_output_dir() -> Path:
 def normalization_dependency_paths() -> list[Path]:
     paths = [
         Path(__file__).resolve(),
+        *sorted((PROJECT_ROOT / "engine" / "semantic").glob("*.py")),
         PROJECT_ROOT / "engine" / "transformers" / "filings.py",
         PROJECT_ROOT / "engine" / "transformers" / "_internal" / "dart_filings.py",
         PROJECT_ROOT / "engine" / "transformers" / "_internal" / "statement_files.py",
@@ -725,12 +728,17 @@ def main() -> None:
     )
     parser.add_argument("--no-debug", action="store_true")
     parser.add_argument("--no-notes", action="store_true")
-    parser.add_argument("--no-edgartools", action="store_true")
+    parser.add_argument(
+        "--use-edgartools",
+        action="store_true",
+        help="Allow the optional live edgartools normalization fallback.",
+    )
+    parser.add_argument("--no-edgartools", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--workers",
         type=int,
         default=1,
-        help="US companyfacts worker processes. Use 1 for single process, 0 for CPU count.",
+        help="US filing-XBRL and companyfacts worker processes. Use 1 for single process, 0 for CPU count.",
     )
     parser.add_argument(
         "--progress-interval",
@@ -796,7 +804,7 @@ def main() -> None:
         mapping_rule_path=US_MAPPING_RULE_PATH,
         save_debug=not args.no_debug,
         use_notes=not args.no_notes,
-        use_edgartools=not args.no_edgartools,
+        use_edgartools=bool(args.use_edgartools and not args.no_edgartools),
         workers=args.workers,
         progress_interval=args.progress_interval,
     )

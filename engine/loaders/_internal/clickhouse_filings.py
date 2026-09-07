@@ -44,7 +44,12 @@ def read_report_metadata(
     path: str | Path | None = None,
     *,
     market: str = "kr",
+    start_year: int | None = None,
+    end_year: int | None = None,
+    security_ids: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> pd.DataFrame:
+    if start_year is not None and end_year is not None and start_year > end_year:
+        raise ValueError("start_year must not be after end_year")
     resolved_path = report_metadata_path_for_market(market) if path is None else Path(path)
     path = (
         first_existing_path(REPORT_METADATA_PATH, LEGACY_REPORT_METADATA_PATH)
@@ -68,6 +73,15 @@ def read_report_metadata(
     df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce").dt.date
     df["updated_at"] = pd.to_datetime(df["updated_at"], errors="coerce")
     df["updated_at"] = df["updated_at"].fillna(pd.Timestamp.now())
+    fiscal_year = pd.to_numeric(df["fiscal_year"], errors="coerce")
+    if start_year is not None:
+        df = df.loc[fiscal_year >= int(start_year)].copy()
+        fiscal_year = fiscal_year.loc[df.index]
+    if end_year is not None:
+        df = df.loc[fiscal_year <= int(end_year)].copy()
+    if security_ids is not None:
+        wanted = {str(value).strip() for value in security_ids if str(value).strip()}
+        df = df.loc[df["security_id"].fillna("").astype(str).isin(wanted)].copy()
     return df
 
 
@@ -77,8 +91,17 @@ def insert_report_metadata(
     *,
     market: str = "kr",
     dry_run: bool = False,
+    start_year: int | None = None,
+    end_year: int | None = None,
+    security_ids: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> int:
-    df = read_report_metadata(path, market=market)
+    df = read_report_metadata(
+        path,
+        market=market,
+        start_year=start_year,
+        end_year=end_year,
+        security_ids=security_ids,
+    )
     if df.empty:
         return 0
 
@@ -116,9 +139,19 @@ def main() -> None:
     parser.add_argument("--market", default="kr", choices=["kr", "us"])
     parser.add_argument("--path", default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--start-year", type=int)
+    parser.add_argument("--end-year", type=int)
+    parser.add_argument("--security-id", action="append", dest="security_ids")
     args = parser.parse_args()
 
-    inserted = insert_report_metadata(path=args.path, market=args.market, dry_run=args.dry_run)
+    inserted = insert_report_metadata(
+        path=args.path,
+        market=args.market,
+        dry_run=args.dry_run,
+        start_year=args.start_year,
+        end_year=args.end_year,
+        security_ids=args.security_ids,
+    )
     action = "prepared" if args.dry_run else "inserted"
     print(f"{action} dart_report_metadata market={args.market} rows={inserted:,}")
 
