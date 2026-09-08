@@ -25,7 +25,18 @@ from api.repository.factor_screen_query import (
     DEFAULT_FACTOR_TABLE,
 )
 from api.service.factor_identity import canonical_factor_id
-from api.service.backtest_service import BacktestService, _previous_trading_day, _rebalance_dates
+from api.model.backtest import (
+    BacktestEquityCurvePoint,
+    BacktestRebalance,
+    FactorBacktestResult,
+)
+from api.service.backtest_service import (
+    BacktestService,
+    _annual_returns,
+    _previous_trading_day,
+    _rebalance_dates,
+    _summary,
+)
 from api.service.dto import (
     FactorBacktestRequestDto,
     FactorConditionDto,
@@ -621,6 +632,7 @@ LIMIT 1
         )
 
     def run_backtest(self, run_id: str, request: FactorLabBacktestRequestDto):
+        blend_config: dict[str, str] | None = None
         client = self._client_factory()
         try:
             _ensure_tables(client)
@@ -629,10 +641,23 @@ LIMIT 1
                 raise KeyError(run_id)
             if run_status != "completed":
                 raise ValueError(f"factor lab run is not completed: {run_status}")
-            if _load_run_value_count(client, run_id) <= 0:
+            blend_config = _load_blended_run_config(client, run_id)
+            if blend_config is None and _load_run_value_count(client, run_id) <= 0:
                 raise ValueError("factor lab run has no completed factor values")
         finally:
             _close(client)
+
+        if blend_config is not None:
+            primary_run_id = blend_config["primary_run_id"]
+            fallback_run_id = blend_config["fallback_run_id"]
+            if run_id in {primary_run_id, fallback_run_id}:
+                raise ValueError("a blended FactorLab run cannot reference itself")
+            return self.run_blended_backtest(
+                primary_run_id,
+                fallback_run_id,
+                policy=blend_config["policy"],
+                request=request,
+            )
 
         factor_id = _lab_factor_id(run_id)
         backtest_request = FactorBacktestRequestDto(
@@ -656,6 +681,180 @@ LIMIT 1
             factor_table="factor_lab_values",
         )
         return BacktestService(client_factory=self._client_factory).run_factor_backtest(backtest_request)
+
+    def run_blended_backtest(
+        self,
+        primary_run_id: str,
+        fallback_run_id: str,
+        *,
+        policy: str,
+        request: FactorLabBacktestRequestDto,
+    ) -> FactorBacktestResult:
+        """Run a primary FactorLab strategy with a fallback for empty rebalances."""
+        if policy != "when_primary_has_no_positions":
+            raise ValueError(
+                "policy must be 'when_primary_has_no_positions'"
+            )
+
+        primary = self.run_backtest(primary_run_id, request)
+        fallback = self.run_backtest(fallback_run_id, request)
+        primary_dates = [point.trade_date for point in primary.equity_curve]
+        fallback_dates = [point.trade_date for point in fallback.equity_curve]
+        if primary_dates != fallback_dates:
+            raise ValueError(
+                "primary and fallback backtests must cover the same trading-day calendar"
+            )
+        if not primary_dates:
+            raise ValueError("primary and fallback backtests produced no equity curve")
+
+        selected_history, source_by_rebalance = _select_blended_rebalances(
+            primary.rebalance_history,
+            fallback.rebalance_history,
+        )
+        primary_returns = _nav_returns_by_date(primary.equity_curve)
+        fallback_returns = _nav_returns_by_date(fallback.equity_curve)
+        primary_points = {point.trade_date: point for point in primary.equity_curve}
+        fallback_points = {point.trade_date: point for point in fallback.equity_curve}
+
+        nav = 1.0
+        active_source = "cash"
+        result_points: list[BacktestEquityCurvePoint] = []
+        for trade_date in primary_dates:
+            if trade_date in source_by_rebalance:
+                active_source = source_by_rebalance[trade_date]
+            if active_source == "primary":
+                daily_return = primary_returns.get(trade_date, 0.0)
+            elif active_source == "fallback":
+                daily_return = fallback_returns.get(trade_date, 0.0)
+            else:
+                daily_return = 0.0
+            nav *= 1.0 + daily_return
+            result_points.append(
+                BacktestEquityCurvePoint(
+                    trade_date=trade_date,
+                    strategy_nav=nav,
+                    benchmark_navs=_merged_benchmark_navs(
+                        primary_points[trade_date],
+                        fallback_points[trade_date],
+                    ),
+                )
+            )
+
+        benchmark_ids = sorted(
+            {
+                benchmark_id
+                for point in result_points
+                for benchmark_id in point.benchmark_navs
+            }
+        )
+        warnings = list(dict.fromkeys([*primary.warnings, *fallback.warnings]))
+        warnings.append(
+            "Applied FactorLab blend policy when_primary_has_no_positions: "
+            f"primary={primary_run_id}, fallback={fallback_run_id}."
+        )
+        return FactorBacktestResult(
+            summary=_summary(
+                result_points,
+                start_date=request.start_date,
+                end_date=request.end_date,
+                rebalance_frequency=request.rebalance_frequency,
+                rebalance_count=len(selected_history),
+            ),
+            equity_curve=result_points,
+            rebalance_history=selected_history,
+            annual_returns=_annual_returns(result_points, benchmark_ids),
+            warnings=warnings,
+            raw={
+                "policy": policy,
+                "primary_run_id": primary_run_id,
+                "fallback_run_id": fallback_run_id,
+            },
+        )
+
+
+def _nav_returns_by_date(
+    points: list[BacktestEquityCurvePoint],
+) -> dict[date, float]:
+    previous_nav = 1.0
+    result: dict[date, float] = {}
+    for point in points:
+        result[point.trade_date] = (
+            point.strategy_nav / previous_nav - 1.0 if previous_nav else 0.0
+        )
+        previous_nav = point.strategy_nav
+    return result
+
+
+def _select_blended_rebalances(
+    primary_history: list[BacktestRebalance],
+    fallback_history: list[BacktestRebalance],
+) -> tuple[list[BacktestRebalance], dict[date, str]]:
+    primary_by_date = {item.rebalance_date: item for item in primary_history}
+    fallback_by_date = {item.rebalance_date: item for item in fallback_history}
+    previous_positions_by_id = {}
+    result: list[BacktestRebalance] = []
+    source_by_rebalance: dict[date, str] = {}
+
+    for rebalance_date in sorted(primary_by_date.keys() | fallback_by_date.keys()):
+        primary = primary_by_date.get(rebalance_date)
+        fallback = fallback_by_date.get(rebalance_date)
+        if primary is not None and primary.positions:
+            selected = primary
+            source = "primary"
+        elif fallback is not None and fallback.positions:
+            selected = fallback
+            source = "fallback"
+        else:
+            selected = primary or fallback
+            source = "cash"
+
+        positions = list(selected.positions) if selected is not None else []
+        current_positions_by_id = {
+            position.security_id: position for position in positions
+        }
+        entered_positions = [
+            position
+            for security_id, position in current_positions_by_id.items()
+            if security_id not in previous_positions_by_id
+        ]
+        exited_positions = [
+            position
+            for security_id, position in previous_positions_by_id.items()
+            if security_id not in current_positions_by_id
+        ]
+        signal_date = (
+            selected.signal_date
+            if selected is not None
+            else rebalance_date
+        )
+        result.append(
+            BacktestRebalance(
+                rebalance_date=rebalance_date,
+                signal_date=signal_date,
+                positions=positions,
+                entered_positions=entered_positions,
+                exited_positions=exited_positions,
+            )
+        )
+        source_by_rebalance[rebalance_date] = source
+        previous_positions_by_id = current_positions_by_id
+
+    return result, source_by_rebalance
+
+
+def _merged_benchmark_navs(
+    primary: BacktestEquityCurvePoint,
+    fallback: BacktestEquityCurvePoint,
+) -> dict[str, float | None]:
+    benchmark_ids = primary.benchmark_navs.keys() | fallback.benchmark_navs.keys()
+    return {
+        benchmark_id: (
+            primary.benchmark_navs.get(benchmark_id)
+            if primary.benchmark_navs.get(benchmark_id) is not None
+            else fallback.benchmark_navs.get(benchmark_id)
+        )
+        for benchmark_id in benchmark_ids
+    }
 
 
 def _resolve_screening_factor_date(
@@ -1170,6 +1369,58 @@ LIMIT 1
     if not rows:
         return None
     return str(rows[0].get("status") or "")
+
+
+def _load_blended_run_config(client: Any, run_id: str) -> dict[str, str] | None:
+    rows = _records(
+        client.query_df(
+            """
+SELECT graph_json
+FROM factor_lab_experiment FINAL
+WHERE experiment_id = (
+    SELECT experiment_id
+    FROM factor_lab_run FINAL
+    WHERE run_id = {run_id:UUID}
+        AND experiment_id IS NOT NULL
+    ORDER BY started_at DESC
+    LIMIT 1
+)
+ORDER BY updated_at DESC
+LIMIT 1
+""".strip(),
+            parameters={"run_id": run_id},
+        )
+    )
+    if not rows:
+        return None
+    try:
+        graph = json.loads(str(rows[0]["graph_json"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    final_node_id = str((graph.get("outputs") or {}).get("final_node_id") or "")
+    final_node = next(
+        (
+            node
+            for node in graph.get("nodes") or []
+            if str(node.get("id") or "") == final_node_id
+        ),
+        None,
+    )
+    if not final_node or final_node.get("type") != "date_fallback":
+        return None
+    config = final_node.get("config") or {}
+    policy = str(config.get("backtest_policy") or "").strip()
+    primary_run_id = str(config.get("primary_run_id") or "").strip()
+    fallback_run_id = str(config.get("fallback_run_id") or "").strip()
+    if policy != "when_primary_has_no_positions":
+        return None
+    if not primary_run_id or not fallback_run_id:
+        return None
+    return {
+        "policy": policy,
+        "primary_run_id": primary_run_id,
+        "fallback_run_id": fallback_run_id,
+    }
 
 
 def _load_run_value_count(client: Any, run_id: str) -> int:

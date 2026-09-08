@@ -52,7 +52,7 @@ Arcana는 서로 다른 시장과 공시 체계를 공통 금융 모델로 변�
 | 설계 원칙 | 구현 방식 |
 | --- | --- |
 | **Point-in-Time** | DART 접수일과 SEC 공시일 등 `report_date`를 정보 이용 가능 시점으로 사용해 미래 공시가 과거 스냅샷에 섞이지 않도록 합니다. |
-| **Canonicalization** | 계정명뿐 아니라 statement section, context, parent path와 시장별 YAML 규칙을 이용해 DART·SEC의 표현을 공통 canonical account로 변환합니다. |
+| **Canonicalization** | 계정명뿐 아니라 statement section, XBRL context·dimension, taxonomy graph와 시장별 규칙 bundle을 이용해 DART·SEC의 표현을 공통 canonical account로 변환합니다. US 규칙은 SHA-256 manifest가 고정한 HMRB형 DSL입니다. |
 | **Data Quality** | `Assets = Liabilities + Equity` 등의 회계 invariant, 필수 계정, 중복, mapping coverage를 검증하고 낮은 신뢰도의 행을 진단 대상으로 분리합니다. |
 | **Reproducibility** | 원문, 접수번호, URL, SHA-256, 실행 manifest와 버전 관리되는 규칙 파일을 연결해 파생 결과에서 source까지 역추적할 수 있게 합니다. |
 
@@ -61,7 +61,7 @@ Arcana는 서로 다른 시장과 공시 체계를 공통 금융 모델로 변�
 ### Financial data ELT
 
 - 한국: DART 공시·주석·사업보고서, KRX 가격·주식수·배당·벤치마크
-- 미국: SEC Company Facts·filing notes·10-K/10-Q/8-K 원문 HTML·8-K EX-99.x IR 첨부, Yahoo Finance 가격·배당
+- 미국: accession 단위 SEC 10-K/10-Q XBRL bundle·Company Facts·filing notes·8-K 원문/EX-99.x IR 첨부, Yahoo Finance 가격·배당
 - 컨센서스: 한국 리포트 데이터와 미국 Finnworlds·FMP·Alpha Vantage·Yahoo Finance
 - 미국 earnings call transcript: FMP 우선, Alpha Vantage 누락분 보완 수집
 - 거시·산업·지역 입력: BLS, Census, BEA, EIA, FDIC, NASS, FHFA, FRED, Damodaran ERP
@@ -125,6 +125,7 @@ POST /api/factor-lab/runs
 python -m engine.workflows.refresh --market kr
 python -m engine.workflows.score_cli build-factor-scores --trade-date 2026-07-24 --factor-asof-mode asof --financial-basis annual --include-financials
 python -m engine.workflows.pqci_inputs --source bls --source census --source bea
+python -m engine.workflows.download --market us statements --symbols AAPL,MSFT --start-date 2025-01-01
 python -m engine.workflows.download --market us --symbols AAPL,MSFT --start-date 2025-01-01 sec-filings
 python -m pytest tests -q
 ```
@@ -134,7 +135,7 @@ python -m pytest tests -q
 
 ## Tech stack
 
-- **Data & modeling:** Python, pandas, NumPy, YAML rule sets
+- **Data & modeling:** Python, pandas, NumPy, HMRB-style US semantic DSL, YAML rule sets
 - **API:** FastAPI, Pydantic
 - **Storage:** file-based Bronze/Silver/Gold data lake, ClickHouse
 - **Sources:** DART, SEC EDGAR, KRX, Yahoo Finance, FRED, Damodaran, BLS, Census, BEA, EIA, FDIC, NASS, FHFA 및 consensus providers

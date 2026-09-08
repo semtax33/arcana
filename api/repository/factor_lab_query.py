@@ -36,7 +36,13 @@ LOGICAL_NODES = {"and", "or"}
 BINARY_NODES = ARITHMETIC_NODES | COMPARISON_NODES | LOGICAL_NODES
 INPUT_NODES = {"factor_input", "constant"}
 EVALUATE_NODES = {"ic", "bucket_return", "long_short", "turnover", "decay_test", "backtest"}
-SUPPORTED_NODES = INPUT_NODES | UNARY_NODES | BINARY_NODES | {"condition", "condition_score", "weighted_score"} | EVALUATE_NODES
+SUPPORTED_NODES = (
+    INPUT_NODES
+    | UNARY_NODES
+    | BINARY_NODES
+    | {"condition", "condition_score", "date_fallback", "weighted_score"}
+    | EVALUATE_NODES
+)
 
 GROUP_BY_ALIASES = {
     ("trade_date",): ("trade_date",),
@@ -155,6 +161,13 @@ def node_type_specs() -> list[NodeTypeSpec]:
         ),
         NodeTypeSpec("condition", "logic", ["condition", "if_true", "if_false"], ["out"], {}),
         NodeTypeSpec("condition_score", "logic", ["condition", "score"], ["out"], {}),
+        NodeTypeSpec(
+            "date_fallback",
+            "logic",
+            ["primary", "fallback"],
+            ["out"],
+            {},
+        ),
         NodeTypeSpec("weighted_score", "score", ["named inputs from weights"], ["out"], {"weights": {"node_handle": 1.0}, "missing_weight_renormalize": False}),
         NodeTypeSpec("bucket", "score", ["input"], ["out"], {"bucket_count": 5, "order": "desc"}),
         NodeTypeSpec("ic", "evaluate", ["score"], [], {"horizons": [1, 5, 20]}),
@@ -376,6 +389,8 @@ def compile_factor_lab_graph(
             ctes.append(_compile_condition(node_id, input_map))
         elif node_type == "condition_score":
             ctes.append(_compile_condition_score(node_id, input_map))
+        elif node_type == "date_fallback":
+            ctes.append(_compile_date_fallback(node_id, input_map))
         elif node_type == "neutralize":
             ctes.append(_compile_neutralize(node_id, config, input_map["input"]))
         elif node_type == "bucket":
@@ -427,9 +442,19 @@ def build_factor_lab_insert_query(
         "run_id": run_id,
         "node_id": compile_result.final_node_id,
     }
-    temporal_execution_settings = (
-        "\nSETTINGS max_threads = 2"
-        if "temporal_end_date" in compile_result.parameters
+    execution_settings: list[str] = []
+    if "FROM factor_lab_values AS f" in compile_result.query:
+        # ClickHouse 26.8 can incorrectly prune ``is_valid`` from a reused CTE
+        # while optimizing INSERT ... SELECT over materialized FactorLab
+        # inputs, then fail with NOT_FOUND_COLUMN_IN_BLOCK.  The equivalent
+        # SELECT is correct; disabling query-plan rewrites only for composed
+        # lab_* inserts avoids that server bug without slowing raw-factor runs.
+        execution_settings.append("query_plan_enable_optimizations = 0")
+    if "temporal_end_date" in compile_result.parameters:
+        execution_settings.append("max_threads = 2")
+    execution_settings_sql = (
+        "\nSETTINGS " + ", ".join(execution_settings)
+        if execution_settings
         else ""
     )
     query = f"""
@@ -463,7 +488,7 @@ SELECT
     invalid_reason
 FROM (
 {compile_result.query}
-){temporal_execution_settings}
+){execution_settings_sql}
 """.strip()
     return query, params
 
@@ -913,6 +938,8 @@ def _validate_arity(
             _require_exact_handles(node_id, handles, {"condition", "if_true", "if_false"}, errors)
         elif node_type == "condition_score":
             _require_exact_handles(node_id, handles, {"condition", "score"}, errors)
+        elif node_type == "date_fallback":
+            _require_exact_handles(node_id, handles, {"primary", "fallback"}, errors)
         elif node_type in EVALUATE_NODES:
             _require_exact_handles(node_id, handles, {"score"}, errors)
         elif node_type == "weighted_score":
@@ -1468,6 +1495,45 @@ def _compile_condition_score(node_id: str, input_map: dict[str, str]) -> str:
 )""".strip()
 
 
+def _compile_date_fallback(node_id: str, input_map: dict[str, str]) -> str:
+    """Choose one complete score source per date, preferring the primary source."""
+    primary_cte = _cte_name(input_map["primary"])
+    fallback_cte = _cte_name(input_map["fallback"])
+    return f"""
+{_cte_name(node_id)} AS (
+    WITH primary_availability AS (
+        SELECT
+            trade_date,
+            countIf(is_valid) > 0 AS use_primary
+        FROM {primary_cte}
+        GROUP BY trade_date
+    )
+    SELECT
+        primary.trade_date AS trade_date,
+        primary.security_id AS security_id,
+        primary.value AS value,
+        primary.is_valid AS is_valid,
+        primary.invalid_reason AS invalid_reason
+    FROM {primary_cte} AS primary
+    INNER JOIN primary_availability AS availability
+        ON availability.trade_date = primary.trade_date
+    WHERE availability.use_primary
+
+    UNION ALL
+
+    SELECT
+        fallback.trade_date AS trade_date,
+        fallback.security_id AS security_id,
+        fallback.value AS value,
+        fallback.is_valid AS is_valid,
+        fallback.invalid_reason AS invalid_reason
+    FROM {fallback_cte} AS fallback
+    LEFT JOIN primary_availability AS availability
+        ON availability.trade_date = fallback.trade_date
+    WHERE NOT ifNull(availability.use_primary, false)
+)""".strip()
+
+
 def _compile_unary_math(node_id: str, node_type: str, input_node_id: str) -> str:
     input_cte = _cte_name(input_node_id)
     if node_type == "log":
@@ -1732,7 +1798,7 @@ def _compile_dense_score(
         trade_date,
         security_id,
         if(max_rank <= 1, {scale}, ({scale}) * (max_rank - dense_value) / (max_rank - 1)) AS value,
-        is_valid,
+        true AS is_valid,
         invalid_reason
     FROM (
         SELECT
@@ -1740,7 +1806,6 @@ def _compile_dense_score(
             s.security_id,
             toFloat64(dense_rank() OVER (PARTITION BY {partition_by} ORDER BY s.value {order_sql}, s.security_id ASC)) AS dense_value,
             toFloat64(count() OVER (PARTITION BY {partition_by})) AS max_rank,
-            s.is_valid,
             s.invalid_reason
         FROM {_group_source_sql(input_cte, config.get("group_by", ["trade_date"]))} AS s
         WHERE s.is_valid
@@ -1772,7 +1837,7 @@ def _compile_dense_score(
                 group_count - (first_rank + ((tie_count - 1) / 2.0))
             ) / (group_count - 1)
         ) AS value,
-        is_valid,
+        true AS is_valid,
         invalid_reason
     FROM (
         SELECT
@@ -1789,7 +1854,6 @@ def _compile_dense_score(
             toFloat64(count() OVER (
                 PARTITION BY {observation_partition}
             )) AS group_count,
-            s.is_valid,
             s.invalid_reason
         FROM {_group_source_sql(input_cte, config.get("group_by", ["trade_date"]))} AS s
         WHERE s.is_valid

@@ -116,12 +116,23 @@ class BacktestService:
                     "A flat cash equity curve was returned because the strategy produced no "
                     "investable return points."
                 )
+            else:
+                filled_equity_points = _fill_cash_equity_points(
+                    equity_points,
+                    visible_days,
+                )
+                if len(filled_equity_points) != len(equity_points):
+                    warnings.append(
+                        "Held cash on trading days without an investable strategy return so "
+                        "the equity curve covers the full requested period."
+                    )
+                equity_points = filled_equity_points
 
             benchmark_navs = self._load_benchmark_navs(
                 client,
                 benchmark_ids=benchmark_ids,
-                start_date=equity_points[0].trade_date if equity_points else request.start_date,
-                end_date=equity_points[-1].trade_date if equity_points else request.end_date,
+                start_date=visible_days[0],
+                end_date=visible_days[-1],
                 warnings=warnings,
             )
         finally:
@@ -1088,6 +1099,28 @@ def _flat_cash_equity_points(trading_days: list[date]) -> list[BacktestEquityCur
         BacktestEquityCurvePoint(trade_date=trade_date, strategy_nav=1.0)
         for trade_date in trading_days
     ]
+
+
+def _fill_cash_equity_points(
+    points: list[BacktestEquityCurvePoint],
+    trading_days: list[date],
+) -> list[BacktestEquityCurvePoint]:
+    """Carry NAV through strategy gaps instead of deleting cash holding periods."""
+    by_date = {point.trade_date: point for point in points}
+    nav = 1.0
+    result: list[BacktestEquityCurvePoint] = []
+    for trade_date in trading_days:
+        point = by_date.get(trade_date)
+        if point is not None:
+            nav = point.strategy_nav
+        result.append(
+            BacktestEquityCurvePoint(
+                trade_date=trade_date,
+                strategy_nav=nav,
+                benchmark_navs=(point.benchmark_navs if point is not None else {}),
+            )
+        )
+    return result
 
 
 def _summary(

@@ -351,6 +351,7 @@ def _compute_partition(
     part_index: int,
     part_count: int,
     factor_ids: tuple[str, ...],
+    completed_security_ids: tuple[str, ...],
 ) -> dict[str, int | float]:
     warnings.filterwarnings("ignore")
     cache = FactorMarketDataCache(
@@ -363,13 +364,21 @@ def _compute_partition(
     )
     price_frame, _ = cache._groups("price")
     targets = {pd.Timestamp(value) for value in TARGET_DATES}
-    stock_codes = sorted(
+    completed_stock_codes = {
+        security_id.removeprefix("SEC_US_")
+        for security_id in completed_security_ids
+    }
+    stock_codes = [
+        stock_code
+        for stock_code in sorted(
         price_frame.loc[price_frame["trade_date"].isin(targets), "security_id"]
         .dropna()
         .astype(str)
         .str.removeprefix("SEC_US_")
         .unique()
-    )[part_index::part_count]
+        )[part_index::part_count]
+        if stock_code not in completed_stock_codes
+    ]
     client = _client()
     inserted = 0
     buffer: list[pd.DataFrame] = []
@@ -432,8 +441,19 @@ def _compute_partition(
 def compute(*, workers: int, parts_per_shard: int) -> list[dict[str, int | float]]:
     _validate_compute_inputs()
     factor_ids = tuple(preferred_factor_columns())
+    completed_security_ids = tuple(_completed_security_ids())
+    print(
+        f"resuming after completed securities={len(completed_security_ids):,}",
+        flush=True,
+    )
     tasks = [
-        (shard_index, part_index, parts_per_shard, factor_ids)
+        (
+            shard_index,
+            part_index,
+            parts_per_shard,
+            factor_ids,
+            completed_security_ids,
+        )
         for shard_index in range(SHARD_COUNT)
         for part_index in range(parts_per_shard)
     ]
@@ -445,6 +465,36 @@ def compute(*, workers: int, parts_per_shard: int) -> list[dict[str, int | float
             results.append(result)
             print(json.dumps(result), flush=True)
     return sorted(results, key=lambda item: (item["shard"], item["part"]))
+
+
+def _completed_security_ids() -> list[str]:
+    client = _client()
+    try:
+        return [
+            str(row[0])
+            for row in client.query(
+                """
+SELECT security_id
+FROM fact_daily_factors
+PREWHERE has({days:Array(Date)}, trade_date)
+WHERE startsWith(security_id, 'SEC_US_')
+  AND has({bases:Array(String)}, financial_basis)
+  AND factor_value IS NOT NULL
+GROUP BY security_id
+HAVING uniqExact(trade_date) = {date_count:UInt32}
+   AND uniqExact(financial_basis) = {basis_count:UInt32}
+""".strip(),
+                parameters={
+                    "days": list(TARGET_DATES),
+                    "bases": list(FINANCIAL_BASES),
+                    "date_count": len(TARGET_DATES),
+                    "basis_count": len(FINANCIAL_BASES),
+                },
+                settings={"max_threads": 2},
+            ).result_rows
+        ]
+    finally:
+        client.close()
 
 
 def load_snapshots() -> None:
@@ -595,6 +645,9 @@ def main() -> None:
     compute_parser = subparsers.add_parser("compute")
     compute_parser.add_argument("--workers", type=int, default=16)
     compute_parser.add_argument("--parts-per-shard", type=int, default=2)
+    all_parser = subparsers.add_parser("all")
+    all_parser.add_argument("--workers", type=int, default=16)
+    all_parser.add_argument("--parts-per-shard", type=int, default=2)
     subparsers.add_parser("snapshots")
     subparsers.add_parser("verify")
     args = parser.parse_args()
@@ -617,7 +670,7 @@ def main() -> None:
                 indent=2,
             )
         )
-    elif args.command == "compute":
+    elif args.command in {"compute", "all"}:
         print(
             json.dumps(
                 compute(
@@ -627,6 +680,9 @@ def main() -> None:
                 indent=2,
             )
         )
+        if args.command == "all":
+            load_snapshots()
+            verify()
     elif args.command == "snapshots":
         load_snapshots()
     else:
