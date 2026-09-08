@@ -561,8 +561,46 @@ def prepare_targets(
     if frame.empty:
         raise RuntimeError("no US price universe found in the requested date range")
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(target_path, index=False, encoding="utf-8")
-    contract = _load_contract(target_path, start_date=start_date, end_date=end_date)
+    temporary = target_path.with_suffix(target_path.suffix + ".tmp")
+    try:
+        frame.to_csv(temporary, index=False, encoding="utf-8")
+        contract = _load_contract(
+            temporary, start_date=start_date, end_date=end_date
+        )
+        if status_path.exists():
+            status = _validated_status(status_path, contract)
+            price_rows = int(frame["price_row_count"].sum())
+            expected_rows = status.get("initial_price_rows")
+            if expected_rows is not None and int(expected_rows) != price_rows:
+                raise RuntimeError(
+                    "recreated target price row count differs from frozen status"
+                )
+            cached_parity = status.get("price_input_parity")
+            expected_coverage_sha = None
+            if isinstance(cached_parity, dict):
+                fingerprint = cached_parity.get("fingerprint")
+                if isinstance(fingerprint, dict):
+                    expected_coverage_sha = fingerprint.get(
+                        "clickhouse_coverage_sha256"
+                    )
+            if (
+                expected_coverage_sha
+                and expected_coverage_sha != _price_coverage_sha256(frame)
+            ):
+                raise RuntimeError(
+                    "recreated target price coverage differs from frozen status"
+                )
+            temporary.replace(target_path)
+            print(
+                f"[RECREATED] targets={len(frame):,}, price_rows={price_rows:,}, "
+                f"hash={contract.target_sha256}",
+                flush=True,
+            )
+            return contract
+        temporary.replace(target_path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
     status = _initial_status(contract)
     status["initial_price_rows"] = int(frame["price_row_count"].sum())
     _write_json(status_path, status)

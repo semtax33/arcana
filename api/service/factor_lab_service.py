@@ -25,6 +25,9 @@ from api.repository.factor_screen_query import (
     DEFAULT_FACTOR_TABLE,
 )
 from api.service.factor_identity import canonical_factor_id
+from api.service.factor_lab_evaluation_service import (
+    FactorLabEvaluationService, prepare_evaluation_run, EVALUATION_DDL,
+)
 from api.model.backtest import (
     BacktestEquityCurvePoint,
     BacktestRebalance,
@@ -143,6 +146,9 @@ class FactorLabService:
                 inputs=spec.inputs,
                 outputs=spec.outputs,
                 config_schema=spec.config_schema,
+                latest_version=2 if spec.type == "lag" else 1,
+                supported_versions=[1, 2] if spec.type == "lag" else [1],
+                version_schemas={"1": spec.config_schema, **({"2": {**spec.config_schema, "unit": "row|trading_day"}} if spec.type == "lag" else {})},
             )
             for spec in node_type_specs()
         ]
@@ -162,7 +168,12 @@ class FactorLabService:
         client = self._client_factory()
         try:
             known_factor_ids = _load_known_factor_ids(client, graph_dict)
-            result = compile_factor_lab_graph(graph_dict, known_factor_ids=known_factor_ids)
+            pit_preview = graph_dict.get("version", 1) == 2 and (
+                graph_dict.get("outputs", {}).get("evaluation_node_ids")
+                or graph_dict["experiment"].get("factor_data_mode") == "point_in_time_snapshot"
+            )
+            result = compile_factor_lab_graph(graph_dict, known_factor_ids=known_factor_ids,
+                factor_table=DEFAULT_FACTOR_SNAPSHOT_TABLE if pit_preview else DEFAULT_FACTOR_TABLE)
         finally:
             _close(client)
         return _compile_response(result)
@@ -263,6 +274,12 @@ DELETE WHERE experiment_id = {experiment_id:UUID}
                 {"experiment_id": experiment_id},
             )
             if run_ids:
+                for ddl in EVALUATION_DDL:
+                    _execute(client, ddl)
+                for table in ("factor_lab_evaluation", "factor_lab_run_definition"):
+                    _execute(client,
+                        f"ALTER TABLE {table} DELETE WHERE has({{run_ids:Array(UUID)}}, run_id) SETTINGS mutations_sync = 1",
+                        {"run_ids": run_ids})
                 _execute(
                     client,
                     """
@@ -487,6 +504,21 @@ LIMIT 1
                         graph_dict=graph_dict,
                         trade_dates=history_trade_dates,
                     )
+            if graph_dict.get("outputs", {}).get("evaluation_node_ids"):
+                if request.mode == "history":
+                    if history_trade_dates is None:
+                        history_trade_dates = BacktestService()._load_trading_days(
+                            client, _as_date(execution_graph["experiment"]["start_date"]),
+                            _as_date(execution_graph["experiment"]["end_date"]),
+                            market=str(execution_graph["experiment"].get("market") or "") or None,
+                        )
+                    if not history_trade_dates:
+                        raise ValueError("no trading dates available for evaluation signals")
+                    factor_table = _require_history_snapshot_coverage(
+                        client, graph_dict=execution_graph, trade_dates=history_trade_dates,
+                    )
+                elif factor_table != DEFAULT_FACTOR_SNAPSHOT_TABLE:
+                    raise ValueError("forward evaluation requires point-in-time score snapshots")
             compile_result = compile_factor_lab_graph(
                 execution_graph,
                 known_factor_ids=known_factor_ids,
@@ -509,6 +541,8 @@ LIMIT 1
             )
             _execute(client, insert_query, params)
             _insert_factor_catalog(client, factor_id=factor_id, run_id=run_id)
+            prepare_evaluation_run(client, run_id, execution_graph,
+                                   factor_table=factor_table, trade_dates=history_trade_dates)
             _insert_run_status(
                 client,
                 run_id=run_id,
@@ -541,6 +575,16 @@ LIMIT 1
         finally:
             _close(client)
 
+        evaluation = None
+        evaluation_warnings = []
+        if execution_graph.get("outputs", {}).get("evaluation_node_ids"):
+            try:
+                evaluation = FactorLabEvaluationService(client_factory=self._client_factory).evaluate(
+                    run_id, as_of=request.evaluation_as_of,
+                )
+            except Exception as exc:
+                # Scores remain usable; evaluation can be retried against the frozen run.
+                evaluation_warnings.append(f"Evaluation failed; retry via /runs/{run_id}/evaluations: {exc}")
         return FactorLabRunResponseDto(
             run_id=run_id,
             experiment_id=experiment_id,
@@ -548,8 +592,9 @@ LIMIT 1
             status="completed",
             final_node_id=compile_result.final_node_id,
             graph_hash=compile_result.graph_hash,
+            evaluation=evaluation,
             quality=quality,
-            warnings=[issue.message for issue in compile_result.warnings],
+            warnings=[issue.message for issue in compile_result.warnings] + evaluation_warnings,
             rows=run_rows,
             results=run_rows,
             rankings=run_rows,
@@ -1282,6 +1327,11 @@ def _load_known_factor_ids(client: Any, graph: dict[str, Any]) -> set[str]:
             if node.get("type") == "factor_input" and node.get("config", {}).get("factor_id")
         }
     )
+    factor_ids = sorted(set(factor_ids) | {
+        canonical_factor_id(str(node.get("config", {}).get("target_factor_id") or ""))
+        for node in graph.get("nodes", []) if node.get("type") == "forward_outcome"
+        and node.get("config", {}).get("target_factor_id")
+    })
     if not factor_ids:
         return set()
     rows = _records(

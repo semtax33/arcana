@@ -68,6 +68,12 @@ def write_index(p=None):
         status='본문 22장 번역을 완료했습니다. 앞부분·찾아보기의 번역과 전권 누락 검수를 진행 중입니다.'
         if p.get('whole_book_complete'):status='본문과 부속 자료의 번역 및 전권 누락 검수를 완료했습니다.'
         html=html.replace('완료된 장은 아래에서 열 수 있습니다. 나머지 장은 아직 번역 중이며 전권 완역은 완료되지 않았습니다.',status)
+    extras=[]
+    for file,label in [('금융_머신러닝의_발전_전권_한국어.html','전권 통합 HTML 열기'),('금융_머신러닝의_발전_앞부분_한국어.html','앞부분 · 추천사 · 상세 목차'),('금융_머신러닝의_발전_찾아보기_한국어.html','찾아보기 · 항목 검색')]:
+        if (OUT/file).exists():extras.append(f'<p><a href="{file}" style="color:#147a77;font-weight:bold">{label} →</a></p>')
+    if extras:html=html.replace('<div class="list">',''.join(extras)+'<div class="list">')
+    if p.get('whole_book_complete'):
+        html=html.replace('제공된 PDF를 장별로 꼼꼼하게 옮기는 번역 작업입니다.','제공된 PDF를 장별로 꼼꼼하게 옮긴 한국어 번역본입니다.')
     (OUT/'index.html').write_text(html,encoding='utf-8')
 
 if __name__=='__main__':write_index()

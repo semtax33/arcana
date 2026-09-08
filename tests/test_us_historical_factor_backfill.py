@@ -65,6 +65,68 @@ def test_us_universe_query_is_price_and_date_scoped() -> None:
     }
 
 
+def test_prepare_targets_recreates_missing_csv_without_resetting_status(
+    tmp_path, monkeypatch
+) -> None:
+    import json
+
+    import scripts.backfill_us_historical_factors as sut
+
+    contract = sut.HistoricalBackfillContract.create(
+        security_ids=["SEC_US_AAPL"],
+        factor_ids=["roe"],
+        start_date="2006-01-01",
+        end_date="2016-12-31",
+    )
+    status = sut._initial_status(contract)
+    status["factor_completed"]["annual"] = ["SEC_US_AAPL"]
+    status["factor_inserted_rows"]["annual"] = 123
+    status_path = tmp_path / "status.json"
+    sut._write_json(status_path, status)
+    target_path = tmp_path / "targets.csv"
+
+    class _UniverseResult:
+        column_names = [
+            "security_id",
+            "symbol",
+            "min_price_date",
+            "max_price_date",
+            "price_row_count",
+            "price_date_sum",
+            "price_date_square_sum",
+        ]
+        result_rows = [
+            (
+                "SEC_US_AAPL",
+                "AAPL",
+                "2006-01-03",
+                "2016-12-30",
+                2,
+                1,
+                1,
+            )
+        ]
+
+    class _UniverseClient:
+        def query(self, query, parameters=None):
+            return _UniverseResult()
+
+    monkeypatch.setattr(sut, "_load_contract", lambda *args, **kwargs: contract)
+
+    assert sut.prepare_targets(
+        _UniverseClient(),
+        target_path=target_path,
+        status_path=status_path,
+        start_date="2006-01-01",
+        end_date="2016-12-31",
+    ) == contract
+
+    persisted = json.loads(status_path.read_text(encoding="utf-8"))
+    assert target_path.exists()
+    assert persisted["factor_completed"]["annual"] == ["SEC_US_AAPL"]
+    assert persisted["factor_inserted_rows"]["annual"] == 123
+
+
 def test_price_input_coverage_requires_silver_and_clickhouse_to_match() -> None:
     import pandas as pd
     import pytest

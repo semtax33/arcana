@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
+from uuid import UUID
+from api.config.clickhouse import get_clickhouse_client
+from api.service.factor_lab_evaluation_service import FactorLabEvaluationService
 
 from api.service.dto import (
     BacktestAnnualReturnDto,
@@ -16,6 +19,7 @@ from api.service.dto import (
     FactorLabExperimentResponseDto,
     FactorLabExperimentSaveRequestDto,
     FactorLabGraphDto,
+    FactorLabEvaluationRequestDto,
     FactorLabNodePreviewResponseDto,
     FactorLabNodeTypeDto,
     FactorLabRunRequestDto,
@@ -26,6 +30,21 @@ from api.service.factor_lab_service import FactorLabService
 
 
 router = APIRouter(prefix="/api/factor-lab", tags=["factor-lab"])
+
+
+@router.post("/runs/{run_id}/evaluations")
+def evaluate_factor_lab_run(run_id: UUID, request: FactorLabEvaluationRequestDto):
+    try:
+        return FactorLabEvaluationService(client_factory=get_clickhouse_client).evaluate(str(run_id), as_of=request.as_of)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=_error("evaluation_run_not_found", str(exc))) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=_error("invalid_evaluation", str(exc))) from exc
+
+
+@router.get("/runs/{run_id}/evaluations")
+def list_factor_lab_evaluations(run_id: UUID):
+    return FactorLabEvaluationService(client_factory=get_clickhouse_client).list_evaluations(str(run_id))
 
 
 @router.get("/node-types", response_model=list[FactorLabNodeTypeDto])

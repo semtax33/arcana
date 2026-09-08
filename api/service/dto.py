@@ -401,6 +401,9 @@ class FactorLabNodeTypeDto(BaseModel):
     inputs: list[str] = Field(default_factory=list)
     outputs: list[str] = Field(default_factory=list)
     config_schema: dict[str, Any] = Field(default_factory=dict)
+    latest_version: int = 1
+    supported_versions: list[int] = Field(default_factory=lambda: [1])
+    version_schemas: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class FactorLabUniverseDto(BaseModel):
@@ -429,6 +432,7 @@ class FactorLabExperimentConfigDto(BaseModel):
 class FactorLabNodeDto(BaseModel):
     id: str
     type: str
+    version: int = Field(default=1, strict=True, ge=1)
     position: dict[str, float] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
 
@@ -443,10 +447,11 @@ class FactorLabEdgeDto(BaseModel):
 
 class FactorLabOutputsDto(BaseModel):
     final_node_id: str
+    evaluation_node_ids: list[str] = Field(default_factory=list)
 
 
 class FactorLabGraphDto(BaseModel):
-    version: int = 1
+    version: int = Field(default=1, strict=True, ge=1)
     experiment: FactorLabExperimentConfigDto
     nodes: list[FactorLabNodeDto] = Field(..., min_length=1)
     edges: list[FactorLabEdgeDto] = Field(default_factory=list)
@@ -502,6 +507,11 @@ class FactorLabRunRequestDto(BaseModel):
     history_start_date: date | None = None
     history_end_date: date | None = None
     history_rebalance_frequency: RebalanceFrequency | None = None
+    evaluation_as_of: date | None = None
+
+
+class FactorLabEvaluationRequestDto(BaseModel):
+    as_of: date | None = None
 
 
 class FactorLabQualitySummaryDto(BaseModel):
@@ -536,6 +546,7 @@ class FactorLabRunResponseDto(BaseModel):
     status: str
     final_node_id: str
     graph_hash: str
+    evaluation: dict[str, Any] | None = None
     quality: FactorLabQualitySummaryDto = Field(default_factory=FactorLabQualitySummaryDto)
     warnings: list[str] = Field(default_factory=list)
     rows: list[FactorLabRunRowDto] = Field(default_factory=list)

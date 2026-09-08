@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from copy import deepcopy
 from datetime import date, datetime
 import hashlib
 import json
@@ -36,12 +37,14 @@ LOGICAL_NODES = {"and", "or"}
 BINARY_NODES = ARITHMETIC_NODES | COMPARISON_NODES | LOGICAL_NODES
 INPUT_NODES = {"factor_input", "constant"}
 EVALUATE_NODES = {"ic", "bucket_return", "long_short", "turnover", "decay_test", "backtest"}
+OUTCOME_NODES = {"forward_outcome"}
 SUPPORTED_NODES = (
     INPUT_NODES
     | UNARY_NODES
     | BINARY_NODES
     | {"condition", "condition_score", "date_fallback", "weighted_score"}
     | EVALUATE_NODES
+    | OUTCOME_NODES
 )
 
 GROUP_BY_ALIASES = {
@@ -176,6 +179,12 @@ def node_type_specs() -> list[NodeTypeSpec]:
         NodeTypeSpec("turnover", "evaluate", ["score"], [], {"top_percent": 20}),
         NodeTypeSpec("decay_test", "evaluate", ["score"], [], {"horizons": [1, 5, 20]}),
         NodeTypeSpec("backtest", "evaluate", ["score"], [], {"top_percent": 20, "rebalance_frequency": "monthly|quarterly|semiannual|annual"}),
+        NodeTypeSpec("forward_outcome", "evaluate", ["score"], [], {
+            "target_factor_id": "string", "financial_basis": "annual|quarterly|ttm",
+            "measure": "level|change|pct_change|direction", "horizons": [20, 60, 120],
+            "unit": "trading_day|calendar_day", "bucket_count": 5, "score_order": "higher|lower",
+            "period_policy": "same_period|allow_change",
+        }),
     ]
 
 
@@ -199,6 +208,8 @@ def validate_factor_lab_graph(
     incoming = _validate_edges(nodes, edges, errors)
     _validate_arity(nodes, incoming, errors)
     _validate_dense_score_missing_inputs(nodes, incoming, errors)
+    evaluation_ids = outputs.get("evaluation_node_ids") or []
+    _validate_versions_and_evaluations(graph, nodes, edges, evaluation_ids, errors)
 
     if not final_node_id:
         errors.append(FactorLabIssue("missing_final_node", "outputs.final_node_id is required", field="outputs.final_node_id"))
@@ -209,10 +220,12 @@ def validate_factor_lab_graph(
     if not errors and final_node_id:
         try:
             execution_order = _topological_order(nodes, edges, final_node_id)
+            reachable = set(execution_order)
+            for evaluation_id in evaluation_ids:
+                reachable.update(_topological_order(nodes, edges, evaluation_id))
         except ValueError as exc:
             errors.append(FactorLabIssue("cycle", str(exc)))
         else:
-            reachable = set(execution_order)
             for node_id in nodes:
                 if node_id not in reachable:
                     warnings.append(FactorLabIssue("disconnected_node", "node is not reachable from final node and will be skipped", node_id=node_id))
@@ -292,6 +305,18 @@ def compile_factor_lab_graph(
     ctes: list[str] = []
     if _needs_security_universe(nodes, validation.execution_order, experiment):
         ctes.append(_compile_security_universe_cte(experiment, security_table, issuer_table, params))
+    if any(nodes[n]["type"] == "lag" and _dict(nodes[n].get("config")).get("unit") == "trading_day" for n in validation.execution_order):
+        params["calendar_market"] = str(experiment.get("market") or "ALL").strip().upper()
+        ctes.append(f"""lab_trading_calendar AS (
+    SELECT DISTINCT p.trade_date AS trade_date
+    FROM {price_table} AS p
+    INNER JOIN (
+        SELECT security_id, argMax(country, updated_at) AS country
+        FROM {security_table} GROUP BY security_id
+    ) AS u ON p.security_id = u.security_id
+    WHERE p.trade_date <= {{temporal_end_date:Date}}
+        AND ({{calendar_market:String}} = 'ALL' OR u.country = {{calendar_market:String}})
+)""")
     base_universe_needs_history = any(
         nodes[node_id]["type"] == "constant"
         or (
@@ -341,6 +366,7 @@ def compile_factor_lab_graph(
                     params,
                     include_history=node_id in temporal_history_input_node_ids,
                     history_row_limit=direct_temporal_row_limits.get(node_id),
+                    require_pit=graph.get("version", 1) == 2 and factor_table.split(".")[-1] == "fact_daily_factor_snapshot",
                 )
             )
         elif node_type == "constant":
@@ -736,7 +762,31 @@ def _validate_node_config(
     known_factor_ids: set[str] | None,
     errors: list[FactorLabIssue],
 ) -> None:
-    if node_type == "factor_input":
+    if node_type == "forward_outcome":
+        factor_id = canonical_factor_id(str(config.get("target_factor_id") or ""))
+        if not FACTOR_ID_RE.fullmatch(factor_id) or factor_id.startswith("lab_"):
+            errors.append(FactorLabIssue("invalid_target_factor", "target must be a registered PIT snapshot factor", node_id=node_id))
+        elif known_factor_ids is not None and factor_id not in known_factor_ids:
+            errors.append(FactorLabIssue("unknown_factor_id", f"unknown target factor: {factor_id}", node_id=node_id))
+        for key, choices in {
+            "financial_basis": {"annual", "quarterly", "ttm"},
+            "measure": {"level", "change", "pct_change", "direction"},
+            "unit": {"trading_day", "calendar_day"},
+            "score_order": {"higher", "lower"},
+        }.items():
+            if not isinstance(config.get(key), str) or config.get(key) not in choices:
+                errors.append(FactorLabIssue("invalid_outcome_config", f"{key} must be one of {sorted(choices)}", node_id=node_id, field=f"config.{key}"))
+        horizons = config.get("horizons")
+        if (not isinstance(horizons, list) or not 1 <= len(horizons) <= 12
+                or any(type(h) is not int or not 1 <= h <= 1260 for h in horizons)
+                or len(set(horizons)) != len(horizons)):
+            errors.append(FactorLabIssue("invalid_horizons", "horizons requires 1-12 unique integers in 1..1260", node_id=node_id))
+        buckets = config.get("bucket_count", 5)
+        if type(buckets) is not int or not 2 <= buckets <= 20:
+            errors.append(FactorLabIssue("invalid_bucket_count", "bucket_count must be an integer in 2..20", node_id=node_id))
+        if config.get("period_policy", "same_period") not in ("same_period", "allow_change"):
+            errors.append(FactorLabIssue("invalid_period_policy", "period_policy must be same_period or allow_change", node_id=node_id))
+    elif node_type == "factor_input":
         raw_factor_id = str(config.get("factor_id") or "")
         factor_id = canonical_factor_id(raw_factor_id) if raw_factor_id else ""
         if not factor_id or not FACTOR_ID_RE.match(factor_id):
@@ -940,7 +990,7 @@ def _validate_arity(
             _require_exact_handles(node_id, handles, {"condition", "score"}, errors)
         elif node_type == "date_fallback":
             _require_exact_handles(node_id, handles, {"primary", "fallback"}, errors)
-        elif node_type in EVALUATE_NODES:
+        elif node_type in EVALUATE_NODES | OUTCOME_NODES:
             _require_exact_handles(node_id, handles, {"score"}, errors)
         elif node_type == "weighted_score":
             weights = _dict(_dict(node.get("config")).get("weights"))
@@ -1104,6 +1154,7 @@ def _compile_factor_input(
     *,
     include_history: bool = False,
     history_row_limit: int | None = None,
+    require_pit: bool = False,
 ) -> str:
     factor_id = canonical_factor_id(str(config["factor_id"]))
     _validate_factor_id(factor_id)
@@ -1155,13 +1206,18 @@ INNER JOIN security_universe AS u
     ON u.security_id = f.security_id
 """.strip()
     else:
+        pit_invalid = "f.source_trade_date > f.trade_date OR " if require_pit else ""
+        pit_valid = " AND f.source_trade_date <= f.trade_date" if require_pit else ""
+        pit_reason = "f.source_trade_date > f.trade_date, 'source_after_snapshot'," if require_pit else ""
+        source_date_select = ", argMax(f.source_trade_date, f.updated_at) AS source_trade_date" if require_pit else ""
         source_select = f"""
 SELECT
     f.trade_date AS trade_date,
     f.security_id AS security_id,
-    if(f.factor_value IS NULL OR NOT isFinite(toFloat64(f.factor_value)), NULL, toFloat64(f.factor_value)) AS value,
-    f.factor_value IS NOT NULL AND isFinite(toFloat64(f.factor_value)) AS is_valid,
+    if({pit_invalid}f.factor_value IS NULL OR NOT isFinite(toFloat64(f.factor_value)), NULL, toFloat64(f.factor_value)) AS value,
+    f.factor_value IS NOT NULL AND isFinite(toFloat64(f.factor_value)){pit_valid} AS is_valid,
     multiIf(
+        {pit_reason}
         f.factor_value IS NULL, 'source_null',
         NOT isFinite(toFloat64(f.factor_value)), 'source_non_finite',
         ''
@@ -1173,7 +1229,7 @@ FROM (
         tupleElement(
             argMax(tuple(f.factor_value), f.updated_at),
             1
-        ) AS factor_value
+        ) AS factor_value{source_date_select}
     FROM {factor_table} AS f
     WHERE f.factor_id = {{{param_prefix}_factor_id:String}}
         AND f.financial_basis = {{{param_prefix}_financial_basis:String}}
@@ -1348,6 +1404,25 @@ def _compile_lag(
     input_cte = _cte_name(input_node_id)
     param_prefix = _param_prefix(node_id)
     params[f"{param_prefix}_period"] = int(config["period"])
+    if config.get("unit") == "trading_day":
+        output_scope = _time_series_output_scope_filter(params) if limit_to_output_scope else ""
+        return f"""{_cte_name(node_id)} AS (
+    SELECT * FROM (
+        SELECT i.trade_date AS trade_date, i.security_id AS security_id,
+            if(ifNull(p.is_valid, false), p.value, NULL) AS value,
+            ifNull(p.is_valid, false) AND isFinite(p.value) AS is_valid,
+            multiIf(c.previous_date IS NULL, 'lag_insufficient_history',
+                p.value IS NULL, 'lag_missing_trading_day',
+                NOT ifNull(p.is_valid, false), p.invalid_reason, '') AS invalid_reason
+        FROM {input_cte} AS i
+        INNER JOIN (
+            SELECT trade_date, lagInFrame(toNullable(trade_date), {{{param_prefix}_period:UInt32}}, NULL)
+                OVER (ORDER BY trade_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS previous_date
+            FROM lab_trading_calendar
+        ) AS c ON i.trade_date = c.trade_date
+        LEFT JOIN {input_cte} AS p ON p.security_id = i.security_id AND p.trade_date = c.previous_date
+    ) {output_scope}
+)"""
     window = """PARTITION BY i.security_id
                 ORDER BY i.trade_date
                 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"""
@@ -2212,6 +2287,8 @@ def _direct_temporal_factor_row_limits(
         ]
         if not direct_temporal_edges:
             continue
+        if any(_dict(nodes[str(e["target"])].get("config")).get("unit") == "trading_day" for e in direct_temporal_edges):
+            continue
         # If this input also reaches a temporal node through an intermediate
         # calculation, its observation requirement is graph-dependent; retain
         # the full history for that general case.
@@ -2258,8 +2335,51 @@ def _resolve_date(value: Any) -> str:
 
 
 def _graph_hash(graph: dict[str, Any]) -> str:
+    if graph.get("version", 1) == 1:
+        graph = deepcopy(graph)
+        for node in graph.get("nodes", []):
+            if isinstance(node, dict) and node.get("version") == 1:
+                node.pop("version")
+        outputs = graph.get("outputs")
+        if isinstance(outputs, dict) and outputs.get("evaluation_node_ids") == []:
+            outputs.pop("evaluation_node_ids")
     payload = json.dumps(graph, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _validate_versions_and_evaluations(graph, nodes, edges, evaluation_ids, errors):
+    version = graph.get("version", 1)
+    if type(version) is not int or version not in {1, 2}:
+        errors.append(FactorLabIssue("unsupported_graph_version", "supported graph versions: 1, 2"))
+    if not isinstance(evaluation_ids, list) or any(not isinstance(e, str) for e in evaluation_ids):
+        errors.append(FactorLabIssue("invalid_evaluations", "evaluation_node_ids must be a list of node IDs"))
+        return
+    if len(set(evaluation_ids)) != len(evaluation_ids):
+        errors.append(FactorLabIssue("duplicate_evaluation", "evaluation node IDs must be unique"))
+    if evaluation_ids and version != 2:
+        errors.append(FactorLabIssue("evaluation_requires_v2", "independent evaluations require graph v2"))
+    if len(evaluation_ids) > 12:
+        errors.append(FactorLabIssue("too_many_evaluations", "at most 12 evaluations per run"))
+    for node_id in evaluation_ids:
+        if nodes.get(node_id, {}).get("type") not in OUTCOME_NODES:
+            errors.append(FactorLabIssue("invalid_evaluation_node", "evaluation output must reference forward_outcome", node_id=node_id))
+    for node_id, node in nodes.items():
+        nv = node.get("version", 1)
+        node_type = node.get("type")
+        supported = {1, 2} if node_type == "lag" else {1}
+        if type(nv) is not int or nv not in supported:
+            errors.append(FactorLabIssue("unsupported_node_version", f"{node_type} supports versions {sorted(supported)}", node_id=node_id))
+        if (nv != 1 or node_type in OUTCOME_NODES) and version != 2:
+            errors.append(FactorLabIssue("node_requires_graph_v2", "this node requires graph v2", node_id=node_id))
+        if node_type == "lag":
+            unit = _dict(node.get("config")).get("unit")
+            if (nv == 1 and unit not in {None, "row"}) or (nv == 2 and unit not in {"row", "trading_day"}):
+                errors.append(FactorLabIssue("invalid_lag_unit", "lag v1 uses rows; lag v2 requires row or trading_day", node_id=node_id))
+        if node_type in OUTCOME_NODES or (version == 2 and node_type in EVALUATE_NODES):
+            if _dict(graph.get("outputs")).get("final_node_id") == node_id:
+                errors.append(FactorLabIssue("evaluation_as_score", "evaluation cannot be the final score", node_id=node_id))
+            if any(edge.get("source") == node_id for edge in edges):
+                errors.append(FactorLabIssue("evaluation_not_terminal", "evaluations cannot feed signal nodes", node_id=node_id))
 
 
 def _cte_name(node_id: str) -> str:
