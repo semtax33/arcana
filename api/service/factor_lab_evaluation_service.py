@@ -48,8 +48,6 @@ def _json(value):
 def prepare_evaluation_run(client, run_id, graph, *, factor_table, trade_dates=None):
     """Freeze selected score inputs before any future labels are queried."""
     evaluation_ids = graph.get("outputs", {}).get("evaluation_node_ids", [])
-    if not evaluation_ids:
-        return
     for ddl in EVALUATION_DDL:
         client.command(ddl)
     score_ids = sorted({e["source"] for e in graph["edges"] if e["target"] in evaluation_ids and e.get("target_handle") == "score"})

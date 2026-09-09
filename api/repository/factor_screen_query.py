@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from api.model.universe import has_universe_filters
+from api.repository.universe_query import filter_factor_query
+
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import math
@@ -227,6 +230,9 @@ def query_latest_factor_values(
 def build_factor_screen_query(
     conditions: list[FactorCondition | dict[str, Any]],
     *,
+    universe=None,
+    cap_table: str = "fact_daily_factors",
+    exact_signal_values: bool = False,
     as_of_date: str | date | None = None,
     market: str | None = None,
     financial_basis: str | None = DEFAULT_FINANCIAL_BASIS,
@@ -580,6 +586,7 @@ SELECT
     {matched_conditions_sql} AS matched_conditions,
     count() OVER () AS total_count,
     max(trade_date) AS latest_trade_date,
+    (SELECT latest_date FROM latest_trade_date) AS evaluation_date,
 {value_select_sql}
 FROM scored_factors AS sf
 {"LEFT JOIN security_universe AS u ON u.security_id = sf.security_id" if include_security_metadata else ""}
@@ -588,6 +595,12 @@ HAVING {having_clause}
 ORDER BY security_id ASC{limit_clause}
 """.strip()
     query = _clean_query(query)
+    if has_universe_filters(universe) or exact_signal_values:
+        query, params = filter_factor_query(query, params,
+            dates_sql='SELECT latest_date AS trade_date FROM latest_trade_date', universe=universe, market=market,
+            sector_codes=sector_codes, industry_group_codes=industry_group_codes,
+            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table,
+            batch=False, exact_signal_values=exact_signal_values)
     return query, params
 
 
@@ -595,6 +608,7 @@ def screen_stocks_by_factors(
     client: Any,
     conditions: list[FactorCondition | dict[str, Any]],
     *,
+    universe=None,
     as_of_date: str | date | None = None,
     market: str | None = None,
     financial_basis: str | None = DEFAULT_FINANCIAL_BASIS,
@@ -618,6 +632,7 @@ def screen_stocks_by_factors(
 
     query, params = build_factor_screen_query(
         conditions,
+        universe=universe,
         as_of_date=as_of_date,
         market=market,
         financial_basis=financial_basis,
@@ -637,7 +652,14 @@ def screen_stocks_by_factors(
         identifier_table=identifier_table,
         include_security_metadata=include_security_metadata,
     )
-    return client.query_df(query, parameters=params)
+    frame = client.query_df(query, parameters=params)
+    if has_universe_filters(universe):
+        start = query.index("latest_trade_date AS (")
+        end = query.index("\n)", start) + 2
+        scope = query[start:end]
+        records = client.query_df("WITH " + scope + " SELECT latest_date AS evaluation_date FROM latest_trade_date", parameters=params).to_dict("records")
+        frame.attrs["evaluation_date"] = records[0]["evaluation_date"] if records else None
+    return frame
 
 
 def _condition_predicate(

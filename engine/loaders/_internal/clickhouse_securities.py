@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from engine.core.clickhouse import get_clickhouse_client
+from engine.core.exchanges import refresh_exchange_codes
 from engine.transformers.securities import (
     get_normalized_identifier,
     get_normalized_sector_and_issuer,
@@ -33,6 +34,7 @@ def insert_security_master(*, market: str = "kr", dry_run: bool = False, client=
     owns_client = client is None
     client = client or get_clickhouse_client()
     try:
+        client.command("ALTER TABLE security_master ADD COLUMN IF NOT EXISTS exchange_code LowCardinality(String) DEFAULT ''")
         client.insert_df(
             "security_master",
             normalized_security_master_df,
@@ -74,10 +76,14 @@ def insert_securities(*, market: str = "kr", target: str = "all", dry_run: bool 
     client = client or (None if dry_run else get_clickhouse_client())
     try:
         selected = targets.items() if target == "all" else [(target, targets[target])]
-        return {
+        result = {
             name: loader(market=market, dry_run=dry_run, client=client)
             for name, loader in selected
         }
+        if not dry_run:
+            client.command("ALTER TABLE security_master ADD COLUMN IF NOT EXISTS exchange_code LowCardinality(String) DEFAULT ''")
+            refresh_exchange_codes(client)
+        return result
     finally:
         if owns_client and client is not None:
             client.close()

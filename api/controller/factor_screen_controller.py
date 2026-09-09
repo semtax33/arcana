@@ -114,6 +114,7 @@ def _screen_factor_request(request: FactorScreenRequestDto) -> FactorScreenRespo
             stock_name=row.stock_name,
             country=row.country,
             market_cap=row.market_cap,
+            exchange_code=row.exchange_code,
             sector_code=row.sector_code,
             industry_group_code=row.industry_group_code,
             industry_group_name=row.industry_group_name,
@@ -144,6 +145,7 @@ def _screen_factor_request(request: FactorScreenRequestDto) -> FactorScreenRespo
             displayed_count=len(rows),
         ),
         total_count=result.total_count,
+        universe_summary=result.universe_summary,
         fixed_columns=[
             FactorScreenColumnDto(**column.__dict__) for column in result.fixed_columns
         ],

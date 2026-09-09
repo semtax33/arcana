@@ -8,6 +8,8 @@ import uuid
 from typing import Any, Callable
 
 from api.config.clickhouse import get_clickhouse_client
+from api.model.universe import has_universe_filters
+from api.repository.universe_query import load_universe_details
 from api.repository.factor_lab_query import (
     FactorLabCompileResult,
     FactorLabIssue,
@@ -88,6 +90,7 @@ CREATE TABLE IF NOT EXISTS factor_lab_run
     start_date Date,
     end_date Date,
     error String,
+    universe_summary_json String DEFAULT '',
     started_at DateTime64(3, 'Asia/Seoul') DEFAULT now64(3),
     finished_at Nullable(DateTime64(3, 'Asia/Seoul'))
 )
@@ -132,6 +135,8 @@ PARTITION BY toYYYYMM(trade_date)
 ORDER BY (factor_id, trade_date, security_id)
 """.strip(),
 ]
+FACTOR_LAB_DDL.append("ALTER TABLE factor_lab_run ADD COLUMN IF NOT EXISTS universe_summary_json String DEFAULT ''")
+
 
 
 class FactorLabService:
@@ -546,8 +551,23 @@ LIMIT 1
             _insert_factor_catalog(client, factor_id=factor_id, run_id=run_id)
             prepare_evaluation_run(client, run_id, execution_graph,
                                    factor_table=factor_table, trade_dates=history_trade_dates)
+            universe_config = execution_graph["experiment"].get("universe") or {}
+            universe_summary = None
+            if has_universe_filters(universe_config):
+                summary_days = history_trade_dates
+                if summary_days is None and request.mode == "history":
+                    start = _as_date(execution_graph["experiment"]["start_date"])
+                    end = _as_date(execution_graph["experiment"]["end_date"])
+                    summary_days = [d for d in BacktestService()._load_trading_days(client, start, end,
+                        market=execution_graph["experiment"].get("market")) if start <= d <= end]
+                universe_summary, _ = load_universe_details(client,
+                    dates=summary_days or [execution_graph["experiment"]["end_date"]],
+                    universe=universe_config, market=execution_graph["experiment"].get("market"),
+                    sector_codes=universe_config.get("sector_codes"),
+                    industry_group_codes=universe_config.get("industry_group_codes"))
             _insert_run_status(
                 client,
+                universe_summary=universe_summary,
                 run_id=run_id,
                 experiment_id=experiment_id,
                 graph_hash=compile_result.graph_hash,
@@ -596,6 +616,7 @@ LIMIT 1
             final_node_id=compile_result.final_node_id,
             graph_hash=compile_result.graph_hash,
             evaluation=evaluation,
+            universe_summary=universe_summary,
             quality=quality,
             warnings=[issue.message for issue in compile_result.warnings] + evaluation_warnings,
             rows=run_rows,
@@ -607,6 +628,7 @@ LIMIT 1
     def get_run(self, run_id: str) -> FactorLabRunResponseDto:
         client = self._client_factory()
         try:
+            _ensure_tables(client)
             rows = _records(
                 client.query_df(
                     """
@@ -614,7 +636,8 @@ SELECT
     run_id,
     experiment_id,
     graph_hash,
-    status
+    status,
+    universe_summary_json
 FROM factor_lab_run FINAL
 WHERE run_id = {run_id:UUID}
 ORDER BY started_at DESC
@@ -643,6 +666,7 @@ LIMIT 1
             final_node_id="",
             graph_hash=str(row["graph_hash"]),
             quality=quality,
+            universe_summary=json.loads(row.get("universe_summary_json") or "null"),
             rows=run_rows,
             results=run_rows,
             rankings=run_rows,
@@ -689,8 +713,10 @@ LIMIT 1
                 raise KeyError(run_id)
             if run_status != "completed":
                 raise ValueError(f"factor lab run is not completed: {run_status}")
-            blend_config = _load_blended_run_config(client, run_id)
-            if blend_config is None and _load_run_value_count(client, run_id) <= 0:
+            frozen_graph = _load_frozen_graph(client, run_id)
+            blend_config = _load_blended_run_config(client, run_id, graph=frozen_graph)
+            filtered_run = has_universe_filters((frozen_graph or {}).get("experiment", {}).get("universe"))
+            if blend_config is None and not filtered_run and _load_run_value_count(client, run_id) <= 0:
                 raise ValueError("factor lab run has no completed factor values")
         finally:
             _close(client)
@@ -700,6 +726,11 @@ LIMIT 1
             fallback_run_id = blend_config["fallback_run_id"]
             if run_id in {primary_run_id, fallback_run_id}:
                 raise ValueError("a blended FactorLab run cannot reference itself")
+            if frozen_graph and has_universe_filters(frozen_graph.get("experiment", {}).get("universe")):
+                # Recompute the source graphs inside the parent's frozen universe.
+                # Filtering already ranked child scores would change the strategy.
+                primary_run_id = self._rerun_blend_source(primary_run_id, frozen_graph, request)
+                fallback_run_id = self._rerun_blend_source(fallback_run_id, frozen_graph, request)
             return self.run_blended_backtest(
                 primary_run_id,
                 fallback_run_id,
@@ -707,6 +738,9 @@ LIMIT 1
                 request=request,
             )
 
+        config = (frozen_graph or {}).get("experiment") or {}
+        universe = config.get("universe") or {}
+        frozen_market = config.get("market") or request.market
         factor_id = _lab_factor_id(run_id)
         backtest_request = FactorBacktestRequestDto(
             conditions=[
@@ -721,7 +755,11 @@ LIMIT 1
             start_date=request.start_date,
             end_date=request.end_date,
             rebalance_frequency=request.rebalance_frequency,
-            market=request.market,
+            market=frozen_market,
+            universe=universe,
+            sector_codes=universe.get("sector_codes"),
+            industry_group_codes=universe.get("industry_group_codes"),
+            exact_signal_values=has_universe_filters(universe),
             financial_basis="lab",
             benchmarks=request.benchmarks,
             max_positions=request.max_positions,
@@ -729,6 +767,29 @@ LIMIT 1
             factor_table="factor_lab_values",
         )
         return BacktestService(client_factory=self._client_factory).run_factor_backtest(backtest_request)
+
+    def _rerun_blend_source(self, source_run_id, parent_graph, request):
+        client = self._client_factory()
+        try:
+            source_graph = _load_frozen_graph(client, source_run_id)
+        finally:
+            _close(client)
+        if source_graph is None:
+            raise ValueError("대체 전략의 투자 대상을 변경하려면 원본 전략을 history 모드로 다시 실행하세요.")
+        graph = deepcopy(source_graph)
+        experiment = graph.setdefault("experiment", {})
+        parent = parent_graph["experiment"]
+        experiment["market"] = parent["market"]
+        experiment["universe"] = deepcopy(parent.get("universe") or {})
+        experiment["start_date"] = request.start_date.isoformat()
+        experiment["end_date"] = request.end_date.isoformat()
+        graph["outputs"]["evaluation_node_ids"] = []
+        run = self.run_graph(FactorLabRunRequestDto(
+            graph=FactorLabGraphDto(**graph), mode="history",
+            history_start_date=request.start_date, history_end_date=request.end_date,
+            history_rebalance_frequency=request.rebalance_frequency,
+        ))
+        return run.run_id
 
     def run_blended_backtest(
         self,
@@ -812,6 +873,7 @@ LIMIT 1
             rebalance_history=selected_history,
             annual_returns=_annual_returns(result_points, benchmark_ids),
             warnings=warnings,
+            universe_summary=primary.universe_summary if primary.universe_summary == fallback.universe_summary else None,
             raw={
                 "policy": policy,
                 "primary_run_id": primary_run_id,
@@ -1436,7 +1498,9 @@ LIMIT 1
     return str(rows[0].get("status") or "")
 
 
-def _load_blended_run_config(client: Any, run_id: str) -> dict[str, str] | None:
+def _load_blended_run_config(client: Any, run_id: str, *, graph=None) -> dict[str, str] | None:
+    if graph is not None:
+        return _blend_config_for_graph(graph)
     rows = _records(
         client.query_df(
             """
@@ -1462,6 +1526,10 @@ LIMIT 1
         graph = json.loads(str(rows[0]["graph_json"]))
     except (KeyError, TypeError, ValueError):
         return None
+    return _blend_config_for_graph(graph)
+
+
+def _blend_config_for_graph(graph):
     final_node_id = str((graph.get("outputs") or {}).get("final_node_id") or "")
     final_node = next(
         (
@@ -1506,7 +1574,7 @@ WHERE run_id = {run_id:UUID}
 
 
 def _ensure_tables(client: Any) -> None:
-    for ddl in FACTOR_LAB_DDL:
+    for ddl in [*FACTOR_LAB_DDL, EVALUATION_DDL[0]]:
         _execute(client, ddl, {})
 
 
@@ -1519,6 +1587,7 @@ def _insert_run_status(
     status: str,
     graph_dict: dict[str, Any],
     error: str,
+    universe_summary=None,
 ) -> None:
     experiment = graph_dict.get("experiment", {})
     _execute(
@@ -1533,6 +1602,7 @@ INSERT INTO factor_lab_run
     start_date,
     end_date,
     error,
+    universe_summary_json,
     finished_at
 )
 VALUES
@@ -1544,6 +1614,7 @@ VALUES
     {start_date:Date},
     {end_date:Date},
     {error:String},
+    {universe_summary_json:String},
     {finished_at:Nullable(DateTime64(3, 'Asia/Seoul'))}
 )
 """.strip(),
@@ -1555,6 +1626,7 @@ VALUES
             "start_date": _date_iso(experiment.get("start_date")),
             "end_date": _date_iso(experiment.get("end_date")),
             "error": error,
+            "universe_summary_json": json.dumps(universe_summary, default=str) if universe_summary else "",
             "finished_at": datetime.now() if status in {"completed", "failed"} else None,
         },
     )
@@ -1647,11 +1719,19 @@ def _load_run_rows(
         limit=limit,
     )
     rows = _records(client.query_df(query, parameters=params))
+    if rows:
+        from api.repository.universe_query import load_row_metadata
+        metadata = load_row_metadata(client, rows)
+        for row in rows:
+            row.update(metadata.get((str(row["trade_date"])[:10], str(row["security_id"])), {}))
     return [
         FactorLabRunRowDto(
             rank=int(_float_or_none(row.get("rank")) or index + 1),
             security_id=str(row["security_id"]),
             ticker=_optional_str(row.get("ticker")),
+            exchange_code=_optional_str(row.get("exchange_code")),
+            market_cap=_float_or_none(row.get("market_cap")),
+            country=_optional_str(row.get("country")),
             stock_name=_optional_str(row.get("stock_name")),
             trade_date=row["trade_date"],
             factor_id=_optional_str(row.get("factor_id")),
@@ -1768,3 +1848,8 @@ def _iso_datetime(value: Any) -> str:
     if callable(isoformat):
         return str(isoformat())
     return str(value)
+
+
+def _load_frozen_graph(client, run_id):
+    rows = _records(client.query_df("SELECT graph_json FROM factor_lab_run_definition WHERE run_id = {run_id:UUID} ORDER BY created_at DESC LIMIT 1", parameters={"run_id": run_id}))
+    return json.loads(rows[0]["graph_json"]) if rows and rows[0].get("graph_json") else None

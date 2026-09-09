@@ -256,6 +256,7 @@ def run_factor_lab_backtest(
             for annual_return in result.annual_returns
         ],
         warnings=result.warnings,
+        universe_summary=result.universe_summary,
     )
 
 

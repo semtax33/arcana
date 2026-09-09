@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from api.model.universe import has_universe_filters
+from api.repository.universe_query import filter_factor_query
+
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import math
@@ -36,6 +39,9 @@ class FactorSnapshotQuerySpec:
 def build_factor_snapshot_query(
     conditions: list[FactorCondition | dict[str, Any]],
     *,
+    universe=None,
+    cap_table: str = "fact_daily_factors",
+    exact_signal_values: bool = False,
     signal_date: str | date,
     snapshot_date: str | date | None = None,
     market: str | None = None,
@@ -284,12 +290,21 @@ ORDER BY
     rf.security_id ASC,
     rf.factor_id ASC
 """.strip()
+    if has_universe_filters(universe) or exact_signal_values:
+        query, params = filter_factor_query(query, params,
+            dates_sql='SELECT {signal_date:Date} AS trade_date', universe=universe, market=market,
+            sector_codes=sector_codes, industry_group_codes=industry_group_codes,
+            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table,
+            batch=False, exact_signal_values=exact_signal_values)
     return query, params
 
 
 def build_factor_snapshot_batch_query(
     conditions: list[FactorCondition | dict[str, Any]],
     *,
+    universe=None,
+    cap_table: str = "fact_daily_factors",
+    exact_signal_values: bool = False,
     signal_dates: list[str | date],
     snapshot_dates: list[str | date] | None = None,
     market: str | None = None,
@@ -522,12 +537,21 @@ ORDER BY
     rf.security_id ASC,
     rf.factor_id ASC
 """.strip()
+    if has_universe_filters(universe) or exact_signal_values:
+        query, params = filter_factor_query(query, params,
+            dates_sql='SELECT arrayJoin({signal_dates:Array(Date)}) AS trade_date', universe=universe, market=market,
+            sector_codes=sector_codes, industry_group_codes=industry_group_codes,
+            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table,
+            batch=True, exact_signal_values=exact_signal_values)
     return query, params
 
 
 def build_factor_raw_batch_query(
     conditions: list[FactorCondition | dict[str, Any]],
     *,
+    universe=None,
+    cap_table: str = "fact_daily_factors",
+    exact_signal_values: bool = False,
     signal_dates: list[str | date],
     market: str | None = None,
     financial_basis: str | None = "annual",
@@ -770,6 +794,12 @@ ORDER BY
     rf.security_id ASC,
     rf.factor_id ASC
 """.strip()
+    if has_universe_filters(universe) or exact_signal_values:
+        query, params = filter_factor_query(query, params,
+            dates_sql='SELECT arrayJoin({signal_dates:Array(Date)}) AS trade_date', universe=universe, market=market,
+            sector_codes=sector_codes, industry_group_codes=industry_group_codes,
+            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table,
+            batch=True, exact_signal_values=exact_signal_values)
     return query, params
 
 

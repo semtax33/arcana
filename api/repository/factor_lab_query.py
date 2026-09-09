@@ -9,6 +9,8 @@ import math
 import re
 from typing import Any
 
+from api.model.universe import has_universe_filters, normalize_universe
+from api.repository.universe_query import build_universe_ctes
 from api.service.factor_identity import canonical_factor_id
 from api.repository.factor_lab_regression import compile_residualize
 from api.repository.factor_lab_fiscal import compile_fiscal_lag
@@ -58,6 +60,7 @@ GROUP_BY_ALIASES = {
 }
 
 INVALID_REASONS = {
+    "outside_universe",
     "source_null",
     "source_non_finite",
     "division_by_zero",
@@ -213,6 +216,10 @@ def validate_factor_lab_graph(
     final_node_id = str(outputs.get("final_node_id") or "")
 
     _validate_experiment(experiment, errors)
+    try:
+        normalize_universe(experiment.get("universe"), experiment.get("market"))
+    except ValueError as exc:
+        errors.append(FactorLabIssue("invalid_universe", str(exc), field="experiment.universe"))
     _validate_nodes(nodes, known_factor_ids=known_factor_ids, errors=errors)
     incoming = _validate_edges(nodes, edges, errors)
     _validate_arity(nodes, incoming, errors)
@@ -256,6 +263,7 @@ def compile_factor_lab_graph(
     trade_dates: list[str | date] | None = None,
     factor_table: str = "fact_daily_factors",
     factor_lab_table: str = "factor_lab_values",
+    cap_table: str = "fact_daily_factors",
     price_table: str = "price_daily",
     security_table: str = "security_master",
     issuer_table: str = "issuers",
@@ -314,6 +322,21 @@ def compile_factor_lab_graph(
     )
 
     ctes: list[str] = []
+    universe_active = has_universe_filters(experiment.get("universe"))
+    if universe_active:
+        if has_temporal_nodes:
+            dates_sql = f"SELECT DISTINCT trade_date FROM {price_table} WHERE trade_date <= {{temporal_end_date:Date}}"
+        elif "trade_dates" in params:
+            dates_sql = "SELECT arrayJoin({trade_dates:Array(Date)}) AS trade_date"
+        else:
+            dates_sql = f"SELECT DISTINCT trade_date FROM {price_table} WHERE trade_date BETWEEN {{start_date:Date}} AND {{end_date:Date}}"
+        universe = experiment.get("universe") or {}
+        uv_ctes, uv_params = build_universe_ctes(dates_sql=dates_sql, universe=universe,
+            market=experiment.get("market"), sector_codes=universe.get("sector_codes"),
+            industry_group_codes=universe.get("industry_group_codes"),
+            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table)
+        ctes.extend(uv_ctes)
+        params.update(uv_params)
     if _needs_security_universe(nodes, validation.execution_order, experiment):
         ctes.append(_compile_security_universe_cte(experiment, security_table, issuer_table, params))
     if any(nodes[n]["type"] in TEMPORAL_NODES and _dict(nodes[n].get("config")).get("unit") == "trading_day" for n in validation.execution_order):
@@ -366,7 +389,19 @@ def compile_factor_lab_graph(
         node = nodes[node_id]
         node_type = node["type"]
         config = _dict(node.get("config"))
-        input_map = incoming.get(node_id, {})
+        input_map = dict(incoming.get(node_id, {}))
+        scoped_cross_section = universe_active and node_type in {
+            "winsorize", "zscore", "shrunk_zscore", "rank", "dense_rank", "percent_rank",
+            "dense_score", "neutralize", "bucket", "residualize", "date_fallback",
+        }
+        # Filter cross sections, not raw time series: removing history here would
+        # change row lag/rolling windows when a stock enters the size universe.
+        if scoped_cross_section:
+            for handle, source in list(input_map.items()):
+                scoped = f"uv_{node_id}_{handle}"
+                ctes.append(f"{_cte_name(scoped)} AS (SELECT * FROM {_cte_name(source)} "
+                    "WHERE (trade_date, security_id) IN (SELECT trade_date, security_id FROM uv_eligible))")
+                input_map[handle] = scoped
         if node_type == "factor_input":
             ctes.append(
                 _compile_factor_input(
@@ -375,6 +410,7 @@ def compile_factor_lab_graph(
                     factor_table,
                     factor_lab_table,
                     params,
+                    universe_active=universe_active,
                     include_history=node_id in temporal_history_input_node_ids,
                     history_row_limit=direct_temporal_row_limits.get(node_id),
                     require_pit=graph.get("version", 1) == 2 and factor_table.split(".")[-1] == "fact_daily_factor_snapshot",
@@ -445,6 +481,25 @@ def compile_factor_lab_graph(
             ctes.append(_compile_evaluate_passthrough(node_id, input_map["score"]))
         else:
             raise ValueError(f"unsupported node type: {node_type}")
+        if scoped_cross_section and node_id in temporal_history_input_node_ids:
+            # Keep excluded dates as invalid rows so row-based windows do not
+            # jump over them when the security later re-enters the universe.
+            result_cte = _cte_name(f"uv_result_{node_id}")
+            ctes[-1] = ctes[-1].replace(f"{_cte_name(node_id)} AS (", f"{result_cte} AS (", 1)
+            keys = " UNION DISTINCT ".join(
+                f"SELECT trade_date, security_id FROM {_cte_name(source)}"
+                for source in dict.fromkeys(incoming[node_id].values())
+            )
+            ctes.append(f"""{_cte_name(node_id)} AS (
+    SELECT b.trade_date AS trade_date, b.security_id AS security_id,
+           if(ifNull(r.is_valid, false), r.value, NULL) AS value,
+           ifNull(r.is_valid, false) AS is_valid,
+           multiIf(ifNull(r.is_valid, false), '',
+               (b.trade_date, b.security_id) NOT IN (SELECT trade_date, security_id FROM uv_eligible), 'outside_universe',
+               ifNull(r.invalid_reason, '') = '', 'source_null', r.invalid_reason) AS invalid_reason
+    FROM ({keys}) b
+    LEFT JOIN {result_cte} r ON r.trade_date = b.trade_date AND r.security_id = b.security_id
+)""")
 
     final_cte = _cte_name(validation.final_node_id or "")
     # ClickHouse 26.5 can drop a computed Bool alias from a joined CTE block when
@@ -458,6 +513,8 @@ def compile_factor_lab_graph(
             if "trade_dates" in params
             else "\n    AND trade_date >= {start_date:Date}\n    AND trade_date <= {end_date:Date}"
         )
+    if universe_active:
+        final_scope_filter += "\n    AND (trade_date, security_id) IN (SELECT trade_date, security_id FROM uv_eligible)"
     query = (
         "WITH\n"
         + ",\n".join(ctes)
@@ -1218,6 +1275,7 @@ def _compile_factor_input(
     factor_lab_table: str,
     params: dict[str, Any],
     *,
+    universe_active: bool = False,
     include_history: bool = False,
     history_row_limit: int | None = None,
     require_pit: bool = False,
@@ -1315,6 +1373,7 @@ INNER JOIN security_universe AS u
         return _compile_factor_input_with_cross_sectional_median(
             node_id,
             f"{source_select}{row_limit_sql}",
+            universe_active=universe_active,
         )
     return f"""
 {_cte_name(node_id)} AS (
@@ -1325,6 +1384,7 @@ INNER JOIN security_universe AS u
 def _compile_factor_input_with_cross_sectional_median(
     node_id: str,
     source_select: str,
+    universe_active: bool = False,
 ) -> str:
     """Fill missing input values with the same-date eligible-universe median.
 
@@ -1344,7 +1404,7 @@ def _compile_factor_input_with_cross_sectional_median(
             trade_date,
             quantileExact(0.5)(value) AS median_value
         FROM source_values
-        WHERE is_valid
+        WHERE is_valid{(" AND (trade_date, security_id) IN (SELECT trade_date, security_id FROM uv_eligible)" if universe_active else "")}
         GROUP BY trade_date
     )
     SELECT
@@ -2437,6 +2497,13 @@ def _resolve_date(value: Any) -> str:
 
 
 def _graph_hash(graph: dict[str, Any]) -> str:
+    graph = deepcopy(graph)
+    universe = (graph.get("experiment") or {}).get("universe") or {}
+    for key in ("exchange_codes", "market_cap_min_mil", "market_cap_max_mil", "size_percentile"):
+        if universe.get(key) is None or universe.get(key) == []:
+            universe.pop(key, None)
+    if universe.get("exchange_codes"):
+        universe["exchange_codes"] = sorted(set(universe["exchange_codes"]))
     if graph.get("version", 1) == 1:
         graph = deepcopy(graph)
         for node in graph.get("nodes", []):

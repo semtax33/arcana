@@ -63,4 +63,5 @@ class FactorBacktestResult:
     rebalance_history: list[BacktestRebalance]
     annual_returns: list[BacktestAnnualReturn]
     warnings: list[str] = field(default_factory=list)
+    universe_summary: dict[str, Any] | None = None
     raw: dict[str, Any] = field(default_factory=dict)

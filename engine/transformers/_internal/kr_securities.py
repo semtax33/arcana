@@ -8,6 +8,7 @@ import pandas as pd
 import yaml
 
 from engine.core.paths import DATA_LAKE
+from engine.core.exchanges import normalize_exchange, us_exchange_mapping
 from engine.core.identifiers import issuer_id_of, security_id_of
 from engine.markets.kr import KR_MARKET_CONFIG, normalize_kr_stock_code
 from engine.markets.registry import market_config
@@ -494,11 +495,9 @@ def _get_kr_normalized_security_master() -> pd.DataFrame:
     stock_codes = df["종목코드"].astype(str).str.strip().map(
         normalize_kr_stock_code
     )
-    market_col = (
-        df["?쒖옣援щ텇"]
-        if "?쒖옣援щ텇" in df.columns
-        else pd.Series([""] * len(df), index=df.index)
-    )
+    market_column = next((name for name in ("시장구분", "상장구분", "market") if name in df.columns), None)
+    market_col = df[market_column] if market_column else pd.Series("", index=df.index)
+
 
     return pd.DataFrame(
         {
@@ -509,6 +508,7 @@ def _get_kr_normalized_security_master() -> pd.DataFrame:
             "share_class": stock_codes.map(lambda code: "ORD" if code[-1] == "0" else "PREF"),
             "country": "KR",
             "primary_market_mic": market_col.map(lambda value: str(value)),
+            "exchange_code": market_col.map(lambda value: normalize_exchange(value, "KR")),
             "currency": "KRW",
             "is_active": True,
         }
@@ -625,6 +625,7 @@ def _get_us_normalized_security_master() -> pd.DataFrame:
             "share_class": "ORD",
             "country": config.country,
             "primary_market_mic": config.default_market_mic,
+            "exchange_code": tickers.map(us_exchange_mapping()).fillna(""),
             "currency": config.currency,
             "is_active": True,
         }

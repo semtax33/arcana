@@ -56,4 +56,5 @@ def run_factor_backtest(request: FactorBacktestRequestDto) -> FactorBacktestResp
             for annual_return in result.annual_returns
         ],
         warnings=result.warnings,
+        universe_summary=result.universe_summary,
     )

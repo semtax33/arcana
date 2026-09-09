@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from api.service.style_score_catalog import DEFAULT_FACTOR_SCREEN_STYLE_PROFILE
+from api.model.universe import UniverseFiltersDto
 
 
 ConditionMode = Literal["top_percent", "threshold"]
@@ -219,6 +220,7 @@ class FactorConditionDto(BaseModel):
 
 
 class FactorScreenRequestDto(BaseModel):
+    universe: UniverseFiltersDto = Field(default_factory=UniverseFiltersDto)
     conditions: list[FactorConditionDto] = Field(..., min_length=1)
     as_of_date: date | None = None
     market: str | None = None
@@ -231,6 +233,7 @@ class FactorScreenRequestDto(BaseModel):
 
 
 ColumnType = Literal[
+    "exchange",
     "rank",
     "ticker",
     "name",
@@ -269,6 +272,7 @@ class FactorScreenValueDto(BaseModel):
 
 
 class ScreenedStockRowDto(BaseModel):
+    exchange_code: str | None = None
     rank: int
     security_id: str
     ticker: str | None = None
@@ -286,6 +290,7 @@ class ScreenedStockRowDto(BaseModel):
 
 
 class FactorScreenResponseDto(BaseModel):
+    universe_summary: dict[str, Any] | None = None
     summary: FactorScreenSummaryDto
     total_count: int
     fixed_columns: list[FactorScreenColumnDto]
@@ -318,6 +323,8 @@ class ScreenerStrategyDeleteResponseDto(BaseModel):
 
 
 class FactorBacktestRequestDto(BaseModel):
+    universe: UniverseFiltersDto = Field(default_factory=UniverseFiltersDto)
+    exact_signal_values: bool = False
     conditions: list[FactorConditionDto] = Field(..., min_length=1)
     start_date: date
     end_date: date
@@ -381,6 +388,7 @@ class BacktestAnnualReturnDto(BaseModel):
 
 
 class FactorBacktestResponseDto(BaseModel):
+    universe_summary: dict[str, Any] | None = None
     summary: BacktestSummaryDto
     equity_curve: list[BacktestEquityCurvePointDto] = Field(default_factory=list)
     rebalance_history: list[BacktestRebalanceDto] = Field(default_factory=list)
@@ -406,7 +414,7 @@ class FactorLabNodeTypeDto(BaseModel):
     version_schemas: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
-class FactorLabUniverseDto(BaseModel):
+class FactorLabUniverseDto(UniverseFiltersDto):
     type: str = "market"
     sector_codes: list[str] = Field(default_factory=list)
     industry_group_codes: list[str] = Field(default_factory=list)
@@ -525,6 +533,9 @@ class FactorLabQualitySummaryDto(BaseModel):
 
 
 class FactorLabRunRowDto(BaseModel):
+    exchange_code: str | None = None
+    market_cap: float | None = None
+    country: str | None = None
     rank: int | None = None
     security_id: str
     ticker: str | None = None
@@ -540,6 +551,7 @@ class FactorLabRunRowDto(BaseModel):
 
 
 class FactorLabRunResponseDto(BaseModel):
+    universe_summary: dict[str, Any] | None = None
     run_id: str
     experiment_id: str | None = None
     factor_id: str

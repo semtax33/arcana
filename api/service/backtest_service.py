@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from api.model.universe import has_universe_filters, normalize_universe
+from api.repository.universe_query import load_universe_details
+
 from collections import defaultdict
 import csv
 from datetime import date, datetime, timedelta
@@ -57,6 +60,8 @@ class BacktestService:
 
     def run_factor_backtest(self, request: FactorBacktestRequestDto) -> FactorBacktestResult:
         _validate_request(request)
+        normalize_universe(request.universe, request.market)
+        universe_summary = None
         conditions = [_to_repository_condition(condition) for condition in request.conditions]
         style_profile = _resolve_style_profile(request.style_profile, conditions)
         benchmark_ids = _resolve_benchmark_ids(request.benchmarks, market=request.market)
@@ -109,7 +114,15 @@ class BacktestService:
                 max_positions=request.max_positions,
                 transaction_cost_bps=float(request.transaction_cost_bps),
                 warnings=warnings,
+                universe=request.universe,
+                exact_signal_values=request.exact_signal_values,
             )
+            if has_universe_filters(request.universe):
+                signal_days = [_previous_trading_day(trading_days, d) for d in rebalance_dates]
+                universe_summary, _ = load_universe_details(client, dates=signal_days,
+                    universe=request.universe, market=request.market,
+                    sector_codes=request.sector_codes, industry_group_codes=request.industry_group_codes)
+                warnings.append("거래소: 현재 분류 / 시총: 각 신호일 기준")
             if not equity_points:
                 equity_points = _flat_cash_equity_points(visible_days)
                 warnings.append(
@@ -166,6 +179,7 @@ class BacktestService:
             rebalance_history=rebalance_history,
             annual_returns=annual_returns,
             warnings=warnings,
+            universe_summary=universe_summary,
         )
 
     def _load_trading_days(
@@ -188,6 +202,8 @@ class BacktestService:
         self,
         client: Any,
         *,
+        universe=None,
+        exact_signal_values: bool = False,
         conditions: list[FactorCondition],
         trading_days: list[date],
         rebalance_dates: list[date],
@@ -258,6 +274,8 @@ class BacktestService:
             batched_snapshot_rows = self._load_factor_snapshot_batch(
                 client,
                 conditions=conditions,
+                universe=universe,
+                exact_signal_values=exact_signal_values,
                 signal_dates=snapshot_signal_dates,
                 snapshot_dates=[
                     snapshot_dates_by_signal[signal_date]
@@ -283,6 +301,8 @@ class BacktestService:
             batched_raw_rows = self._load_factor_raw_batch(
                 client,
                 conditions=conditions,
+                universe=universe,
+                exact_signal_values=exact_signal_values,
                 signal_dates=raw_signal_dates,
                 market=market,
                 financial_basis=financial_basis,
@@ -314,6 +334,8 @@ class BacktestService:
                 snapshot_rows = self._load_factor_snapshot(
                     client,
                     conditions=conditions,
+                    universe=universe,
+                    exact_signal_values=exact_signal_values,
                     signal_date=signal_date,
                     snapshot_date=(
                         snapshot_dates_by_signal[signal_date] if use_snapshot else None
@@ -428,6 +450,8 @@ class BacktestService:
         self,
         client: Any,
         *,
+        universe=None,
+        exact_signal_values: bool = False,
         conditions: list[FactorCondition],
         signal_date: date,
         snapshot_date: date | None = None,
@@ -442,6 +466,8 @@ class BacktestService:
     ) -> list[dict[str, Any]]:
         query, params = build_factor_snapshot_query(
             conditions,
+            universe=universe,
+            exact_signal_values=exact_signal_values,
             signal_date=signal_date,
             snapshot_date=snapshot_date,
             market=market,
@@ -459,6 +485,8 @@ class BacktestService:
         self,
         client: Any,
         *,
+        universe=None,
+        exact_signal_values: bool = False,
         conditions: list[FactorCondition],
         signal_dates: list[date],
         snapshot_dates: list[date],
@@ -470,6 +498,8 @@ class BacktestService:
     ) -> dict[date, list[dict[str, Any]]]:
         query, params = build_factor_snapshot_batch_query(
             conditions,
+            universe=universe,
+            exact_signal_values=exact_signal_values,
             signal_dates=signal_dates,
             snapshot_dates=snapshot_dates,
             market=market,
@@ -488,6 +518,8 @@ class BacktestService:
         self,
         client: Any,
         *,
+        universe=None,
+        exact_signal_values: bool = False,
         conditions: list[FactorCondition],
         signal_dates: list[date],
         market: str | None,
@@ -499,6 +531,8 @@ class BacktestService:
     ) -> dict[date, list[dict[str, Any]]]:
         query, params = build_factor_raw_batch_query(
             conditions,
+            universe=universe,
+            exact_signal_values=exact_signal_values,
             signal_dates=signal_dates,
             market=market,
             financial_basis=financial_basis,

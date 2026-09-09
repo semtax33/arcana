@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS arcana.security_master
     share_class   LowCardinality(String)      default '',
     country       LowCardinality(String)      default '',
     primary_market_mic LowCardinality(String) default '',
+    exchange_code LowCardinality(String) default '',
     currency      LowCardinality(String)      default '',
     is_active     Bool                        default true,
     created_at    DateTime64(3, 'Asia/Seoul') default now64(3),

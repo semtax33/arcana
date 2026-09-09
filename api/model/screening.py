@@ -36,6 +36,7 @@ class ScreenedStockRow:
     stock_name: str | None = None
     country: str | None = None
     market_cap: float | None = None
+    exchange_code: str | None = None
     sector_code: str | None = None
     industry_group_code: str | None = None
     industry_group_name: str | None = None
@@ -53,3 +54,4 @@ class FactorScreenResult:
     fixed_columns: list[FactorScreenColumn]
     factor_columns: list[FactorScreenColumn]
     rows: list[ScreenedStockRow]
+    universe_summary: dict[str, Any] | None = None

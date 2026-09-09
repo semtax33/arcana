@@ -8,6 +8,8 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from api.config.clickhouse import get_clickhouse_client
+from api.model.universe import has_universe_filters, normalize_universe
+from api.repository.universe_query import load_universe_details, load_row_metadata
 from api.model.screening import (
     FactorScreenColumn,
     FactorScreenResult,
@@ -36,6 +38,7 @@ FIXED_COLUMNS = [
     FactorScreenColumn(key="ticker", label="티커", column_type="ticker", order=2),
     FactorScreenColumn(key="stock_name", label="종목명", column_type="name", order=3),
     FactorScreenColumn(key="country", label="국가", column_type="country", order=4),
+    FactorScreenColumn(key="exchange_code", label="거래소", column_type="exchange", order=4),
     FactorScreenColumn(key="market_cap", label="시가총액", column_type="market_cap", order=5),
     FactorScreenColumn(key="percentile", label="퍼센타일", column_type="percentile", order=10_000),
 ]
@@ -46,6 +49,8 @@ class FactorScreenService:
         self._client_factory = client_factory
 
     def screen_stocks(self, request: FactorScreenRequestDto) -> FactorScreenResult:
+        normalize_universe(request.universe, request.market)
+        universe_summary = None
         conditions = [_to_repository_condition(condition) for condition in request.conditions]
 
         client = self._client_factory()
@@ -65,6 +70,7 @@ class FactorScreenService:
             result_df = screen_stocks_by_factors(
                 client,
                 conditions,
+                universe=request.universe,
                 as_of_date=request.as_of_date,
                 market=request.market,
                 financial_basis=request.financial_basis or DEFAULT_FINANCIAL_BASIS,
@@ -80,6 +86,15 @@ class FactorScreenService:
                 include_security_metadata=True,
             )
             all_rows = result_df.to_dict("records")
+            metadata = load_row_metadata(client, all_rows)
+            for row in all_rows:
+                day = row.get("evaluation_date") or row.get("latest_trade_date")
+                row.update(metadata.get((str(day)[:10], str(row["security_id"])), {}))
+            if has_universe_filters(request.universe):
+                universe_summary, _ = load_universe_details(client,
+                    dates=[result_df.attrs.get("evaluation_date")], universe=request.universe,
+                    market=request.market, sector_codes=request.sector_codes,
+                    industry_group_codes=request.industry_group_codes)
         finally:
             close = getattr(client, "close", None)
             if callable(close):
@@ -110,6 +125,7 @@ class FactorScreenService:
             fixed_columns=FIXED_COLUMNS,
             factor_columns=factor_columns,
             rows=screened_rows,
+            universe_summary=universe_summary,
         )
 
 
@@ -375,6 +391,7 @@ def _to_screened_row(
         stock_name=_clean_value(row.get("issuer_name")),
         country=_clean_value(row.get("country")) or "KR",
         market_cap=_clean_value(row.get("market_cap")),
+        exchange_code=_clean_value(row.get("exchange_code")),
         sector_code=_clean_value(row.get("sector_code")),
         industry_group_code=_clean_value(row.get("industry_group_code")),
         industry_group_name=_clean_value(row.get("industry_group_name")),
