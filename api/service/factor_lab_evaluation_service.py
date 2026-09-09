@@ -13,6 +13,7 @@ from api.config.clickhouse import get_clickhouse_client
 from api.repository.factor_lab_query import compile_factor_lab_graph
 from api.service.factor_identity import canonical_factor_id
 from api.service.factor_lab_outcomes import evaluate_forward_outcome
+from api.service.factor_lab_earnings import evaluate_earnings_outcome
 
 
 EVALUATION_DDL = [
@@ -112,6 +113,26 @@ class FactorLabEvaluationService:
                     raise ValueError("evaluation as_of cannot precede the latest signal date")
                 config = nodes[node_id]["config"]
                 start = min((r["trade_date"] for r in scores), default=as_of)
+                if nodes[node_id]["type"] == "earnings_outcome":
+                    field = {k: k for k in ("surprise_pct", "reported_eps", "estimated_eps")}[config["target_field"]]
+                    events = _records(client.query_df(f"""SELECT security_id, event_date,
+                        event.1 AS availability_date, event.2 AS fiscal_period_end,
+                        if(event.1 <= {{as_of:Date}}, event.3, NULL) AS {field}, event.4 AS raw_path, event.5 AS snapshot_date
+                        FROM (SELECT security_id, event_date,
+                            argMin(tuple(availability_date, fiscal_period_end, {field}, raw_path, snapshot_date), tuple(snapshot_date, raw_path)) AS event
+                            FROM us_consensus_events
+                            WHERE provider = {{provider:String}} AND event_type = 'EARNINGS_RELEASE'
+                                AND security_id IN {{security_ids:Array(String)}}
+                                AND event_date > {{start:Date}} AND event_date <= {{as_of:Date}}
+                            GROUP BY security_id, event_date)
+                        ORDER BY security_id, event_date LIMIT 2000001""",
+                        parameters={"provider": config["provider"], "security_ids": sorted({r["security_id"] for r in scores}), "start": start, "as_of": as_of})) if scores else []
+                    if len(events) > 2_000_000:
+                        raise ValueError("evaluation exceeds 2,000,000 event rows")
+                    result = evaluate_earnings_outcome(config, scores, events, as_of)
+                    manifests.append({"node_id": node_id, "scores": scores, "events": events, "observations": result.pop("observations")})
+                    evaluations.append({"node_id": node_id, "node_version": nodes[node_id].get("version", 1), "score_node_id": source_id, **result})
+                    continue
                 market = str(graph["experiment"].get("market") or "").strip().upper()
                 calendar = _records(client.query_df("""SELECT DISTINCT p.trade_date AS trade_date
                     FROM price_daily AS p INNER JOIN (

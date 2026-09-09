@@ -428,6 +428,9 @@ LIMIT 1
             graph = self.get_experiment(experiment_id).graph
 
         graph_dict = _model_dump(graph)
+        requires_pit = bool(graph_dict.get("outputs", {}).get("evaluation_node_ids")) or any(n.get("type") == "fiscal_lag" for n in graph_dict.get("nodes", []))
+        if requires_pit:
+            graph_dict["experiment"]["factor_data_mode"] = "point_in_time_snapshot"
         execution_graph = graph_dict
         run_id = str(uuid.uuid4())
         factor_id = _lab_factor_id(run_id)
@@ -504,7 +507,7 @@ LIMIT 1
                         graph_dict=graph_dict,
                         trade_dates=history_trade_dates,
                     )
-            if graph_dict.get("outputs", {}).get("evaluation_node_ids"):
+            if requires_pit:
                 if request.mode == "history":
                     if history_trade_dates is None:
                         history_trade_dates = BacktestService()._load_trading_days(
@@ -1007,6 +1010,18 @@ WHERE true{market_filter}
 
     params["factor_pair_count"] = len(factor_pairs)
     pair_predicate = _factor_pair_predicate(factor_pairs, params)
+    if graph.get("version", 1) == 2 and experiment.get("factor_data_mode") == "point_in_time_snapshot":
+        snapshot_rows = _records(client.query_df(f"""SELECT trade_date,
+            uniqExact(tuple(factor_id, financial_basis)) AS factor_pair_count
+            FROM {DEFAULT_FACTOR_SNAPSHOT_TABLE}
+            PREWHERE trade_date IN {{candidate_dates:Array(Date)}}
+            WHERE {pair_predicate}{market_filter} AND source_trade_date <= trade_date
+            GROUP BY trade_date HAVING factor_pair_count >= {{factor_pair_count:UInt64}}
+            ORDER BY trade_date DESC LIMIT 1""", parameters=params))
+        snapshot_date = _row_date(snapshot_rows, "trade_date")
+        if snapshot_date is None:
+            raise ValueError("no common PIT snapshot date found in the screening window")
+        return DEFAULT_FACTOR_SNAPSHOT_TABLE, snapshot_date
     snapshot_query = f"""
 WITH
 eligible_raw_dates AS (

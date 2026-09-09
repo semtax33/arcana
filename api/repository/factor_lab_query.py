@@ -10,6 +10,8 @@ import re
 from typing import Any
 
 from api.service.factor_identity import canonical_factor_id
+from api.repository.factor_lab_regression import compile_residualize
+from api.repository.factor_lab_fiscal import compile_fiscal_lag
 
 
 NODE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -19,7 +21,7 @@ MISSING_POLICIES = {"drop", "cross_sectional_median"}
 CROSS_SECTIONAL_MEDIAN_MISSING_POLICY = "cross_sectional_median"
 
 MATH_UNARY_NODES = {"log", "abs", "sqrt", "negate"}
-TEMPORAL_NODES = {"lag", "rolling_max", "rolling_min"}
+TEMPORAL_NODES = {"lag", "rolling_max", "rolling_min", "rolling_mean", "rolling_std", "fiscal_lag"}
 UNARY_NODES = MATH_UNARY_NODES | TEMPORAL_NODES | {
     "winsorize",
     "zscore",
@@ -37,12 +39,12 @@ LOGICAL_NODES = {"and", "or"}
 BINARY_NODES = ARITHMETIC_NODES | COMPARISON_NODES | LOGICAL_NODES
 INPUT_NODES = {"factor_input", "constant"}
 EVALUATE_NODES = {"ic", "bucket_return", "long_short", "turnover", "decay_test", "backtest"}
-OUTCOME_NODES = {"forward_outcome"}
+OUTCOME_NODES = {"forward_outcome", "earnings_outcome"}
 SUPPORTED_NODES = (
     INPUT_NODES
     | UNARY_NODES
     | BINARY_NODES
-    | {"condition", "condition_score", "date_fallback", "weighted_score"}
+    | {"condition", "condition_score", "date_fallback", "weighted_score", "filter", "mask", "residualize"}
     | EVALUATE_NODES
     | OUTCOME_NODES
 )
@@ -185,6 +187,13 @@ def node_type_specs() -> list[NodeTypeSpec]:
             "unit": "trading_day|calendar_day", "bucket_count": 5, "score_order": "higher|lower",
             "period_policy": "same_period|allow_change",
         }),
+        NodeTypeSpec("rolling_mean", "temporal", ["input"], ["out"], {"window": 20, "unit": "row|trading_day", "min_count": 20}),
+        NodeTypeSpec("filter", "condition", ["input", "condition"], ["out"], {}),
+        NodeTypeSpec("mask", "condition", ["input", "condition"], ["out"], {}),
+        NodeTypeSpec("residualize", "transform", ["target", "named exposures"], ["out"], {"exposures": ["size", "beta"], "method": "ols|ridge", "min_count": 30, "alpha": 1.0}),
+        NodeTypeSpec("fiscal_lag", "temporal", ["input"], ["out"], {"period": 1}),
+        NodeTypeSpec("earnings_outcome", "evaluate", ["score"], [], {"provider": "ALPHA_VANTAGE", "target_field": "surprise_pct|reported_eps|estimated_eps", "horizons": [1], "max_wait_days": 365, "bucket_count": 5, "score_order": "higher|lower"}),
+        NodeTypeSpec("rolling_std", "temporal", ["input"], ["out"], {"window": 20, "unit": "row|trading_day", "min_count": 20, "ddof": 0}),
     ]
 
 
@@ -256,6 +265,8 @@ def compile_factor_lab_graph(
         messages = "; ".join(issue.message for issue in validation.errors)
         raise ValueError(messages)
 
+    if any(n.get("type") == "fiscal_lag" for n in graph.get("nodes", [])):
+        factor_table = "fact_daily_factor_snapshot"
     for table_name in [factor_table, factor_lab_table, price_table, security_table, issuer_table]:
         _validate_identifier(table_name, "table_name")
 
@@ -305,7 +316,7 @@ def compile_factor_lab_graph(
     ctes: list[str] = []
     if _needs_security_universe(nodes, validation.execution_order, experiment):
         ctes.append(_compile_security_universe_cte(experiment, security_table, issuer_table, params))
-    if any(nodes[n]["type"] == "lag" and _dict(nodes[n].get("config")).get("unit") == "trading_day" for n in validation.execution_order):
+    if any(nodes[n]["type"] in TEMPORAL_NODES and _dict(nodes[n].get("config")).get("unit") == "trading_day" for n in validation.execution_order):
         params["calendar_market"] = str(experiment.get("market") or "ALL").strip().upper()
         ctes.append(f"""lab_trading_calendar AS (
     SELECT DISTINCT p.trade_date AS trade_date
@@ -388,6 +399,9 @@ def compile_factor_lab_graph(
                     limit_to_output_scope=node_id not in temporal_history_input_node_ids,
                 )
             )
+        elif node_type == "fiscal_lag":
+            source = nodes[input_map["input"]]
+            ctes.extend(compile_fiscal_lag(node_id, config, source, params))
         elif node_type in {"rolling_max", "rolling_min"}:
             ctes.append(
                 _compile_rolling(
@@ -399,6 +413,8 @@ def compile_factor_lab_graph(
                     limit_to_output_scope=node_id not in temporal_history_input_node_ids,
                 )
             )
+        elif node_type in {"rolling_mean", "rolling_std"}:
+            ctes.append(_compile_rolling_statistics(node_id, node_type, config, input_map["input"], params))
         elif node_type == "winsorize":
             ctes.extend(_compile_winsorize(node_id, config, input_map["input"], params))
         elif node_type == "zscore":
@@ -415,6 +431,10 @@ def compile_factor_lab_graph(
             ctes.append(_compile_condition(node_id, input_map))
         elif node_type == "condition_score":
             ctes.append(_compile_condition_score(node_id, input_map))
+        elif node_type in {"filter", "mask"}:
+            ctes.append(_compile_gate(node_id, node_type, input_map))
+        elif node_type == "residualize":
+            ctes.extend(compile_residualize(node_id, config, input_map, params))
         elif node_type == "date_fallback":
             ctes.append(_compile_date_fallback(node_id, input_map))
         elif node_type == "neutralize":
@@ -762,7 +782,18 @@ def _validate_node_config(
     known_factor_ids: set[str] | None,
     errors: list[FactorLabIssue],
 ) -> None:
-    if node_type == "forward_outcome":
+    if node_type == "earnings_outcome":
+        for key, choices in {"provider": ("ALPHA_VANTAGE",), "target_field": ("surprise_pct", "reported_eps", "estimated_eps"), "score_order": ("higher", "lower")}.items():
+            if config.get(key) not in choices:
+                errors.append(FactorLabIssue("invalid_earnings_config", f"invalid {key}", node_id=node_id))
+        horizons = config.get("horizons")
+        if not isinstance(horizons, list) or not 1 <= len(horizons) <= 8 or any(type(h) is not int or not 1 <= h <= 8 for h in horizons) or len(set(horizons)) != len(horizons):
+            errors.append(FactorLabIssue("invalid_earnings_horizons", "horizons requires unique event ordinals in 1..8", node_id=node_id))
+        for key, low, high, default in [("max_wait_days", 1, 1460, 365), ("bucket_count", 2, 20, 5)]:
+            value = config.get(key, default)
+            if type(value) is not int or not low <= value <= high:
+                errors.append(FactorLabIssue("invalid_earnings_config", f"{key} must be an integer in {low}..{high}", node_id=node_id))
+    elif node_type == "forward_outcome":
         factor_id = canonical_factor_id(str(config.get("target_factor_id") or ""))
         if not FACTOR_ID_RE.fullmatch(factor_id) or factor_id.startswith("lab_"):
             errors.append(FactorLabIssue("invalid_target_factor", "target must be a registered PIT snapshot factor", node_id=node_id))
@@ -786,6 +817,19 @@ def _validate_node_config(
             errors.append(FactorLabIssue("invalid_bucket_count", "bucket_count must be an integer in 2..20", node_id=node_id))
         if config.get("period_policy", "same_period") not in ("same_period", "allow_change"):
             errors.append(FactorLabIssue("invalid_period_policy", "period_policy must be same_period or allow_change", node_id=node_id))
+    elif node_type == "residualize":
+        exposures = config.get("exposures")
+        if (not isinstance(exposures, list) or not 1 <= len(exposures) <= 8
+                or any(not isinstance(e, str) or not NODE_ID_RE.fullmatch(e) or e == "target" for e in exposures)
+                or len(set(exposures)) != len(exposures)):
+            errors.append(FactorLabIssue("invalid_exposures", "exposures requires 1-8 unique named numeric inputs", node_id=node_id))
+        if config.get("method") not in ("ols", "ridge"):
+            errors.append(FactorLabIssue("invalid_regression_method", "method must be ols or ridge", node_id=node_id))
+        minimum = config.get("min_count", 30)
+        if type(minimum) is not int or minimum < (len(exposures) + 2 if isinstance(exposures, list) else 3):
+            errors.append(FactorLabIssue("invalid_regression_count", "min_count must exceed exposures + 1", node_id=node_id))
+        if config.get("method") == "ridge" and (not _is_finite_number(config.get("alpha", 1)) or config.get("alpha", 1) <= 0):
+            errors.append(FactorLabIssue("invalid_ridge_alpha", "ridge alpha must be positive and finite", node_id=node_id))
     elif node_type == "factor_input":
         raw_factor_id = str(config.get("factor_id") or "")
         factor_id = canonical_factor_id(raw_factor_id) if raw_factor_id else ""
@@ -810,10 +854,21 @@ def _validate_node_config(
         value = config.get("value")
         if not _is_finite_number(value):
             errors.append(FactorLabIssue("invalid_constant", "constant.value must be a finite number", node_id=node_id, field="config.value"))
-    elif node_type == "lag":
+    elif node_type in {"lag", "fiscal_lag"}:
         _validate_positive_integer_config(node_id, config, "period", errors)
     elif node_type in {"rolling_max", "rolling_min"}:
         _validate_positive_integer_config(node_id, config, "window", errors)
+    elif node_type in {"rolling_mean", "rolling_std"}:
+        window = config.get("window")
+        count = config.get("min_count", window)
+        if type(window) is not int or not 1 <= window <= 1260:
+            errors.append(FactorLabIssue("invalid_window", "window must be an integer in 1..1260", node_id=node_id))
+        if type(count) is not int or type(window) is not int or not 1 <= count <= window:
+            errors.append(FactorLabIssue("invalid_min_count", "min_count must be in 1..window", node_id=node_id))
+        if config.get("unit") not in ("row", "trading_day"):
+            errors.append(FactorLabIssue("invalid_rolling_unit", "unit must be row or trading_day", node_id=node_id))
+        if node_type == "rolling_std" and (type(config.get("ddof", 0)) is not int or config.get("ddof", 0) not in (0, 1)):
+            errors.append(FactorLabIssue("invalid_ddof", "ddof must be 0 or 1", node_id=node_id))
     elif node_type == "winsorize":
         lower = config.get("lower_quantile", 0.01)
         upper = config.get("upper_quantile", 0.99)
@@ -982,12 +1037,23 @@ def _validate_arity(
             errors.append(FactorLabIssue("invalid_arity", f"{node_type} does not accept inputs", node_id=node_id))
         elif node_type in UNARY_NODES:
             _require_exact_handles(node_id, handles, {"input"}, errors)
+            if node_type == "fiscal_lag" and "input" in handles:
+                source = nodes[handles["input"]]
+                cfg = _dict(source.get("config"))
+                if source.get("type") != "factor_input" or cfg.get("financial_basis") != "quarterly" or str(cfg.get("factor_id", "")).startswith("lab_") or cfg.get("missing_policy", "drop") != "drop":
+                    errors.append(FactorLabIssue("invalid_fiscal_input", "fiscal_lag requires a direct quarterly factor_input with drop missing policy", node_id=node_id))
         elif node_type in BINARY_NODES:
             _require_exact_handles(node_id, handles, {"left", "right"}, errors)
         elif node_type == "condition":
             _require_exact_handles(node_id, handles, {"condition", "if_true", "if_false"}, errors)
         elif node_type == "condition_score":
             _require_exact_handles(node_id, handles, {"condition", "score"}, errors)
+        elif node_type in {"filter", "mask"}:
+            _require_exact_handles(node_id, handles, {"input", "condition"}, errors)
+        elif node_type == "residualize":
+            names = _dict(node.get("config")).get("exposures", [])
+            if isinstance(names, list) and all(isinstance(n, str) for n in names):
+                _require_exact_handles(node_id, handles, {"target", *names}, errors)
         elif node_type == "date_fallback":
             _require_exact_handles(node_id, handles, {"primary", "fallback"}, errors)
         elif node_type in EVALUATE_NODES | OUTCOME_NODES:
@@ -1506,6 +1572,42 @@ def _compile_rolling(
     )
     {output_scope_filter}
 )""".strip()
+
+
+def _compile_gate(node_id, node_type, inputs):
+    valid = "i.is_valid AND isFinite(i.value) AND ifNull(c.is_valid, false) AND isFinite(c.value) AND c.value != 0"
+    return f"""{_cte_name(node_id)} AS (
+        SELECT i.trade_date AS trade_date, i.security_id AS security_id,
+            if({valid}, i.value, NULL) AS value,
+            {valid} AS is_valid,
+            multiIf(NOT i.is_valid, i.invalid_reason, NOT ifNull(c.is_valid, false) OR c.value IS NULL, 'gate_missing_condition', c.value = 0, 'condition_not_met', '') AS invalid_reason
+        FROM {_cte_name(inputs['input'])} AS i
+        LEFT JOIN {_cte_name(inputs['condition'])} AS c ON c.trade_date = i.trade_date AND c.security_id = i.security_id
+        {f'WHERE {valid}' if node_type == 'filter' else ''}
+    )"""
+
+
+def _compile_rolling_statistics(node_id, node_type, config, input_node_id, params):
+    prefix = _param_prefix(node_id)
+    params[f"{prefix}_preceding"] = config["window"] - 1
+    params[f"{prefix}_count"] = max(config.get("min_count", config["window"]), config.get("ddof", 0) + 1)
+    calendar = ""
+    ordering, frame_kind = "i.trade_date", "ROWS"
+    if config["unit"] == "trading_day":
+        calendar = "INNER JOIN (SELECT trade_date, row_number() OVER (ORDER BY trade_date) AS ordinal FROM lab_trading_calendar) AS c ON c.trade_date = i.trade_date"
+        ordering, frame_kind = "c.ordinal", "RANGE"
+    frame = f"PARTITION BY i.security_id ORDER BY {ordering} {frame_kind} BETWEEN {{{prefix}_preceding:UInt32}} PRECEDING AND CURRENT ROW"
+    aggregate = "avg" if node_type == "rolling_mean" else "stddevSamp" if config.get("ddof", 0) else "stddevPop"
+    return f"""{_cte_name(node_id)} AS (
+        SELECT trade_date, security_id,
+            if(n >= {{{prefix}_count:UInt32}} AND isFinite(v), v, NULL) AS value,
+            n >= {{{prefix}_count:UInt32}} AND isFinite(v) AS is_valid,
+            multiIf(n < {{{prefix}_count:UInt32}}, 'rolling_insufficient_history', NOT isFinite(v), 'non_finite_result', '') AS invalid_reason
+        FROM (SELECT i.trade_date AS trade_date, i.security_id AS security_id,
+            countIf(i.is_valid AND isFinite(i.value)) OVER ({frame}) AS n,
+            {aggregate}(if(i.is_valid AND isFinite(i.value), i.value, NULL)) OVER ({frame}) AS v
+            FROM {_cte_name(input_node_id)} AS i {calendar})
+    )"""
 
 
 def _time_series_output_scope_filter(params: dict[str, Any]) -> str:
@@ -2287,7 +2389,7 @@ def _direct_temporal_factor_row_limits(
         ]
         if not direct_temporal_edges:
             continue
-        if any(_dict(nodes[str(e["target"])].get("config")).get("unit") == "trading_day" for e in direct_temporal_edges):
+        if any(_dict(nodes[str(e["target"])].get("config")).get("unit") == "trading_day" or nodes[str(e["target"])]["type"] == "fiscal_lag" for e in direct_temporal_edges):
             continue
         # If this input also reaches a temporal node through an intermediate
         # calculation, its observation requirement is graph-dependent; retain
@@ -2366,10 +2468,12 @@ def _validate_versions_and_evaluations(graph, nodes, edges, evaluation_ids, erro
     for node_id, node in nodes.items():
         nv = node.get("version", 1)
         node_type = node.get("type")
+        if node_type == "earnings_outcome" and str(_dict(graph.get("experiment")).get("market", "")).strip().upper() != "US":
+            errors.append(FactorLabIssue("unsupported_earnings_market", "earnings_outcome currently requires US event data", node_id=node_id))
         supported = {1, 2} if node_type == "lag" else {1}
         if type(nv) is not int or nv not in supported:
             errors.append(FactorLabIssue("unsupported_node_version", f"{node_type} supports versions {sorted(supported)}", node_id=node_id))
-        if (nv != 1 or node_type in OUTCOME_NODES) and version != 2:
+        if (nv != 1 or node_type in OUTCOME_NODES | {"rolling_mean", "rolling_std", "filter", "mask", "residualize", "fiscal_lag"}) and version != 2:
             errors.append(FactorLabIssue("node_requires_graph_v2", "this node requires graph v2", node_id=node_id))
         if node_type == "lag":
             unit = _dict(node.get("config")).get("unit")
