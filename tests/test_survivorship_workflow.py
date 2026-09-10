@@ -26,6 +26,88 @@ def test_survivorship_user_summary_uses_gold_and_retains_incomplete_status(tmp_p
     assert saved['coverage_complete'] is False
 
 
+def test_kr_refresh_retains_dart_primary_evidence_and_separate_exchange_corroboration(tmp_path):
+    from engine.workflows.survivorship import run_survivorship_refresh
+
+    lake = tmp_path / "data-lake"
+    sources = []
+    for source_id, provider, day, url in [
+        ("dart", "DART", "2026-01-07", "https://opendart.fss.or.kr/api/document.xml?rcept_no=20260107000001"),
+        ("kind", "KIND", "2026-01-08", "https://kind.krx.co.kr/external/2026/01/08/000001/20260108000001/68051.htm"),
+    ]:
+        original = lake / "bronze" / provider.lower() / "synthetic_listing.html"
+        original.parent.mkdir(parents=True)
+        original.write_text("Synthetic fixture: an old common stock was listed in 2000 and removed on Jan 6, 2026.", encoding="utf-8")
+        sources.append(dict(source_id=source_id, provider=provider, published_date=day,
+            path=original.relative_to(lake).as_posix(), source_url=url,
+            source_sha256=hashlib.sha256(original.read_bytes()).hexdigest()))
+    manifest = lake / "silver" / "review" / "reviewed.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps(dict(schema_version=1, market="kr", review_status="verified", source_root="../..",
+        sources=sources, listing_episodes=[dict(episode_id="kr-old", security_id="SEC_KR_009994", issuer_id="OLD",
+            symbol="009994", country="KR", exchange_code="KOSPI", security_type="common_stock", status="confirmed",
+            valid_from="2000-01-01", valid_until="2026-01-06", published_date="2026-01-08",
+            source_ids=["dart"], supporting_source_ids=["kind"])], events=[], entitlements=[])), encoding="utf-8")
+
+    run_survivorship_refresh(market="kr", end_date="2026-01-09", manifest_path=manifest,
+        download=False, load_clickhouse=False)
+
+    user = json.loads((lake / "gold/survivorship/kr/listing_episodes.json").read_text("utf-8"))
+    episode, = user["rows"]
+    assert episode["source_ids"] == ["dart"]
+    assert episode["source_url"] == sources[0]["source_url"]
+    assert episode["source_sha256"] == sources[0]["source_sha256"]
+    assert episode["supporting_sources"] == [dict(source_id="kind", provider="KIND", published_date="2026-01-08",
+        source_url=sources[1]["source_url"], source_sha256=sources[1]["source_sha256"])]
+    assert episode["published_date"] == "2026-01-08"
+    assert episode["valid_until"] == "2026-01-06"
+    assert user["coverage_complete"] is False
+
+
+@pytest.mark.parametrize("invalid_change", ["replace_dart", "backdate", "missing_reference", "changed_original", "unofficial_domain"])
+def test_kr_corroboration_rejects_invalid_evidence_without_replacing_the_user_generation(tmp_path, invalid_change):
+    from engine.workflows.survivorship import run_survivorship_refresh
+
+    lake = tmp_path / "data-lake"
+    bronze = lake / "bronze" / "synthetic"
+    bronze.mkdir(parents=True)
+    sources = []
+    for identifier, provider, day, url in [
+        ("dart", "DART", "2026-01-07", "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260107000001"),
+        ("kind", "KIND", "2026-01-08", "https://kind.krx.co.kr/external/2026/01/08/synthetic.html"),
+    ]:
+        source = bronze / f"{identifier}.html"
+        source.write_text("Synthetic confirmed listing-removal fixture", encoding="utf-8")
+        sources.append(dict(source_id=identifier, provider=provider, published_date=day,
+            path=source.relative_to(lake).as_posix(), source_url=url, source_sha256=hashlib.sha256(source.read_bytes()).hexdigest()))
+    manifest = lake / "silver" / "review" / "reviewed.json"
+    manifest.parent.mkdir(parents=True)
+    reviewed = dict(schema_version=1, market="kr", review_status="verified", source_root="../..", sources=sources,
+        listing_episodes=[dict(episode_id="kr-old", security_id="SEC_KR_009994", issuer_id="OLD", symbol="009994",
+            country="KR", exchange_code="KOSPI", security_type="common_stock", status="confirmed", valid_from="2000-01-01",
+            valid_until="2026-01-06", published_date="2026-01-08", source_ids=["dart"], supporting_source_ids=["kind"])],
+        events=[], entitlements=[])
+    manifest.write_text(json.dumps(reviewed), encoding="utf-8")
+    run_survivorship_refresh(market="kr", end_date="2026-01-09", manifest_path=manifest, download=False, load_clickhouse=False)
+    gold = lake / "gold/survivorship/kr"
+    previous = {path.name:path.read_bytes() for path in gold.iterdir() if path.is_file()}
+    episode = reviewed["listing_episodes"][0]
+    if invalid_change == "replace_dart":
+        episode["source_ids"], episode["supporting_source_ids"] = ["kind"], []
+    elif invalid_change == "backdate":
+        episode["published_date"] = "2026-01-07"
+    elif invalid_change == "missing_reference":
+        episode["supporting_source_ids"] = ["absent"]
+    elif invalid_change == "changed_original":
+        (bronze / "kind.html").write_text("A different original response", encoding="utf-8")
+    elif invalid_change == "unofficial_domain":
+        sources[1]["source_url"] = "https://example.test/unofficial-notice.html"
+    manifest.write_text(json.dumps(reviewed), encoding="utf-8")
+    with pytest.raises(ValueError):
+        run_survivorship_refresh(market="kr", end_date="2026-01-09", manifest_path=manifest, download=False, load_clickhouse=False)
+    assert {path.name:path.read_bytes() for path in gold.iterdir() if path.is_file()} == previous
+
+
 @pytest.mark.parametrize("reader_mode", ["cached", "csv"])
 def test_dart_reviewed_kr_history_restores_pinned_marcap_prices_and_capitalization(tmp_path, monkeypatch, reader_mode):
     import pandas as pd

@@ -44,7 +44,7 @@
 
 ## 증거 위치와 검증
 
-`docs/research/us_four_split_conflicts_20260910/` 폴더에 최초 네 건과 추가 PMCB를 함께 저장했다.
+`data-lake/bronze/research/stock_splits/us/us_four_split_conflicts_20260910/` 폴더에 최초 네 건과 추가 PMCB를 함께 저장했다.
 
 - `manifest.json`: 17개 원본의 정확한 EDGAR URL·로컬 경로·SHA-256. 기존 로컬 원본을 복사한 경우 원래 경로와 수집 메타데이터도 보존했다.
 - `DD/`, `HON/`, `PMN/`, `POLA/`, `PMCB/`: 원본 HTML/PDF/JPG 및 개별 메타데이터. HTML의 읽기용 `.txt`도 저장했다.
@@ -54,3 +54,5 @@
 - `source_text_observations.json`, `validation.json`: 원문 문구 관찰값과 모든 원본 SHA 일치 결과.
 
 확정 비율은 모두 공시의 명시적 교환 문구에서 얻었다. 거래일은 위 회사 공시와 실행 증거를 대조한 값이며, 독립적인 거래소 체결 원장을 조회한 것은 아니다. HON의 외부 조정계수 의미와 PMCB의 외부 1/1550 값의 원인은 여전히 미확정이다.
+
+가공·검증 자료: [us_four_split_conflicts_20260910](../../data-lake/silver/research/stock_splits/us/us_four_split_conflicts_20260910). 원문은 위 bronze 표본 경로에 보존한다.

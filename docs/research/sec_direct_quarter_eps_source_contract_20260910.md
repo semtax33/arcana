@@ -10,7 +10,7 @@
 
 ## 실제 companyfacts 행
 
-아래 Basic/Diluted는 모두 표준 태그 `us-gaap:EarningsPerShareBasic`, `us-gaap:EarningsPerShareDiluted`의 `USD/shares` 단위다. 각 값은 원본 행의 `val`을 그대로 옮겼다. 원본과 동일한 모든 키는 `sec_direct_quarter_eps_samples_20260910/local_companyfacts_exact_rows.json`에 보존했다. [NVDA 공식 companyfacts](https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json), [AAPL 공식 companyfacts](https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json).
+아래 Basic/Diluted는 모두 표준 태그 `us-gaap:EarningsPerShareBasic`, `us-gaap:EarningsPerShareDiluted`의 `USD/shares` 단위다. 각 값은 원본 행의 `val`을 그대로 옮겼다. 원본과 동일한 모든 키는 `../../data-lake/silver/research/financial_statements/eps/sec_direct_quarter_eps_samples_20260910/local_companyfacts_exact_rows.json`에 보존했다. [NVDA 공식 companyfacts](https://data.sec.gov/api/xbrl/companyfacts/CIK0001045810.json), [AAPL 공식 companyfacts](https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json).
 
 | 발행사·관측 | start | end | filed | accn | Basic | Diluted |
 |---|---|---|---|---|---:|---:|
@@ -93,7 +93,7 @@ companyfacts의 `filed`는 날짜 정밀도다. 본 연구의 `filed <= as_of` �
 
 ## 검증 및 저장물
 
-`docs/research/sec_direct_quarter_eps_samples_20260910/`에 다음을 저장했다.
+`data-lake/bronze/research/financial_statements/eps/sec_direct_quarter_eps_samples_20260910/`에 다음을 저장했다.
 
 - `local_input_manifest.json`: 로컬 companyfacts 두 파일의 정확한 경로·공식 URL·SHA-256·크기·mtime. NVDA 스냅샷은 로컬 2026-06-17 수정, AAPL은 2026-05-01 수정 파일이며 재다운로드하지 않았다.
 - `local_companyfacts_exact_rows.json`: 대상 기간의 EPS와 비가산성 확인용 가중평균 주식수 원행. 비교기간으로 나중에 다시 제출된 행도 함께 보존했다.
@@ -104,3 +104,5 @@ companyfacts의 `filed`는 날짜 정밀도다. 본 연구의 `filed <= as_of` �
 - `filing_text_observations.json`, `code_read_manifest.json`, `validation.json`: EPS 설명·분할 기준단위·비가산성 문구와 코드 버전·산술 확인.
 
 이는 현 로컬 스냅샷에 남은 과거 공시 행과 공식 원문을 통한 재현이다. SEC API 전체의 역사적 응답·배포 지연을 보존한 시점별 아카이브를 구축한 것은 아니다. 조사한 두 발행사 밖의 직접 분기 EPS 커버리지나 pro forma 배제율은 측정하지 않았다.
+
+가공·검증 자료: [sec_direct_quarter_eps_samples_20260910](../../data-lake/silver/research/financial_statements/eps/sec_direct_quarter_eps_samples_20260910). 원문은 위 bronze 표본 경로에 보존한다.

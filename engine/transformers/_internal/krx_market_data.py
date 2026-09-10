@@ -1,6 +1,11 @@
 ﻿from glob import glob
+import hashlib
+from io import BytesIO
+import json
 from pathlib import Path
+from uuid import uuid4
 
+import numpy as np
 import pandas as pd
 
 from engine.core.paths import DATA_LAKE, PROJECT_ROOT, market_csv_name
@@ -36,9 +41,16 @@ def _glob_files(path: str) -> list[str]:
     return files
 
 
-def _write_csv(df: pd.DataFrame, output_path: Path) -> None:
+def _write_csv(df: pd.DataFrame, output_path: Path, *, before_replace=None) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(output_path, index=False, encoding="utf-8-sig")
+    temporary = output_path.with_name(f".{output_path.name}.{uuid4().hex}.tmp")
+    try:
+        df.to_csv(temporary, index=False, encoding="utf-8-sig")
+        if before_replace is not None:
+            before_replace(temporary)
+        temporary.replace(output_path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _stock_code_from_path(path: str | Path) -> str:
@@ -113,7 +125,19 @@ def normalize_price(path: str):
     return result
 
 
-def normalize_shares(path: str):
+def normalize_shares(path: str, *, output_path: str | Path | None = None):
+    """Normalize KRX and registered historical observations to a silver input."""
+    output = Path(output_path) if output_path is not None else DATA_LAKE.silver(
+        "krx", "shares", market_csv_name("normalized_shares"),
+    )
+    if not output.resolve().is_relative_to((DATA_LAKE.root / "silver").resolve()):
+        raise ValueError("Normalized share data must be inside data-lake/silver")
+    default = DATA_LAKE.silver("krx", "shares", market_csv_name("normalized_shares"))
+    # The refresh command owns the market lock across collection and publication.
+    return _normalize_shares(path, output, track_changes=output.resolve() == default.resolve())
+
+
+def _normalize_shares(path, output, *, track_changes):
     df = _read_market_symbol_files(path)
     _require_columns(df, [DATE_COLUMN, LISTED_SHARES_COLUMN, MARKET_CAP_COLUMN])
 
@@ -123,6 +147,122 @@ def normalize_shares(path: str):
     result["shares"] = df[LISTED_SHARES_COLUMN]
     result["market_cap"] = df[MARKET_CAP_COLUMN]
 
-    _write_csv(result, DATA_LAKE.silver("krx", "shares", market_csv_name("normalized_shares")))
+    historical = _historical_shares()
+    quarantined_rows = historical.attrs.get("quarantined_share_source_rows", 0)
+    if not historical.empty:
+        result = pd.concat([result, historical], ignore_index=True)
+        keys = ["security_id", "trade_date"]
+        duplicates = result.loc[result.duplicated(keys, keep=False)]
+        reference = duplicates.drop_duplicates(keys).set_index(keys)
+        comparison = duplicates.join(reference, on=keys, rsuffix="_first")
+        consistent = np.isclose(comparison.shares, comparison.shares_first, rtol=0, atol=0) & np.isclose(
+            comparison.market_cap, comparison.market_cap_first, rtol=1e-8, atol=1,
+        )
+        if not consistent.all():
+            sample = comparison.loc[~consistent, keys].head(3).to_dict("records")
+            raise ValueError(f"Historical share observations conflict: {sample}")
+        result = result.drop_duplicates(keys, keep="first")
+        result = result.sort_values(keys).reset_index(drop=True)
+    if track_changes:
+        from engine.transformers.share_input_history import prepare_share_input_change, finish_share_input_change
+        publication = {}
+        def prepare(candidate):
+            publication["path"] = prepare_share_input_change(output, candidate, data_lake=DATA_LAKE)
+        _write_csv(result, output, before_replace=prepare)
+        finish_share_input_change(publication["path"])
+        result.attrs["share_input_change_report"] = str(publication["path"].resolve())
+    else:
+        _write_csv(result, output)
+    result.attrs["quarantined_share_source_rows"] = quarantined_rows
     return result
+
+
+def _historical_shares() -> pd.DataFrame:
+    """Read explicitly registered bronze observations, without listing inference."""
+    manifest_path = DATA_LAKE.silver("krx", "shares", "historical_sources.json")
+    if not manifest_path.exists():
+        return pd.DataFrame()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest["schema_version"] != 1:
+        raise ValueError("Unsupported historical share source manifest")
+    sources = manifest["sources"]
+    identities = [(source["path"], source.get("start_date"), source.get("end_date"), source.get("observation_date")) for source in sources]
+    if not sources or len(set(identities)) != len(sources):
+        raise ValueError("Historical share registration has empty or duplicate sources")
+    frames = []
+    quarantined_rows = 0
+    for source in sources:
+        source_path = (DATA_LAKE.root / source["path"]).resolve()
+        if not source_path.is_relative_to((DATA_LAKE.root / "bronze").resolve()):
+            raise ValueError("Historical share originals must be inside data-lake/bronze")
+        source_bytes = source_path.read_bytes()
+        if hashlib.sha256(source_bytes).hexdigest() != source["sha256"]:
+            raise ValueError(f"Historical share source hash mismatch: {source_path.name}")
+        source_format = source.get("format", "marcap_parquet")
+        if source_format == "marcap_parquet":
+            raw = pd.read_parquet(BytesIO(source_bytes), columns=["Code", "Date", "Close", "Stocks", "Marcap"])
+        elif source_format == "fdr_listing_csv":
+            # A pinned, independently dated listing snapshot, never today's listing.
+            raw = pd.read_csv(BytesIO(source_bytes), usecols=["Code", "Close", "Stocks", "Marcap"], dtype={"Code": str})
+            raw["Date"] = source["observation_date"]
+        else:
+            raise ValueError(f"Unsupported historical share source format: {source_format}")
+        raw["Date"] = _parse_trade_dates(raw["Date"])
+        start = pd.Timestamp(source.get("start_date", f"{source['year']}-01-01"))
+        end = pd.Timestamp(source.get("end_date", f"{source['year']}-12-31"))
+        if start > end or start.year != source["year"] or end.year != source["year"]:
+            raise ValueError("Invalid registered capitalization date interval")
+        if not raw["Date"].dt.year.eq(source["year"]).all():
+            raise ValueError("Historical capitalization source contains the wrong year")
+        raw = raw.loc[raw["Date"].between(start, end)].copy()
+        codes = raw["Code"].astype(str).str.strip().str.zfill(6)
+        dates = _parse_trade_dates(raw["Date"])
+        values = raw[["Close", "Stocks", "Marcap"]].apply(pd.to_numeric, errors="raise")
+        valid = (
+            codes.str.fullmatch(r"[0-9A-Z]{6}") & dates.dt.year.eq(source["year"])
+            & np.isfinite(values).all(axis=1) & values.gt(0).all(axis=1)
+            & values.Stocks.mod(1).eq(0)
+            & np.isclose(values.Close * values.Stocks, values.Marcap, rtol=1e-8, atol=1)
+        )
+        frame = pd.DataFrame({
+            "security_id": "SEC_KR_" + codes,
+            "trade_date": dates,
+            "shares": values.Stocks,
+            "market_cap": values.Marcap,
+        })
+        if frame.empty or not codes.str.fullmatch(r"[0-9A-Z]{6}").all() or frame.duplicated(["security_id", "trade_date"]).any():
+            raise ValueError(f"Invalid historical capitalization observations: {source_path.name}")
+        if source.get("quarantine") is not None:
+            rejected = frame.assign(raw_close=values.Close).loc[~valid]
+            _verify_share_quarantine(source["quarantine"], rejected)
+            quarantined_rows += len(rejected)
+            frame = frame.loc[valid].copy()
+        elif not valid.all():
+            raise ValueError(f"Invalid historical capitalization observations: {source_path.name}")
+        frames.append(frame)
+    result = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    result.attrs["quarantined_share_source_rows"] = quarantined_rows
+    return result
+
+
+def _verify_share_quarantine(registration, rejected):
+    """Accept only an exact, pinned inventory of already-invalid observations."""
+    path = (DATA_LAKE.root / registration["path"]).resolve()
+    if not path.is_relative_to((DATA_LAKE.root / "silver").resolve()):
+        raise ValueError("Share source quarantine evidence must be inside data-lake/silver")
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != registration["sha256"]:
+        raise ValueError("Share source quarantine hash mismatch")
+    expected = pd.read_parquet(BytesIO(raw))
+    keys = ["security_id", "trade_date"]
+    fields = ["raw_close", "shares", "market_cap"]
+    _require_columns(expected, keys + fields)
+    expected["trade_date"] = _parse_trade_dates(expected.trade_date)
+    if expected.empty or expected.duplicated(keys).any():
+        raise ValueError("Share source quarantine must contain unique rejected observations")
+    expected, actual = expected.set_index(keys).sort_index(), rejected.set_index(keys).sort_index()
+    if not expected.index.equals(actual.index):
+        raise ValueError("Share source quarantine differs from the invalid source keys")
+    if not np.array_equal(expected[fields].to_numpy(float), actual[fields].to_numpy(float), equal_nan=True):
+        raise ValueError("Share source quarantine differs from original values")
 

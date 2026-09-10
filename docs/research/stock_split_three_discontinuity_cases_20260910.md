@@ -85,7 +85,7 @@
 
 ## 저장물
 
-`docs/research/stock_split_capital_reduction_cases_20260910/`에 다음을 저장했다.
+`data-lake/bronze/research/stock_splits/kr/stock_split_capital_reduction_cases_20260910/`에 다음을 저장했다.
 
 - `document_manifest.json`: 공식 본문 **11개**, 문서번호·제목·정정 선택 정보·URL·수집시각·SHA-256 및 원본 경로.
 - `disclosures/037030/`, `disclosures/013890/`, `disclosures/900300/`: 원본 HTML과 각 파일의 메타데이터.
@@ -96,3 +96,5 @@
 - `organic_other_action_search.json`: 같은 시기 추가상장 검색의 범위와 결과.
 
 정상 공식 경로만 사용했다. 이번 연구에서 확인하지 않은 무상감자 일반 사례까지 자동 조정하도록 결론을 확장하지 않는다.
+
+가공·검증 자료: [stock_split_capital_reduction_cases_20260910](../../data-lake/silver/research/stock_splits/kr/stock_split_capital_reduction_cases_20260910). 원문은 위 bronze 표본 경로에 보존한다.

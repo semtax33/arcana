@@ -79,7 +79,7 @@ KIND `20180503000318` / 문서 `20180503000874`는 **유가증권시장본부가
 
 ## 저장한 증거
 
-표본 디렉터리: [stock_split_official_fallback_samples_20260909](stock_split_official_fallback_samples_20260909/).
+표본 디렉터리: [원문 표본](../../data-lake/bronze/research/stock_splits/kr/stock_split_official_fallback_samples_20260909).
 
 - `kind_sample_manifest.json`: 신규 원문·검색·뷰어·contents 응답·EXCEL의 정확 URL, 요청, 인코딩, SHA256.
 - `kind_samsung_amendment_*_request.json`: 처음 검증한 검색·뷰어·contents 요청의 추가 출처 정보.
@@ -88,3 +88,5 @@ KIND `20180503000318` / 문서 `20180503000874`는 **유가증권시장본부가
 - `kind_sample_validation.json`: 원본 응답 18개 SHA256 검증과 과거 DART 표본 대조. 삼성 정정, 캔버스엔 정정, 캔버스엔 거래정지해제의 표 텍스트는 공백 정규화 후 DART/KIND가 모두 동일했다.
 
 샘플 요청은 단기간·소수 공시에 한정했으며 전체 시장의 수집 완료율, 모든 014의 복원 가능성, 모든 기업행사의 포괄성을 검증한 결과는 아니다.
+
+가공·검증 자료: [stock_split_official_fallback_samples_20260909](../../data-lake/silver/research/stock_splits/kr/stock_split_official_fallback_samples_20260909). 원문은 위 bronze 표본 경로에 보존한다.

@@ -35,11 +35,11 @@ IPO 증권신고서 표지의 문서 날짜는 2025년 8월 29일이고 SEC 접�
 
 접수번호 0001683168-22-007213에 최초 계획, 지연 발표, 최종 실행 발표가 함께 첨부되어 있다. 본문은 10월 26일 효력 예정이던 정관 수정을 다시 덮어써 그날 병합이 발생하지 않게 했고, **11월 1일 23:59 Eastern Time**으로 다시 정했다고 설명한다. 이후 문단은 **11월 2일 OTCQB에서 실제 분할 반영 거래를 시작했다**고 명시한다. [본문 8-K](https://www.sec.gov/Archives/edgar/data/867840/000168316822007213/poci_8k.htm), [명시적인 지연 발표](https://www.sec.gov/Archives/edgar/data/867840/000168316822007213/poci_ex9902.htm), [최종 1-for-3 실행 발표](https://www.sec.gov/Archives/edgar/data/867840/000168316822007213/poci_ex9903.htm)
 
-FINRA의 `OTCDailyListID=247068`, `exDate=2022-11-02`, `reverseSplitRate=1:3`, PEYE→PEYED가 동일 날짜와 비율을 독립 확인한다. PEYED는 당시 임시 기호이며 원 공시는 Nasdaq 이전 시 POCI로 바뀔 기호를 설명한다. Alpha의 11월 3일 행사 행을 공식일로 이동시키는 것만으로 모든 가격 단위가 고쳐진다고 볼 수 없다. 본체는 11월 2일의 양의 거래량 일별 종가가 아직 구단위로 보이는 문제를 별도 점검 중이다. [FINRA 원본](us_eight_remaining_date_conflict_samples_20260910/POCI/finra_peye_20221001_20221130.json), [최초 발표의 티커 연결](https://www.sec.gov/Archives/edgar/data/867840/000168316822007213/poci_ex9901.htm)
+FINRA의 `OTCDailyListID=247068`, `exDate=2022-11-02`, `reverseSplitRate=1:3`, PEYE→PEYED가 동일 날짜와 비율을 독립 확인한다. PEYED는 당시 임시 기호이며 원 공시는 Nasdaq 이전 시 POCI로 바뀔 기호를 설명한다. Alpha의 11월 3일 행사 행을 공식일로 이동시키는 것만으로 모든 가격 단위가 고쳐진다고 볼 수 없다. 본체는 11월 2일의 양의 거래량 일별 종가가 아직 구단위로 보이는 문제를 별도 점검 중이다. [FINRA 원본](../../data-lake/bronze/research/stock_splits/us/us_eight_remaining_date_conflict_samples_20260910/POCI/finra_peye_20221001_20221130.json), [최초 발표의 티커 연결](https://www.sec.gov/Archives/edgar/data/867840/000168316822007213/poci_ex9901.htm)
 
 ## RDGL: 6월 26일을 6월 28일로 명시 정정
 
-6월 27일 정정 보도자료는 6월 26일 발표를 고친다고 명시하고 **6월 28일 시장 개장**으로 변경한다. 후속 본문 8-K는 법적 효력 6월 25일 23:59 Eastern Time, FINRA 승인 6월 27일, 실제 시장 적용 6월 28일을 분리한다. FINRA 레코드 `156947`도 `exDate=2019-06-28`, `1:8`, RDGL→RDGLD다. 같은 병합을 6월 26일과 28일에 두 번 적용하면 안 된다. [정정 발표](https://www.sec.gov/Archives/edgar/data/1449349/000149315219010114/ex99-2.htm), [실제 실행 8-K](https://www.sec.gov/Archives/edgar/data/1449349/000149315219010114/form8-k.htm), [FINRA 원본](us_eight_remaining_date_conflict_samples_20260910/RDGL/finra_rdgl_20190601_20190731.json)
+6월 27일 정정 보도자료는 6월 26일 발표를 고친다고 명시하고 **6월 28일 시장 개장**으로 변경한다. 후속 본문 8-K는 법적 효력 6월 25일 23:59 Eastern Time, FINRA 승인 6월 27일, 실제 시장 적용 6월 28일을 분리한다. FINRA 레코드 `156947`도 `exDate=2019-06-28`, `1:8`, RDGL→RDGLD다. 같은 병합을 6월 26일과 28일에 두 번 적용하면 안 된다. [정정 발표](https://www.sec.gov/Archives/edgar/data/1449349/000149315219010114/ex99-2.htm), [실제 실행 8-K](https://www.sec.gov/Archives/edgar/data/1449349/000149315219010114/form8-k.htm), [FINRA 원본](../../data-lake/bronze/research/stock_splits/us/us_eight_remaining_date_conflict_samples_20260910/RDGL/finra_rdgl_20190601_20190731.json)
 
 ## SHIP: 공식 거래일은 6월 27일, Alpha 내부 가격 충돌은 별도 문제
 
@@ -51,11 +51,11 @@ FINRA의 `OTCDailyListID=247068`, `exDate=2022-11-02`, `reverseSplitRate=1:3`, P
 
 최초 발표의 9월 20일은 정정 발표와 Certificate of Correction에서 **9월 21일**로 바뀐다. 수정 정관의 단위 변경 시각은 00:01 Eastern Time이다. 최종 비율은 1-for-35이며, 후속 감사된 10-K의 주식분할 주석은 9월 21일 실제 실행을 확인한다. [최종 비율 8-K](https://www.sec.gov/Archives/edgar/data/1817760/000110465923102289/tm2326434d1_8k.htm), [정정 발표](https://www.sec.gov/Archives/edgar/data/1817760/000110465923102289/tm2326434d1_ex99-2.htm), [정관 날짜 정정](https://www.sec.gov/Archives/edgar/data/1817760/000110465923102289/tm2326434d1_ex3-2.htm), [실행 확인 10-K](https://www.sec.gov/Archives/edgar/data/1817760/000155837024004098/smtk-20231231x10k.htm)
 
-FINRA 레코드 `268874`는 `exDate=2023-09-21`, `1:35`, SMTK→SMTKD다. 발행사 보도자료가 기존 SMTK 기호라고 설명한 것과 FINRA의 임시 D 표기를 모두 보존했다. 이는 동일 보통주의 시장 적용 확인이며 거래 정지 후 재개라는 별도 사실을 뜻하지 않는다. Alpha에는 해당 행사 행과 9월 21·22일 가격 행이 없고, 본체가 발견한 첫 후속 9월 25일 가격도 추가 점검이 필요하다. [FINRA 원본](us_eight_remaining_date_conflict_samples_20260910/SMTK/finra_smtk_20230901_20231031.json)
+FINRA 레코드 `268874`는 `exDate=2023-09-21`, `1:35`, SMTK→SMTKD다. 발행사 보도자료가 기존 SMTK 기호라고 설명한 것과 FINRA의 임시 D 표기를 모두 보존했다. 이는 동일 보통주의 시장 적용 확인이며 거래 정지 후 재개라는 별도 사실을 뜻하지 않는다. Alpha에는 해당 행사 행과 9월 21·22일 가격 행이 없고, 본체가 발견한 첫 후속 9월 25일 가격도 추가 점검이 필요하다. [FINRA 원본](../../data-lake/bronze/research/stock_splits/us/us_eight_remaining_date_conflict_samples_20260910/SMTK/finra_smtk_20230901_20231031.json)
 
 ## SPRB: 8월 5일 예상과 8월 7일 실제 OTCQB 거래
 
-7월 24일 발표는 8월 4일 17:00 Eastern Time 효력·8월 5일 거래를 예상했지만, 8월 14일 실적 발표와 2025년 10-K는 **8월 7일 실제 OTCQB 분할 반영 거래 개시**를 명시한다. FINRA 레코드 `310719`도 `exDate=2025-08-07`, `1:75`, SPRB→SPRBD다. 별도 취소 발표를 찾았다고 주장하지 않고, 예정일을 독립적인 규제기관 자료와 후속 실제 거래 확인으로 대체한다. [최초 일정](https://www.sec.gov/Archives/edgar/data/1683553/000095017025098340/sprb-ex99_1.htm), [후속 실행 발표](https://www.sec.gov/Archives/edgar/data/1683553/000095017025108868/sprb-ex99_1.htm), [후속 10-K](https://www.sec.gov/Archives/edgar/data/1683553/000119312526097558/sprb-20251231.htm), [좁은 기간 FINRA 원본](us_eight_remaining_date_conflict_samples_20260910/SPRB/finra_sprb_20250701_20250831.json)
+7월 24일 발표는 8월 4일 17:00 Eastern Time 효력·8월 5일 거래를 예상했지만, 8월 14일 실적 발표와 2025년 10-K는 **8월 7일 실제 OTCQB 분할 반영 거래 개시**를 명시한다. FINRA 레코드 `310719`도 `exDate=2025-08-07`, `1:75`, SPRB→SPRBD다. 별도 취소 발표를 찾았다고 주장하지 않고, 예정일을 독립적인 규제기관 자료와 후속 실제 거래 확인으로 대체한다. [최초 일정](https://www.sec.gov/Archives/edgar/data/1683553/000095017025098340/sprb-ex99_1.htm), [후속 실행 발표](https://www.sec.gov/Archives/edgar/data/1683553/000095017025108868/sprb-ex99_1.htm), [후속 10-K](https://www.sec.gov/Archives/edgar/data/1683553/000119312526097558/sprb-20251231.htm), [좁은 기간 FINRA 원본](../../data-lake/bronze/research/stock_splits/us/us_eight_remaining_date_conflict_samples_20260910/SPRB/finra_sprb_20250701_20250831.json)
 
 처음 조회한 7~9월 FINRA 응답은 뒤의 기호 변경·Nasdaq 복귀 관련 행도 포함하여 원본으로 보존했다. 설치 proof에는 **7~8월의 단일 행사 행 응답**을 사용했다. 해당 source의 게시일 8월 6일과 sidecar 게시일이 일치하며, 뒤의 기호 변경을 추가 병합으로 세지 않는다.
 
@@ -65,9 +65,11 @@ FINRA 레코드 `268874`는 `exDate=2023-09-21`, `1:35`, SMTK→SMTKD다. 발행
 
 ## 저장물과 검증 범위
 
-- [manifest.json](us_eight_remaining_date_conflict_samples_20260910/manifest.json): 원본 URL·SHA256·접수번호·CIK·실제 SEC 접수일·security_id·원문 경로. FINRA는 provider와 POST 요청 본문을 별도로 기록했다.
-- [expected_parser_fields.json](us_eight_remaining_date_conflict_samples_20260910/expected_parser_fields.json): 8개 사건별 정확한 비율, 실제·예정 거래일, 법적 효력, 증거 역할, 짧은 literal marker, 대체할 과거 후보의 SHA와 정정·실제 확인 근거, 남은 한계.
-- [filing_metadata_provenance.json](us_eight_remaining_date_conflict_samples_20260910/filing_metadata_provenance.json): SEC 접수일을 보도자료 작성일·효력일과 구별한 filing index 21건.
-- [validation.json](us_eight_remaining_date_conflict_samples_20260910/validation.json): 39개 source hash와 신원 필드, 57개 literal, 4개 FINRA 레코드 필드 검사 통과. 가격 환산 검증은 false로 명시했다.
+- [manifest.json](../../data-lake/bronze/research/stock_splits/us/us_eight_remaining_date_conflict_samples_20260910/manifest.json): 원본 URL·SHA256·접수번호·CIK·실제 SEC 접수일·security_id·원문 경로. FINRA는 provider와 POST 요청 본문을 별도로 기록했다.
+- [expected_parser_fields.json](../../data-lake/silver/research/stock_splits/us/us_eight_remaining_date_conflict_samples_20260910/expected_parser_fields.json): 8개 사건별 정확한 비율, 실제·예정 거래일, 법적 효력, 증거 역할, 짧은 literal marker, 대체할 과거 후보의 SHA와 정정·실제 확인 근거, 남은 한계.
+- [filing_metadata_provenance.json](../../data-lake/silver/research/stock_splits/us/us_eight_remaining_date_conflict_samples_20260910/filing_metadata_provenance.json): SEC 접수일을 보도자료 작성일·효력일과 구별한 filing index 21건.
+- [validation.json](../../data-lake/silver/research/stock_splits/us/us_eight_remaining_date_conflict_samples_20260910/validation.json): 39개 source hash와 신원 필드, 57개 literal, 4개 FINRA 레코드 필드 검사 통과. 가격 환산 검증은 false로 명시했다.
 
 FINRA 조회는 [공식 공개 Query API](https://developer.finra.org/docs)의 읽기용 POST 요청이다. `calendarDay`는 조회 파티션이고 사건의 시장 적용일은 `exDate`다. 여기서 검증한 4개 선택 행은 active DA이며 취소 문구가 없다. 원문·과거 후보는 보존하며, 이 조사가 벤더 가격의 단위 수정이나 실제 파이프라인 실행을 완료했다는 뜻은 아니다.
+
+가공·검증 자료: [us_eight_remaining_date_conflict_samples_20260910](../../data-lake/silver/research/stock_splits/us/us_eight_remaining_date_conflict_samples_20260910). 원문은 위 bronze 표본 경로에 보존한다.

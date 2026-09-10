@@ -1,9 +1,13 @@
 """Validate source proofs for the eight researched cases, without changing a ledger."""
 from pathlib import Path
 import datetime, hashlib, json, re, sys
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0,str(ROOT.parents[2]))
+REPO = Path(__file__).resolve().parents[3]
+ROOT = REPO / 'data-lake/bronze/research/stock_splits/us/us_eight_remaining_date_conflict_samples_20260910'
+SILVER = REPO / 'data-lake/silver/research/stock_splits/us/us_eight_remaining_date_conflict_samples_20260910'
+sys.path.insert(0,str(REPO))
 from engine.transformers.stock_splits import text_of_html
+
+SILVER.mkdir(parents=True, exist_ok=True)
 
 manifest = json.loads((ROOT/'manifest.json').read_text('utf-8'))
 by_name = {(m['symbol'],Path(m['path']).name):m for m in manifest}
@@ -200,10 +204,10 @@ for e in events:
 result={'scope':'JXG, PMI, POCI, RDGL, SHIP, SMTK, SPRB, WLFC only. Research evidence; no production ledger or price edits.',
     'researched_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'events':events,
     'vendor_price_warning':'A confirmed official action date does not prove the per-day share units of vendor prices. POCI/SHIP/SMTK/PMI quote continuity remains a separate caller verification.'}
-(ROOT/'expected_parser_fields.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),'utf-8')
-validation={'source_count':len(manifest),'filing_index_count':len(json.loads((ROOT/'filing_metadata_provenance.json').read_text('utf-8'))),
+(SILVER/'expected_parser_fields.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),'utf-8')
+validation={'source_count':len(manifest),'filing_index_count':len(json.loads((SILVER/'filing_metadata_provenance.json').read_text('utf-8'))),
     'literal_checks':checked,'finra_record_checks':4,'failures':failures,
     'status':'passed' if not failures else 'failed','price_adjustment_validated':False,'production_code_changed':False}
-(ROOT/'validation.json').write_text(json.dumps(validation,ensure_ascii=False,indent=2),'utf-8')
+(SILVER/'validation.json').write_text(json.dumps(validation,ensure_ascii=False,indent=2),'utf-8')
 print(json.dumps({'sources':len(manifest),'markers':len(checked),'failures':failures},ensure_ascii=False))
 if failures:raise SystemExit(1)

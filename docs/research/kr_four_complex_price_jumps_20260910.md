@@ -64,7 +64,7 @@ AIG JAPAN에 해당하지 않고 양 단계에 계속 남은 보유자에 대해
 
 `ledger_snapshot.json`은 본체 수정 이전의 파일 SHA·버전·관련 사건과 review를 보존한다. 007460에는 앱토크롬 후보가 부모 코드로 남았고, 나머지에는 비균등·명시 비율 부재 등의 검토 사유가 있었다. 007460은 실제 부모 감자가 빠진 오류이고, 다른 세 건은 복잡한 권리 처리를 완성하지 않은 상태라는 점을 구분한다.
 
-자료 폴더: `docs/research/kr_four_complex_price_jump_samples_20260910/`.
+자료 폴더: `data-lake/bronze/research/stock_splits/kr/kr_four_complex_price_jump_samples_20260910/`.
 
 - `manifest.json`, `disclosures/`: 원문 25건, 원본 SHA, URL, 접수·문서번호, 제출일, security_id 및 자회사 공시 대상 주의사항.
 - `expected_parser_fields.json`: 007460 확정 비율·일자와 나머지 세 건 단계별 조건·미검증 범위, literal 23개 및 위치.
@@ -74,3 +74,5 @@ AIG JAPAN에 해당하지 않고 양 단계에 계속 남은 보유자에 대해
 - `validation.json`: 원문 SHA, 필수 메타데이터와 literal 위치 확인.
 
 종목별 단순 가격 배율 override, 신규상장 경계 추가, 오래된 관측 삭제는 수행하지 않았다. 에이프로젠의 실제 주식단위 변화만 확정했으며, 나머지 세 건은 공식 근거와 미검증 보유수익률 범위를 명확히 남겼다.
+
+가공·검증 자료: [kr_four_complex_price_jump_samples_20260910](../../data-lake/silver/research/stock_splits/kr/kr_four_complex_price_jump_samples_20260910). 원문은 위 bronze 표본 경로에 보존한다.

@@ -59,7 +59,7 @@ KIND 실행 결정 접수번호 `20260313001817`, 문서번호 `20260313004516`.
 
 ## 저장 산출물과 검증
 
-증거 폴더: `docs/research/stock_split_three_capital_reductions_20260910/`.
+증거 폴더: `data-lake/bronze/research/stock_splits/kr/stock_split_three_capital_reductions_20260910/`.
 
 - `disclosures/<종목코드>/`: 19건의 공식 원본 HTML과 각 `.metadata.json`. 정확한 URL, KIND 접수번호·문서번호, 수집시각, SHA-256, 뷰어의 정정문서 목록을 포함한다.
 - `document_manifest.json`: 원문 19건의 메타데이터 목록. 모든 원본 바이트의 SHA-256을 재계산해 일치를 확인했다.
@@ -69,3 +69,5 @@ KIND 실행 결정 접수번호 `20260313001817`, 문서번호 `20260313004516`.
 - `validation.json`: 명시적 비율 문구 존재, 원본 SHA, 주식수·자본금 산술 대조 결과와 미검증 범위.
 
 조회 범위 내 최종 문서와 실제 실행 문서의 일치는 확인했지만 전체 시장의 동시 기업행사 전수 조사나 주주별 단주 대사는 수행하지 않았다. 본 문서의 3건 밖으로 무상감자 처리 규칙을 자동 확장하려면 같은 수준의 조건·취소 여부·실행일 확인이 필요하다.
+
+가공·검증 자료: [stock_split_three_capital_reductions_20260910](../../data-lake/silver/research/stock_splits/kr/stock_split_three_capital_reductions_20260910). 원문은 위 bronze 표본 경로에 보존한다.

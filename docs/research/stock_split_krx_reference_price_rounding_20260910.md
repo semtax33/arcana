@@ -77,7 +77,7 @@ KOSDAQ 표본 체리부로는 보통주식 `A066360`, 1,340원, 적용일 2026-0
 
 ## 저장물과 재현 한계
 
-`docs/research/stock_split_krx_reference_price_samples_20260910/`에 다음을 저장했다.
+`data-lake/bronze/research/stock_splits/kr/stock_split_krx_reference_price_samples_20260910/`에 다음을 저장했다.
 
 - `000860_reference_price_notice.html`, `003090_reference_price_notice.html`: 요청한 두 거짓 음성 후보의 공식 원문.
 - `samsung_reference_price_notice.html`, `ascendio_reference_price_notice.html`, `cherrybro_reference_price_notice.html`: 종류주식 및 양 시장 서식 표본.
@@ -86,3 +86,5 @@ KOSDAQ 표본 체리부로는 보통주식 `A066360`, 1,340원, 적용일 2026-0
 - `validation_examples.json`: 두 사건의 입력 출처 구분과 위 산식의 계산 결과.
 
 KIND 원문은 정상 공개 HTTP 요청으로 직접 확보했다. KRX 법무포털의 일부 직접 요청은 시간초과여서 해당 공식 페이지의 검색 색인에 노출된 조문을 확인했다. **전체 법규 원본 파일이나 모든 역사 시점의 시행본을 확보했다고 주장하지 않는다.** 검색 결과의 제3자 설명은 근거로 사용하지 않았다. 네트워크 차단 우회나 자격증명 사용은 없었다.
+
+가공·검증 자료: [stock_split_krx_reference_price_samples_20260910](../../data-lake/silver/research/stock_splits/kr/stock_split_krx_reference_price_samples_20260910). 원문은 위 bronze 표본 경로에 보존한다.

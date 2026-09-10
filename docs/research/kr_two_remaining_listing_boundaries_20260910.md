@@ -41,7 +41,7 @@
 
 ## 저장 자료와 검증 범위
 
-폴더: `docs/research/kr_two_remaining_listing_boundary_samples_20260910/`.
+폴더: `data-lake/bronze/research/stock_splits/kr/kr_two_remaining_listing_boundary_samples_20260910/`.
 
 - `manifest.json`, `disclosures/`: 원문 14건과 공식 URL, 접수번호, 문서번호, 제출일, security_id, SHA-256, 원문 위치.
 - `expected_parser_fields.json`: 두 구간의 상장·폐지 날짜, 종목·법인 연결, 지표 초기화 판정, literal 14개 및 원문 텍스트 위치.
@@ -51,3 +51,5 @@
 - `validation.json`: 원문 SHA, 필수 메타데이터와 literal 위치 검증 결과.
 
 여기서 사용하는 신규상장·SPAC 소멸합병상장·상장폐지는 각 거래소 원문의 분류다. 가격 점프에서 만든 추정 행사나 개별 분할 override는 없다.
+
+가공·검증 자료: [kr_two_remaining_listing_boundary_samples_20260910](../../data-lake/silver/research/stock_splits/kr/kr_two_remaining_listing_boundary_samples_20260910). 원문은 위 bronze 표본 경로에 보존한다.

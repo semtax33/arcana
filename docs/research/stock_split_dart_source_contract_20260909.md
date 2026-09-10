@@ -2,7 +2,7 @@
 
 - 확인일: 2026-09-09
 - 범위: 공식 DART 공시에서 단순 주식분할·주식병합의 비율과 거래 적용일을 추출하는 방법. 회사분할·합병·주식교환, 감자, 유무상증자, 배당 총수익 조정은 별도 사건이다.
-- 검증: 공식 API 개발가이드와 실제 비인증 DART 검색·본문 HTTP 응답을 확인했다. 원문 표본은 `tests/fixtures/stock_splits/`에 원래 바이트와 인코딩을 보존했다. 이 문서 작성 과정에서 DB나 애플리케이션 코드는 변경하지 않았다.
+- 검증: 공식 API 개발가이드와 실제 비인증 DART 검색·본문 HTTP 응답을 확인했다. 원문 표본은 `data-lake/bronze/fixtures/stock_splits/`에 원래 바이트와 인코딩을 보존했다. 이 문서 작성 과정에서 DB나 애플리케이션 코드는 변경하지 않았다.
 
 ## 적용할 원칙
 
@@ -103,7 +103,7 @@ split_adjusted_close(t; T) = raw_close(t) / product(s_e for t < d_e <= T)
 
 ## 보존한 회귀 검증 자료
 
-위치: [fixture 디렉터리](../../tests/fixtures/stock_splits/). `dart_source_manifest.json`에 원문별 정확 URL, receipt/dcm, 인코딩, SHA256과 수집시각이 있다. 원문 파일은 네 공시의 main/viewer **8개**다.
+위치: [fixture 디렉터리](../../data-lake/bronze/fixtures/stock_splits). `dart_source_manifest.json`에 원문별 정확 URL, receipt/dcm, 인코딩, SHA256과 수집시각이 있다. 원문 파일은 네 공시의 main/viewer **8개**다.
 
 | 파일 접두사 / receipt | 기대 검증 |
 | --- | --- |

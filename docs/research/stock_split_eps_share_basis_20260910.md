@@ -94,7 +94,7 @@ earnings_yield_current_cap = disclosed_common_earnings_TTM / current_common_mark
 
 ## 저장된 원문과 재현 자료
 
-경로: `docs/research/stock_split_eps_basis_samples_20260910/`.
+경로: `data-lake/bronze/research/financial_statements/eps/stock_split_eps_basis_samples_20260910/`.
 
 - `aapl_2020q3_10q.html`, `aapl_2020_10k.html`: 같은 과거 Q3의 분할 전후 단위.
 - `nvda_2024q1_10q.html`, `nvda_2024q2_10q.html`: actual/pro forma 구분 및 실제 Q2 검산.
@@ -105,3 +105,5 @@ earnings_yield_current_cap = disclosed_common_earnings_TTM / current_common_mark
 - `numeric_validation.json`: 분모 기반 EPS 검산, 로컬 EPS 차감 오류, NI 차감 일치.
 
 IFRS 기준서는 공식 검색 색인에서 관련 문단을 확인했다. 원문 PDF 접근이 로그인으로 이동해 기준서 전체 파일은 저장하지 않았다. 삼성전자 규제보고서는 접근 가능한 공식 KIND 원문을 사용했고 DART 원문 API를 새로 호출하지 않았다. 발행 승인일과 모든 원천 데이터의 소급 정책이 확인된 것은 아니다.
+
+가공·검증 자료: [stock_split_eps_basis_samples_20260910](../../data-lake/silver/research/financial_statements/eps/stock_split_eps_basis_samples_20260910). 원문은 위 bronze 표본 경로에 보존한다.

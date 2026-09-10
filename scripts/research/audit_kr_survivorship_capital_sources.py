@@ -56,7 +56,7 @@ def review_source(task):
     for row in rows:
         if row["statement_type"] != "BS":
             continue
-        if re.search("차입|사채|리스|금융부채", row["original_account_name"]):
+        if re.search(r"차입|사채|리스|금융부채|유동성\s*장기부채", row["original_account_name"]):
             borrowing.append({key: row.get(key) for key in ("table_index", "row_index", "indent_level",
                 "original_account_name", "amount_raw", "raw_amount", "unit_factor", "table_title",
                 "source_financial_scope", "parse_alignment_complete", "amount_is_missing")})

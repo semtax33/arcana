@@ -544,7 +544,12 @@ def run_refresh(args: argparse.Namespace) -> None:
                 state.complete_step("operating-metrics")
                 progress.done("operating-metrics")
         if "factors" in targets:
-            if state.is_step_completed("factors"):
+            if not args.dry_run and not args.skip_clickhouse:
+                ensure_krx_silver_market_data_current()
+            from engine.workflows.share_input_rebuild import pending_rebuilds as pending_share_rebuilds
+            share_changes = pending_share_rebuilds("kr", args.financial_basis,
+                symbols=parse_symbols_arg(getattr(args, "symbols", None)), data_lake=DATA_LAKE)
+            if state.is_step_completed("factors") and not share_changes:
                 print("[RESUME] skipping completed step: factors", flush=True)
             else:
                 progress.begin("factors")
@@ -552,11 +557,16 @@ def run_refresh(args: argparse.Namespace) -> None:
                 state.complete_step("factors", market_window)
                 progress.done("factors")
         if "snapshots" in targets:
-            if state.is_step_completed("snapshots"):
+            if not args.dry_run and not args.skip_clickhouse:
+                ensure_krx_silver_market_data_current()
+            from engine.workflows.share_input_rebuild import pending_rebuilds as pending_share_rebuilds
+            share_changes = pending_share_rebuilds("kr", args.financial_basis, kind="snapshots",
+                symbols=parse_symbols_arg(getattr(args, "symbols", None)), data_lake=DATA_LAKE)
+            if state.is_step_completed("snapshots") and not share_changes:
                 print("[RESUME] skipping completed step: snapshots", flush=True)
             else:
                 progress.begin("snapshots")
-                run_factor_snapshot_refresh(args, client)
+                run_factor_snapshot_refresh(args, client, state=state)
                 state.complete_step("snapshots")
                 progress.done("snapshots")
     finally:
@@ -1527,9 +1537,12 @@ def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: 
         return
 
     from engine.workflows.financial_history_rebuild import pending_rebuilds
+    from engine.workflows.share_input_rebuild import pending_rebuilds as pending_share_rebuilds, rebuild_factors as rebuild_share_factors
     from engine.workflows.stock_splits import rebuild_manifest_path, save_json
     market = str(getattr(args, "market", "kr")).lower()
     financial_rebuilds = pending_rebuilds(market, args.financial_basis,
+        symbols=parse_symbols_arg(getattr(args, "symbols", None)), data_lake=DATA_LAKE)
+    share_rebuilds = pending_share_rebuilds(market, args.financial_basis,
         symbols=parse_symbols_arg(getattr(args, "symbols", None)), data_lake=DATA_LAKE)
     dirty_path = rebuild_manifest_path(market, data_lake=DATA_LAKE)
     dirty = json.loads(dirty_path.read_text(encoding="utf-8")) if dirty_path.exists() else {"items": {}}
@@ -1540,7 +1553,7 @@ def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: 
         if args.financial_basis not in item.get("completed_bases", [])
         and (requested_ids is None or sid in requested_ids)
     }
-    if state.is_step_completed("factors-insert") and not financial_rebuilds and not pending_rebuild:
+    if state.is_step_completed("factors-insert") and not financial_rebuilds and not pending_rebuild and not share_rebuilds:
         print("[RESUME] skipping completed substep: factors-insert", flush=True)
         return
 
@@ -1573,7 +1586,9 @@ def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: 
     )
     financial_rebuilds = {sid: item for sid, item in financial_rebuilds.items() if item["from_date"] <= as_of_date.isoformat()}
     rebuild_financial_history_factors(args, client, as_of_date, financial_rebuilds)
+    share_rebuilds = {sid: item for sid, item in share_rebuilds.items() if item["from_date"] <= as_of_date.isoformat()}
     if state.is_step_completed("factors-insert") and not pending_rebuild:
+        rebuild_share_factors(client, share_rebuilds, args.financial_basis, as_of_date, data_lake=DATA_LAKE, workers=args.workers)
         return
     if bool(getattr(args, "force_full", False)):
         start_date = _to_iso_date(DEFAULT_START_DATE)
@@ -1625,9 +1640,12 @@ def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: 
         for item in pending_rebuild.values():
             item["completed_bases"] = sorted(set(item.get("completed_bases", [])) | {args.financial_basis})
         save_json(dirty_path, dirty)
+    # Historical publication is last: the ordinary overlap reload must not
+    # overwrite the verified rows or their consumer files afterwards.
+    rebuild_share_factors(client, share_rebuilds, args.financial_basis, as_of_date, data_lake=DATA_LAKE, workers=args.workers)
 
 
-def run_factor_snapshot_refresh(args: argparse.Namespace, client: Any) -> None:
+def run_factor_snapshot_refresh(args: argparse.Namespace, client: Any, *, state: RefreshState | None = None) -> None:
     if args.skip_clickhouse:
         print("[SKIP] factor snapshots require ClickHouse")
         return
@@ -1674,6 +1692,17 @@ def run_factor_snapshot_refresh(args: argparse.Namespace, client: Any) -> None:
         raise RuntimeError("price adjustments changed; rebuild historical factors for this financial basis before snapshots")
     if pending_snapshots:
         start_date = min(start_date, min(date.fromisoformat(item["from_date"]) for item in pending_snapshots.values()))
+    from engine.workflows.share_input_rebuild import pending_rebuilds as pending_share_rebuilds, rebuild_snapshots as rebuild_share_snapshots
+    share_snapshots = {sid: item for sid, item in pending_share_rebuilds(market, args.financial_basis,
+        kind="snapshots", symbols=parse_symbols_arg(getattr(args, "symbols", None)), data_lake=DATA_LAKE).items()
+        if item["from_date"] <= as_of_date.isoformat()}
+    if state is not None and state.is_step_completed("snapshots") and not financial_snapshots and not pending_snapshots:
+        rebuild_share_snapshots(client, share_snapshots, args.financial_basis, as_of_date, data_lake=DATA_LAKE)
+        return
+    share_factors = pending_share_rebuilds(market, args.financial_basis,
+        symbols=parse_symbols_arg(getattr(args, "symbols", None)), data_lake=DATA_LAKE)
+    if any(item["from_date"] <= as_of_date.isoformat() for item in share_factors.values()):
+        raise RuntimeError("share inputs changed; rebuild historical factors for this financial basis before snapshots")
     market_scoped_delete(
         client,
         factor_snapshot_loader.FACTOR_SNAPSHOT_TABLE,
@@ -1701,9 +1730,12 @@ def run_factor_snapshot_refresh(args: argparse.Namespace, client: Any) -> None:
             item["snapshots_rebuilt"] = {"annual", "quarterly", "ttm"} <= set(item["completed_snapshot_bases"])
         save_json(dirty_path, dirty)
     complete_rebuilds(market, args.financial_basis, financial_snapshots, kind="snapshots", data_lake=DATA_LAKE)
+    rebuild_share_snapshots(client, share_snapshots, args.financial_basis, as_of_date, data_lake=DATA_LAKE)
 
 
 def ensure_krx_silver_market_data_current() -> bool:
+    from engine.transformers.share_input_history import historical_registration_changed, assert_published_share_input
+    shares_changed = historical_registration_changed(data_lake=DATA_LAKE)
     bronze_latest = latest_krx_bronze_date("price")
     silver_price_path = DATA_LAKE.silver(
         "krx",
@@ -1714,7 +1746,10 @@ def ensure_krx_silver_market_data_current() -> bool:
     if bronze_latest is None or (
         silver_latest is not None and silver_latest >= bronze_latest
     ):
-        return False
+        if shares_changed:
+            normalize_shares(str(DATA_LAKE.bronze("krx", "shares", "*")))
+        assert_published_share_input(data_lake=DATA_LAKE)
+        return shares_changed
 
     print(
         "[INFO] KRX Silver market data is stale; "

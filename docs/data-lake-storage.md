@@ -34,7 +34,29 @@ gold에 있다는 사실이 검증 완료를 의미하지 않는다. `coverage_c
 
 과거 시점 스냅샷의 월별 변경 전후 행, 독립적인 as-of 대조 결과, 실제 SQL 검증 결과는 `silver/survivorship/financial_research/kr_market_snapshot_publication/{attempt}`에 저장한다. 게시와 최종 DB 대조가 모두 통과한 경우에만 gold의 `snapshot_summary.json`을 갱신한다. 실제 게시 시각과 DB 버전 순서용 시각이 다르면 두 시각을 명시한다.
 
-계산 불가 상태도 가공 자료다. 과거 값의 사용을 중단하는 결측 사건과 검증용 준비 파일은 silver에 저장한다. 사용자용 gold 요약에서는 유효한 팩터 셀 수와 결측 사건 수를 따로 표시한다. 결측 사건을 수치 0으로 저장하거나 팩터 커버리지에 포함하지 않는다. `kr_capital_abstention_preparation_20260910`의 32,541개 유효 값과 94개 결측 사건은 검증을 마친 준비 자료이며 DB·스냅샷에 새로 게시된 결과는 아니다.
+계산 불가 상태도 가공 자료다. 과거 값의 사용을 중단하는 결측 사건과 검증용 준비 파일은 silver에 저장한다. 사용자용 gold 요약에서는 유효한 팩터 셀 수와 결측 사건 수를 따로 표시한다. 결측 사건을 수치 0으로 저장하거나 팩터 커버리지에 포함하지 않는다. `kr_capital_abstention_preparation_20260910`은 준비 당시의 기록으로 보존한다. 이후 반영한 32,541개 유효 값과 94개 결측 사건의 공개 보고서는 `gold/survivorship/kr/capital_factors/20260910`에 있으며, DB·스냅샷 검증 결과를 함께 제공한다.
+
+2013~2015년 시총 누락의 원본은 `bronze/marcap/data/marcap-{year}.parquet`에 있다. 원문 해시·가격×주식수 대조·기존 주식수 입력과의 비교는 `silver/survivorship/financial_research/kr_historical_capitalization_source_audit_20260911_v2`에, 복구 진행 상태는 `gold/survivorship/kr/capitalization_coverage/20260911`에 둔다. 이 검증은 원문 수치의 검증이며 새로운 발행사·상장 이력을 승인하는 절차가 아니다.
+
+정규 `normalize_shares`는 `silver/krx/shares/historical_sources.json`에 등록된 원본을 매 실행마다 병합한다. 원본은 `bronze/registered-market-sources/sha256={hash}/{filename}`에 바이트 그대로 보관하고, 공급자의 갱신 가능한 캐시 경로는 `original_path`로 남긴다. 등록에는 출처, SHA-256, 관측 연도·날짜 범위를 보존한다. 날짜가 없는 과거 listing CSV는 검증된 고정 관측일을 명시하며 현재 날짜로 대체하지 않는다. 해시·산식·중복·기존 값 충돌을 검증한 후 임시 CSV를 원자적으로 교체한다.
+
+2026-09-11에는 1996~2026년 Marcap 원본 31개와 기존 고정일 목록 원본 1개를 이 경로에 등록했다. 정규 주식수 입력은 15,384,392행이며, 기존 7,102,067행의 값을 유지하면서 누락 관측 8,282,325행을 추가했다. 전체 연도별 원문 대조, 변경 전 CSV, 변경 기록 검증은 `silver/survivorship/financial_research/kr_full_share_input_publication_20260911`에 저장한다. 사용자용 최신 상태는 `gold/survivorship/kr/share_inputs/1996_2026/summary.json`에서 입력 반영과 DB·스냅샷 반영을 구분한다.
+
+후속 2024년 시총·주식수 팩터의 검증·DB 변경 전후 행은 Silver의 `kr_full_share_native_preparation_20260911_2024`, `kr_full_share_native_publication_20260911_2024`에 둔다. 실제 FactorLab의 244거래일 대조 결과는 `kr_full_share_native_factorlab_20260911_2024`에 있다. 사용자용 월별 파일과 검증 요약은 `gold/survivorship/kr/capitalization_factors/2024`에 저장하며 기존 `2013_2015` 결과와 구분한다. 입력 Gold 요약의 `market_factor_scopes`에서 완료한 개별 연도 범위를 제공하고, 전체 재계산 상태를 완료로 바꾸지 않는다.
+
+같은 2024년 원천 범위의 스냅샷 반영·DB 대조·후속 원천 날짜와 달력의 재검증은 Silver의 `kr_full_share_snapshot_publication_20260911_2024_v2`에 보존한다. 실제 사용자 조회 검증은 `kr_full_share_snapshot_factorlab_20260911_2024`에 있다. Gold의 `capitalization_factors/2024/snapshots/{month}.parquet` 33개는 실제 DB의 검증된 최신 스냅샷이며, 원천 날짜와 `is_market_trading_date`를 함께 제공한다. 이 파일의 날짜는 as-of 날짜로서, 거래일이 아닌 기존 캐시 날짜를 주가 관측으로 바꾸지 않는다. Gold 파일을 Silver 검증본과 다시 읽어 비교한 기록은 `closeout/serving_artifacts.json`에 있다.
+
+원문의 결측·0 이하 가격/주식수 등으로 정규화할 수 없는 13,426행은 원본을 보존한 채 `silver/krx/shares/source_quarantine/{source_sha256}/observations.parquet`에 격리했다. 등록의 `quarantine`에는 경로·해시·행 수·이유가 포함된다. 정규화는 격리 파일의 키와 수치가 해당 원문의 실제 부적합 행 전체와 정확히 같을 때만 제외를 허용한다. 유효 행 제외, 원문 수치 변경, 해시 불일치는 실패한다. 사용자용 미해결 관측 목록은 같은 Gold 폴더의 `quarantined_observations.parquet`에 출처와 함께 제공한다. 격리를 값 0 대입이나 상장 적격성 승인으로 해석하지 않는다.
+
+주식수 입력의 변경 기록은 `silver/market_input_changes/kr/{run}/report.json`과 `changed_observations.parquet`에 남는다. CSV 교체 전후 해시, 종목별 최초 변경일, 추가·수정·철회 행 수를 보존한다. `latest.json`은 최근 정규화 입력을 가리키며, 연간·분기·TTM의 팩터·스냅샷 재계산 상태는 `rebuild_state.json`에서 각각 관리한다. 스테이징용 별도 CSV 출력은 정규 입력의 완료 상태를 바꾸지 않는다.
+
+이 변경에 따른 계산 준비본과 월별 DB 변경 전후 행은 `silver/share_input_rebuilds/kr/{symbol}/{basis}/{run}` 및 `silver/share_input_snapshot_rebuilds/kr/{symbol}/{basis}/{run}`에 저장한다. 검증된 사용자용 월별 파일과 요약은 `gold/share_input_rebuilds/kr/{symbol}/{basis}/{factors|snapshots}/{run}`에 둔다. 이 요약의 완료는 해당 입력 변경 범위의 반영을 뜻하며, 전체 시장 생존편향 제거를 뜻하지 않는다. 원본은 이 과정에서 수정하지 않는다.
+
+2026-09-11 실제 입력 복구의 전체 변경 전 CSV·추가 행·정규 파이프라인 스테이징 결과는 `silver/survivorship/financial_research/kr_historical_share_publication_20260911_v2`에 있다. 2013~2015년 1,455,590행을 추가했고, 기존 최근 구간 68,944행도 원본을 연결해 유지했다. 등록 원본 보관의 변경 전후 manifest와 재실행 검증은 `kr_historical_share_source_freeze_20260911`에 있다.
+
+이 입력으로 복구한 `mcap_mil`·`csho` 8,726,945개의 DB 변경 전후 행은 `silver/survivorship/financial_research/kr_historical_capitalization_native_publication_20260911_v2`에 보존한다. 사용자용 월별 팩터 파일 36개는 `gold/survivorship/kr/capitalization_factors/2013_2015`에 있으며, 740거래일의 실제 FactorLab 순위·모집단·상위 70% 대조 자료는 silver의 `kr_historical_capitalization_factorlab_20260911_v3`에 둔다. gold의 `factorlab_verification.json`은 그 근거와 해시를 참조한다. native 값 검증과 과거 시점 스냅샷 검증은 별도 상태로 표시한다.
+
+시총·주식수 스냅샷 19,374,780개의 월별 변경 전후 행·독립 as-of 계산·SQL 검증 결과는 silver의 `kr_historical_capitalization_snapshot_publication_20260911_v2`와 `kr_historical_capitalization_existing_snapshot_publication_20260911`에 있다. 두 범위는 같은 스냅샷 키를 중복 포함하지 않으며, 통합 근거는 `kr_historical_capitalization_snapshot_completion_20260911`에 둔다. 사용자용 통합 상태와 실제 팩터랩 검증 결과는 gold의 `capitalization_factors/2013_2015/snapshot_summary.json`, `snapshot_consumer_verification.json`에 제공한다. 기준일 2026-09-10과 실제 한국 가격 달력의 마지막 관측일 2026-09-04를 구분한다.
 
 2026-09-10 이동의 파일별 원래 위치·새 위치·SHA-256은 `silver/storage_migrations/docs_tests_20260910/inventory.json`과 `journal.json`에 있다. 경로를 수정한 수집 메타데이터의 원본 바이트는 `bronze/storage_migrations/docs_tests_20260910/preimages`에 보존했다. 이동 검증은 아래 명령으로 반복할 수 있다.
 

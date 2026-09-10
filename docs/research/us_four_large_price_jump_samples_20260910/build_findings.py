@@ -9,12 +9,14 @@ import re
 
 from lxml import html
 
-ROOT = Path(__file__).resolve().parent
-REPO = ROOT.parents[2]
+REPO = Path(__file__).resolve().parents[3]
+ROOT = REPO / 'data-lake/bronze/research/stock_splits/us/us_four_large_price_jump_samples_20260910'
+SILVER = REPO / 'data-lake/silver/research/stock_splits/us/us_four_large_price_jump_samples_20260910'
 CASES = {"KEEL": "1812477", "SKYX": "1598981", "CAPS": "887151", "ASTI": "1350102"}
 
 
 def dump(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -43,7 +45,7 @@ def source(symbol, filename, roles, markers=(), record_id=None, location=None):
 
 
 def prepare_metadata():
-    observed = json.loads((ROOT / "initial_local_observations.json").read_text("utf-8"))
+    observed = json.loads((SILVER / "initial_local_observations.json").read_text("utf-8"))
     for symbol, cik in CASES.items():
         for kind in ["cached_TIME_SERIES_DAILY_ADJUSTED", "current_TIME_SERIES_DAILY", "cached_SPLITS"]:
             path = ROOT / symbol / f"{symbol}_{kind}.json"
@@ -122,7 +124,7 @@ def price_checks():
                           "cached_split_coefficients_in_window": sorted({v["8. split coefficient"] for d, v in cached.items() if start <= d <= end})}
     result["ASTI"]["no_raw_rows_interval"] = {"start": "2018-07-23", "end": "2018-08-16", "rows": [d for d in result["ASTI"]["current_raw_rows"] if "2018-07-23" <= d <= "2018-08-16"]}
     result["CAPS"]["unresolved_price_unit_interval"] = {"start": "2019-09-10", "end": "2019-09-18", "raw_rows": {d: r for d, r in result["CAPS"]["current_raw_rows"].items() if "2019-09-10" <= d <= "2019-09-18"}}
-    dump(ROOT / "alpha_daily_comparison.json", result)
+    dump(SILVER / "alpha_daily_comparison.json", result)
     return result
 
 
@@ -222,7 +224,7 @@ def findings():
     result = {"scope": "Exactly KEEL 2019-06-14, SKYX 2022-02-10, CAPS 2019-09-19, ASTI 2018-08-17. Read-only research; no core, ledger, production, or price-panel edits.",
               "researched_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "events": [keel, skyx, caps, asti], "price_provider": "Alpha Vantage only", "production_installation_performed": False}
-    dump(ROOT / "expected_parser_fields.json", result)
+    dump(SILVER / "expected_parser_fields.json", result)
     return result
 
 
@@ -275,7 +277,7 @@ def validate(manifest, expected, prices):
                   "observed_jump_and_prior_close_exactly_agree": all(p["jump_and_prior_close_match_exactly"] for p in prices.values()),
                   "errors": errors, "no_price_or_ledger_mutations": True,
                   "limitations": "Evidence integrity and current-vs-cached Alpha agreement do not certify every quote as an executable market price or validate total-wealth returns."}
-    dump(ROOT / "validation.json", validation)
+    dump(SILVER / "validation.json", validation)
     print(json.dumps(validation, ensure_ascii=False, indent=2))
     if errors:
         raise SystemExit(1)

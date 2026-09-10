@@ -50,11 +50,11 @@
 
 ## 저장 증거와 검증
 
-최초 3종목 원본 11건과 SRXH/BTTR 추가 원본 8건, 합계 19건의 URL·수집시각·SHA256 메타데이터를 `docs/research/us_three_decimal_split_samples_20260910/`에 저장했다. HTML에는 읽기용 텍스트를 함께 저장했고, 스캔 정관은 원본 이미지 4장을 저장해 직접 열어 확인했다. 원본은 EDGAR에서 받아 보존했거나 기존 공식 원문 캐시와 바이트 동일하게 복사했다. 영문 숫자 단어를 치환하지 않았다.
+최초 3종목 원본 11건과 SRXH/BTTR 추가 원본 8건, 합계 19건의 URL·수집시각·SHA256 메타데이터를 `data-lake/bronze/research/stock_splits/us/us_three_decimal_split_samples_20260910/`에 저장했다. HTML에는 읽기용 텍스트를 함께 저장했고, 스캔 정관은 원본 이미지 4장을 저장해 직접 열어 확인했다. 원본은 EDGAR에서 받아 보존했거나 기존 공식 원문 캐시와 바이트 동일하게 복사했다. 영문 숫자 단어를 치환하지 않았다.
 
-- [원본 manifest](us_three_decimal_split_samples_20260910/manifest.json): 원본 19개 전체 경로, 공식 URL 및 SHA256.
-- [기대 파서 필드와 정확 문구](us_three_decimal_split_samples_20260910/expected_parser_fields.json): 종목별 정확한 구주·신주 비율, 법적 효력일, 거래일, 증거 수준, 별도 행사, 원문 위치·짧은 발췌·URL·SHA256.
-- [검증 결과](us_three_decimal_split_samples_20260910/validation.json): 원본 19개 해시 일치, HTML 핵심 발췌 24개가 공백만 정규화한 원문에 존재, 스캔 정관의 비율·시각 발췌 3개는 육안 확인, JSON 파싱 성공. 육안 전사는 자동 텍스트 일치 검사와 구분했다.
+- [원본 manifest](../../data-lake/bronze/research/stock_splits/us/us_three_decimal_split_samples_20260910/manifest.json): 원본 19개 전체 경로, 공식 URL 및 SHA256.
+- [기대 파서 필드와 정확 문구](../../data-lake/silver/research/stock_splits/us/us_three_decimal_split_samples_20260910/expected_parser_fields.json): 종목별 정확한 구주·신주 비율, 법적 효력일, 거래일, 증거 수준, 별도 행사, 원문 위치·짧은 발췌·URL·SHA256.
+- [검증 결과](../../data-lake/silver/research/stock_splits/us/us_three_decimal_split_samples_20260910/validation.json): 원본 19개 해시 일치, HTML 핵심 발췌 24개가 공백만 정규화한 원문에 존재, 스캔 정관의 비율·시각 발췌 3개는 육안 확인, JSON 파싱 성공. 육안 전사는 자동 텍스트 일치 검사와 구분했다.
 
 이 검증은 문서 보존과 발췌 일치 검증이다. 애플리케이션 파서 실행 테스트나 가격 계열 대조 테스트를 수행했다는 뜻은 아니다.
 
@@ -70,4 +70,6 @@
 
 이 결과는 부모 작업이 전달한 Alpha daily 0.025(1/40)와 계약상 불일치한다. 공식 비율을 1/40으로 고칠 근거는 없으며, 원인과 벤더 처리 방식은 이번 원문 조사로 확정하지 않았다. 2025년 별도 합병·사명 변경의 비율을 이번 2024년 행사에 섞지 않았다. ZSTK는 추가 조사하지 않았다.
 
-추가 증거 8건은 `SRXH_BTTR/`와 [추가 manifest](us_three_decimal_split_samples_20260910/srxh_addendum_manifest.json)에 있다. 정관 본문 1쪽의 SHA256은 `7e14057784201a31ac39348fd8e2e6505c72abe5273eed5107993ef86a4dbc11`, 실행 8-K의 SHA256은 `00604807725110dba38f95099b03b2bdf1cb63c2324f6f8fb53574a9b67db9cd`이다.
+추가 증거 8건은 `SRXH_BTTR/`와 [추가 manifest](../../data-lake/bronze/research/stock_splits/us/us_three_decimal_split_samples_20260910/srxh_addendum_manifest.json)에 있다. 정관 본문 1쪽의 SHA256은 `7e14057784201a31ac39348fd8e2e6505c72abe5273eed5107993ef86a4dbc11`, 실행 8-K의 SHA256은 `00604807725110dba38f95099b03b2bdf1cb63c2324f6f8fb53574a9b67db9cd`이다.
+
+가공·검증 자료: [us_three_decimal_split_samples_20260910](../../data-lake/silver/research/stock_splits/us/us_three_decimal_split_samples_20260910). 원문은 위 bronze 표본 경로에 보존한다.

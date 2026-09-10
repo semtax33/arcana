@@ -43,6 +43,7 @@ def read_reviewed_manifest(path, *, market, end_date):
     sources = {}
     domains = {"ALPHA_VANTAGE": {"www.alphavantage.co", "alphavantage.co"},
                "DART": {"dart.fss.or.kr", "opendart.fss.or.kr"},
+               "KIND": {"kind.krx.co.kr"},
                "SEC": {"www.sec.gov", "sec.gov", "data.sec.gov"}, "MARCAP": {"api.github.com"}}
     for source in manifest.get("sources", []):
         identifier = source["source_id"]
@@ -62,6 +63,8 @@ def read_reviewed_manifest(path, *, market, end_date):
                 raise ValueError("Marcap source must match its immutable published Git blob")
         sources[identifier] = dict(source, path=str(location), source_sha256=digest,
                                    published_date=_day(source["published_date"]))
+        if source["provider"] == "KIND" and market != "kr":
+            raise ValueError("KIND corroboration is only supported for Korean lifecycle facts")
 
     rows = {}
     keys = {"listing_episodes": "episode_id", "events": "event_id", "entitlements": "component_id"}
@@ -78,10 +81,21 @@ def read_reviewed_manifest(path, *, market, end_date):
                     raise ValueError(f"Missing source evidence for {identifier}")
                 if market == "kr" and any(sources[ref]["provider"] != "DART" for ref in refs):
                     raise ValueError("Korean listing and lifecycle facts require DART evidence")
+                supporting = row.get("supporting_source_ids", [])
+                if (not isinstance(supporting, list) or any(not isinstance(ref, str) for ref in supporting)
+                        or len(set(supporting)) != len(supporting)
+                        or any(ref not in sources for ref in supporting)):
+                    raise ValueError("Missing or duplicated lifecycle corroborating evidence")
+                if supporting and (market != "kr" or any(sources[ref]["provider"] != "KIND" for ref in supporting)):
+                    raise ValueError("Korean exchange corroboration must cite separately retained KIND notices")
+                row.pop("supporting_sources", None)
+                if supporting:
+                    row["supporting_sources"] = [{key:sources[ref][key] for key in
+                        ("source_id", "provider", "published_date", "source_url", "source_sha256")} for ref in supporting]
                 if row.get("status") != "confirmed":
                     raise ValueError("Unconfirmed rows belong in the unresolved inventory")
                 row["published_date"] = _day(row["published_date"])
-                if row["published_date"] < max(sources[ref]["published_date"] for ref in refs):
+                if row["published_date"] < max(sources[ref]["published_date"] for ref in [*refs, *supporting]):
                     raise ValueError("Fact availability precedes its cited evidence")
                 # A later correction cannot be silently backdated by the receipt ID.
                 if row["published_date"] > end_date:
@@ -131,6 +145,9 @@ def read_reviewed_manifest(path, *, market, end_date):
                 episode["source_ids"] = sorted(set(episode["source_ids"] + event["source_ids"]))
                 episode["closure_published_date"] = event["published_date"]
                 episode["closure_source_ids"] = event["source_ids"]
+                if event.get("supporting_source_ids"):
+                    episode["closure_supporting_source_ids"] = event["supporting_source_ids"]
+                    episode["closure_supporting_sources"] = event["supporting_sources"]
         if episode.get("valid_until") and episode["valid_until"] <= episode["valid_from"]:
             raise ValueError("Listing episode must have a positive lifetime")
     return {**rows, "sources": list(sources.values()), "unresolved": manifest.get("unresolved", []),

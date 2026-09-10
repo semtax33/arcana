@@ -21,6 +21,7 @@ from engine.core.paths import DATA_LAKE
 from engine.core.serving_storage import export_frame, export_json
 from engine.core.source_storage import SourceRefreshLock
 from prepare_kr_survivorship_full_factors import input_inventory
+from publish_kr_survivorship_financial_factors import verify_existing_publication
 from publish_kr_survivorship_market_factors import metadata_difference, next_revision_time
 from validate_kr_survivorship_financial_factors import SILVER, KEYS, canonical, digest, save
 
@@ -128,7 +129,10 @@ def main():
     assert symbols == ["003410", "035480"] and len(ids) == 11 and not any(f.startswith("lab_") for f in ids)
     dependencies = dict(preparation["implementation_sha256"])
     dependencies[str(args.preparation / "summary.json")] = digest(args.preparation / "summary.json")
-    for path in (Path(__file__), ROOT / "scripts/research/publish_kr_survivorship_market_factors.py"):
+    for path in (Path(__file__), ROOT / "scripts/research/publish_kr_survivorship_market_factors.py",
+                 ROOT / "scripts/research/publish_kr_survivorship_financial_factors.py",
+                 ROOT / "scripts/research/validate_kr_survivorship_financial_factors.py",
+                 ROOT / "scripts/research/prepare_kr_survivorship_full_factors.py"):
         dependencies[str(path)] = digest(path)
     frames = []
     for case in preparation["cases"]:
@@ -144,6 +148,10 @@ def main():
         for path, checksum in dependencies.items():
             assert digest(path) == checksum, f"Publication dependency changed: {path}"
         assert input_inventory(symbols) == preparation["input_inventory"], "Reviewed input changed"
+        for symbol in symbols:
+            case = next(r for r in preparation["cases"] if r["symbol"] == symbol)
+            source = case["source_version"]
+            verify_existing_publication(dict(manifest_path=source["manifest_path"], sha256=source["manifest_sha256"]))
     verify()
     attempt = args.output / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid4().hex[:8])
     report = dict(status="starting", native_published=False, snapshots_published=False, coverage_complete=False,

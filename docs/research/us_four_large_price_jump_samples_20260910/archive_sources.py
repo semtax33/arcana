@@ -1,10 +1,11 @@
-"""Read-only source research; writes only this research evidence directory."""
+"""Read-only source research; archives sources in bronze and derived observations in silver."""
 from pathlib import Path
 import datetime, hashlib, json, re, sys
 from lxml import html
 
-ROOT = Path(__file__).resolve().parent
-REPO = ROOT.parents[2]
+REPO = Path(__file__).resolve().parents[3]
+ROOT = REPO / 'data-lake/bronze/research/stock_splits/us/us_four_large_price_jump_samples_20260910'
+SILVER = REPO / 'data-lake/silver/research/stock_splits/us/us_four_large_price_jump_samples_20260910'
 sys.path.insert(0, str(REPO))
 from engine.extractors.stock_splits import OfficialSession
 from engine.transformers._internal.edgar_identity import resolve_edgar_identity
@@ -15,6 +16,7 @@ def stamp():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 def dump(path, obj):
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding='utf-8')
 
 def compact(raw):
@@ -26,7 +28,7 @@ def main():
     indexes, manifest, errors = {}, [], []
     for symbol, (cik, names) in CASES.items():
         target = ROOT / symbol
-        target.mkdir(exist_ok=True)
+        target.mkdir(parents=True, exist_ok=True)
         for name in names:
             accession, filename = name.split('_', 1)
             url = f'https://www.sec.gov/Archives/edgar/data/{cik}/{accession.replace("-", "")}/{filename}'
@@ -83,7 +85,7 @@ def main():
     for path in ROOT.glob('*/finra_*.json.metadata.json'):
         manifest.append(json.loads(path.read_text('utf-8')))
     dump(ROOT / 'manifest.json', manifest)
-    dump(ROOT / 'filing_metadata_provenance.json', indexes)
+    dump(SILVER / 'filing_metadata_provenance.json', indexes)
     dump(ROOT / 'download_errors.json', errors)
     print('DONE',len(manifest),'sources',len(indexes),'indexes',len(errors),'errors', flush=True)
 

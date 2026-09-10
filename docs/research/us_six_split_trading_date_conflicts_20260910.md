@@ -13,7 +13,7 @@
 | DVA | 2/1 | **2013-09-09**, 후속 실적 공시 확인 | 주식배당 지급일 2013-09-06; 기준일 8월 23일 유지 | **9월 23일 계획을 대체** |
 | ESEA | 1/10 | **2015-07-23**, 완료 공시 확인 | 2015-07-22; 장중 시각 표현은 정관과 보도자료가 다름 | **8월 3일 계획을 대체** |
 
-아래 원문들이 각 행의 비율·일정·이전 계획 연결 근거다. 확정 행사와 폐기할 이전 예정 후보는 [expected_parser_fields.json](us_amze_atds_date_conflict_samples_20260910/expected_parser_fields.json)에 함께 저장했다. 원본 삭제를 의미하지 않으며, 이전 예정일을 활성 가격조정 원장에 중복 적용하지 않도록 구분한 것이다.
+아래 원문들이 각 행의 비율·일정·이전 계획 연결 근거다. 확정 행사와 폐기할 이전 예정 후보는 [expected_parser_fields.json](../../data-lake/silver/research/stock_splits/us/us_amze_atds_date_conflict_samples_20260910/expected_parser_fields.json)에 함께 저장했다. 원본 삭제를 의미하지 않으며, 이전 예정일을 활성 가격조정 원장에 중복 적용하지 않도록 구분한 것이다.
 
 ## AMZE: 7월 24일 주식 단위 변경과 7월 27일 거래 재개
 
@@ -46,7 +46,7 @@ FINRA 공식 API에서도 다음 네 행을 받았다. 최초와 취소 행의 �
 | 165116 | 2019-10-15 10:33:06 | 2019-10-16 | DD, commentText=cancelled, **동일 dividendMasterID 40119287** |
 | 165774 | 2019-10-28 12:02:05 | **2019-10-29** | 최종 DA, 1:750, dividendMasterID 40119432 |
 
-자료: [저장한 FINRA 원본 응답](us_amze_atds_date_conflict_samples_20260910/ATDS/finra_ldsr_daily_list_201910_201911.json), [FINRA 공식 OTC Daily List API 문서](https://developer.finra.org/docs). 요청 본문·공식 URL·SHA는 원본 옆 `.metadata.json`에 있다. 이벤트 코드 하나만으로 일반적인 취소 규칙을 추론하지 않고, 이 사례의 취소 문구·연결 식별자·issuer 공시를 함께 확인했다.
+자료: [저장한 FINRA 원본 응답](../../data-lake/bronze/research/stock_splits/us/us_amze_atds_date_conflict_samples_20260910/ATDS/finra_ldsr_daily_list_201910_201911.json), [FINRA 공식 OTC Daily List API 문서](https://developer.finra.org/docs). 요청 본문·공식 URL·SHA는 원본 옆 `.metadata.json`에 있다. 이벤트 코드 하나만으로 일반적인 취소 규칙을 추론하지 않고, 이 사례의 취소 문구·연결 식별자·issuer 공시를 함께 확인했다.
 
 정관의 보통주 집행 조항도 750→1을 명시한다. 단주는 정수 주식으로 올리며 현금을 주지 않는다. 거래 기호는 최초 LDSR, 최종 적용일로부터 20영업일 동안 LDSRD, 이후 ATDS로 공시됐다. 정관의 선택적 효력일 칸은 비어 있어 시장 적용일과 별개의 법적 효력 날짜·시각은 채우지 않았다. [정관 본문](https://www.sec.gov/Archives/edgar/data/1068689/000149315219016127/ex3-1_003.jpg), [정관 날짜 칸](https://www.sec.gov/Archives/edgar/data/1068689/000149315219016127/ex3-1_002.jpg)
 
@@ -60,7 +60,7 @@ FINRA 공식 API에서도 다음 네 행을 받았다. 최초와 취소 행의 �
 
 11월 9일 8-K/A의 Explanatory Note는 최초 8-K를 수정하는 목적이 **법적 효력일을 10월 18일로 명확히 하는 것**이라고 한정한다. 그런데 본문에는 10월 25일경, 늦어도 29일이라는 기존 거래 예측이 남아 있다. 최신 제출 공시에 있다는 이유로 이 예측을 실제 거래일로 사용할 수 없다. [최초 8-K](https://www.sec.gov/Archives/edgar/data/1356093/000121390018014348/f8k101718_creativerealities.htm), [법적 효력일 정정 8-K/A](https://www.sec.gov/Archives/edgar/data/1356093/000121390018015267/f8k101818a1_creativereal.htm)
 
-FINRA 원본의 `OTCDailyListID=135638`은 `reverseSplitRate=1:30`, **`exDate=2018-10-31 00:00:00.0`**, 게시 시각 `2018-10-30 13:11:23.0`을 명시한다. 종목은 CREX→CREXD, 사유는 Reverse Split/CUSIP Change다. 같은 행의 `calendarDay=2018-10-25`는 실제 적용일이 아니다. 공식 metadata는 `calendarDay`를 파티션 필드로 지정하고 장중 종목 변경의 달력 날짜로 설명하며, `exDate`를 Effective/Ex Date/Time으로 별도 정의한다. [FINRA 원본](us_amze_atds_date_conflict_samples_20260910/CREX/finra_crex_daily_list_201810_201811.json), [공식 필드 metadata 원본](us_amze_atds_date_conflict_samples_20260910/CREX/finra_otcdailylist_metadata.json), [공식 API 문서](https://developer.finra.org/docs)
+FINRA 원본의 `OTCDailyListID=135638`은 `reverseSplitRate=1:30`, **`exDate=2018-10-31 00:00:00.0`**, 게시 시각 `2018-10-30 13:11:23.0`을 명시한다. 종목은 CREX→CREXD, 사유는 Reverse Split/CUSIP Change다. 같은 행의 `calendarDay=2018-10-25`는 실제 적용일이 아니다. 공식 metadata는 `calendarDay`를 파티션 필드로 지정하고 장중 종목 변경의 달력 날짜로 설명하며, `exDate`를 Effective/Ex Date/Time으로 별도 정의한다. [FINRA 원본](../../data-lake/bronze/research/stock_splits/us/us_amze_atds_date_conflict_samples_20260910/CREX/finra_crex_daily_list_201810_201811.json), [공식 필드 metadata 원본](../../data-lake/bronze/research/stock_splits/us/us_amze_atds_date_conflict_samples_20260910/CREX/finra_otcdailylist_metadata.json), [공식 API 문서](https://developer.finra.org/docs)
 
 10월 25일 후보를 대체할 근거는 확보됐지만, 이 사건을 별도로 취소했다고 표현한 issuer 문구까지 찾은 것은 아니다. JSON에는 **오래된 예정일을 FINRA의 최종 exDate로 대체**하는 것으로 표시했다.
 
@@ -78,11 +78,13 @@ FINRA 원본의 `OTCDailyListID=135638`은 `reverseSplitRate=1:30`, **`exDate=20
 
 ## 저장물과 재현 범위
 
-- [manifest](us_amze_atds_date_conflict_samples_20260910/manifest.json): 원본 **37건**. 개별 URL, SHA256, 접수번호·문서 식별자, 실제 SEC 제출일, CIK, security_id 포함. issuer IR와 FINRA는 EDGAR로 가장하지 않고 provider를 구분했다.
-- [expected_parser_fields](us_amze_atds_date_conflict_samples_20260910/expected_parser_fields.json): 6개 사건, 취소·대체할 후보, 최종 비율·시장 적용일, 법적 효력일의 한계, 원문 위치와 짧은 정확 문구, FINRA 레코드 필드.
-- [filing_metadata_provenance](us_amze_atds_date_conflict_samples_20260910/filing_metadata_provenance.json): **SEC filing index 19건**에서 제출일을 확인한 근거. 보도자료 작성일·기준일·효력일과 구분했다.
-- [validation](us_amze_atds_date_conflict_samples_20260910/validation.json): 37개 원본 해시, HTML 발췌 **45개**, 스캔 원문 발췌 **5개**의 육안 확인, FINRA **5개 레코드**의 선택 필드 일치 검증.
+- [manifest](../../data-lake/bronze/research/stock_splits/us/us_amze_atds_date_conflict_samples_20260910/manifest.json): 원본 **37건**. 개별 URL, SHA256, 접수번호·문서 식별자, 실제 SEC 제출일, CIK, security_id 포함. issuer IR와 FINRA는 EDGAR로 가장하지 않고 provider를 구분했다.
+- [expected_parser_fields](../../data-lake/silver/research/stock_splits/us/us_amze_atds_date_conflict_samples_20260910/expected_parser_fields.json): 6개 사건, 취소·대체할 후보, 최종 비율·시장 적용일, 법적 효력일의 한계, 원문 위치와 짧은 정확 문구, FINRA 레코드 필드.
+- [filing_metadata_provenance](../../data-lake/silver/research/stock_splits/us/us_amze_atds_date_conflict_samples_20260910/filing_metadata_provenance.json): **SEC filing index 19건**에서 제출일을 확인한 근거. 보도자료 작성일·기준일·효력일과 구분했다.
+- [validation](../../data-lake/silver/research/stock_splits/us/us_amze_atds_date_conflict_samples_20260910/validation.json): 37개 원본 해시, HTML 발췌 **45개**, 스캔 원문 발췌 **5개**의 육안 확인, FINRA **5개 레코드**의 선택 필드 일치 검증.
 
 FINRA는 공식 개발자 문서가 안내하는 공개 Query API를 사용했다. CREX 한 종목의 2018년 10~11월, LDSR 한 종목의 2019년 10~11월을 제한 조회했다. POST 요청은 읽기용 데이터 질의이며 payload는 메타데이터에 저장했다. FINRA 배치 응답의 `published_date`는 포함된 행의 가장 늦은 게시일로 표시했으며, 개별 행의 시점 판단에는 `dailyListDatetime`을 사용해야 한다. 원문 응답이나 과거 후보를 삭제하지 않았다.
 
 이 검증은 소스 계약과 일정 검증이다. 애플리케이션 파서 실행 테스트, 벤더 데이터 수정, 가격 환산 검증을 수행했다는 뜻은 아니다.
+
+가공·검증 자료: [us_amze_atds_date_conflict_samples_20260910](../../data-lake/silver/research/stock_splits/us/us_amze_atds_date_conflict_samples_20260910). 원문은 위 bronze 표본 경로에 보존한다.

@@ -31,7 +31,7 @@
 
 ## 보존 증거
 
-폴더: `docs/research/us_lvlu_split_date_samples_20260910/`.
+폴더: `data-lake/bronze/research/stock_splits/us/us_lvlu_split_date_samples_20260910/`.
 
 - `manifest.json`: 원문 5개, CIK·접수번호·문서 ID·제출일·security_id·공식 URL·SHA-256·원래 corpus 위치·복사 위치.
 - `disclosures/`: 원문 그대로 복사한 HTML와 메타데이터. 제출일은 기존 SEC 검색 메타데이터 및 공시 서명·발표 날짜로 확인했다.
@@ -39,3 +39,5 @@
 - `validation.json`: 원문 SHA 및 필수 메타데이터·literal 검증 결과.
 
 Alpha Vantage와의 비교는 이번 조사에서 수행하지 않았다. 본 자료는 공식 행사 단위와 최종 날짜를 제공하며, 벤더 가격에 이미 반영됐는지는 별도 가격 단위 QA 사항이다.
+
+가공·검증 자료: [us_lvlu_split_date_samples_20260910](../../data-lake/silver/research/stock_splits/us/us_lvlu_split_date_samples_20260910). 원문은 위 bronze 표본 경로에 보존한다.

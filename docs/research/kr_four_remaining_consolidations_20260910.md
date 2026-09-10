@@ -67,9 +67,11 @@ DART 9-12 원결정, 같은 날 정정, 10-04 최종 정정의 접수번호는 �
 
 ## 보존 파일
 
-- `kr_four_remaining_consolidation_samples_20260910/manifest.json`: 원문 20건의 접수번호, 문서번호, URL, SHA-256, security_id, 제출일, 로컬 경로. 원래 bronze 파일은 변경하지 않았다.
+- `../../data-lake/bronze/research/stock_splits/kr/kr_four_remaining_consolidation_samples_20260910/manifest.json`: 원문 20건의 접수번호, 문서번호, URL, SHA-256, security_id, 제출일, 로컬 경로. 원래 bronze 파일은 변경하지 않았다.
 - `disclosures/`: 원문 HTML와 개별 메타데이터. `document_archives/`와 `archive_manifest.json`: 900300 OpenDART 원 ZIP 3개와 검증된 SHA.
 - `expected_parser_fields.json`: 4건의 정확한 필드, 단위·정정·동시행사 관련 한계, 원문 16개 literal proof와 정규화 텍스트 내 위치.
 - `additional_search_inventory.json`·`kind_responses/`: 지정 기간의 검색, 실제 응답 건수, 최종 정정 뷰어 목록. 025620 현재명 차이를 명시했다.
 - `ledger_review_snapshot.json`: 수정 전 원장 해시 및 해당 사건 누락 증거.
 - `validation.json`: SHA와 literal 위치 확인 결과.
+
+가공·검증 자료: [kr_four_remaining_consolidation_samples_20260910](../../data-lake/silver/research/stock_splits/kr/kr_four_remaining_consolidation_samples_20260910). 원문은 위 bronze 표본 경로에 보존한다.
