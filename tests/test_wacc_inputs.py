@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 
 import pandas as pd
 
-from engine.transformers.factors import add_wacc_factors
+from engine.transformers.factors import add_annual_financial_factors, add_wacc_factors
 from engine.transformers.wacc import (
     calculate_rolling_beta,
     equity_risk_premium_series_for_market,
@@ -15,6 +15,34 @@ from engine.transformers.wacc import (
 
 
 class WaccInputsTest(unittest.TestCase):
+    def test_wacc_preserves_small_disclosed_tax_percentages(self):
+        # The financial transformer exposes tax_rate in percent, including
+        # rates below 1%. Passing through WACC must not multiply the tax shield.
+        financial = add_annual_financial_factors(pd.DataFrame({
+            "financial_period": pd.date_range("2018-12-31", periods=4, freq="YE"),
+            "PBT": [1000.] * 4, "TAX_EXPENSE": [0., 5., 10., 250.],
+        }))
+        self.assertEqual(financial.tax_rate.tolist(), [0., .5, 1., 25.])
+        for market in ("kr", "us"):
+            for observed_interest in (True, False):
+                with self.subTest(market=market, observed_interest=observed_interest):
+                    daily = pd.DataFrame({
+                        "trade_date": pd.date_range("2024-01-02", periods=4),
+                        "market_cap": [800.] * 4, "debt": [200.] * 4,
+                        "avg_debt": [200.] * 4,
+                        "xint": [8. if observed_interest else float("nan")] * 4,
+                        "tax_rate": financial.tax_rate,
+                    })
+                    assumptions = pd.DataFrame({"market": [market],
+                        "risk_free_rate": [2.], "equity_risk_premium": [5.],
+                        "credit_spread": [2.], "default_beta": [1.]})
+                    actual = add_wacc_factors(daily, market=market,
+                        market_data_cache=_WaccCache(risk_free=pd.DataFrame(),
+                            erp=pd.DataFrame(), assumptions=assumptions))
+                    for i, expected in enumerate([4., 3.98, 3.96, 3.]):
+                        self.assertAlmostEqual(actual.cost_of_debt_after_tax.iloc[i], expected)
+                        self.assertAlmostEqual(actual.wacc.iloc[i], .8 * 7 + .2 * expected)
+
     def test_country_erp_is_point_in_time_and_rejects_implausible_percent_values(self):
         erp = pd.DataFrame(
             {

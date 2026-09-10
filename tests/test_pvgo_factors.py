@@ -127,6 +127,7 @@ class PvgoFactorTest(unittest.TestCase):
                     "TOTAL_ASSETS": 2_000.0 + index * 25.0,
                     "TOTAL_EQUITY": 1_000.0 + index * 12.5,
                     "PPE": 100.0 + index * 12.5,
+                    "INTANGIBLE_ASSETS": 0.0,
                     "CURRENT_ASSETS": 500.0,
                     "CURRENT_LIABILITIES": 250.0,
                     "INVENTORIES": 0.0,

@@ -123,6 +123,9 @@ def read_receipt_financial_history(stock_code, financial_dir, market, *, basis="
         event["financial_history_periods_per_year"] = periods_per_year
         event["history_comparability_start_date"] = comparability_start
         window = 3 * periods_per_year
-        event["historical_roe_3y_avg"] = calculated.roe.rolling(window, min_periods=window).mean().iloc[-1]
+        ownership = calculated.roe_ownership_basis.tail(window)
+        consistent_ownership = len(ownership) == window and ownership.notna().all() and ownership.nunique() == 1
+        event["historical_roe_3y_avg"] = (calculated.roe.tail(window).mean()
+                                          if consistent_ownership else float("nan"))
         events.append(event)
     return pd.DataFrame(events).reset_index(drop=True)

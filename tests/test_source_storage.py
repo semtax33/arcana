@@ -37,6 +37,7 @@ class SourceStorageTest(unittest.TestCase):
                 )
 
             archive = root / entry["archive"]
+            self.assertTrue(archive.resolve().is_relative_to((root / "bronze").resolve()))
             self.assertEqual(entry["status"], "committed")
             self.assertEqual(sha256_file(archive), old_hash)
             self.assertEqual(
@@ -68,7 +69,7 @@ class SourceStorageTest(unittest.TestCase):
                 )
 
             self.assertEqual(target.read_text(encoding="utf-8"), '{"version": 1}')
-            self.assertFalse((root / "source-archive").exists())
+            self.assertFalse((root / "bronze" / "source-archive").exists())
             self.assertTrue(staged.exists())
 
     def test_unchanged_source_is_not_archived_or_replaced(self):
@@ -86,7 +87,7 @@ class SourceStorageTest(unittest.TestCase):
 
             self.assertEqual(entry["status"], "unchanged")
             self.assertIsNone(entry["archive"])
-            self.assertFalse((root / "source-archive").exists())
+            self.assertFalse((root / "bronze" / "source-archive").exists())
 
     def test_replace_failure_keeps_old_current_and_archived_copy(self):
         with TemporaryDirectory() as temp_dir:

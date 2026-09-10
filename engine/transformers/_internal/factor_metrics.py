@@ -114,6 +114,7 @@ NON_FACTOR_COLUMNS = set(BASE_COLUMNS) | {
     "ev_nopat_quality_flag",
     "nopat_quality_flag",
     "operating_income_source",
+    "roe_ownership_basis",
 }
 PERCENT_RATIO_FACTOR_COLUMNS = {
     "fcf_margin",
@@ -1499,6 +1500,18 @@ def profit_growth_pct(series, periods=1):
     return result.where(same_sign)
 
 
+def net_income_growth_pct(df, periods=1):
+    """Compare parent income when both periods disclose it, otherwise group income."""
+    parent = numeric_column(df, "NET_INCOME_PARENT")
+    group = numeric_column(df, "NET_INCOME")
+    parent_pair = parent.notna() & parent.shift(periods).notna()
+    current = parent.where(parent_pair, group)
+    previous = parent.shift(periods).where(parent_pair, group.shift(periods))
+    result = (current - previous) / previous.abs() * 100
+    same_sign = ((current > 0) & (previous > 0)) | ((current < 0) & (previous < 0))
+    return result.where(same_sign)
+
+
 def cagr_pct(series, years, periods_per_year=1):
     periods = max(int(round(years * periods_per_year)), 1)
     previous = series.shift(periods)
@@ -1714,11 +1727,20 @@ def add_annual_financial_factors(
         .mean()
     )
 
-    df["avg_parent_equity"] = (df["ceq"] + df["ceq"].shift(lag)) / 2
-    df["roe"] = df["ni_parent"] / df["avg_parent_equity"]
-    df["roe_growth_1y"] = growth_pct(df["roe"], periods=lag)
-    df["roe_growth_3y"] = growth_pct(df["roe"], periods=lag * 3)
-    df["roe_growth_5y"] = growth_pct(df["roe"], periods=lag * 5)
+    parent_income = numeric_column(df, "NET_INCOME_PARENT")
+    parent_equity = bound_by_reference(numeric_column(df, "EAOP"), df["at"], 2)
+    parent_average = (parent_equity + parent_equity.shift(lag)) / 2
+    parent_complete = parent_income.notna() & parent_average.notna() & parent_average.ne(0)
+    # Select a complete ownership basis together. Independent fallbacks could
+    # divide group income by parent equity, or average two different populations.
+    roe_income = parent_income.where(parent_complete, df["ni"])
+    df["avg_parent_equity"] = parent_average.where(parent_complete, df["avg_equity"])
+    df["roe"] = roe_income / df["avg_parent_equity"]
+    df["roe_ownership_basis"] = pd.Series(np.where(parent_complete, "parent", "group"), index=df.index)
+    df["roe_ownership_basis"] = df["roe_ownership_basis"].where(np.isfinite(df["roe"]))
+    for years in (1, 3, 5):
+        same_basis = df["roe_ownership_basis"].eq(df["roe_ownership_basis"].shift(lag * years))
+        df[f"roe_growth_{years}y"] = growth_pct(df["roe"], periods=lag * years).where(same_basis)
     df["roa"] = df["ni"] / df["avg_assets"]
     df["accrual_ratio"] = (df["ni"] - df["oancf"]) / df["avg_assets"]
 
@@ -1813,12 +1835,14 @@ def add_annual_financial_factors(
     df["avg_debt"] = ((df["debt"] + df["debt"].shift(lag)) / 2).fillna(df["debt"])
     df["net_debt"] = df["debt"] - df["che"]
     df["invested_capital_financial"] = df["seq"] + df["debt"] - df["che"]
+    # A partial reviewed statement does not establish that missing operating
+    # assets or payables are zero. Explicit disclosed zeros remain valid inputs.
     df["invested_capital_operational"] = (
-        df["rect"].fillna(0)
-        + df["invt"].fillna(0)
-        - df["ap"].fillna(0)
-        + df["ppent"].fillna(0)
-        + numeric_column(df, "INTANGIBLE_ASSETS", 0).fillna(0)
+        df["rect"]
+        + df["invt"]
+        - df["ap"]
+        + df["ppent"]
+        + numeric_column(df, "INTANGIBLE_ASSETS")
     )
     df["avg_ic_financial"] = (
         (df["invested_capital_financial"] + df["invested_capital_financial"].shift(lag)) / 2
@@ -1884,9 +1908,12 @@ def add_annual_financial_factors(
     df["total_asset_turnover"] = df["asset_turnover"]
     df["receivables_turnover"] = df["sale"] / df["avg_receivables"]
     df["inventory_turnover"] = df["cogs"] / df["avg_inventory"]
-    df["inv_days"] = df["avg_inventory"] / df["cogs"] * 365
-    df["ar_days"] = df["avg_receivables"] / df["sale"] * 365
-    df["ap_days"] = df["avg_payables"] / df["cogs"] * 365
+    # Annual and TTM flows cover a full year. Standalone quarter flows must
+    # be annualized before applying the existing 365-day convention.
+    flow_days = 365 / (1 if annualized_flows else lag)
+    df["inv_days"] = df["avg_inventory"] / df["cogs"] * flow_days
+    df["ar_days"] = df["avg_receivables"] / df["sale"] * flow_days
+    df["ap_days"] = df["avg_payables"] / df["cogs"] * flow_days
     df["ccc"] = df["inv_days"] + df["ar_days"] - df["ap_days"]
     df["working_capital"] = df["act"] - df["lct"]
     df["wc_to_sales_pct"] = df["working_capital"] / df["sale"] * 100
@@ -1921,6 +1948,7 @@ def add_annual_financial_factors(
         "RETAINED_EARNINGS",
         "RETAINED_EARNINGS_FALLBACK",
     )
+    negative_fcf = df["fcf"].lt(0).astype(float).where(df["fcf"].notna())
     tail_columns = pd.DataFrame(
         {
             "fcfe": fcfe,
@@ -1938,18 +1966,18 @@ def add_annual_financial_factors(
             "interest_expense_to_fcf_pct": df["xint"].abs() / positive_denominator(df["fcf"]) * 100,
             "fcf_interest_coverage": df["fcf"] / positive_denominator(df["xint"].abs()),
             "fcf_volatility_5y": df["fcf"].rolling(lag * 5, min_periods=2).std(),
-            "fcf_negative_freq_5y_pct": (df["fcf"] < 0).rolling(lag * 5, min_periods=1).mean() * 100,
+            "fcf_negative_freq_5y_pct": negative_fcf.rolling(lag * 5, min_periods=1).mean() * 100,
             "fcf_volatility_10y": df["fcf"].rolling(lag * 10, min_periods=2).std(),
-            "fcf_negative_freq_10y_pct": (df["fcf"] < 0).rolling(lag * 10, min_periods=1).mean() * 100,
+            "fcf_negative_freq_10y_pct": negative_fcf.rolling(lag * 10, min_periods=1).mean() * 100,
             "sales_yoy_pct": yoy_pct(df["sale"], periods=lag),
             "op_yoy_pct": yoy_pct(df["oiadp"], periods=lag),
             "sales_growth_1y": growth_pct(df["sale"], periods=lag),
             "sales_growth_3y": growth_pct(df["sale"], periods=lag * 3),
             "sales_growth_5y": growth_pct(df["sale"], periods=lag * 5),
             "sales_cagr_3y": cagr_pct(df["sale"], years=3, periods_per_year=lag),
-            "net_income_growth_1y": profit_growth_pct(df["ni_parent"], periods=lag),
-            "net_income_growth_3y": profit_growth_pct(df["ni_parent"], periods=lag * 3),
-            "net_income_growth_5y": profit_growth_pct(df["ni_parent"], periods=lag * 5),
+            "net_income_growth_1y": net_income_growth_pct(df, periods=lag),
+            "net_income_growth_3y": net_income_growth_pct(df, periods=lag * 3),
+            "net_income_growth_5y": net_income_growth_pct(df, periods=lag * 5),
             "operating_income_growth_1y": growth_pct(df["oiadp"], periods=lag),
             "operating_income_growth_3y": growth_pct(df["oiadp"], periods=lag * 3),
             "operating_income_growth_5y": growth_pct(df["oiadp"], periods=lag * 5),
@@ -4216,9 +4244,12 @@ def add_rim_historical_roe_fallback(
     consecutive_periods = pd.Series(True, index=history.index)
     for offset in range(1, required_periods):
         consecutive_periods &= period_sequence.eq(period_sequence.shift(offset) + offset)
+        if "roe_ownership_basis" in history:
+            consecutive_periods &= history.roe_ownership_basis.eq(history.roe_ownership_basis.shift(offset))
     history["historical_roe_3y_avg"] = rolling_mean.where(consecutive_periods)
 
-    events = history.dropna(subset=["historical_roe_3y_avg"]).copy()
+    # Missing/newly incomparable averages must clear an older valid event.
+    events = history.copy()
     if events.empty:
         return df
     events = (
@@ -4248,8 +4279,11 @@ def _read_optional_wacc_csv(path):
 
 
 def _tax_rate_ratio(series):
-    rate = pd.to_numeric(series, errors="coerce")
-    return rate.where(rate <= 1, rate / 100).where(lambda value: (value >= 0) & (value <= 1))
+    # Financial factors expose tax_rate in percentage points. A value of 0.5
+    # means 0.5%, including at the 1% boundary; its magnitude cannot identify
+    # an alternative unit. Convert the declared unit before applying WACC.
+    rate = pd.to_numeric(series, errors="coerce") / 100
+    return rate.where((rate >= 0) & (rate <= 1))
 
 
 def _daily_beta_series(df, *, market, default_beta, benchmark_weekly_returns):

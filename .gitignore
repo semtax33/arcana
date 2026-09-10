@@ -27,3 +27,21 @@ scripts/token_output.csv
 .codex-work/
 _workspace/
 deliverables/
+
+# Small, offline stock-split source fixtures live in bronze alongside other sources.
+!data-lake/bronze/fixtures/
+!data-lake/bronze/fixtures/stock_splits/
+!data-lake/bronze/fixtures/stock_splits/**
+!data-lake/bronze/research/
+data-lake/bronze/research/*
+!data-lake/bronze/research/stock_splits/
+data-lake/bronze/research/stock_splits/*
+!data-lake/bronze/research/stock_splits/kr/
+data-lake/bronze/research/stock_splits/kr/*
+!data-lake/bronze/research/stock_splits/kr/stock_split_official_fallback_samples_20260909/
+!data-lake/bronze/research/stock_splits/kr/stock_split_official_fallback_samples_20260909/**
+!data-lake/bronze/research/stock_splits/kr/stock_split_krx_reference_price_samples_20260910/
+!data-lake/bronze/research/stock_splits/kr/stock_split_krx_reference_price_samples_20260910/**
+!data-lake/silver/fixtures/
+!data-lake/silver/fixtures/stock_splits/
+!data-lake/silver/fixtures/stock_splits/dart_expected_events.json

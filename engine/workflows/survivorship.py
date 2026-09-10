@@ -139,11 +139,14 @@ def read_reviewed_manifest(path, *, market, end_date):
 
 
 def run_survivorship_refresh(*, market, end_date, manifest_path=None, output_dir=None,
-                            source_dir=None, start_date=None, panel_dir=None, download=True, load_clickhouse=True, force=False):
+                            source_dir=None, start_date=None, panel_dir=None, download=True, load_clickhouse=True, force=False,
+                            gold_dir=None):
     end_date = _day(end_date)
     if market not in {"us", "kr"}:
         raise ValueError("market must be us or kr")
     output = Path(output_dir or DATA_LAKE.silver("survivorship", market))
+    gold = Path(gold_dir or DATA_LAKE.gold("survivorship", market))
+    from engine.core.serving_storage import export_json, export_frame, export_prices
     manifest_path = Path(manifest_path or DATA_LAKE.meta("survivorship", f"{market}_reviewed.json"))
     collection = None
     if download:
@@ -153,8 +156,9 @@ def run_survivorship_refresh(*, market, end_date, manifest_path=None, output_dir
     if not manifest_path.exists():
         summary = {"status": "awaiting_review", "market": market, "as_of": end_date,
                    "coverage_complete": False, "collection": collection,
-                   "manifest_path": str(manifest_path.resolve())}
+                   "manifest_path": str(manifest_path.resolve()), "gold_dir": str(gold.resolve()), "artifacts": []}
         _write_json(output / "summary.json", summary)
+        export_json(gold / "summary.json", summary)
         return summary
     result = read_reviewed_manifest(manifest_path, market=market, end_date=end_date)
     if market == "us" and result["market_data_sources"]:
@@ -269,12 +273,22 @@ def run_survivorship_refresh(*, market, end_date, manifest_path=None, output_dir
                     "signature": signature, "completed_bases": [], "snapshots_rebuilt": False,
                 }
         _write_json(rebuild_path, dirty)
+    artifacts = []
+    for category in ("listing_episodes", "events", "entitlements", "unresolved"):
+        artifacts.append(export_json(gold / f"{category}.json", {
+            "schema_version": 1, "market": market, "as_of": end_date,
+            "coverage_complete": False, "rows": result[category]}))
+    for metadata, frame in prices:
+        artifacts.append(export_prices(gold / "prices" / f"{market}_{metadata['symbol']}.parquet", frame))
+    artifacts.append(export_frame(gold / "market_cap_factors.parquet", market_cap_factors))
     summary = {"market": market, "as_of": end_date,
                **{key: len(value) for key, value in result.items()},
                "restored_price_rows": sum(len(frame) for _, frame in prices),
                "restored_share_rows": (len(capitalizations) if market == "kr" else sum(metadata["valid_price_days"] for metadata, _, _ in shares)),
                "restored_market_cap_rows": len(market_cap_factors),
                "database_publication": publication,
-               "coverage_complete": False, "output_dir": str(output.resolve())}
+               "coverage_complete": False, "output_dir": str(output.resolve()),
+               "gold_dir": str(gold.resolve()), "artifacts": artifacts}
     _write_json(output / "summary.json", summary)
+    export_json(gold / "summary.json", summary)
     return summary

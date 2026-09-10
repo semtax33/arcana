@@ -222,7 +222,7 @@ class SourceArchiveSession(AbstractContextManager["SourceArchiveSession"]):
         self.data_lake_root = Path(data_lake_root).resolve()
         self.run_id = run_id or new_source_run_id()
         self.archive_root = (
-            self.data_lake_root / "source-archive" / self.market / self.run_id
+            self.data_lake_root / "bronze" / "source-archive" / self.market / self.run_id
         )
         self.manifest_path = (
             self.data_lake_root

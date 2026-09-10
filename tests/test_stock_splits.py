@@ -11,7 +11,33 @@ from engine.transformers.stock_splits import (
     parse_edgar_split, confirm_dart_with_prices, parse_dart_resumption,
 )
 
-FIXTURES=Path(__file__).parent/'fixtures'/'stock_splits'
+FIXTURES=Path(__file__).resolve().parents[1]/'data-lake/bronze/fixtures/stock_splits'
+
+
+def test_stock_split_refresh_writes_user_summary_to_gold(tmp_path, monkeypatch):
+    import json
+    from engine.core.paths import DataLakePaths
+    from engine.extractors import stock_splits as extractor
+    from engine.transformers import stock_splits as transformer
+    from engine.workflows import stock_splits as workflow
+    lake = DataLakePaths(tmp_path / 'data-lake')
+    for module in (extractor, transformer, workflow):
+        monkeypatch.setattr(module, 'DATA_LAKE', lake)
+    raw = lake.bronze('krx', 'price', 'kr_005930.csv')
+    raw.parent.mkdir(parents=True)
+    raw.write_text('날짜,시가,고가,저가,종가,거래량\n2026-09-09,100,100,100,100,10\n', encoding='utf-8')
+    source_bytes = raw.read_bytes()
+    result = workflow.run_stock_split_refresh(market='kr', end_date='2026-09-10',
+        symbols=['005930'], download=False, build_prices=True)
+    assert Path(result['ledger_path']) == lake.silver('corporate_actions', 'kr_stock_splits.json')
+    report = lake.root / 'gold/corporate_actions/kr/summary.json'
+    assert report.exists()
+    assert json.loads(report.read_text(encoding='utf-8'))['events'] == 0
+    import pandas as pd
+    prices = pd.read_parquet(report.parent / 'prices/kr_005930.parquet')
+    assert prices.close.tolist() == prices.adj_close.tolist() == [100.]
+    assert raw.read_bytes() == source_bytes
+    assert not list((tmp_path / 'docs').glob('**/*'))
 
 
 def test_edgar_trading_date_does_not_cross_into_meeting_sentence():
@@ -344,7 +370,7 @@ def test_latest_board_decision_revision_replaces_original_date(tmp_path,monkeypa
 def test_kind_official_search_viewer_and_actual_listing_contract():
     from engine.extractors.kind_stock_splits import parse_kind_search,parse_kind_viewer,parse_kind_contents
     from engine.transformers.stock_splits import parse_kind_listing
-    samples=Path(__file__).resolve().parents[1]/'docs/research/stock_split_official_fallback_samples_20260909'
+    samples=Path(__file__).resolve().parents[1]/'data-lake/bronze/research/stock_splits/kr/stock_split_official_fallback_samples_20260909'
     rows,total=parse_kind_search((samples/'kind_samsung_amendment_search.html').read_bytes())
     assert total==1 and rows[0]['kind_acpt_no']=='20180316000856'
     code,doc,family=parse_kind_viewer((samples/'kind_samsung_amendment_viewer_main.html').read_bytes(),rows[0])
@@ -408,7 +434,7 @@ def test_factor_price_reader_uses_ready_adjusted_panel_and_rejects_quarantine(tm
 def test_official_reference_price_resolves_tick_rounding_without_changing_ratio():
     from engine.transformers.stock_splits import parse_kind_reference_price,confirm_dart_with_prices
     from dataclasses import replace
-    samples=Path(__file__).resolve().parents[1]/'docs/research/stock_split_krx_reference_price_samples_20260910'
+    samples=Path(__file__).resolve().parents[1]/'data-lake/bronze/research/stock_splits/kr/stock_split_krx_reference_price_samples_20260910'
     notice=parse_kind_reference_price((samples/'000860_reference_price_notice.html').read_bytes())
     assert notice['reference_price']=='11930' and notice['effective_date']=='2025-04-30'
     event=SplitEvent(security_id='SEC_KR_000860',effective_date='2025-04-30',new_shares='2',old_shares='1',

@@ -63,7 +63,7 @@ class FactorSnapshotsLoaderTest(unittest.TestCase):
         self.assertIn("FROM source_rows AS f", query)
         self.assertIn("CROSS JOIN snapshot_dates AS d", query)
         self.assertIn("arrayJoin({snapshot_dates:Array(Date)}) AS snapshot_date", query)
-        self.assertIn("argMax(f.factor_value, tuple(f.trade_date, f.updated_at)) AS factor_value", query)
+        self.assertIn("argMax(tuple(f.factor_value, f.fiscal_year, f.financial_period, f.currency), tuple(f.trade_date, f.updated_at))", query)
         self.assertIn("max(f.trade_date) AS source_trade_date", query)
         self.assertIn("trade_date <= {end_date:Date}", query)
         self.assertIn("financial_basis = {financial_basis:String}", query)

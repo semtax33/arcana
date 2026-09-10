@@ -144,11 +144,72 @@ def apply(entries):
     return results
 
 
+def verify():
+    journal = json.loads((STATE / "journal.json").read_text(encoding="utf-8"))
+    entries = journal["files"]
+    destinations = {(ROOT / r["destination"]).resolve() for r in entries}
+    checks, errors = Counter(), []
+
+    def inspect(value, parent, owner):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if isinstance(item, str) and (key.endswith("path") or key in {"file", "filename"}):
+                    if not item.startswith(("http://", "https://")) and len(item) < 500:
+                        try:
+                            candidates = [(parent / item).resolve(), (ROOT / item).resolve()]
+                            target = next((p for p in candidates if p in destinations), None)
+                        except (ValueError, OSError):
+                            target = None
+                        if target is not None:
+                            checks["moved_file_references"] += 1
+                            expected = value.get(key.removesuffix("path") + "sha256")
+                            if expected is None and key in {"path", "file", "filename", "local_path"}:
+                                expected = value.get("source_sha256") or value.get("sha256")
+                            if expected is not None:
+                                checks["source_digest_references"] += 1
+                                if digest(target.read_bytes()) != expected:
+                                    errors.append(dict(owner=owner, field=key, reason="referenced_digest_differs"))
+                inspect(item, parent, owner)
+        elif isinstance(value, list):
+            for item in value:
+                inspect(item, parent, owner)
+
+    for record in entries:
+        path = ROOT / record["destination"]
+        assert path.resolve().is_relative_to(ROOT / "data-lake" / record["layer"])
+        assert not (ROOT / record["source"]).exists(), record["source"]
+        raw = path.read_bytes()
+        assert digest(raw) == record["relocated_sha256"], record["destination"]
+        if record["role"] in {"source_document", "source_response"}:
+            assert digest(raw) == record["original_sha256"]
+            checks["unchanged_source_files"] += 1
+        elif path.suffix == ".json":
+            inspect(json.loads(raw.decode("utf-8-sig")), path.parent, record["destination"])
+        if record["metadata_paths_rebased"]:
+            assert digest((PREIMAGES / record["source"]).read_bytes()) == record["original_sha256"]
+            checks["preserved_metadata_preimages"] += 1
+    remaining = [p.relative_to(ROOT).as_posix() for folder in ("docs", "tests")
+                 for p in (ROOT / folder).rglob("*")
+                 if p.is_file() and p.suffix.lower() in {".html", ".htm", ".json", ".csv"}]
+    report = dict(status="passed" if not errors and not remaining else "failed", files=len(entries),
+                  bytes=sum(r["source_bytes"] for r in entries),
+                  by_layer=dict(Counter(r["layer"] for r in entries)), checks=dict(checks),
+                  errors=errors, remaining_docs_tests_data=remaining)
+    write_json(STATE / "verification.json", report)
+    assert report["status"] == "passed", "Inspect verification.json"
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--apply", action="store_true")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--apply", action="store_true")
+    action.add_argument("--verify", action="store_true", help="Verify the existing relocation journal without moving files.")
     args = parser.parse_args()
     plan_path = STATE / "inventory.json"
+    if args.verify:
+        print(verify())
+        return
     if not args.apply:
         assert not plan_path.exists(), "Preserve the existing inventory"
         entries = inventory()

@@ -38,6 +38,9 @@ class DataLakePaths:
     def silver(self, provider: str, *parts: str) -> Path:
         return self.root.joinpath("silver", provider, *parts)
 
+    def gold(self, dataset: str, *parts: str) -> Path:
+        return self.root.joinpath("gold", dataset, *parts)
+
     def meta(self, *parts: str) -> Path:
         return self.root.joinpath("meta", *parts)
 

@@ -1,10 +1,29 @@
 """Public refresh command consumes source-pinned lifecycle review manifests."""
 import hashlib
 import json
+from datetime import date
 
 import pytest
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def isolated_survivorship_default_storage(tmp_path, monkeypatch):
+    from engine.core.paths import DataLakePaths
+    from engine.workflows import survivorship
+    monkeypatch.setattr(survivorship, 'DATA_LAKE', DataLakePaths(tmp_path / 'data-lake'))
+
+
+def test_survivorship_user_summary_uses_gold_and_retains_incomplete_status(tmp_path):
+    from engine.workflows.survivorship import run_survivorship_refresh
+    result = run_survivorship_refresh(market='us', end_date='2026-09-10',
+                                      download=False, load_clickhouse=False)
+    path = tmp_path / 'data-lake/gold/survivorship/us/summary.json'
+    assert path.exists()
+    saved = json.loads(path.read_text(encoding='utf-8'))
+    assert saved['status'] == result['status'] == 'awaiting_review'
+    assert saved['coverage_complete'] is False
 
 
 @pytest.mark.parametrize("reader_mode", ["cached", "csv"])
@@ -65,6 +84,8 @@ def test_dart_reviewed_kr_history_restores_pinned_marcap_prices_and_capitalizati
     assert metadata["quality_review_basis"]["source_sha256"] == "a" * 64
     assert restored.close.tolist() == [10., 12.]
     assert restored.shares.tolist() == [1000, 1000]
+    user_prices = pd.read_parquet(tmp_path / 'data-lake/gold/survivorship/kr/prices/kr_009993.parquet')
+    assert user_prices.close.tolist() == user_prices.adj_close.tolist() == [10., 12.]
     caps = pd.read_parquet(output / "market_cap_factors.parquet")
     assert caps.factor_value.tolist() == [.01, .012]
     assert caps.currency.tolist() == ["KRW", "KRW"]
@@ -438,4 +459,16 @@ def test_reviewed_historical_alpha_prices_and_shares_use_split_units_and_availab
     )
     assert calculated.security_id.tolist() == ["SEC_US_OLD"]
     assert calculated.factor_value.tolist() == [.012]
+    assert fallback_calls == []
+    with_abstentions = factors.create_daily_factor_rows(
+        stock_codes=None, market="us", financial_basis="annual", factor_ids=["mcap_mil"],
+        start_date="2026-01-05", end_date="2026-01-06", price_path=price_csv,
+        shares_path=share_csv, dividend_path=dividend_csv,
+        financial_dir=tmp_path / "no-financials", report_metadata_path=tmp_path / "no-reports.csv",
+        use_edgartools=True, edgartools_provider=current_ticker_provider, wacc_online_backfill=False,
+        include_abstentions=True,
+    )
+    assert pd.to_datetime(with_abstentions.trade_date).dt.date.tolist() == [date(2026, 1, 5), date(2026, 1, 6)]
+    assert pd.isna(with_abstentions.factor_value.iloc[0])
+    assert with_abstentions.factor_value.iloc[1] == .012
     assert fallback_calls == []

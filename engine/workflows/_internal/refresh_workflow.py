@@ -326,6 +326,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--survivorship-manifest", type=Path, help="Source-pinned reviewed listing and entitlement manifest.")
     parser.add_argument("--survivorship-output", type=Path, help="Canonical survivorship output directory.")
+    parser.add_argument("--survivorship-gold-output", type=Path, help="User-facing survivorship export directory.")
     parser.add_argument("--survivorship-panel-dir", type=Path, help="Optional staging directory for factor-input price panels.")
     parser.add_argument("--survivorship-source-dir", type=Path, help="Retained listing and disclosure source directory.")
     parser.add_argument("--survivorship-start-date", type=parse_date_arg, help="DART historical search start; defaults to an overlapping incremental window.")
@@ -1188,6 +1189,7 @@ def run_survivorship_target(args: argparse.Namespace) -> None:
         market=args.market, end_date=args.end_date,
         manifest_path=getattr(args, "survivorship_manifest", None),
         output_dir=getattr(args, "survivorship_output", None),
+        gold_dir=getattr(args, "survivorship_gold_output", None),
         panel_dir=getattr(args, "survivorship_panel_dir", None),
         source_dir=getattr(args, "survivorship_source_dir", None),
         start_date=getattr(args, "survivorship_start_date", None),
@@ -1477,12 +1479,68 @@ def run_dividend_refresh(
     )
 
 
+def rebuild_financial_history_factors(args, client, as_of_date, pending):
+    """Prepare each affected issuer before replacing its historical factor rows."""
+    from uuid import uuid4
+    from engine.workflows.financial_history_rebuild import pending_rebuilds, complete_rebuilds
+    from engine.workflows.stock_splits import save_json
+
+    market = str(getattr(args, "market", "kr")).lower()
+    for sid, item in pending.items():
+        prepared = factor_loader.insert_daily_factors(
+            stock_codes=[item["symbol"]], market=market, financial_basis=args.financial_basis,
+            start_date=item["from_date"], end_date=as_of_date.isoformat(), dry_run=True,
+            insert_catalog=False, client=client, parallel_workers=args.workers,
+            use_edgartools=False, require_report_metadata=True, wacc_online_backfill=False,
+            include_abstentions=True,
+        )
+        if not prepared.empty and (
+            set(prepared.security_id) != {sid}
+            or set(prepared.financial_basis) != {args.financial_basis}
+        ):
+            raise ValueError("Prepared financial history is outside its rebuild scope")
+        folder = DATA_LAKE.silver("financial_history_rebuilds", market, item["symbol"],
+                                 args.financial_basis, uuid4().hex)
+        folder.mkdir(parents=True)
+        prepared.to_parquet(folder / "prepared.parquet", index=False)
+        record = {**item, "financial_basis": args.financial_basis,
+                  "through_date": as_of_date.isoformat(), "rows": len(prepared), "status": "prepared"}
+        save_json(folder / "rebuild.json", record)
+        current = pending_rebuilds(market, args.financial_basis, symbols=[item["symbol"]], data_lake=DATA_LAKE)
+        if current.get(sid, {}).get("signature") != item["signature"]:
+            raise ValueError("Financial inputs changed before historical replacement")
+        market_scoped_delete(client, "fact_daily_factors", market=market,
+            start_date=item["from_date"], end_date=as_of_date,
+            financial_basis=args.financial_basis, symbols=[item["symbol"]])
+        inserted = factor_loader._insert_daily_factor_rows_by_partition(client, prepared, split_by_partition=True)
+        if inserted != len(prepared):
+            raise RuntimeError("Historical financial rebuild did not insert every prepared row")
+        complete_rebuilds(market, args.financial_basis, {sid: item}, data_lake=DATA_LAKE)
+        record.update(status="inserted", inserted_rows=inserted)
+        save_json(folder / "rebuild.json", record)
+        print(f"[FINANCIAL-HISTORY] rebuilt {sid} {args.financial_basis}: {inserted} rows", flush=True)
+
+
 def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: Any, state: RefreshState) -> None:
     if args.skip_clickhouse:
         print("[SKIP] factors require ClickHouse")
         return
 
-    if state.is_step_completed("factors-insert"):
+    from engine.workflows.financial_history_rebuild import pending_rebuilds
+    from engine.workflows.stock_splits import rebuild_manifest_path, save_json
+    market = str(getattr(args, "market", "kr")).lower()
+    financial_rebuilds = pending_rebuilds(market, args.financial_basis,
+        symbols=parse_symbols_arg(getattr(args, "symbols", None)), data_lake=DATA_LAKE)
+    dirty_path = rebuild_manifest_path(market, data_lake=DATA_LAKE)
+    dirty = json.loads(dirty_path.read_text(encoding="utf-8")) if dirty_path.exists() else {"items": {}}
+    requested_symbols = parse_symbols_arg(getattr(args, "symbols", None))
+    requested_ids = set(normalized_security_ids(market, requested_symbols)) if requested_symbols else None
+    pending_rebuild = {
+        sid: item for sid, item in dirty["items"].items()
+        if args.financial_basis not in item.get("completed_bases", [])
+        and (requested_ids is None or sid in requested_ids)
+    }
+    if state.is_step_completed("factors-insert") and not financial_rebuilds and not pending_rebuild:
         print("[RESUME] skipping completed substep: factors-insert", flush=True)
         return
 
@@ -1513,6 +1571,10 @@ def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: 
         market=market,
         financial_basis=args.financial_basis,
     )
+    financial_rebuilds = {sid: item for sid, item in financial_rebuilds.items() if item["from_date"] <= as_of_date.isoformat()}
+    rebuild_financial_history_factors(args, client, as_of_date, financial_rebuilds)
+    if state.is_step_completed("factors-insert") and not pending_rebuild:
+        return
     if bool(getattr(args, "force_full", False)):
         start_date = _to_iso_date(DEFAULT_START_DATE)
     elif latest_factor_date is None or latest_factor_date >= as_of_date:
@@ -1521,17 +1583,6 @@ def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: 
         start_date = (latest_factor_date + timedelta(days=1)).isoformat()
     if window.has_work and window.start_iso and latest_factor_date is not None:
         start_date = min(start_date, window.start_iso)
-
-    from engine.workflows.stock_splits import rebuild_manifest_path, save_json
-    dirty_path = rebuild_manifest_path(market, data_lake=DATA_LAKE)
-    dirty = json.loads(dirty_path.read_text(encoding="utf-8")) if dirty_path.exists() else {"items": {}}
-    requested_symbols = parse_symbols_arg(getattr(args, "symbols", None))
-    requested_ids = set(normalized_security_ids(market, requested_symbols)) if requested_symbols else None
-    pending_rebuild = {
-        sid: item for sid, item in dirty["items"].items()
-        if args.financial_basis not in item.get("completed_bases", [])
-        and (requested_ids is None or sid in requested_ids)
-    }
     if pending_rebuild:
         start_date = min(start_date, min(item["from_date"] for item in pending_rebuild.values()))
         print(f"[SPLITS] rebuilding historical price factors from {start_date}; affected securities={len(pending_rebuild)}", flush=True)
@@ -1554,6 +1605,7 @@ def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: 
         insert_catalog=False,
         client=client,
         parallel_workers=args.workers,
+        include_abstentions=True,
     )
     inserted_rows = int(factor_result.attrs.get("inserted_rows", 0))
     if inserted_rows <= 0:
@@ -1591,6 +1643,13 @@ def run_factor_snapshot_refresh(args: argparse.Namespace, client: Any) -> None:
         )
         return
 
+    from engine.workflows.financial_history_rebuild import pending_rebuilds, complete_rebuilds
+    financial_factors = pending_rebuilds(market, args.financial_basis, data_lake=DATA_LAKE)
+    if any(item["from_date"] <= as_of_date.isoformat() for item in financial_factors.values()):
+        raise RuntimeError("financial history changed; rebuild historical factors for this financial basis before snapshots")
+    financial_snapshots = {sid: item for sid, item in pending_rebuilds(market, args.financial_basis,
+        kind="snapshots", data_lake=DATA_LAKE).items() if item["from_date"] <= as_of_date.isoformat()}
+
     latest_snapshot_date = latest_market_table_date(
         client,
         factor_snapshot_loader.FACTOR_SNAPSHOT_TABLE,
@@ -1602,6 +1661,8 @@ def run_factor_snapshot_refresh(args: argparse.Namespace, client: Any) -> None:
         if latest_snapshot_date is None or latest_snapshot_date >= as_of_date
         else latest_snapshot_date + timedelta(days=1)
     )
+    if financial_snapshots:
+        start_date = min(start_date, min(date.fromisoformat(item["from_date"]) for item in financial_snapshots.values()))
     from engine.workflows.stock_splits import rebuild_manifest_path, save_json
     dirty_path = rebuild_manifest_path(market, data_lake=DATA_LAKE)
     dirty = json.loads(dirty_path.read_text(encoding="utf-8")) if dirty_path.exists() else {"items": {}}
@@ -1639,6 +1700,7 @@ def run_factor_snapshot_refresh(args: argparse.Namespace, client: Any) -> None:
             item["completed_snapshot_bases"] = sorted(set(item.get("completed_snapshot_bases", [])) | {args.financial_basis})
             item["snapshots_rebuilt"] = {"annual", "quarterly", "ttm"} <= set(item["completed_snapshot_bases"])
         save_json(dirty_path, dirty)
+    complete_rebuilds(market, args.financial_basis, financial_snapshots, kind="snapshots", data_lake=DATA_LAKE)
 
 
 def ensure_krx_silver_market_data_current() -> bool:

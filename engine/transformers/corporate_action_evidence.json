@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "kind": "new_listing",
+      "security_id": "SEC_KR_037030",
+      "effective_date": "2018-06-07",
+      "sources": [
+        {
+          "source_id": "20180604000393",
+          "kind_doc_no": "20180604000958",
+          "title": "신규상장",
+          "published_date": "2018-06-04",
+          "source_url": "https://kind.krx.co.kr/external/2018/06/04/000393/20180604000958/70760.htm",
+          "source_sha256": "078ff549fef57f6f30274ebf8425ab19cb6323fa4e1ea9452a2b24512e577010",
+          "role": "new_listing",
+          "markers": [
+            "신규상장",
+            "보통주 KR7037030004 A037030",
+            "상장일(매매개시일) 2018년 06월 07일"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "new_listing",
+      "security_id": "SEC_KR_013890",
+      "effective_date": "2019-10-30",
+      "sources": [
+        {
+          "source_id": "20191028000390",
+          "kind_doc_no": "20191028000930",
+          "title": "신규상장((주)지누스, 상장일 2019.10.30)",
+          "published_date": "2019-10-28",
+          "source_url": "https://kind.krx.co.kr/external/2019/10/28/000390/20191028000930/68152.htm",
+          "source_sha256": "5c72ad9deec4f5fec53daacfbe2d590199044eb372cb5fe5e7d8eee738a22c6a",
+          "role": "new_listing",
+          "markers": [
+            "주권 신규상장 내역",
+            "상장일 : 2019년 10월 30일",
+            "KR7013890009(단축코드:A013890)"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "share_consolidation",
+      "security_id": "SEC_KR_900300",
+      "effective_date": "2026-06-24",
+      "new_shares": "1",
+      "old_shares": "50",
+      "ratio_marker": "2026년 05월 28일 주식병합(50:1)을 실시하여 발행주식총수가 389,004,876주에서 7,780,097주로 감소하였습니다.",
+      "sources": [
+        {
+          "source_id": "20260601001556",
+          "kind_doc_no": "20260601002507",
+          "title": "분기보고서(일반법인) (2026.03)",
+          "published_date": "2026-06-01",
+          "source_url": "https://kind.krx.co.kr/external/2026/06/01/001556/20260601002507/11013.htm",
+          "source_sha256": "e61d3ca463ac8bbb05504b0d1028f08de062700055c40a8dc2d913ad3d0e50d0",
+          "role": "exact_ratio",
+          "markers": [
+            "2026년 05월 28일 주식병합(50:1)을 실시하여 발행주식총수가 389,004,876주에서 7,780,097주로 감소하였습니다."
+          ]
+        },
+        {
+          "source_id": "20260623000445",
+          "kind_doc_no": "20260623001102",
+          "title": "변경상장(주식병합(무액면주식))",
+          "published_date": "2026-06-23",
+          "source_url": "https://kind.krx.co.kr/external/2026/06/23/000445/20260623001102/70763.htm",
+          "source_sha256": "da16fd5578fb5665060d0dcd909d0d610950d6cc4a64fd9ab41acbac87654412",
+          "role": "actual_listing",
+          "markers": [
+            "보통주 A900300 -381,224,779",
+            "보통주 7,780,097",
+            "상장일 2026-06-24"
+          ]
+        },
+        {
+          "source_id": "20260623000742",
+          "kind_doc_no": "20260623001627",
+          "title": "기준가격안내(주식병합)",
+          "published_date": "2026-06-23",
+          "source_url": "https://kind.krx.co.kr/external/2026/06/23/000742/20260623001627/70795.htm",
+          "source_sha256": "1b58776a0396e62e43b3fdde6cc85aa0eb50a1f2ecffd22547469c310b16173c",
+          "role": "exchange_reference",
+          "markers": [
+            "보통주식 A900300 4,550",
+            "적용일 2026-06-24",
+            "사유 주식병합"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "new_listing",
+      "security_id": "SEC_KR_101970",
+      "effective_date": "2025-03-28",
+      "sources": [
+        {
+          "source_id": "20150304000777",
+          "kind_doc_no": "20150304001997",
+          "title": "prior_delisting",
+          "published_date": "2015-03-04",
+          "source_url": "https://kind.krx.co.kr/external/2015/03/04/000777/20150304001997/70769.htm",
+          "source_sha256": "d4f89dcc8f13c996bf800d3d681dcec818cc11b58387d9d9524aa77bdc4fceb8",
+          "role": "prior_delisting",
+          "markers": [
+            "보통주 A101970 25,735,667 2012-07-26",
+            "만료일 2015-03-16 7.상장폐지일 2015-03-17"
+          ]
+        },
+        {
+          "source_id": "20250327000555",
+          "kind_doc_no": "20250327001682",
+          "title": "new_listing",
+          "published_date": "2025-03-27",
+          "source_url": "https://kind.krx.co.kr/external/2025/03/27/000555/20250327001682/70980.htm",
+          "source_sha256": "078f45afe7b05572616b69a471688a581d99f167f1948f8b18a77c2ffcf48ea0",
+          "role": "new_listing",
+          "markers": [
+            "보통주 KR7101970002 A101970 14,547,709",
+            "10.상장일(매매개시일) 2025년 03월 28일",
+            "11.피합병법인(SPAC) KB제26호스팩"
+          ]
+        },
+        {
+          "source_id": "20250327001708",
+          "kind_doc_no": "20250327003314",
+          "title": "exchange_reference",
+          "published_date": "2025-03-27",
+          "source_url": "https://kind.krx.co.kr/external/2025/03/27/001708/20250327003314/70718.htm",
+          "source_sha256": "5f150753597104ec1f3c18ee20017042b6cc65b8e3c0203c9efab32d0b4b9694",
+          "role": "exchange_reference",
+          "markers": [
+            "3. 사유 SPAC소멸합병상장 4. 적용일 2025-03-28"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "new_listing",
+      "security_id": "SEC_KR_036220",
+      "effective_date": "2024-03-13",
+      "sources": [
+        {
+          "source_id": "20160429000334",
+          "kind_doc_no": "20160429000754",
+          "title": "prior_delisting",
+          "published_date": "2016-04-29",
+          "source_url": "https://kind.krx.co.kr/external/2016/04/29/000334/20160429000754/70769.htm",
+          "source_sha256": "86e24d17940854a282073b646adec291188f4db5e1845f8f9593603ce2121fe8",
+          "role": "prior_delisting",
+          "markers": [
+            "보통주 A036220 10,694,594 2007-06-05",
+            "만료일 2016-05-04 7.상장폐지일 2016-05-09"
+          ]
+        },
+        {
+          "source_id": "20240311001336",
+          "kind_doc_no": "20240311003318",
+          "title": "new_listing",
+          "published_date": "2024-03-11",
+          "source_url": "https://kind.krx.co.kr/external/2024/03/11/001336/20240311003318/70760.htm",
+          "source_sha256": "a6d7d5bfc9ed5f34904e1288ac1443306be12dacd03e2fd1ad88488a44c671d7",
+          "role": "new_listing",
+          "markers": [
+            "보통주 KR7036220002 A036220 14,104,416",
+            "10.상장일(매매개시일) 2024년 03월 13일"
+          ]
+        },
+        {
+          "source_id": "20240312001005",
+          "kind_doc_no": "20240312002675",
+          "title": "exchange_reference",
+          "published_date": "2024-03-12",
+          "source_url": "https://kind.krx.co.kr/external/2024/03/12/001005/20240312002675/72100.htm",
+          "source_sha256": "0970cb145c014955f154b31544dbe5cb5162fdecdc10ffa97c751fd0808bcae6",
+          "role": "exchange_reference",
+          "markers": [
+            "4. 사유 신규상장 5. 적용일 2024-03-13"
+          ]
+        }
+      ]
+    }
+  ]
+}

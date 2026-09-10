@@ -745,7 +745,14 @@ def prepare_daily_factor_rows(
     financial_basis: str = "annual",
     factor_ids: list[str] | None = None,
     sort_rows: bool = True,
+    include_abstentions: bool = False,
 ) -> pd.DataFrame:
+    """Prepare finite cells, optionally retaining the start of missing runs.
+
+    An abstention is a missing source event, not a zero or an available factor cell.
+    Keep an initial missing event for each security too, so partial refreshes
+    can revoke a value that was published before the requested interval.
+    """
     if wide_df.empty:
         return empty_daily_factor_rows()
 
@@ -764,6 +771,14 @@ def prepare_daily_factor_rows(
         "updated_at",
     ]
     wide_df = _ensure_columns(wide_df, id_columns)
+    if include_abstentions:
+        wide_df = wide_df.copy()
+        wide_df["trade_date"] = pd.to_datetime(wide_df["trade_date"], errors="raise")
+        if wide_df[["security_id", "trade_date"]].isna().any().any():
+            raise ValueError("Abstention events require security and trade date")
+        if wide_df.duplicated(["security_id", "trade_date"]).any():
+            raise ValueError("Abstention events require one calculation per security and date")
+        wide_df = wide_df.sort_values(["security_id", "trade_date"]).reset_index(drop=True)
 
     value_columns = factor_ids if factor_ids is not None else factor_columns(wide_df)
     value_columns = [column for column in value_columns if column in wide_df.columns]
@@ -775,12 +790,17 @@ def prepare_daily_factor_rows(
     for factor_id in value_columns:
         factor_value = pd.to_numeric(wide_df[factor_id], errors="coerce")
         valid_mask = factor_value.notna() & factor_value.map(math.isfinite)
-        if not valid_mask.any():
+        selected_mask = valid_mask
+        if include_abstentions:
+            prior_valid = valid_mask.groupby(wide_df["security_id"], sort=False).shift(1, fill_value=True)
+            selected_mask = valid_mask | prior_valid
+            factor_value = factor_value.where(valid_mask, math.nan)
+        if not selected_mask.any():
             continue
 
-        part = id_frame.loc[valid_mask].copy()
+        part = id_frame.loc[selected_mask].copy()
         part["factor_id"] = factor_id
-        part["factor_value"] = factor_value.loc[valid_mask].to_numpy()
+        part["factor_value"] = factor_value.loc[selected_mask].to_numpy(dtype=float, na_value=math.nan)
         long_parts.append(part)
 
     if not long_parts:
@@ -793,10 +813,14 @@ def prepare_daily_factor_rows(
     fiscal_year = pd.to_numeric(long_df["fiscal_year"], errors="coerce").astype("Int64")
     long_df["fiscal_year"] = fiscal_year.astype("object").where(fiscal_year.notna(), None)
     long_df["currency"] = long_df["currency"].fillna("KRW")
-    long_df["updated_at"] = pd.to_datetime(long_df["updated_at"], errors="coerce")
-    long_df["updated_at"] = long_df["updated_at"].fillna(
-        datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
-    )
+    revisions = pd.to_datetime(long_df["updated_at"], errors="coerce")
+    # Calculation frames use Seoul wall time. Naive datetime64 values are
+    # serialized as UTC by insert_df, shifting revisions nine hours forward.
+    if revisions.dt.tz is None:
+        revisions = revisions.dt.tz_localize("Asia/Seoul")
+    else:
+        revisions = revisions.dt.tz_convert("Asia/Seoul")
+    long_df["updated_at"] = revisions.fillna(datetime.now(ZoneInfo("Asia/Seoul")))
 
     long_df = long_df[FACT_DAILY_FACTOR_COLUMNS]
     if sort_rows:
@@ -886,6 +910,7 @@ def _prepare_daily_factor_rows_for_stock(
     factor_ids = _normalize_factor_ids(kwargs.get("factor_ids"))
     stock_kwargs = dict(kwargs)
     stock_kwargs.pop("factor_ids", None)
+    include_abstentions = stock_kwargs.pop("include_abstentions", False)
     historical_symbols = stock_kwargs.pop("reviewed_historical_symbols", set())
     if stock_code in historical_symbols:
         # Current ticker lookup may resolve another issuer after ticker reuse.
@@ -910,6 +935,7 @@ def _prepare_daily_factor_rows_for_stock(
         financial_basis=financial_basis,
         factor_ids=factor_ids,
         sort_rows=False,
+        include_abstentions=include_abstentions,
     )
     return stock_code, factor_df
 

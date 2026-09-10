@@ -1,6 +1,7 @@
 """Publishing reviewed receipts preserves earlier inputs and their availability."""
 from hashlib import sha256
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -25,10 +26,10 @@ def reviewed_receipt(root, received, sales):
             "source_url": f"https://opendart.fss.or.kr/api/document.xml?rcept_no={receipt}"}
 
 
-def review_file(root, receipts):
+def review_file(root, receipts, **metadata):
     path = root / "review.json"
     path.write_text(json.dumps({"schema_version": 1, "market": "kr", "symbol": "035480",
-                               "corp_code": "00255141", "receipts": receipts}), encoding="utf-8")
+                               "corp_code": "00255141", "receipts": receipts, **metadata}), encoding="utf-8")
     return path
 
 
@@ -51,6 +52,64 @@ def test_incremental_publication_keeps_original_and_amendment_without_duplicate_
     assert result.report_date.tolist() == [pd.Timestamp("2022-03-30"), pd.Timestamp("2022-08-15")]
     assert repeated["status"] == "unchanged"
     assert repeated["receipts"] == 2
+
+
+def test_review_extension_adds_a_disclosed_account_without_changing_its_availability(tmp_path):
+    from engine.workflows.financial_history import publish_reviewed_financial_history
+    receipt = reviewed_receipt(tmp_path, "2022-03-30", 100)
+    source = tmp_path / receipt["source_path"]
+    source.write_text("<DOCUMENT><COMPANY-NAME AREGCIK='00255141'>예제</COMPANY-NAME>매출액 100; 매출채권 20</DOCUMENT>", "utf-8")
+    receipt["source_sha256"] = sha256(source.read_bytes()).hexdigest()
+    target = tmp_path / "published"
+    original = publish_reviewed_financial_history(review_file(tmp_path, [receipt]), financial_dir=target)
+    previous = Path(original["manifest_path"]).read_bytes()
+    normalized = tmp_path / receipt["normalized_path"]
+    frame = pd.read_csv(normalized)
+    frame.loc[len(frame)] = dict(canonical_account_id="TRADE_RECEIVABLES", statement_type="BS",
+        original_account_name="매출채권", period="2021.12", normalized_amount=20)
+    frame.to_csv(normalized, index=False)
+    receipt.update(normalized_sha256=sha256(normalized.read_bytes()).hexdigest(),
+        accepted_canonical_account_ids=["REVENUE", "TRADE_RECEIVABLES"],
+        review_evidence="Previously accepted sales preserved; pure trade receivables verified against the same retained statement.")
+    review = review_file(tmp_path, [receipt], expected_manifest_sha256=sha256(previous).hexdigest(),
+        revision_reason="Extend the reviewed operating-capital inputs from the original filing.")
+    published = publish_reviewed_financial_history(review, financial_dir=target)
+    result = read_financials(target)
+    assert result.sale.tolist() == [100]
+    assert result.TRADE_RECEIVABLES.tolist() == [20]
+    assert result.report_date.tolist() == [pd.Timestamp("2022-03-30")]
+    assert Path(published["previous_manifest_path"]).read_bytes() == previous
+    assert publish_reviewed_financial_history(review, financial_dir=target)["status"] == "unchanged"
+
+
+@pytest.mark.parametrize("problem", ["stale_manifest", "changed_amount", "removed_account", "changed_scope", "missing_reason"])
+def test_review_extension_rejects_changes_to_accepted_history(tmp_path, problem):
+    from engine.workflows.financial_history import publish_reviewed_financial_history
+    receipt = reviewed_receipt(tmp_path, "2022-03-30", 100)
+    target = tmp_path / "published"
+    initial = publish_reviewed_financial_history(review_file(tmp_path, [receipt]), financial_dir=target)
+    manifest = Path(initial["manifest_path"])
+    previous = manifest.read_bytes()
+    normalized = tmp_path / receipt["normalized_path"]
+    frame = pd.read_csv(normalized)
+    frame.loc[len(frame)] = dict(canonical_account_id="TRADE_RECEIVABLES", statement_type="BS",
+        original_account_name="매출채권", period="2021.12", normalized_amount=20)
+    if problem == "changed_amount":
+        frame.loc[0, "normalized_amount"] = 90
+    frame.to_csv(normalized, index=False)
+    receipt.update(normalized_sha256=sha256(normalized.read_bytes()).hexdigest(),
+        accepted_canonical_account_ids=["REVENUE", "TRADE_RECEIVABLES"])
+    if problem == "removed_account":
+        receipt["accepted_canonical_account_ids"] = ["TRADE_RECEIVABLES"]
+    if problem == "changed_scope":
+        receipt["financial_scope"] = "OFS"
+    review = review_file(tmp_path, [receipt],
+        expected_manifest_sha256="0" * 64 if problem == "stale_manifest" else sha256(previous).hexdigest(),
+        revision_reason="" if problem == "missing_reason" else "Extend the reviewed operating-capital inputs.")
+    with pytest.raises(ValueError):
+        publish_reviewed_financial_history(review, financial_dir=target)
+    assert manifest.read_bytes() == previous
+    assert read_financials(target).sale.tolist() == [100]
 
 
 @pytest.mark.parametrize("problem", ["modified_source", "unreviewed", "backdated_amendment", "unknown_regime"])
@@ -90,6 +149,51 @@ def test_actual_dart_publication_date_can_follow_the_receipt_identifier_date(tmp
     publish_reviewed_financial_history(review_file(tmp_path, [receipt]), financial_dir=target)
     result = read_financials(target)
     assert result.report_date.tolist() == [pd.Timestamp("2022-08-15")]
+    assert not list(target.rglob("publication_sources/*.json"))
+    manifest = json.loads((target / "history/035480/manifest.json").read_text("utf-8"))
+    record = manifest["receipts"][0]
+    assert (Path(record["evidence_root"]) / record["publication_source_path"]).resolve() == index.resolve()
+
+
+def test_publication_references_bronze_sources_without_copying_raw_documents_into_silver(tmp_path):
+    from engine.workflows.financial_history import publish_reviewed_financial_history
+    bronze = tmp_path / "data-lake/bronze/dart/financial_history"
+    bronze.mkdir(parents=True)
+    receipt = reviewed_receipt(bronze, "2022-03-30", 100)
+    target = tmp_path / "data-lake/silver/dart/normalized"
+    review = review_file(bronze, [receipt])
+    result = publish_reviewed_financial_history(review, financial_dir=target)
+    assert not list(target.rglob("*.html")), "Raw DART documents belong in bronze"
+    manifest = json.loads(Path(result["manifest_path"]).read_text("utf-8"))
+    record = manifest["receipts"][0]
+    source = Path(record["evidence_root"]) / record["source_path"]
+    assert source.resolve().is_relative_to(bronze)
+    assert sha256(source.read_bytes()).hexdigest() == receipt["source_sha256"]
+    previous = Path(result["manifest_path"]).read_bytes()
+    source.write_text("changed provider bytes", encoding="utf-8")
+    with pytest.raises(ValueError, match="digest"):
+        publish_reviewed_financial_history(review, financial_dir=target)
+    assert Path(result["manifest_path"]).read_bytes() == previous
+
+
+def test_incremental_publication_can_keep_a_legacy_embedded_source_record(tmp_path):
+    from engine.workflows.financial_history import publish_reviewed_financial_history
+    receipt = reviewed_receipt(tmp_path, "2022-03-30", 100)
+    target = tmp_path / "published"
+    published = publish_reviewed_financial_history(review_file(tmp_path, [receipt]), financial_dir=target)
+    manifest_path = Path(published["manifest_path"])
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    legacy = manifest["receipts"][0]
+    legacy.pop("evidence_root")
+    legacy["source_path"] = "legacy_source.html"
+    (manifest_path.parent / legacy["source_path"]).write_bytes((tmp_path / receipt["source_path"]).read_bytes())
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    amendment = reviewed_receipt(tmp_path, "2022-08-15", 80)
+    publish_reviewed_financial_history(review_file(tmp_path, [receipt, amendment]), financial_dir=target)
+    updated = json.loads(manifest_path.read_text("utf-8"))
+    assert updated["receipts"][0] == legacy
+    assert "evidence_root" in updated["receipts"][1]
+    assert read_financials(target).sale.tolist() == [100, 80]
 
 
 @pytest.mark.parametrize("dry_run", [True, False])

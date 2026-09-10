@@ -446,7 +446,7 @@ def build_split_price_panels(market,ledger,*,symbols=None,as_of=None,refresh_us=
 
 
 def run_stock_split_refresh(*,market,symbols=None,end_date=None,start_date='20100101',
-                           download=True,build_prices=True,refresh_us=True,force=False):
+                           download=True,build_prices=True,refresh_us=True,force=False,gold_dir=None):
     cutoff=str(pd.Timestamp(end_date or date.today()).date())
     if download:
         report=download_stock_splits(market=market,symbols=symbols,start_date=start_date,end_date=cutoff,force=force)
@@ -466,8 +466,21 @@ def run_stock_split_refresh(*,market,symbols=None,end_date=None,start_date='2010
     if market=='us' and build_prices:
         from engine.transformers.sec_shares import build_disclosed_shares
         build_disclosed_shares(symbols=symbols,as_of=cutoff)
-    return {'ledger_path':str(ledger_path(market)),'events':len(ledger['events']),'review':len(ledger['review']),
-            'price_panels':len(prices['processed']) if prices else 0,'price_errors':prices['errors'] if prices else []}
+    from engine.core.serving_storage import export_json, export_prices
+    gold = Path(gold_dir or DATA_LAKE.gold('corporate_actions', market))
+    artifacts = [export_json(gold / 'stock_splits.json', {
+        'market': market, 'as_of': cutoff, 'events': ledger['events'],
+        'review': ledger['review'], 'coverage_complete': False})]
+    for metadata in prices['processed'] if prices else []:
+        filename = f"{market}_{metadata['symbol']}.parquet"
+        artifacts.append(export_prices(gold / 'prices' / filename,
+                                       pd.read_parquet(price_panel_dir(market) / filename)))
+    result = {'ledger_path':str(ledger_path(market)),'events':len(ledger['events']),'review':len(ledger['review']),
+              'price_panels':len(prices['processed']) if prices else 0,'price_errors':prices['errors'] if prices else [],
+              'market': market, 'as_of': cutoff, 'coverage_complete': False,
+              'gold_dir': str(gold.resolve()), 'artifacts': artifacts}
+    export_json(gold / 'summary.json', result)
+    return result
 
 
 def main():
@@ -480,11 +493,13 @@ def main():
     parser.add_argument('--skip-prices',action='store_true')
     parser.add_argument('--no-us-price-refresh',action='store_true')
     parser.add_argument('--force',action='store_true')
+    parser.add_argument('--gold-output',type=Path,help='User-facing split and price export directory.')
     args=parser.parse_args()
     with SourceRefreshLock(args.market),SourceArchiveSession(market=args.market,run_id=new_source_run_id()):
         result=run_stock_split_refresh(market=args.market,symbols=args.symbols.split(',') if args.symbols else None,
                                       end_date=args.end_date,start_date=args.start_date,download=not args.skip_download,
-                                      build_prices=not args.skip_prices,refresh_us=not args.no_us_price_refresh,force=args.force)
+                                      build_prices=not args.skip_prices,refresh_us=not args.no_us_price_refresh,force=args.force,
+                                      gold_dir=args.gold_output)
         print(json.dumps(result,ensure_ascii=False,indent=2))
 
 

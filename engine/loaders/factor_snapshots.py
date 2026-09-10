@@ -162,7 +162,9 @@ def build_factor_snapshot_insert_query(
         )
 
     params: dict[str, Any] = {}
-    source_filters = ["isFinite(factor_value)"]
+    # A newer missing value revokes the earlier value. Filtering before argMax
+    # would resurrect it; consumers decide usability after selecting the row.
+    source_filters = ["1"]
     security_prefix = _security_prefix_for_market(market)
     if security_prefix:
         params["security_prefix"] = security_prefix
@@ -208,6 +210,9 @@ def build_factor_snapshot_insert_query(
         source_filters.append("has({factor_ids:Array(String)}, factor_id)")
 
     source_where_sql = "\n        AND ".join(source_filters)
+    # Aggregate one row as a tuple: scalar argMax skips nullable metadata and
+    # could attach an older fiscal period to the latest factor value.
+    selected_source = "argMax(tuple(f.factor_value, f.fiscal_year, f.financial_period, f.currency), tuple(f.trade_date, f.updated_at))"
     query = f"""
 INSERT INTO {_validate_table_name(snapshot_table)}
 (
@@ -245,11 +250,11 @@ SELECT
     f.security_id AS security_id,
     f.factor_id AS factor_id,
     f.financial_basis AS financial_basis,
-    argMax(f.factor_value, tuple(f.trade_date, f.updated_at)) AS factor_value,
+    tupleElement({selected_source}, 1) AS factor_value,
     max(f.trade_date) AS source_trade_date,
-    argMax(f.fiscal_year, tuple(f.trade_date, f.updated_at)) AS fiscal_year,
-    argMax(f.financial_period, tuple(f.trade_date, f.updated_at)) AS financial_period,
-    argMax(f.currency, tuple(f.trade_date, f.updated_at)) AS currency,
+    tupleElement({selected_source}, 2) AS fiscal_year,
+    tupleElement({selected_source}, 3) AS financial_period,
+    tupleElement({selected_source}, 4) AS currency,
     max(f.updated_at) AS updated_at
 FROM source_rows AS f
 CROSS JOIN snapshot_dates AS d
@@ -280,7 +285,6 @@ def build_incremental_factor_snapshot_insert_query(
     }
     current_filters = [
         "f.trade_date = {snapshot_date:Date}",
-        "isFinite(f.factor_value)",
     ]
     previous_filters = [
         "s.trade_date = {previous_snapshot_date:Date}",
@@ -305,6 +309,8 @@ def build_incremental_factor_snapshot_insert_query(
 
     current_where_sql = "\n        AND ".join(current_filters)
     previous_where_sql = "\n        AND ".join(previous_filters)
+    selected_raw = "argMax(tuple(f.factor_value, f.fiscal_year, f.financial_period, f.currency), tuple(f.trade_date, f.updated_at))"
+    selected_previous = "argMax(tuple(s.factor_value, s.source_trade_date, s.fiscal_year, s.financial_period, s.currency), tuple(s.updated_at, s.source_trade_date))"
     query = f"""
 INSERT INTO {_validate_table_name(snapshot_table)}
 (
@@ -326,11 +332,11 @@ current_raw AS (
         f.security_id AS security_id,
         f.factor_id AS factor_id,
         f.financial_basis AS financial_basis,
-        argMax(f.factor_value, tuple(f.trade_date, f.updated_at)) AS factor_value,
+        tupleElement({selected_raw}, 1) AS factor_value,
         max(f.trade_date) AS source_trade_date,
-        argMax(f.fiscal_year, tuple(f.trade_date, f.updated_at)) AS fiscal_year,
-        argMax(f.financial_period, tuple(f.trade_date, f.updated_at)) AS financial_period,
-        argMax(f.currency, tuple(f.trade_date, f.updated_at)) AS currency,
+        tupleElement({selected_raw}, 2) AS fiscal_year,
+        tupleElement({selected_raw}, 3) AS financial_period,
+        tupleElement({selected_raw}, 4) AS currency,
         max(f.updated_at) AS updated_at
     FROM {_validate_table_name(source_table)} AS f
     WHERE {current_where_sql}
@@ -345,11 +351,11 @@ previous_snapshot AS (
         s.security_id AS security_id,
         s.factor_id AS factor_id,
         s.financial_basis AS financial_basis,
-        argMax(s.factor_value, tuple(s.updated_at, s.source_trade_date)) AS factor_value,
-        argMax(s.source_trade_date, tuple(s.updated_at, s.source_trade_date)) AS source_trade_date,
-        argMax(s.fiscal_year, tuple(s.updated_at, s.source_trade_date)) AS fiscal_year,
-        argMax(s.financial_period, tuple(s.updated_at, s.source_trade_date)) AS financial_period,
-        argMax(s.currency, tuple(s.updated_at, s.source_trade_date)) AS currency,
+        tupleElement({selected_previous}, 1) AS factor_value,
+        tupleElement({selected_previous}, 2) AS source_trade_date,
+        tupleElement({selected_previous}, 3) AS fiscal_year,
+        tupleElement({selected_previous}, 4) AS financial_period,
+        tupleElement({selected_previous}, 5) AS currency,
         max(s.updated_at) AS updated_at
     FROM {_validate_table_name(snapshot_table)} AS s
     LEFT JOIN current_raw AS r
@@ -570,7 +576,7 @@ def _build_raw_copy_snapshot_insert_query(
     security_ids: list[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     params: dict[str, Any] = {}
-    filters = ["isFinite(factor_value)"]
+    filters = ["1"]
     security_prefix = _security_prefix_for_market(market)
     if security_prefix:
         params["security_prefix"] = security_prefix
@@ -728,7 +734,7 @@ def _resolve_factor_ids(
         return _normalize_factor_ids(factor_ids)
 
     params: dict[str, Any] = {"end_date": _date_iso(end_date)}
-    filters = ["trade_date <= {end_date:Date}", "isFinite(factor_value)"]
+    filters = ["trade_date <= {end_date:Date}"]
     security_prefix = _security_prefix_for_market(market)
     if security_prefix:
         params["security_prefix"] = security_prefix

@@ -50,6 +50,12 @@ class RefreshWorkflowTest(unittest.TestCase):
                       side_effect=lambda market,**kwargs:self.split_manifest_root/f'{market}_rebuild.json')
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Receipt rebuilds have dedicated isolated tests; never read production
+        # history or complete its markers through this fake database client.
+        financial_patcher = patch(
+            'engine.workflows.financial_history_rebuild.pending_rebuilds', return_value={})
+        financial_patcher.start()
+        self.addCleanup(financial_patcher.stop)
 
     def test_split_snapshot_rebuild_waits_for_its_financial_basis(self):
         (self.split_manifest_root/'us_rebuild.json').write_text(json.dumps({'items':{

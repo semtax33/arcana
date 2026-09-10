@@ -27,6 +27,8 @@ def write_history(root, records):
             {"canonical_account_id": "TOTAL_EQUITY", "statement_type": "BS", "original_account_name": "자본총계", "normalized_amount": 600},
         ]
         if len(record) > 3:
+            facts.append({"canonical_account_id": "EAOP", "statement_type": "BS",
+                          "original_account_name": "지배기업소유주지분", "normalized_amount": 600})
             facts.append({"canonical_account_id": "NET_INCOME_PARENT", "statement_type": "IS",
                           "original_account_name": "지배기업소유주순이익", "normalized_amount": record[3]})
         pd.DataFrame(facts).to_csv(path, index=False)
