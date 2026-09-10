@@ -175,7 +175,9 @@ class BacktestQueryTest(unittest.TestCase):
 
         self.assertIn("portfolio_positions AS", query)
         self.assertIn("lagInFrame", query)
-        self.assertIn("avgIf", query)
+        self.assertIn("avg(if(entry_close > 0", query)
+        self.assertIn("position_calendar AS", query)
+        self.assertIn("unpriced_exit_count", query)
         self.assertIn("ranked_segment_returns AS", query)
         self.assertEqual(params["security_ids"], ["SEC_A", "SEC_B"])
         self.assertEqual(

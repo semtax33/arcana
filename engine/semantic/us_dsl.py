@@ -66,6 +66,7 @@ class UsSemanticRule:
             _put_list(rule, "alternate_tags", self.alternate_concepts, explicit)
             _put_list(rule, "label_patterns", self.label_patterns, explicit)
             _put_list(rule, "label_exclude_patterns", self.label_excludes, explicit)
+            _put_list(rule, "report_name_exclude_patterns", self.report_excludes, explicit)
         elif self.legacy_group == "notes_rules":
             _put_list(rule, "tags", self.exact_concepts, explicit)
             _put_list(rule, "tag_patterns", self.concept_patterns, explicit)

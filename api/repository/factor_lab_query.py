@@ -11,6 +11,7 @@ from typing import Any
 
 from api.model.universe import has_universe_filters, normalize_universe
 from api.repository.universe_query import build_universe_ctes
+from api.repository.listing_history import security_source_sql
 from api.service.factor_identity import canonical_factor_id
 from api.repository.factor_lab_regression import compile_residualize
 from api.repository.factor_lab_fiscal import compile_fiscal_lag
@@ -267,6 +268,7 @@ def compile_factor_lab_graph(
     price_table: str = "price_daily",
     security_table: str = "security_master",
     issuer_table: str = "issuers",
+    listing_table: str | None = None,
 ) -> FactorLabCompileResult:
     validation = validate_factor_lab_graph(graph, known_factor_ids=known_factor_ids)
     if not validation.valid:
@@ -322,7 +324,7 @@ def compile_factor_lab_graph(
     )
 
     ctes: list[str] = []
-    universe_active = has_universe_filters(experiment.get("universe"))
+    universe_active = has_universe_filters(experiment.get("universe")) or bool(listing_table)
     if universe_active:
         if has_temporal_nodes:
             dates_sql = f"SELECT DISTINCT trade_date FROM {price_table} WHERE trade_date <= {{temporal_end_date:Date}}"
@@ -334,11 +336,12 @@ def compile_factor_lab_graph(
         uv_ctes, uv_params = build_universe_ctes(dates_sql=dates_sql, universe=universe,
             market=experiment.get("market"), sector_codes=universe.get("sector_codes"),
             industry_group_codes=universe.get("industry_group_codes"),
-            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table)
+            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table,
+            listing_table=listing_table)
         ctes.extend(uv_ctes)
         params.update(uv_params)
     if _needs_security_universe(nodes, validation.execution_order, experiment):
-        ctes.append(_compile_security_universe_cte(experiment, security_table, issuer_table, params))
+        ctes.append(_compile_security_universe_cte(experiment, security_table, issuer_table, params, listing_table))
     if any(nodes[n]["type"] in TEMPORAL_NODES and _dict(nodes[n].get("config")).get("unit") == "trading_day" for n in validation.execution_order):
         params["calendar_market"] = str(experiment.get("market") or "ALL").strip().upper()
         ctes.append(f"""lab_trading_calendar AS (
@@ -346,7 +349,7 @@ def compile_factor_lab_graph(
     FROM {price_table} AS p
     INNER JOIN (
         SELECT security_id, argMax(country, updated_at) AS country
-        FROM {security_table} GROUP BY security_id
+        FROM {security_source_sql(security_table, listing_table)} GROUP BY security_id
     ) AS u ON p.security_id = u.security_id
     WHERE p.trade_date <= {{temporal_end_date:Date}}
         AND ({{calendar_market:String}} = 'ALL' OR u.country = {{calendar_market:String}})
@@ -1195,6 +1198,7 @@ def _compile_security_universe_cte(
     security_table: str,
     issuer_table: str,
     params: dict[str, Any],
+    listing_table: str | None = None,
 ) -> str:
     market = str(experiment.get("market") or "").strip().upper()
     universe = _dict(experiment.get("universe"))
@@ -1224,7 +1228,7 @@ security_universe AS (
             security_id,
             argMax(issuer_id, updated_at) AS issuer_id,
             argMax(country, updated_at) AS country
-        FROM {security_table}
+        FROM {security_source_sql(security_table, listing_table)}
         GROUP BY security_id
     ) AS sm
     LEFT JOIN

@@ -886,6 +886,15 @@ def _prepare_daily_factor_rows_for_stock(
     factor_ids = _normalize_factor_ids(kwargs.get("factor_ids"))
     stock_kwargs = dict(kwargs)
     stock_kwargs.pop("factor_ids", None)
+    historical_symbols = stock_kwargs.pop("reviewed_historical_symbols", set())
+    if stock_code in historical_symbols:
+        # Current ticker lookup may resolve another issuer after ticker reuse.
+        # Historical fundamentals must come from normalized, dated evidence.
+        stock_kwargs["use_edgartools"] = False
+        stock_kwargs["require_report_metadata"] = True
+        stock_kwargs["financial_availability_delay_days"] = max(
+            1, stock_kwargs.get("financial_availability_delay_days", 0)
+        )
     wide_df = create_stock_factor_dataframe(
         stock_code,
         financial_basis=financial_basis,
@@ -936,6 +945,7 @@ def _iter_prepared_daily_factor_rows(
     parallel_workers: int,
     **kwargs,
 ):
+    kwargs["reviewed_historical_symbols"] = _reviewed_historical_symbols(market)
     if parallel_workers == 1 or len(stock_codes) <= 1:
         for stock_code in stock_codes:
             yield _prepare_daily_factor_rows_for_stock(
@@ -986,6 +996,27 @@ def _iter_prepared_daily_factor_rows(
                 submit_next(executor)
 
 
+def _reviewed_historical_symbols(market: str) -> set[str]:
+    import json
+    episode_path = DATA_LAKE.silver("survivorship", market, "listing_episodes.json")
+    if not episode_path.exists():
+        return set()
+    payload = json.loads(episode_path.read_text(encoding="utf-8"))
+    if payload.get("market") != market or payload.get("schema_version") != 1:
+        raise ValueError("Invalid historical factor-universe metadata")
+    issuers_by_symbol = {}
+    for episode in payload.get("rows", []):
+        if episode.get("status") != "confirmed" or episode.get("security_type") != "common_stock":
+            continue
+        symbol = str(episode["symbol"]).strip().upper()
+        if episode["security_id"] != f"SEC_{market.upper()}_{symbol}":
+            raise ValueError("Historical factor inputs require an unambiguous security identity")
+        issuers_by_symbol.setdefault(symbol, set()).add(episode["issuer_id"])
+    if any(len(issuers) != 1 for issuers in issuers_by_symbol.values()):
+        raise ValueError("Historical symbol reuse requires issuer-specific factor inputs")
+    return set(issuers_by_symbol)
+
+
 def _resolve_stock_codes(stock_codes: list[str] | None, market: str = "kr") -> list[str]:
     market = str(market or "kr").strip().lower()
     if stock_codes is not None:
@@ -1007,16 +1038,20 @@ def _resolve_stock_codes(stock_codes: list[str] | None, market: str = "kr") -> l
                 snapshot_meta = parse_statement_snapshot_filename(path)
                 if snapshot_meta is not None:
                     symbols.add(str(snapshot_meta["stock_code"]))
+        # Retired issuers may have prices and disclosed shares before their
+        # historical financial statements have been normalized. They still
+        # belong in price/share factor computation.
+        symbols.update(_reviewed_historical_symbols(market))
         return sorted(symbols)
 
     local_stock_codes = _kr_stock_codes_from_normalized_price()
     if local_stock_codes:
-        return local_stock_codes
+        return sorted(set(local_stock_codes) | _reviewed_historical_symbols(market))
 
     from engine.extractors.market_universe import kospi_kosdaq_corp_list
 
     corps_list = kospi_kosdaq_corp_list()
-    return sorted(corps_list["stock_code"].dropna().map(normalize_stock_code).unique())
+    return sorted(set(corps_list["stock_code"].dropna().map(normalize_stock_code).unique()) | _reviewed_historical_symbols(market))
 
 
 def _kr_stock_codes_from_normalized_price() -> list[str]:

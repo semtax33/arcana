@@ -104,6 +104,11 @@ def normalize_price(path: str):
     result["adj_close"] = df[CLOSE_COLUMN]
     result["currency"] = "KRW"
 
+    from engine.transformers.stock_splits import adjust_prices, load_events
+    events = load_events("kr", DATA_LAKE.silver("corporate_actions", "kr_stock_splits.json"))
+    if events:
+        result["adj_close"] = adjust_prices(result, events, price_basis="raw")["split_adj_close"]
+
     _write_csv(result, DATA_LAKE.silver("krx", "price", market_csv_name("normalized_price")))
     return result
 

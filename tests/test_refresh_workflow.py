@@ -41,6 +41,28 @@ class FakeClickHouseClient:
 
 
 class RefreshWorkflowTest(unittest.TestCase):
+    def setUp(self):
+        # Fake database writes must never complete a real local rebuild marker.
+        temporary=TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.split_manifest_root=Path(temporary.name)
+        patcher=patch('engine.workflows.stock_splits.rebuild_manifest_path',
+                      side_effect=lambda market,**kwargs:self.split_manifest_root/f'{market}_rebuild.json')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_split_snapshot_rebuild_waits_for_its_financial_basis(self):
+        (self.split_manifest_root/'us_rebuild.json').write_text(json.dumps({'items':{
+            'SEC_US_AAPL':{'from_date':'2014-06-09','completed_bases':[]}}}),encoding='utf-8')
+        args=argparse.Namespace(market='us',skip_clickhouse=False,dry_run=False,
+                                complete_universe_ratio=.99,financial_basis='annual',workers=2)
+        with (patch.object(refresh_workflow,'resolve_latest_complete_trade_date',return_value=date(2026,9,4)),
+              patch.object(refresh_workflow,'latest_market_table_date',return_value=date(2026,9,3)),
+              patch.object(refresh_workflow,'market_scoped_delete') as delete):
+            with self.assertRaisesRegex(RuntimeError,'rebuild historical factors'):
+                refresh_workflow.run_factor_snapshot_refresh(args,FakeClickHouseClient())
+        delete.assert_not_called()
+
     def test_us_filing_refresh_downloads_filings_before_local_fallbacks(self):
         args = argparse.Namespace(
             dry_run=False,
@@ -634,6 +656,9 @@ class RefreshWorkflowTest(unittest.TestCase):
                 patch.object(refresh_workflow, "run_market_data_refresh") as run_market_data,
                 redirect_stdout(stdout),
             ):
+                args.survivorship_no_download = True
+                args.survivorship_manifest = str(Path(temp_dir) / "unreviewed.json")
+                args.survivorship_output = str(Path(temp_dir) / "survivorship")
                 refresh_workflow.run_refresh(args)
 
         run_market_data.assert_not_called()
@@ -704,6 +729,9 @@ class RefreshWorkflowTest(unittest.TestCase):
                 ) as run_market_data,
                 redirect_stdout(stdout),
             ):
+                args.survivorship_no_download = True
+                args.survivorship_manifest = str(Path(temp_dir) / "unreviewed.json")
+                args.survivorship_output = str(Path(temp_dir) / "survivorship")
                 refresh_workflow.run_refresh(args)
 
             reloaded = refresh_workflow.RefreshState.open(
@@ -1064,6 +1092,9 @@ class RefreshWorkflowTest(unittest.TestCase):
                 patch.object(refresh_workflow, "run_factor_refresh") as factors,
                 patch.object(refresh_workflow, "run_factor_snapshot_refresh") as snapshots,
             ):
+                args.survivorship_no_download = True
+                args.survivorship_manifest = str(Path(temp_dir) / "unreviewed.json")
+                args.survivorship_output = str(Path(temp_dir) / "survivorship")
                 refresh_workflow.run_us_refresh(args)
 
         filings.assert_called_once()

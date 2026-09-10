@@ -139,9 +139,10 @@ def attach_report_metadata(
 
     keep_columns = [
         column
-        for column in ["stock_code", "fiscal_year", "fiscal_month", "report_date", "rcept_no", "report_name", "source_url"]
+        for column in ["stock_code", "fiscal_year", "fiscal_month", "period_end_date", "report_date", "rcept_no", "report_name", "source_url"]
         if column in metadata_df.columns
     ]
+    metadata_df = metadata_df.loc[metadata_df["stock_code"].isin(df["stock_code"].unique())]
     sort_columns = [
         column for column in ["report_date", "rcept_no"] if column in keep_columns
     ]
@@ -150,7 +151,7 @@ def attach_report_metadata(
         .sort_values(sort_columns, kind="stable")
         .drop_duplicates(["stock_code", "fiscal_year", "fiscal_month"], keep="last")
     )
-    df = df.drop(columns=["report_date", "rcept_no", "report_name", "source_url"], errors="ignore")
+    df = df.drop(columns=["period_end_date", "report_date", "rcept_no", "report_name", "source_url"], errors="ignore")
 
     df = df.merge(
         metadata_df,
@@ -158,8 +159,13 @@ def attach_report_metadata(
         how="left",
     )
     df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce")
+    if "period_end_date" in df.columns:
+        # Fiscal month 12 denotes the annual statement, which need not end in
+        # December. Keep its actual period separate from its publication date.
+        actual_end = pd.to_datetime(df.pop("period_end_date"), errors="coerce")
+        df["financial_period"] = actual_end.fillna(df["financial_period"])
     if fallback_to_period_end:
-        df["report_date"] = df["report_date"].fillna(fallback_report_date)
+        df["report_date"] = df["report_date"].fillna(df["financial_period"])
     return df
 
 

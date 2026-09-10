@@ -108,6 +108,7 @@ def normalization_dependency_paths() -> list[Path]:
         *sorted((PROJECT_ROOT / "engine" / "semantic").glob("*.py")),
         PROJECT_ROOT / "engine" / "transformers" / "filings.py",
         PROJECT_ROOT / "engine" / "transformers" / "_internal" / "dart_filings.py",
+        PROJECT_ROOT / "engine" / "transformers" / "_internal" / "dart_document.py",
         PROJECT_ROOT / "engine" / "transformers" / "_internal" / "statement_files.py",
         PROJECT_ROOT / "engine" / "core" / "paths.py",
         CANONICAL_CSV_PATH,

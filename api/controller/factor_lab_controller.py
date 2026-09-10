@@ -257,6 +257,7 @@ def run_factor_lab_backtest(
         ],
         warnings=result.warnings,
         universe_summary=result.universe_summary,
+        portfolio_history=result.raw.get("portfolio_history", []),
     )
 
 

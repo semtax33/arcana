@@ -143,19 +143,14 @@ def download_sec_company_tickers(args: argparse.Namespace) -> None:
 
 
 def download_all_us_prices(args: argparse.Namespace) -> None:
-    download_us_price_histories(
-        symbols=_parse_symbols(args.symbols),
-        offset=args.offset,
-        limit=args.limit,
-        force=args.force,
-        sleep_seconds=args.sleep_seconds,
-        start_date=args.start_date,
-        end_date=args.end_date,
-        request_timeout=args.yfinance_timeout,
-        retries=args.yfinance_retries,
-        retry_backoff_seconds=args.yfinance_retry_backoff,
-        repair=args.yfinance_repair,
-    )
+    from engine.extractors.alpha_vantage_prices import download_alpha_vantage_prices
+    from engine.extractors._internal.yfinance_market_prices import _resolve_download_symbols
+    symbols = _resolve_download_symbols(_parse_symbols(args.symbols))
+    symbols = symbols[args.offset:]
+    if args.limit is not None:
+        symbols = symbols[:args.limit]
+    download_alpha_vantage_prices(symbols=symbols, as_of=args.end_date, force=args.force,
+                                 max_calls_per_minute=args.alpha_max_calls_per_minute)
 
 
 def download_us_benchmarks(args: argparse.Namespace) -> None:

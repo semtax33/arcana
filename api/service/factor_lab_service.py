@@ -1,4 +1,5 @@
 from __future__ import annotations
+from api.repository.listing_history import listing_history_table
 
 from copy import deepcopy
 from datetime import date, datetime, timedelta
@@ -178,6 +179,7 @@ class FactorLabService:
                 or graph_dict["experiment"].get("factor_data_mode") == "point_in_time_snapshot"
             )
             result = compile_factor_lab_graph(graph_dict, known_factor_ids=known_factor_ids,
+                listing_table=listing_history_table(client),
                 factor_table=DEFAULT_FACTOR_SNAPSHOT_TABLE if pit_preview else DEFAULT_FACTOR_TABLE)
         finally:
             _close(client)
@@ -529,6 +531,7 @@ LIMIT 1
                     raise ValueError("forward evaluation requires point-in-time score snapshots")
             compile_result = compile_factor_lab_graph(
                 execution_graph,
+                listing_table=listing_history_table(client),
                 known_factor_ids=known_factor_ids,
                 trade_dates=history_trade_dates,
                 factor_table=factor_table,

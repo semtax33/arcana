@@ -478,25 +478,28 @@ def test_strict_point_in_time_periodic_input_abstains_without_report_metadata(
     assert result.empty
 
 
-def test_v6_manifest_carries_reproducibility_hashes_and_resolves_bundle() -> None:
-    manifest_path = Path("data-lake/meta/rules/semantic_rule_manifest.json")
+@pytest.mark.parametrize("version", [6, 7])
+def test_versioned_manifest_carries_reproducibility_hashes_and_resolves_bundle(version) -> None:
+    manifest_path = Path(f"data-lake/meta/rules/semantic_kr_v{version}.manifest.json")
     manifest = __import__("json").loads(manifest_path.read_text(encoding="utf-8"))
 
     validate_rule_manifest(manifest, path=manifest_path)
 
-    assert manifest["bundle_id"] == "arcana.semantic.kr.v6"
+    assert manifest["bundle_id"] == f"arcana.semantic.kr.v{version}"
     assert manifest["schema"] == "arcana.semantic-rules/v4"
-    assert manifest["engine"] == "arcana-financial-semantic-v6"
+    assert manifest["engine"] == f"arcana-financial-semantic-v{version}"
     assert manifest["golden_corpus_hash"].startswith("sha256:")
     assert manifest["test_suite_hash"].startswith("sha256:")
-    assert resolve_rule_bundle(manifest_path).name == "semantic_kr_v6.yaml"
+    assert resolve_rule_bundle(manifest_path).name == f"semantic_kr_v{version}.yaml"
 
 
-def test_v6_preserves_signed_tax_benefit_and_identity_passes() -> None:
+@pytest.mark.parametrize("version", [6, 7])
+def test_versioned_bundle_preserves_signed_tax_benefit_and_identity_passes(version) -> None:
+    bundle = Path(f"data-lake/meta/rules/semantic_kr_v{version}.yaml")
     engine = RuleEngine.from_files(
         canonical_csv_path=CANONICAL_CSV_PATH,
-        rule_paths=[SEMANTIC_MAPPING_RULE_PATH],
-        sign_policy_path=SEMANTIC_SIGN_POLICY_PATH,
+        rule_paths=[bundle],
+        sign_policy_path=bundle,
     )
     mapped = engine.map_rows(
         [
@@ -516,7 +519,7 @@ def test_v6_preserves_signed_tax_benefit_and_identity_passes() -> None:
 
     assert mapped["canonical_account_id"].iat[0] == "TAX_EXPENSE"
     assert mapped["normalized_amount"].iat[0] == "-157234785"
-    assert mapped["semantic_engine_version"].iat[0] == "6"
+    assert mapped["semantic_engine_version"].iat[0] == str(version)
     evidence = AccountingInvariantAuditor().audit(
         {
             "PBT": 241_878_238,

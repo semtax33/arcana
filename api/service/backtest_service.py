@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from api.model.universe import has_universe_filters, normalize_universe
 from api.repository.universe_query import load_universe_details
+from api.repository.listing_history import listing_history_table
 
 from collections import defaultdict
 import csv
@@ -46,7 +47,7 @@ from engine.transformers.benchmarks import normalize_benchmark_id
 
 
 SURVIVOR_BIAS_WARNING = (
-    "Survivor bias is not fully eliminated because delisted security history is not available. "
+    "Survivor bias may remain where historical security, listing or entitlement coverage is incomplete. "
     "The backtest does not filter by current security_master.is_active and only uses securities "
     "with point-in-time factor and price data."
 )
@@ -66,6 +67,7 @@ class BacktestService:
         style_profile = _resolve_style_profile(request.style_profile, conditions)
         benchmark_ids = _resolve_benchmark_ids(request.benchmarks, market=request.market)
         warnings = [SURVIVOR_BIAS_WARNING]
+        portfolio_history: list[dict[str, Any]] = []
 
         client = self._client_factory()
         try:
@@ -116,13 +118,14 @@ class BacktestService:
                 warnings=warnings,
                 universe=request.universe,
                 exact_signal_values=request.exact_signal_values,
+                portfolio_history=portfolio_history,
             )
             if has_universe_filters(request.universe):
                 signal_days = [_previous_trading_day(trading_days, d) for d in rebalance_dates]
                 universe_summary, _ = load_universe_details(client, dates=signal_days,
                     universe=request.universe, market=request.market,
                     sector_codes=request.sector_codes, industry_group_codes=request.industry_group_codes)
-                warnings.append("거래소: 현재 분류 / 시총: 각 신호일 기준")
+                warnings.append(f"상장 이력: {universe_summary.get('listing_basis', 'current_unverified')} / 시총: 각 신호일 기준")
             if not equity_points:
                 equity_points = _flat_cash_equity_points(visible_days)
                 warnings.append(
@@ -180,6 +183,7 @@ class BacktestService:
             annual_returns=annual_returns,
             warnings=warnings,
             universe_summary=universe_summary,
+            raw={"portfolio_history": portfolio_history} if portfolio_history else {},
         )
 
     def _load_trading_days(
@@ -191,6 +195,7 @@ class BacktestService:
         market: str | None = None,
     ) -> list[date]:
         query, params = build_trading_days_query(
+            listing_table=listing_history_table(client),
             start_date=start_date,
             end_date=end_date,
             market=market,
@@ -220,6 +225,7 @@ class BacktestService:
         max_positions: int | None,
         transaction_cost_bps: float,
         warnings: list[str],
+        portfolio_history: list[dict[str, Any]] | None = None,
     ) -> tuple[list[BacktestEquityCurvePoint], list[BacktestRebalance]]:
         nav = 1.0
         equity_points: list[BacktestEquityCurvePoint] = []
@@ -384,8 +390,6 @@ class BacktestService:
                 warnings.append(
                     f"No positions selected for rebalance {rebalance_date.isoformat()}."
                 )
-                continue
-
             period_end = _segment_end_date(
                 trading_days,
                 rebalance_dates,
@@ -402,7 +406,7 @@ class BacktestService:
                 }
             )
 
-        if not planned_segments:
+        if not any(segment["security_ids"] for segment in planned_segments):
             warnings.append(
                 _no_positions_error_message(
                     client,
@@ -424,7 +428,40 @@ class BacktestService:
                 for trading_day in trading_days
                 if first_segment_date <= trading_day <= last_segment_date
             ],
+            warnings=warnings,
+            portfolio_history=portfolio_history,
         )
+
+        if portfolio_history:
+            states = {row["trade_date"]: row for row in portfolio_history}
+            metadata = {}
+            actual_history = []
+            previous = {}
+            for rebalance in rebalance_history:
+                metadata.update({position.security_id: position for position in rebalance.positions})
+                state = states.get(rebalance.rebalance_date)
+                if state is None:
+                    actual_history.append(rebalance)
+                    continue
+                positions = []
+                for holding in state["positions"]:
+                    source = metadata.get(holding["security_id"])
+                    positions.append(BacktestPosition(
+                        security_id=holding["security_id"], ticker=source.ticker if source else None,
+                        stock_name=source.stock_name if source else None,
+                        weight=holding["market_value"] / state["nav"] if state["nav"] else 0,
+                        score=source.score if source else None,
+                        factor_values=source.factor_values if source else {},
+                    ))
+                current = {position.security_id: position for position in positions}
+                actual_history.append(BacktestRebalance(
+                    rebalance_date=rebalance.rebalance_date, signal_date=rebalance.signal_date,
+                    positions=positions,
+                    entered_positions=[position for sid, position in current.items() if sid not in previous],
+                    exited_positions=[position for sid, position in previous.items() if sid not in current],
+                ))
+                previous = current
+            rebalance_history = actual_history
 
         for segment_id, _segment in enumerate(planned_segments):
             segment_returns = portfolio_returns.get(segment_id, [])
@@ -466,6 +503,7 @@ class BacktestService:
     ) -> list[dict[str, Any]]:
         query, params = build_factor_snapshot_query(
             conditions,
+            listing_table=listing_history_table(client),
             universe=universe,
             exact_signal_values=exact_signal_values,
             signal_date=signal_date,
@@ -498,6 +536,7 @@ class BacktestService:
     ) -> dict[date, list[dict[str, Any]]]:
         query, params = build_factor_snapshot_batch_query(
             conditions,
+            listing_table=listing_history_table(client),
             universe=universe,
             exact_signal_values=exact_signal_values,
             signal_dates=signal_dates,
@@ -531,6 +570,7 @@ class BacktestService:
     ) -> dict[date, list[dict[str, Any]]]:
         query, params = build_factor_raw_batch_query(
             conditions,
+            listing_table=listing_history_table(client),
             universe=universe,
             exact_signal_values=exact_signal_values,
             signal_dates=signal_dates,
@@ -553,7 +593,74 @@ class BacktestService:
         *,
         segments: list[dict[str, Any]],
         trading_days: list[date],
+        warnings: list[str] | None = None,
+        portfolio_history: list[dict[str, Any]] | None = None,
     ) -> dict[int, list[tuple[date, float]]]:
+        lifecycle_events = []
+        entitlements = []
+        if (_table_exists(client, "security_lifecycle_events", strict=True)
+                or _table_exists(client, "security_lifecycle_events", temporary=True, strict=True)):
+            has_components = (_table_exists(client, "security_lifecycle_entitlements", strict=True)
+                or _table_exists(client, "security_lifecycle_entitlements", temporary=True, strict=True))
+            pending = {sid for segment in segments for sid in segment["security_ids"]}
+            visited = set()
+            while pending:
+                visited.update(pending)
+                found = _records(client.query_df(
+                    """SELECT event_id, security_id, event_type, effective_date,
+                        cash_per_share, cash_payment_date, currency, status,
+                        published_date, source_url, source_sha256, entitlements_complete
+                    FROM security_lifecycle_events
+                    WHERE has({security_ids:Array(String)}, security_id)
+                        AND effective_date <= {end_date:Date}
+                        AND status = 'confirmed'""",
+                    parameters={"security_ids": sorted(pending),
+                                "end_date": max(segment["end_date"] for segment in segments)},
+                ))
+                lifecycle_events.extend(found)
+                if not found or not has_components:
+                    break
+                received = _records(client.query_df(
+                    # Optional lifecycle restrictions are present in newer
+                    # projections; legacy tables retain delivery-only behavior.
+                    """SELECT *
+                    FROM security_lifecycle_entitlements
+                    WHERE has({event_ids:Array(String)}, event_id)""",
+                    parameters={"event_ids": [event["event_id"] for event in found]},
+                ))
+                entitlements.extend(received)
+                pending = {row["recipient_security_id"] for row in received} - visited
+        if lifecycle_events:
+            from api.service.lifecycle_portfolio import simulate_lifecycle_portfolio
+            price_ids = {sid for segment in segments for sid in segment["security_ids"]}
+            price_ids.update(component["recipient_security_id"] for component in entitlements)
+            price_rows = _records(client.query_df(
+                """SELECT security_id, trade_date,
+                    quote.1 AS raw_close, quote.2 AS close, quote.3 AS volume, quote.4 AS currency
+                FROM (
+                    SELECT security_id, trade_date,
+                        argMax(tuple(close, coalesce(adj_close, close), volume, currency), updated_at) AS quote
+                    FROM price_daily
+                    WHERE has({security_ids:Array(String)}, security_id)
+                        AND trade_date BETWEEN {start_date:Date} AND {end_date:Date}
+                    GROUP BY security_id, trade_date
+                ) ORDER BY trade_date, security_id""",
+                parameters={
+                    "security_ids": sorted(price_ids),
+                    "start_date": min(trading_days), "end_date": max(trading_days),
+                },
+            ))
+            history = simulate_lifecycle_portfolio(
+                segments=segments, trading_days=trading_days, prices=price_rows, events=lifecycle_events,
+                entitlements=entitlements,
+            )
+            if portfolio_history is not None:
+                portfolio_history.extend(history)
+            previous_nav, returns = 1.0, []
+            for state in history:
+                returns.append((state["trade_date"], state["nav"] / previous_nav - 1 if previous_nav else 0.0))
+                previous_nav = state["nav"]
+            return {0: returns}
         query, params, position_rows = build_portfolio_return_query(
             segments=segments,
             trading_days=trading_days,
@@ -580,11 +687,21 @@ class BacktestService:
         if not rows:
             return {}
         returns_by_segment: dict[int, list[tuple[date, float]]] = defaultdict(list)
+        missing_entries: dict[int, int] = {}
+        unpriced_exits: dict[int, int] = {}
         for row in rows:
+            segment_id = int(row["segment_id"])
+            missing_entries[segment_id] = max(missing_entries.get(segment_id, 0), int(row.get("missing_entry_count") or 0))
+            unpriced_exits[segment_id] = max(unpriced_exits.get(segment_id, 0), int(row.get("unpriced_exit_count") or 0))
             daily_return = _float_or_none(row.get("daily_return"))
             returns_by_segment[int(row["segment_id"])].append(
                 (_as_date(row["trade_date"]), daily_return if daily_return is not None else 0.0)
             )
+        if warnings is not None:
+            if sum(missing_entries.values()):
+                warnings.append(f"Kept {sum(missing_entries.values())} position allocations in cash because their rebalance close was not executable.")
+            if sum(unpriced_exits.values()):
+                warnings.append(f"Unresolved execution: {sum(unpriced_exits.values())} held positions had no executable exit close. Last traded marks are valuations, not verified liquidation proceeds; returns require corporate-action or execution review.")
         return returns_by_segment
 
     def _load_price_return_matrix(
@@ -762,13 +879,15 @@ ORDER BY trade_date
     return resolved
 
 
-def _table_exists(client: Any, table_name: str) -> bool:
+def _table_exists(client: Any, table_name: str, *, temporary: bool = False, strict: bool = False) -> bool:
     query = getattr(client, "query", None)
     if not callable(query):
         return False
     try:
-        rows = query(f"EXISTS TABLE {table_name}").result_rows
+        rows = query(f"EXISTS {'TEMPORARY ' if temporary else ''}TABLE {table_name}").result_rows
     except Exception:
+        if strict:
+            raise
         return False
     return bool(rows and rows[0][0])
 
@@ -953,7 +1072,9 @@ def _segment_end_date(
         return eligible[-1] if eligible else final_end_date
 
     next_rebalance_date = rebalance_dates[current_index + 1]
-    eligible = [day for day in trading_days if day < next_rebalance_date]
+    # Old shares are held through the next rebalance close. The new segment
+    # starts at that same close and first earns price returns the following day.
+    eligible = [day for day in trading_days if day <= next_rebalance_date]
     return eligible[-1] if eligible else next_rebalance_date
 
 

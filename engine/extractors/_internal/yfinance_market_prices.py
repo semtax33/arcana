@@ -116,25 +116,39 @@ def download_us_price_histories(
         out_path = output_dir / f"{yfinance_price_storage_stem(ticker)}.csv"
         existing = pd.DataFrame()
         effective_start = start_date
+        effective_end = end_date
         if out_path.exists() and not force:
             existing = pd.read_csv(out_path)
+            earliest = _earliest_yfinance_frame_date(existing)
             latest = _latest_yfinance_frame_date(existing)
-            if latest is not None:
+            requested_start = _to_date(start_date) if start_date else None
+            requested_end = _to_date(end_date) if end_date else date.today()
+            if requested_start is not None and earliest is not None and requested_start < earliest:
+                # Historical recovery is a prepend, not the usual forward refresh.
+                # Stop immediately before the first stored row so that a bounded
+                # request cannot overwrite newer observations already on disk.
+                effective_start = requested_start.isoformat()
+                effective_end = min(
+                    requested_end,
+                    earliest - timedelta(days=1),
+                ).isoformat()
+            elif latest is not None:
                 next_date = latest + timedelta(days=1)
-                requested_start = _to_date(start_date) if start_date else None
                 effective_start = max(
                     value for value in (next_date, requested_start) if value is not None
                 ).isoformat()
-                requested_end = _to_date(end_date) if end_date else date.today()
                 if next_date > requested_end:
-                    print(f"skipping {ticker} (already fresh through {latest})")
+                    print(
+                        f"skipping {ticker} (requested range already covered "
+                        f"from {earliest} through {latest})"
+                    )
                     continue
 
         print(f"downloading {ticker} (download_offset : {index})....", flush=True)
         frame = _fetch_yfinance_price_with_retry(
             ticker,
             start_date=effective_start,
-            end_date=end_date,
+            end_date=effective_end,
             request_timeout=request_timeout,
             retries=retries,
             retry_backoff_seconds=retry_backoff_seconds,
@@ -161,8 +175,18 @@ def download_us_price_histories(
 
 
 def _latest_yfinance_frame_date(frame: pd.DataFrame) -> date | None:
+    values = _yfinance_frame_dates(frame)
+    return values.max().date() if not values.empty else None
+
+
+def _earliest_yfinance_frame_date(frame: pd.DataFrame) -> date | None:
+    values = _yfinance_frame_dates(frame)
+    return values.min().date() if not values.empty else None
+
+
+def _yfinance_frame_dates(frame: pd.DataFrame) -> pd.Series:
     if frame is None or frame.empty:
-        return None
+        return pd.Series(dtype="datetime64[ns]")
     column = next(
         (
             candidate
@@ -172,9 +196,8 @@ def _latest_yfinance_frame_date(frame: pd.DataFrame) -> date | None:
         None,
     )
     if column is None:
-        return None
-    values = pd.to_datetime(frame[column], errors="coerce").dropna()
-    return values.max().date() if not values.empty else None
+        return pd.Series(dtype="datetime64[ns]")
+    return pd.to_datetime(frame[column], errors="coerce").dropna()
 
 
 def _merge_yfinance_price_frames(

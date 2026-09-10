@@ -1,4 +1,5 @@
 import math
+import json
 import re
 from datetime import datetime
 from functools import lru_cache
@@ -369,6 +370,8 @@ def us_filing_share_fallback_is_unambiguous(
         normalized_symbol,
         str(ticker_map_path),
         str(aliases_path),
+        ticker_map_path.stat().st_mtime_ns if ticker_map_path.exists() else 0,
+        aliases_path.stat().st_mtime_ns if aliases_path.exists() else 0,
     )
 
 
@@ -377,7 +380,21 @@ def _us_filing_share_fallback_is_unambiguous_cached(
     symbol: str,
     ticker_map_path: str,
     aliases_path: str,
+    ticker_map_mtime: int = 0,
+    aliases_mtime: int = 0,
 ) -> bool:
+    ticker_to_ciks,cik_to_tickers = _us_ticker_identity_maps(
+        ticker_map_path,aliases_path,ticker_map_mtime,aliases_mtime)
+    ciks = ticker_to_ciks.get(symbol, set())
+    if len(ciks) != 1:
+        return False
+    cik = next(iter(ciks))
+    return len(cik_to_tickers.get(cik, set())) == 1
+
+
+@lru_cache(maxsize=8)
+def _us_ticker_identity_maps(ticker_map_path,aliases_path,ticker_map_mtime,aliases_mtime):
+    # Parse the issuer map once per source version, shared by every symbol.
     ticker_to_ciks: dict[str, set[str]] = {}
     cik_to_tickers: dict[str, set[str]] = {}
     for raw_path in (aliases_path, ticker_map_path):
@@ -402,11 +419,7 @@ def _us_filing_share_fallback_is_unambiguous_cached(
             cik = str(int(digits))
             ticker_to_ciks.setdefault(ticker, set()).add(cik)
             cik_to_tickers.setdefault(cik, set()).add(ticker)
-    ciks = ticker_to_ciks.get(symbol, set())
-    if len(ciks) != 1:
-        return False
-    cik = next(iter(ciks))
-    return len(cik_to_tickers.get(cik, set())) == 1
+    return ticker_to_ciks,cik_to_tickers
 
 
 def resolve_price_path(path=None, market="kr"):
@@ -665,6 +678,11 @@ class FactorMarketDataCache:
         wacc_benchmark_path=None,
     ):
         self.market = str(market or "kr").strip().lower()
+        self._use_split_panels = price_path is None
+        self._use_restored_market_shares = shares_path is None
+        from engine.transformers.sec_shares import disclosed_shares_path
+        self.uses_disclosed_shares = self.market=='us' and shares_path is None and disclosed_shares_path().exists()
+        self._disclosed_share_groups = None
         self.price_path = resolve_price_path(price_path, market=self.market)
         self.shares_path = shares_path_for_market(self.market) if shares_path is None else Path(shares_path)
         self.dividend_path = dividend_path_for_market(self.market) if dividend_path is None else Path(dividend_path)
@@ -684,7 +702,11 @@ class FactorMarketDataCache:
         self._benchmark_weekly_returns = None
 
     def prices(self, security_id, stock_code=None):
-        price_df = self._stock_frame("price", security_id)
+        price_df = read_split_price_panel(stock_code or security_id.split('_',2)[-1],self.market) if self._use_split_panels else None
+        if price_df is None and self._use_split_panels and self.market=='us':
+            return pd.DataFrame()
+        if price_df is None:
+            price_df = self._stock_frame("price", security_id)
         if price_df.empty:
             return price_df
 
@@ -700,6 +722,22 @@ class FactorMarketDataCache:
         return price_df.sort_values("trade_date").reset_index(drop=True)
 
     def shares(self, security_id):
+        if self._use_restored_market_shares:
+            restored = read_restored_market_shares(security_id.split('_', 2)[-1], self.market)
+            if restored is not None:
+                return restored
+        if self.uses_disclosed_shares:
+            from engine.transformers.sec_shares import disclosed_shares_path,align_disclosed_shares
+            if self._disclosed_share_groups is None:
+                self._disclosed_share_groups={sid:group for sid,group in pd.read_parquet(disclosed_shares_path()).groupby('security_id',sort=False)}
+            observations=self._disclosed_share_groups.get(security_id,pd.DataFrame())
+            if observations.empty:return pd.DataFrame()
+            symbol=security_id.removeprefix('SEC_US_')
+            ready=read_split_price_panel(symbol,'us')
+            if ready is None:return pd.DataFrame()
+            panel=DATA_LAKE.silver('corporate_actions','prices','us',f'us_{symbol}.parquet')
+            prices=pd.read_parquet(panel,columns=['security_id','trade_date','close','split_adjustment_factor'])
+            return align_disclosed_shares(prices,observations)
         shares_df = self._stock_frame("shares", security_id)
         if shares_df.empty:
             return shares_df
@@ -807,11 +845,30 @@ class FactorMarketDataCache:
         return df, groups
 
 
+def read_split_price_panel(stock_code, market):
+    panel=DATA_LAKE.silver('corporate_actions','prices',market,f'{market}_{stock_code}.parquet')
+    metadata=panel.with_suffix('.metadata.json')
+    if not panel.exists() and not metadata.exists():return None
+    if not metadata.exists():raise ValueError(f'split price panel metadata missing: {stock_code}')
+    meta=json.loads(metadata.read_text(encoding='utf-8'))
+    if meta.get('status')!='ready' or not panel.exists():
+        raise ValueError(f'split price panel is not ready: {stock_code}')
+    frame=pd.read_parquet(panel)
+    frame['adj_close']=frame['split_adj_close']
+    columns=['security_id','trade_date','open','high','low','close','volume','adj_close','currency']
+    if 'listing_episode' in frame:columns.append('listing_episode')
+    return frame[columns]
+
+
 def read_stock_prices(stock_code, path=None, market="kr"):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
     security_id = security_id_for_market(stock_code, market)
-    price_df = read_stock_csv_by_security_id(resolve_price_path(path, market=market), security_id)
+    price_df = read_split_price_panel(stock_code,market) if path is None else None
+    if price_df is None and path is None and market=='us':
+        return pd.DataFrame()
+    if price_df is None:
+        price_df = read_stock_csv_by_security_id(resolve_price_path(path, market=market), security_id)
 
     if price_df.empty:
         return price_df
@@ -827,10 +884,31 @@ def read_stock_prices(stock_code, path=None, market="kr"):
     return price_df.sort_values("trade_date").reset_index(drop=True)
 
 
+def read_restored_market_shares(stock_code, market):
+    if market != "kr":
+        return None
+    panel = DATA_LAKE.silver("corporate_actions", "prices", market, f"{market}_{stock_code}.parquet")
+    metadata = panel.with_suffix(".metadata.json")
+    if not metadata.exists():
+        return None
+    info = json.loads(metadata.read_text(encoding="utf-8"))
+    if info.get("survivorship_restored") is not True or info.get("price_provider") != "MARCAP":
+        return None
+    if info.get("status") != "ready" or not panel.exists():
+        raise ValueError("Restored Korean price/share panel is not ready")
+    frame = pd.read_parquet(panel, columns=["security_id", "trade_date", "shares", "market_cap"])
+    frame["trade_date"] = pd.to_datetime(frame.trade_date)
+    return frame.sort_values("trade_date").reset_index(drop=True)
+
+
 def read_stock_shares(stock_code, path=None, market="kr"):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
     security_id = security_id_for_market(stock_code, market)
+    if path is None:
+        restored = read_restored_market_shares(stock_code, market)
+        if restored is not None:
+            return restored
     shares_df = read_stock_csv_by_security_id(
         shares_path_for_market(market) if path is None else path,
         security_id,
@@ -1162,6 +1240,11 @@ def read_annual_financials(
     rows = []
 
     financial_dir = Path(financial_dir) if financial_dir is not None else financial_dir_for_market(market)
+    from engine.transformers._internal.financial_history import read_receipt_financial_history
+
+    receipt_history = read_receipt_financial_history(stock_code, financial_dir, market)
+    if receipt_history is not None:
+        return receipt_history
     for year, month, df in read_statement_period_frames(
         stock_code,
         financial_dir,
@@ -1305,6 +1388,14 @@ def read_ttm_financials(
     require_report_metadata=False,
 ):
     financial_dir = financial_dir if financial_dir is not None else financial_dir_for_market(market)
+    from engine.transformers._internal.financial_history import read_receipt_financial_history
+
+    receipt_history = read_receipt_financial_history(
+        normalize_symbol_for_market(stock_code, market), financial_dir, market, basis="ttm",
+        cumulative_statement_types=cumulative_statement_types,
+    )
+    if receipt_history is not None:
+        return receipt_history
     if str(market or "kr").strip().lower() == "us" and use_edgartools:
         periodized = _periodized_financial_frame_with_edgartools(
             stock_code,
@@ -1350,6 +1441,14 @@ def read_quarterly_financials(
     require_report_metadata=False,
 ):
     financial_dir = financial_dir if financial_dir is not None else financial_dir_for_market(market)
+    from engine.transformers._internal.financial_history import read_receipt_financial_history
+
+    receipt_history = read_receipt_financial_history(
+        normalize_symbol_for_market(stock_code, market), financial_dir, market, basis="quarterly",
+        cumulative_statement_types=cumulative_statement_types,
+    )
+    if receipt_history is not None:
+        return receipt_history
     if str(market or "kr").strip().lower() == "us" and use_edgartools:
         periodized = _periodized_financial_frame_with_edgartools(
             stock_code,
@@ -2128,10 +2227,11 @@ def add_kr_dividend_factors(daily_df, stock_code):
                         "payout_ratio",
                         "total_dividend_amount",
                     ]
-                ].sort_values("report_date"),
+                ].rename(columns={"report_date":"dividend_report_date"}).sort_values("dividend_report_date"),
                 left_on="trade_date",
-                right_on="report_date",
+                right_on="dividend_report_date",
                 direction="backward",
+                suffixes=("", "_dividend"),
             )
             df["dividend_fiscal_year"] = pd.to_numeric(df["bsns_year"], errors="coerce")
             df["dvpsx"] = pd.to_numeric(df["annual_dividend_per_share"], errors="coerce")
@@ -2161,9 +2261,8 @@ def add_kr_dividend_factors(daily_df, stock_code):
             df = merge_dividend_history(df, events)
             return df.drop(
                 columns=[
-                    "report_date",
                     "bsns_year",
-                    "report_name",
+                    "report_name_dividend",
                     "annual_dividend_per_share",
                     "payout_ratio",
                 ],
@@ -2991,7 +3090,7 @@ def read_us_consensus_factor_frame(stock_code, *, us_consensus_factors_path=US_C
     if frame.empty:
         return pd.DataFrame()
     symbol = normalize_symbol_for_market(stock_code, market="us")
-    result = frame.loc[frame["symbol"].astype(str).map(lambda value: normalize_symbol_for_market(value, market="us")) == symbol].copy()
+    result = frame.loc[frame["symbol"].eq(symbol)].copy()
     if result.empty:
         return result
     result["factor_date"] = pd.to_datetime(result["factor_date"], errors="coerce")
@@ -3003,7 +3102,11 @@ def _cached_us_consensus_factor_frame(path_text):
     path = Path(path_text)
     if not path.exists():
         return pd.DataFrame()
-    return pd.read_csv(path, dtype={"symbol": str, "horizon": str, "provider": str, "source_regime": str})
+    frame = pd.read_csv(path, dtype={"symbol": str, "horizon": str, "provider": str, "source_regime": str})
+    # Normalize the shared source once instead of its entire market history
+    # on every security and financial-basis calculation.
+    frame["symbol"] = frame["symbol"].astype(str).map(lambda value: normalize_symbol_for_market(value, market="us"))
+    return frame
 
 
 def read_real_consensus_daily_frame(stock_code, *, real_consensus_daily_path=HANKYUNG_CONSENSUS_DAILY_PATH):
@@ -3350,6 +3453,12 @@ def max_drawdown(returns):
     return drawdown.min()
 
 
+def max_drawdown_array(returns):
+    """Same rolling-window wealth convention without per-window Series objects."""
+    wealth=np.cumprod(1+np.where(np.isnan(returns),0,returns))
+    return np.min(wealth/np.maximum.accumulate(wealth)-1)
+
+
 def calculate_k_ratio(
     prices,
     *,
@@ -3391,13 +3500,29 @@ def calculate_k_ratio(
 
 def add_price_momentum_factors(daily_df):
     df = daily_df.sort_values("trade_date").copy()
-    close = pd.to_numeric(df["close"], errors="coerce")
+    if 'listing_episode' in df and df.listing_episode.nunique()>1:
+        return pd.concat([add_price_momentum_factors(group) for _,group in
+                          df.groupby('listing_episode',sort=False)]).sort_values('trade_date')
+    raw_close = pd.to_numeric(df["close"], errors="coerce")
     adjusted_close = numeric_column(df, "adj_close")
-    k_ratio_price = adjusted_close if (adjusted_close > 0).any() else close
-    high = numeric_column(df, "high").fillna(close)
-    low = numeric_column(df, "low").fillna(close)
-    volume = numeric_column(df, "volume")
-    ret = close.pct_change()
+    close = adjusted_close.where(adjusted_close > 0, raw_close)
+    adjustment = close / raw_close.where(raw_close > 0)
+    high = (numeric_column(df, "high") * adjustment).fillna(close)
+    low = (numeric_column(df, "low") * adjustment).fillna(close)
+    raw_volume = numeric_column(df, "volume")
+    volume = raw_volume / adjustment
+    if "volume" in df:
+        # Suspended rows may carry a quote already converted to the new share
+        # unit before the first trading day. They are not observed prices.
+        # Carry the last traded mark after putting all prices in one unit;
+        # retain calendar rows, zero turnover, and the original raw fields.
+        traded=raw_volume.gt(0)&raw_close.gt(0)&close.gt(0)
+        close=close.where(traded).ffill()
+        high=high.where(traded,close)
+        low=low.where(traded,close)
+        volume=volume.where(traded,0)
+    k_ratio_price = close
+    ret = close.pct_change(fill_method=None)
 
     for window in [5, 20, 50, 150, 200]:
         df[f"na_{window}"] = close.rolling(window, min_periods=1).mean()
@@ -3415,9 +3540,9 @@ def add_price_momentum_factors(daily_df):
     df["risk_adj_mom"] = df["tr_12_1"] / df["vol_12_1_ann"]
     df["k_ratio_3y"] = calculate_k_ratio(k_ratio_price)
     df["mdd1yr_12_1_pct"] = (
-        ret.shift(21).rolling(231, min_periods=60).apply(max_drawdown, raw=False) * 100
+        ret.shift(21).rolling(231, min_periods=60).apply(max_drawdown_array, raw=True) * 100
     )
-    df["adturn_pct_12_1"] = (volume / df["shares"] * 100).shift(21).rolling(231, min_periods=60).mean()
+    df["adturn_pct_12_1"] = (raw_volume / df["shares"] * 100).shift(21).rolling(231, min_periods=60).mean()
 
     return df
 
@@ -4015,6 +4140,23 @@ def add_rim_historical_roe_fallback(
     if df.empty or financial_df is None or financial_df.empty:
         return df
 
+    if "financial_history_vintage" in financial_df and financial_df.financial_history_vintage.eq(True).any():
+        if (required_years != 3
+                or not financial_df.financial_history_vintage.eq(True).all()
+                or not financial_df.financial_history_periods_per_year.eq(periods_per_year).all()
+                or "historical_roe_3y_avg" not in financial_df):
+            raise ValueError("Receipt history requires consistently computed three-year ROE events")
+        events = financial_df[["report_date", "historical_roe_3y_avg"]].copy()
+        events["report_date"] = pd.to_datetime(events.report_date, errors="raise")
+        # Retain missing events too: an amendment may invalidate a previously
+        # calculable average, which must not remain forward-filled indefinitely.
+        merged = pd.merge_asof(
+            df[["trade_date"]].sort_values("trade_date"), events.sort_values("report_date"),
+            left_on="trade_date", right_on="report_date", direction="backward",
+        )
+        df["historical_roe_3y_avg"] = merged.historical_roe_3y_avg.to_numpy()
+        return df
+
     history = financial_df.copy()
     if "financial_period" not in history.columns or "roe" not in history.columns:
         return df
@@ -4178,11 +4320,14 @@ def create_stock_factor_dataframe(
     rim_decay_factor=DEFAULT_RIM_DECAY_FACTOR,
     require_report_metadata=False,
     requested_factor_ids=None,
+    financial_availability_delay_days=0,
 ):
     market = str(market or "kr").strip().lower()
     stock_code = normalize_symbol_for_market(stock_code, market)
     if financial_dir is None:
         financial_dir = financial_dir_for_market(market)
+    if not isinstance(financial_availability_delay_days, int) or financial_availability_delay_days < 0:
+        raise ValueError("financial_availability_delay_days must be a nonnegative integer")
     if report_metadata_path == REPORT_METADATA_PATH and market == "us":
         report_metadata_path = DATA_LAKE.silver("sec", "us_report_metadata.csv")
     output_start_date = pd.Timestamp(start_date) if start_date is not None else None
@@ -4276,6 +4421,12 @@ def create_stock_factor_dataframe(
             financial_df["report_date"] = financial_df["financial_period"]
         financial_df["report_date"] = pd.to_datetime(financial_df["report_date"], errors="coerce")
         financial_df["report_date"] = financial_df["report_date"].fillna(financial_df["financial_period"])
+        if financial_availability_delay_days:
+            # Keep the actual filing date for lineage. Every downstream join,
+            # including historical ROE and consensus comparisons, uses the
+            # delayed availability date until the output is assembled.
+            financial_df["_financial_publication_date"] = financial_df["report_date"]
+            financial_df["report_date"] += pd.Timedelta(days=financial_availability_delay_days)
         daily_df = pd.merge_asof(
             daily_df.sort_values("trade_date"),
             financial_df.sort_values("report_date"),
@@ -4290,6 +4441,7 @@ def create_stock_factor_dataframe(
 
     if (
         market == "us"
+        and not getattr(market_data_cache,"uses_disclosed_shares",False)
         and "COMMON_SHARES_OUTSTANDING" in daily_df.columns
         and us_filing_share_fallback_is_unambiguous(stock_code)
     ):
@@ -4389,6 +4541,9 @@ def create_stock_factor_dataframe(
     if output_end_date is not None:
         daily_df = daily_df.loc[daily_df["trade_date"] <= output_end_date].copy()
 
+    if "_financial_publication_date" in daily_df:
+        daily_df["financial_available_date"] = daily_df["report_date"]
+        daily_df["report_date"] = daily_df.pop("_financial_publication_date")
     daily_df = daily_df.replace([math.inf, -math.inf], math.nan)
     return order_factor_columns(daily_df)
 

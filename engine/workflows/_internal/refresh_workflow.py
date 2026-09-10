@@ -304,6 +304,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=[
             "all",
             "market-data",
+            "stock-splits",
+            "survivorship",
+            "financial-history",
             "filings",
             "business-info",
             "dividends",
@@ -321,6 +324,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Inclusive end date. Accepts YYYYMMDD or YYYY-MM-DD.",
     )
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--survivorship-manifest", type=Path, help="Source-pinned reviewed listing and entitlement manifest.")
+    parser.add_argument("--survivorship-output", type=Path, help="Canonical survivorship output directory.")
+    parser.add_argument("--survivorship-panel-dir", type=Path, help="Optional staging directory for factor-input price panels.")
+    parser.add_argument("--survivorship-source-dir", type=Path, help="Retained listing and disclosure source directory.")
+    parser.add_argument("--survivorship-start-date", type=parse_date_arg, help="DART historical search start; defaults to an overlapping incremental window.")
+    parser.add_argument("--survivorship-no-download", action="store_true", help="Use retained source evidence without new provider requests.")
+    parser.add_argument("--financial-history-review", type=Path, action="append",
+                        help="Reviewed receipt bundle for the financial-history target; repeat for additional issuers.")
+    parser.add_argument("--financial-history-output", type=Path,
+                        help="Financial-history destination; defaults to the standard DART normalized directory.")
     parser.add_argument(
         "--symbols",
         help="Optional comma-separated market symbols. Defaults to the full market universe.",
@@ -386,6 +399,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def run_refresh(args: argparse.Namespace) -> None:
+    from engine.core.local_secrets import activate_local_secrets
+    activate_local_secrets()
+    if args.targets == "financial-history":
+        run_financial_history_target(args)
+        return
+    if getattr(args, "financial_history_review", None) or getattr(args, "financial_history_output", None):
+        raise ValueError("Financial-history options require --targets financial-history")
+    if args.targets == "survivorship":
+        run_survivorship_target(args)
+        return
+    if args.targets == "stock-splits":
+        run_stock_split_target(args)
+        return
     if args.market == "us":
         run_us_refresh(args)
         return
@@ -451,6 +477,9 @@ def run_refresh(args: argparse.Namespace) -> None:
                 end_date=effective_krx_end_date or end_date,
                 force_full=args.force_full,
             )
+
+        if "market-data" in targets:
+            run_survivorship_target(args)
 
         dart_window = None
         if {"filings", "business-info"} & targets:
@@ -591,6 +620,9 @@ def run_us_refresh(args: argparse.Namespace) -> None:
                 force_full=args.force_full,
             )
 
+        if "market-data" in targets:
+            run_survivorship_target(args)
+
         if "dividends" in targets:
             if state.is_step_completed("dividends"):
                 print("[RESUME] skipping completed step: dividends", flush=True)
@@ -703,20 +735,16 @@ def run_us_market_data_refresh(
         )
         return window
 
-    from engine.extractors.market_prices import download_us_price_histories
-
-    download_us_price_histories(
-        symbols=symbols,
-        force=args.force_full,
-        sleep_seconds=args.sleep_seconds,
-        start_date=DEFAULT_START_DATE,
-        end_date=end_date,
+    from engine.workflows.stock_splits import run_stock_split_refresh, normalized_price_frame
+    result = run_stock_split_refresh(market="us", symbols=symbols, end_date=end_date, force=args.force_full)
+    if result["price_errors"]:
+        raise RuntimeError(f"US split-adjusted price build failed for {len(result['price_errors'])} symbols")
+    price_frame = normalized_price_frame(
+        "us", symbols=symbols,
+        output_path=DATA_LAKE.silver("us", "price", "us_normalized_price.csv"),
     )
-    price_frame = market_loader.create_price_dataframe(
-        market="us",
-        source="bronze",
-        progress_interval=args.progress_interval,
-    )
+    # Price history is reloaded fully; factor invalidation is tracked separately.
+    price_window = RefreshWindow(start_date=price_frame.trade_date.min().strftime("%Y%m%d"), end_date=end_date, latest_date=latest)
     shares_frame = market_loader.create_shares_dataframe(
         market="us",
         source="bronze",
@@ -736,7 +764,7 @@ def run_us_market_data_refresh(
                 market_loader.PRICE_TABLE,
                 frame,
             ),
-            window=window,
+            window=price_window,
         )
         if not shares_frame.empty:
             load_market_table(
@@ -1082,8 +1110,14 @@ def run_market_data_refresh(
     window = earliest_window(price_window, share_window)
 
     if not args.dry_run:
+        from engine.workflows.stock_splits import run_stock_split_refresh
+        result = run_stock_split_refresh(market="kr", symbols=stock_codes, end_date=effective_end_date, force=args.force_full)
+        if result["price_errors"]:
+            raise RuntimeError(f"KR split-adjusted price build failed for {len(result['price_errors'])} symbols")
         normalize_price(str(DATA_LAKE.bronze("krx", "price", "*")))
         normalize_shares(str(DATA_LAKE.bronze("krx", "shares", "*")))
+        # Reinsert all prior prices when the adjustment basis can change.
+        price_window = RefreshWindow(start_date=DEFAULT_START_DATE, end_date=effective_end_date, latest_date=price_window.latest_date)
 
     if not args.skip_clickhouse:
         load_securities(args, client)
@@ -1105,6 +1139,63 @@ def run_market_data_refresh(
         )
 
     return window
+
+
+def run_stock_split_target(args: argparse.Namespace) -> None:
+    """Standalone correction step, also used by the market-data pipeline."""
+    from engine.workflows.stock_splits import run_stock_split_refresh, normalized_price_frame
+    symbols = parse_symbols_arg(getattr(args, "symbols", None))
+    if args.dry_run:
+        print(f"[DRY-RUN] stock-splits market={args.market}, source=DART/EDGAR, US prices=Alpha Vantage")
+        return
+    result = run_stock_split_refresh(market=args.market, symbols=symbols, end_date=args.end_date, force=args.force_full)
+    if result["price_errors"]:
+        raise RuntimeError(f"split price build errors: {len(result['price_errors'])}")
+    provider = "krx" if args.market == "kr" else "us"
+    frame = normalized_price_frame(args.market, symbols=symbols,
+        output_path=DATA_LAKE.silver(provider, "price", f"{args.market}_normalized_price.csv"))
+    if not args.skip_clickhouse:
+        client = get_clickhouse_client()
+        try:
+            # ReplacingMergeTree updates are additive; no raw-table truncation.
+            market_loader._insert_partitioned(client, market_loader.PRICE_TABLE, frame)
+        finally:
+            client.close()
+    print(f"[SPLITS] market={args.market} corrected_price_rows={len(frame):,}; historical price factors require recomputation")
+
+
+def run_financial_history_target(args: argparse.Namespace) -> None:
+    from engine.workflows.financial_history import publish_reviewed_financial_history
+    reviews = getattr(args, "financial_history_review", None) or []
+    if args.market != "kr" or not reviews:
+        raise ValueError("The financial-history target requires KR reviewed DART receipt bundles")
+    target = getattr(args, "financial_history_output", None) or DATA_LAKE.silver("dart", "normalized")
+    if args.dry_run:
+        print(f"[DRY-RUN] financial-history reviewed_bundles={len(reviews)}, output={target}", flush=True)
+        return
+    for review in reviews:
+        result = publish_reviewed_financial_history(review, financial_dir=target)
+        print(f"[FINANCIAL-HISTORY] {json.dumps(result, ensure_ascii=False)}", flush=True)
+    print("[FINANCIAL-HISTORY] Receipt inputs published; recompute affected historical factors before using them in research.", flush=True)
+
+
+def run_survivorship_target(args: argparse.Namespace) -> None:
+    from engine.workflows.survivorship import run_survivorship_refresh
+    if args.dry_run:
+        print(f"[DRY-RUN] survivorship market={args.market}, sources=DART/Alpha Vantage/EDGAR")
+        return
+    result = run_survivorship_refresh(
+        market=args.market, end_date=args.end_date,
+        manifest_path=getattr(args, "survivorship_manifest", None),
+        output_dir=getattr(args, "survivorship_output", None),
+        panel_dir=getattr(args, "survivorship_panel_dir", None),
+        source_dir=getattr(args, "survivorship_source_dir", None),
+        start_date=getattr(args, "survivorship_start_date", None),
+        download=not getattr(args, "survivorship_no_download", False),
+        load_clickhouse=not args.skip_clickhouse,
+        force=args.force_full,
+    )
+    print(f"[SURVIVORSHIP] {json.dumps(result, ensure_ascii=False)}", flush=True)
 
 
 def run_resumable_stock_tasks(
@@ -1431,6 +1522,20 @@ def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: 
     if window.has_work and window.start_iso and latest_factor_date is not None:
         start_date = min(start_date, window.start_iso)
 
+    from engine.workflows.stock_splits import rebuild_manifest_path, save_json
+    dirty_path = rebuild_manifest_path(market, data_lake=DATA_LAKE)
+    dirty = json.loads(dirty_path.read_text(encoding="utf-8")) if dirty_path.exists() else {"items": {}}
+    requested_symbols = parse_symbols_arg(getattr(args, "symbols", None))
+    requested_ids = set(normalized_security_ids(market, requested_symbols)) if requested_symbols else None
+    pending_rebuild = {
+        sid: item for sid, item in dirty["items"].items()
+        if args.financial_basis not in item.get("completed_bases", [])
+        and (requested_ids is None or sid in requested_ids)
+    }
+    if pending_rebuild:
+        start_date = min(start_date, min(item["from_date"] for item in pending_rebuild.values()))
+        print(f"[SPLITS] rebuilding historical price factors from {start_date}; affected securities={len(pending_rebuild)}", flush=True)
+
     market_scoped_delete(
         client,
         "fact_daily_factors",
@@ -1464,6 +1569,10 @@ def run_factor_refresh(args: argparse.Namespace, window: RefreshWindow, client: 
             latest_factor_date,
         ),
     )
+    if pending_rebuild:
+        for item in pending_rebuild.values():
+            item["completed_bases"] = sorted(set(item.get("completed_bases", [])) | {args.financial_basis})
+        save_json(dirty_path, dirty)
 
 
 def run_factor_snapshot_refresh(args: argparse.Namespace, client: Any) -> None:
@@ -1493,6 +1602,17 @@ def run_factor_snapshot_refresh(args: argparse.Namespace, client: Any) -> None:
         if latest_snapshot_date is None or latest_snapshot_date >= as_of_date
         else latest_snapshot_date + timedelta(days=1)
     )
+    from engine.workflows.stock_splits import rebuild_manifest_path, save_json
+    dirty_path = rebuild_manifest_path(market, data_lake=DATA_LAKE)
+    dirty = json.loads(dirty_path.read_text(encoding="utf-8")) if dirty_path.exists() else {"items": {}}
+    pending_snapshots = {
+        sid: item for sid, item in dirty["items"].items()
+        if args.financial_basis not in item.get("completed_snapshot_bases", [])
+    }
+    if any(args.financial_basis not in item.get("completed_bases", []) for item in pending_snapshots.values()):
+        raise RuntimeError("price adjustments changed; rebuild historical factors for this financial basis before snapshots")
+    if pending_snapshots:
+        start_date = min(start_date, min(date.fromisoformat(item["from_date"]) for item in pending_snapshots.values()))
     market_scoped_delete(
         client,
         factor_snapshot_loader.FACTOR_SNAPSHOT_TABLE,
@@ -1514,6 +1634,11 @@ def run_factor_snapshot_refresh(args: argparse.Namespace, client: Any) -> None:
             f"factor snapshot refresh produced no rows for market={market}, "
             f"date={as_of_date.isoformat()}"
         )
+    if pending_snapshots:
+        for item in pending_snapshots.values():
+            item["completed_snapshot_bases"] = sorted(set(item.get("completed_snapshot_bases", [])) | {args.financial_basis})
+            item["snapshots_rebuilt"] = {"annual", "quarterly", "ttm"} <= set(item["completed_snapshot_bases"])
+        save_json(dirty_path, dirty)
 
 
 def ensure_krx_silver_market_data_current() -> bool:
@@ -1806,21 +1931,17 @@ def resolve_latest_complete_trade_date(
 
 
 def latest_us_bronze_date(symbols: list[str] | None = None) -> date | None:
-    root = DATA_LAKE.bronze("yfinance", "price")
+    root = DATA_LAKE.bronze("alpha-vantage", "price")
     if symbols:
-        from engine.extractors._internal.yfinance_market_prices import (
-            yfinance_price_storage_stem,
-        )
-
         paths = [
-            root / f"{yfinance_price_storage_stem(symbol)}.csv"
+            root / f"ticker={str(symbol).upper()}.metadata.json"
             for symbol in symbols
         ]
         if any(not path.exists() for path in paths):
             return None
     else:
-        paths = sorted(root.glob("*.csv"))
-    dates = [latest_date_in_csv(path) for path in paths if path.exists()]
+        paths = sorted(root.glob("ticker=*.metadata.json"))
+    dates = [pd.Timestamp(json.loads(path.read_text(encoding="utf-8"))["last_date"]).date() for path in paths if path.exists()]
     dates = [value for value in dates if value is not None]
     return min(dates) if dates else None
 

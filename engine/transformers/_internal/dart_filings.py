@@ -73,6 +73,10 @@ DEBUG_COLUMNS = [
     "accounting_regime_confidence",
     "accounting_regime_evidence",
     "document_dialect",
+    "source_document_encoding",
+    "source_document_sha256",
+    "source_section",
+    "source_financial_scope",
     "source_type",
     "sector_code",
     "industry_group_code",
@@ -428,31 +432,35 @@ def is_eps_account_name(value: Any) -> bool:
 
 
 @lru_cache(maxsize=100_000)
-def parse_amount(value: Any, unit_factor: int = 1) -> int:
+def parse_amount(value: Any, unit_factor: int = 1, *, preserve_fraction: bool = False,
+                 missing_as_none: bool = False) -> int | Decimal | None:
     """
     DART HTML 표 금액을 원 단위 int로 변환.
     괄호, △, ▲, - 금액은 음수 처리한다.
     """
     if value is None:
-        return 0
+        return None if missing_as_none else 0
 
     s = safe_str(value)
     s = s.replace("\u3000", "")
-    s = s.replace(",", "")
     s = s.strip()
 
-    if s in {"", "-", "－", "—", "–"}:
+    if not s:
+        return None if missing_as_none else 0
+    if s in {"-", "－", "—", "–"}:
         return 0
 
     sign = 1
 
+    if len(s) >= 2 and s[0] == "(" and s[-1] == ")":
+        sign = -1
+        s = s[1:-1].strip()
+    # Legacy subtotal parentheses can enclose an explicit (-) indicator.
+    # They describe the same negative value, not a double negation.
     legacy_minus = re.match(r"^\(\s*[-−－]\s*\)\s*", s)
     if legacy_minus is not None:
         sign = -1
         s = s[legacy_minus.end() :].strip()
-    elif len(s) >= 2 and s[0] == "(" and s[-1] == ")":
-        sign = -1
-        s = s[1:-1].strip()
 
     if s.startswith(("△", "▲")):
         sign = -1
@@ -461,6 +469,12 @@ def parse_amount(value: Any, unit_factor: int = 1) -> int:
     if s.startswith(("-", "－")):
         sign = -1
         s = s[1:].strip()
+
+    grouped = re.fullmatch(r"(?:₩|￦)?\s*([\d,]+(?:\.\d+)?)\s*(?:원|KRW)?", s, re.I)
+    if grouped and "," in grouped.group(1):
+        if not re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?", grouped.group(1)):
+            raise ValueError(f"Invalid thousands grouping in reported amount: {value}")
+    s = s.replace(",", "")
 
     # A data cell must contain one scalar.  Removing every non-numeric
     # character used to concatenate malformed multi-value legacy tables into
@@ -471,14 +485,15 @@ def parse_amount(value: Any, unit_factor: int = 1) -> int:
         flags=re.IGNORECASE,
     )
     if scalar is None:
-        return 0
+        return None if missing_as_none else 0
 
     try:
         # Preserve fractional display units (for example ``1.5억원``).  Truncating
         # before scaling silently loses 50,000,000 won in that case.
-        return int(Decimal(scalar.group(1)) * unit_factor) * sign
+        amount = Decimal(scalar.group(1)) * unit_factor * sign
+        return amount if preserve_fraction else int(amount)
     except (InvalidOperation, ValueError, OverflowError):
-        return 0
+        return None if missing_as_none else 0
 
 
 @lru_cache(maxsize=100_000)
@@ -492,7 +507,7 @@ def amount_to_int(value: Any) -> int:
         return 0
 
 
-def apply_amount_policy(raw_amount: int, amount_policy: str) -> int:
+def apply_amount_policy(raw_amount: int | Decimal, amount_policy: str) -> int | Decimal:
     policy = safe_str(amount_policy).strip() or "as_reported"
 
     if policy not in VALID_AMOUNT_POLICIES:
@@ -507,7 +522,7 @@ def apply_amount_policy(raw_amount: int, amount_policy: str) -> int:
     return raw_amount
 
 
-def apply_cash_direction(normalized_amount: int, cash_direction: str) -> int:
+def apply_cash_direction(normalized_amount: int | Decimal, cash_direction: str) -> int | Decimal:
     direction = safe_str(cash_direction).strip()
 
     if direction == "inflow":
@@ -601,6 +616,7 @@ def is_statement_header_text(text: str) -> bool:
 def is_statement_title_text(text: str) -> bool:
     """Return True only for a standalone statement title, not narrative notes."""
     normalized = normalize_account_name(text)
+    normalized = normalized.replace("재무상태표대차대조표", "재무상태표")
     normalized = re.sub(r"^[\d.．ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+", "", normalized)
     return normalized in {
         "재무상태표",
@@ -624,18 +640,37 @@ def is_statement_title_text(text: str) -> bool:
     }
 
 
-def is_header_table(table) -> bool:
-    if is_data_table(table):
-        return False
+def statement_title_from_header(node: Tag) -> str:
+    """Identify the caption itself, excluding references to other statements."""
+    candidates = [node] if node.name == "p" else node.find_all(["p", "td", "th"])
+    texts = []
+    for candidate in candidates:
+        texts.append(candidate.get_text(" ", strip=True))
+        texts.append(" ".join(str(text) for text in candidate.find_all(string=True, recursive=False)).strip())
+    captions = {text for text in texts if is_statement_title_text(text)}
+    kinds = {normalize_account_name(caption) for caption in captions}
+    if len(kinds) > 1:
+        raise ValueError("Multiple financial statement captions in one header")
+    if captions:
+        return sorted(captions)[0]
+    # Some single-cell headers put the period immediately after the caption.
+    normalized = normalize_account_name(node.get_text(" ", strip=True))
+    match = re.match(
+        r"^(?:연결|별도)?(?:재무상태표|대차대조표|포괄손익계산서|손익계산서|현금흐름표|자본변동표)"
+        r"(?=제?\d|단위|현재|$)", normalized,
+    )
+    return match.group(0) if match else ""
 
-    return is_statement_header_text(table.get_text(" ", strip=True))
+
+def is_header_table(table) -> bool:
+    return not is_data_table(table) and bool(statement_title_from_header(table))
 
 
 def is_header_paragraph(node: Tag) -> bool:
     if node.name != "p" or node.find_parent("table") is not None:
         return False
 
-    if not is_statement_title_text(node.get_text(" ", strip=True)):
+    if not statement_title_from_header(node):
         return False
 
     classes = {safe_str(value).lower() for value in node.get("class", [])}
@@ -686,7 +721,7 @@ def find_next_data_table(header_table):
     node = header_table
     supporting_text: list[str] = []
     header_statement_type = get_statement_type_from_text(
-        header_table.get_text(" ", strip=True)
+        statement_title_from_header(header_table)
     )
 
     while node is not None:
@@ -717,6 +752,8 @@ def find_next_data_table(header_table):
             continue
 
         if is_header_table(node):
+            if get_statement_type_from_text(statement_title_from_header(node)) != header_statement_type:
+                return None, " ".join(supporting_text)
             body_table, nested_text = find_next_data_table(node)
             text = node.get_text(" ", strip=True)
             if text:
@@ -818,16 +855,31 @@ def current_statement_amount_column(
     factor periodizer expects YTD flows, so selecting the first numeric column
     causes it to difference an already quarter-only value.  Detect the first
     current-period column group from the header spans and select its final
-    (cumulative) column.  Balance sheets, annual statements, and simple
-    current/comparative tables continue to use the first amount column.
+    (cumulative) column. Explicit cumulative labels apply in every calendar
+    month, including December interims of March fiscal-year issuers. Balance
+    sheets and simple current/comparative tables use the first amount column.
     """
 
+    first_amount_column = 1
+    for tr in body_table.find_all("tr")[:4]:
+        logical_column = 0
+        for cell in tr.find_all(["td", "th"], recursive=False):
+            width = _positive_span(cell, "colspan")
+            if normalize_account_name(cell.get_text(" ", strip=True)) == "주석":
+                first_amount_column = logical_column + width
+            logical_column += width
+
     period_parts = _statement_period_year_month(period)
-    fiscal_month = period_parts[1] if period_parts is not None else 0
+    calendar_month = period_parts[1] if period_parts is not None else 0
     if normalize_statement_type(statement_type) not in {"IS", "CIS", "CF"}:
-        return 1
-    if fiscal_month not in {3, 6, 9}:
-        return 1
+        return first_amount_column
+    has_cumulative_header = any(
+        "누적" in normalize_account_name(cell.get_text(" ", strip=True))
+        for tr in body_table.find_all("tr")[:4]
+        for cell in tr.find_all(["td", "th"], recursive=False)
+    )
+    if calendar_month not in {3, 6, 9} and not has_cumulative_header:
+        return first_amount_column
 
     for tr in body_table.find_all("tr")[:4]:
         cells = tr.find_all(["td", "th"], recursive=False)
@@ -849,9 +901,9 @@ def current_statement_amount_column(
         cells = tr.find_all(["td", "th"], recursive=False)
         for index, cell in enumerate(cells):
             if "누적" in normalize_account_name(cell.get_text(" ", strip=True)):
-                return index + 1
+                return index + first_amount_column
 
-    return 1
+    return first_amount_column
 
 
 def _cell_break_segments(cell: Tag) -> list[str]:
@@ -876,10 +928,12 @@ def _packed_current_period_columns(body_table: Tag) -> list[int]:
 
     for tr in body_table.find_all("tr")[:4]:
         cells = tr.find_all(["td", "th"], recursive=False)
-        for cell_index, cell in enumerate(cells):
+        logical_column = 0
+        for cell in cells:
             colspan = _positive_span(cell, "colspan")
-            if cell_index > 0 and colspan >= 2:
-                return list(range(cell_index, cell_index + colspan))
+            if logical_column > 0 and colspan >= 2:
+                return list(range(logical_column, logical_column + colspan))
+            logical_column += colspan
     return []
 
 
@@ -893,9 +947,17 @@ def extract_rows_from_dart_html(
     if not html_path.exists():
         raise FileNotFoundError(f"HTML 파일을 찾을 수 없습니다: {html_path}")
 
-    html = html_path.read_text(encoding="utf-8", errors="ignore")
+    from engine.transformers._internal.dart_document import read_dart_financial_document
+    document = read_dart_financial_document(html_path)
+    html = document.html
     soup = BeautifulSoup(html, "lxml")
     document_semantics = detect_financial_document_semantics(html, soup, period)
+    document_semantics.update(
+        source_document_encoding=document.encoding,
+        source_document_sha256=document.source_sha256,
+        source_section=document.section_title,
+        source_financial_scope=document.financial_scope,
+    )
 
     rows: list[dict[str, Any]] = []
     table_index = 0
@@ -906,9 +968,10 @@ def extract_rows_from_dart_html(
             continue
 
         header_text = header_table.get_text(" ", strip=True)
-        fs_type = get_statement_type_from_text(header_text)
+        caption = statement_title_from_header(header_table)
+        fs_type = get_statement_type_from_text(caption)
 
-        if "자본변동표" in normalize_account_name(header_text):
+        if "자본변동표" in normalize_account_name(caption):
             continue
 
         if fs_type == "UNKNOWN":
@@ -933,9 +996,17 @@ def extract_rows_from_dart_html(
             period=period,
         )
         packed_amount_columns = _packed_current_period_columns(body_table)
+        period_parts = _statement_period_year_month(period)
+        interim_flow = fs_type in {"IS", "CIS", "CF"} and period_parts is not None and period_parts[1] in {3, 6, 9}
+        has_duration_subcolumns = any(
+            normalize_account_name(cell.get_text(" ", strip=True)) in {"3개월", "누적"}
+            for tr in body_table.find_all("tr")[:4]
+            for cell in tr.find_all(["td", "th"], recursive=False)
+        )
 
         for row_index, tr in enumerate(body_table.find_all("tr")):
-            tds = tr.find_all("td")
+            tds = [cell for cell in tr.find_all("td", recursive=False)
+                   for _ in range(_positive_span(cell, "colspan"))]
 
             if len(tds) <= amount_column:
                 continue
@@ -975,6 +1046,7 @@ def extract_rows_from_dart_html(
                 parse_alignment_complete = all(
                     len(segments) == len(account_segments)
                     for segments in amount_segments
+                    if any(segments)
                 )
                 for line_index, account_segment in enumerate(account_segments):
                     if not account_segment:
@@ -1012,9 +1084,10 @@ def extract_rows_from_dart_html(
                         # negative/outflow meaning.
                         amount_for_parse = amount_raw[1:-1]
                     raw_amount = (
-                        parse_amount(amount_for_parse, row_unit_factor)
+                        parse_amount(amount_for_parse, row_unit_factor, preserve_fraction=is_eps_account_name(account_segment),
+                                     missing_as_none=True)
                         if amount_raw
-                        else ""
+                        else None
                     )
                     rows.append(
                         {
@@ -1029,6 +1102,7 @@ def extract_rows_from_dart_html(
                             "indent_level": detect_indent_level(account_segment, td_style),
                             "amount": safe_str(raw_amount),
                             "raw_amount": safe_str(raw_amount),
+                            "amount_is_missing": raw_amount is None,
                             "amount_raw": amount_raw,
                             "unit_factor": safe_str(row_unit_factor),
                             "parse_alignment_complete": parse_alignment_complete,
@@ -1039,8 +1113,20 @@ def extract_rows_from_dart_html(
                 continue
 
             amount_raw = amount_td.get_text(" ", strip=True)
+            if packed_columns_available and not has_duration_subcolumns:
+                # Older statements alternate detail and subtotal columns under
+                # one current-period heading. Neither is a note-reference or
+                # comparative column. A row must identify one reported value.
+                values = {tds[column].get_text(" ", strip=True)
+                          for column in packed_amount_columns}
+                values.difference_update({"", "-", "－", "—", "–"})
+                if len(values) > 1 and not interim_flow:
+                    raise ValueError(f"Ambiguous current-period amounts: {original_account_name}")
+                if len(values) <= 1:
+                    amount_raw = next(iter(values), "")
             row_unit_factor = 1 if is_eps_account_name(original_account_name) else unit_factor
-            raw_amount = parse_amount(amount_raw, row_unit_factor)
+            raw_amount = parse_amount(amount_raw, row_unit_factor, preserve_fraction=is_eps_account_name(original_account_name),
+                                      missing_as_none=True)
 
             rows.append(
                 {
@@ -1055,6 +1141,7 @@ def extract_rows_from_dart_html(
                     "indent_level": detect_indent_level(raw_account_name, td_style),
                     "amount": safe_str(raw_amount),
                     "raw_amount": safe_str(raw_amount),
+                    "amount_is_missing": raw_amount is None,
                     "amount_raw": amount_raw,
                     "unit_factor": safe_str(row_unit_factor),
                     "parse_alignment_complete": True,
@@ -1373,7 +1460,9 @@ def extract_rows_from_dart_comment_html(
     if not html_path.exists():
         raise FileNotFoundError(f"HTML 파일을 찾을 수 없습니다: {html_path}")
 
-    html = html_path.read_text(encoding="utf-8", errors="ignore")
+    from engine.transformers._internal.dart_document import read_dart_financial_document
+
+    html = read_dart_financial_document(html_path, section="notes").html
     soup = BeautifulSoup(html, "lxml")
 
     return extract_rows_from_dart_comment_soup(
@@ -1761,7 +1850,9 @@ def extract_mapped_comment_rows(
     include_debug_cols: bool,
 ) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
-    html = Path(comment_html_path).read_text(encoding="utf-8", errors="ignore")
+    from engine.transformers._internal.dart_document import read_dart_financial_document
+    document = read_dart_financial_document(comment_html_path, section="notes")
+    html = document.html
     soup = BeautifulSoup(html, "lxml")
     hits_by_rule = extract_comment_hits_by_rule(soup, comment_rules)
 
@@ -1788,7 +1879,7 @@ def extract_mapped_comment_rows(
     if not frames:
         return pd.DataFrame(columns=columns)
 
-    return (
+    result = (
         pd.concat(frames, ignore_index=True)
         .drop_duplicates(
             subset=["statement_type", "period", "canonical_account_id"],
@@ -1796,6 +1887,12 @@ def extract_mapped_comment_rows(
         )
         .loc[:, columns]
     )
+    if include_debug_cols:
+        result["source_document_encoding"] = document.encoding
+        result["source_document_sha256"] = document.source_sha256
+        result["source_section"] = document.section_title
+        result["source_financial_scope"] = document.financial_scope
+    return result
 
 
 def merge_comment_rows(
@@ -2629,24 +2726,25 @@ class RuleEngine:
         for row in rows:
             row = normalize_input_row(row)
             result = self.map_row(row)
+            missing_amount = row.get("amount_is_missing", False)
 
             raw_amount = amount_to_int(row.get("raw_amount", row.get("amount")))
-            if result.canonical_account_id in EPS_CANONICAL_IDS and safe_str(row.get("amount_raw")):
-                raw_amount = parse_amount(row.get("amount_raw"), 1)
+            if not missing_amount and result.canonical_account_id in EPS_CANONICAL_IDS and safe_str(row.get("amount_raw")):
+                raw_amount = parse_amount(row.get("amount_raw"), 1, preserve_fraction=True)
             normalized_amount = apply_amount_policy(raw_amount, result.amount_policy)
             cash_effect_amount = apply_cash_direction(normalized_amount, result.cash_direction)
 
             item = {
-                "canonical_account_id": result.canonical_account_id,
-                "canonical_account_name": result.canonical_account_name,
+                "canonical_account_id": "UNMAPPED" if missing_amount else result.canonical_account_id,
+                "canonical_account_name": "" if missing_amount else result.canonical_account_name,
                 "original_account_name": safe_str(row.get("original_account_name")),
                 "statement_type": normalize_statement_type(row.get("statement_type")),
                 "period": safe_str(row.get("period")),
                 # 하위 호환: amount는 분석용 normalized_amount로 둔다.
-                "amount": safe_str(normalized_amount),
-                "raw_amount": safe_str(raw_amount),
-                "normalized_amount": safe_str(normalized_amount),
-                "cash_effect_amount": safe_str(cash_effect_amount),
+                "amount": "" if missing_amount else safe_str(normalized_amount),
+                "raw_amount": "" if missing_amount else safe_str(raw_amount),
+                "normalized_amount": "" if missing_amount else safe_str(normalized_amount),
+                "cash_effect_amount": "" if missing_amount else safe_str(cash_effect_amount),
                 "amount_policy": result.amount_policy,
                 "cash_direction": result.cash_direction,
             }
@@ -2654,8 +2752,8 @@ class RuleEngine:
             if include_debug_cols:
                 item.update(
                     {
-                        "rule_id": result.rule_id,
-                        "reason": result.reason,
+                        "rule_id": "" if missing_amount else result.rule_id,
+                        "reason": "No reported scalar amount" if missing_amount else result.reason,
                         "raw_account_name": safe_str(row.get("raw_account_name")),
                         "normalized_name": safe_str(row.get("normalized_name")) or normalize_account_name(row.get("original_account_name")),
                         "indent_level": safe_str(row.get("indent_level")),
@@ -2677,6 +2775,10 @@ class RuleEngine:
                         "accounting_regime_confidence": safe_str(row.get("accounting_regime_confidence")),
                         "accounting_regime_evidence": safe_str(row.get("accounting_regime_evidence")),
                         "document_dialect": safe_str(row.get("document_dialect", "UNKNOWN")),
+                        "source_document_encoding": safe_str(row.get("source_document_encoding")),
+                        "source_document_sha256": safe_str(row.get("source_document_sha256")),
+                        "source_section": safe_str(row.get("source_section")),
+                        "source_financial_scope": safe_str(row.get("source_financial_scope")),
                         "source_type": safe_str(
                             row.get(
                                 "source_type",

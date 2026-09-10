@@ -8,6 +8,30 @@ from engine.transformers._internal.dart_filings import extract_rows_from_dart_ht
 
 
 class DartStatementPeriodTest(unittest.TestCase):
+    def test_december_interim_of_march_year_end_uses_ytd(self):
+        # Reduced from Woori Investment Bank receipt 20140303000380.
+        html = """
+        <p class="table-group-1">연 결 포 괄 손 익 계 산 서</p>
+        <p>제42기 3분기 2013년 10월 01일부터 2013년 12월 31일까지</p>
+        <p>제42기 누적3분기 2013년 04월 01일부터 2013년 12월 31일까지 (단위 : 원)</p>
+        <table border="1">
+          <tr><th rowspan="2">과목</th><th colspan="2">제42기 3분기</th>
+            <th colspan="2">제41기 3분기</th><th rowspan="2">제41기</th></tr>
+          <tr><th>3 개 월</th><th>누 적</th><th>3 개 월</th><th>누 적</th></tr>
+          <tr><td>영업수익</td><td>20,196,725,677</td><td>97,468,804,831</td>
+            <td>54,888,564,731</td><td>163,174,991,372</td><td>207,985,428,287</td></tr>
+          <tr><td>당(분)기순이익(손실)</td><td>-25,451,378,457</td><td>-88,428,049,692</td>
+            <td>-11,634,349,324</td><td>-26,461,704,643</td><td>-33,692,676,910</td></tr>
+        </table>
+        """
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "december-interim.html"
+            path.write_text(html, encoding="utf-8")
+            rows = extract_rows_from_dart_html(path, "010050", "2013.12")
+        amounts = {row["original_account_name"]: row["raw_amount"] for row in rows}
+        self.assertEqual(amounts["영업수익"], "97468804831")
+        self.assertEqual(amounts["당(분)기순이익(손실)"], "-88428049692")
+
     def test_legacy_packed_statement_cells_are_exploded_into_account_rows(self):
         html = """
         <html><body>
@@ -50,7 +74,7 @@ class DartStatementPeriodTest(unittest.TestCase):
             <tr><td>과 목</td><td colspan="2">제 3 기</td></tr>
             <tr>
               <td>자산<br/>유동자산<br/>부채<br/>자본</td>
-              <td><br/></td>
+              <td><br/>60</td>
               <td>100<br/>60<br/>40<br/>20</td>
             </tr>
           </table>

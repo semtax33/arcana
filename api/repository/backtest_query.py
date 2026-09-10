@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from api.model.universe import has_universe_filters
 from api.repository.universe_query import filter_factor_query
+from api.repository.listing_history import security_source_sql
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -55,6 +56,7 @@ def build_factor_snapshot_query(
     style_score_table: str = "arcana.fact_daily_style_score",
     catalog_table: str = "factor_catalog",
     security_table: str = "security_master",
+    listing_table: str | None = None,
     issuer_table: str = "issuers",
     identifier_table: str = "identifiers",
 ) -> tuple[str, dict[str, Any]]:
@@ -154,7 +156,7 @@ latest_snapshot_date AS (
 security_universe AS (
     SELECT
         sm.security_id AS security_id
-    FROM {_validate_table_name(security_table)} AS sm
+    FROM {security_source_sql(security_table, listing_table)} AS sm
     LEFT JOIN {_validate_table_name(issuer_table)} AS iss
         ON iss.issuer_id = sm.issuer_id
     WHERE 1 = 1{market_filter}{sector_filter}{industry_group_filter}
@@ -275,7 +277,7 @@ SELECT
         )
     ) AS percentile_score
 FROM ranked_factor_values AS rf
-LEFT JOIN {_validate_table_name(security_table)} AS sm
+LEFT JOIN {security_source_sql(security_table, listing_table)} AS sm
     ON sm.security_id = rf.security_id
 LEFT JOIN {_validate_table_name(issuer_table)} AS iss
     ON iss.issuer_id = sm.issuer_id
@@ -290,11 +292,11 @@ ORDER BY
     rf.security_id ASC,
     rf.factor_id ASC
 """.strip()
-    if has_universe_filters(universe) or exact_signal_values:
+    if has_universe_filters(universe) or exact_signal_values or listing_table:
         query, params = filter_factor_query(query, params,
             dates_sql='SELECT {signal_date:Date} AS trade_date', universe=universe, market=market,
             sector_codes=sector_codes, industry_group_codes=industry_group_codes,
-            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table,
+            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table, listing_table=listing_table,
             batch=False, exact_signal_values=exact_signal_values)
     return query, params
 
@@ -312,6 +314,7 @@ def build_factor_snapshot_batch_query(
     factor_table: str = DEFAULT_FACTOR_SNAPSHOT_TABLE,
     catalog_table: str = "factor_catalog",
     security_table: str = "security_master",
+    listing_table: str | None = None,
     issuer_table: str = "issuers",
     identifier_table: str = "identifiers",
     sector_codes: list[str] | None = None,
@@ -436,7 +439,7 @@ selected_catalog AS (
 security_universe AS (
     SELECT
         sm.security_id AS security_id
-    FROM {_validate_table_name(security_table)} AS sm
+    FROM {security_source_sql(security_table, listing_table)} AS sm
     LEFT JOIN {_validate_table_name(issuer_table)} AS iss
         ON iss.issuer_id = sm.issuer_id
     WHERE 1 = 1{market_filter}{sector_filter}{industry_group_filter}
@@ -520,7 +523,7 @@ SELECT
         )
     ) AS percentile_score
 FROM ranked_factor_values AS rf
-LEFT JOIN {_validate_table_name(security_table)} AS sm
+LEFT JOIN {security_source_sql(security_table, listing_table)} AS sm
     ON sm.security_id = rf.security_id
 LEFT JOIN {_validate_table_name(issuer_table)} AS iss
     ON iss.issuer_id = sm.issuer_id
@@ -537,11 +540,11 @@ ORDER BY
     rf.security_id ASC,
     rf.factor_id ASC
 """.strip()
-    if has_universe_filters(universe) or exact_signal_values:
+    if has_universe_filters(universe) or exact_signal_values or listing_table:
         query, params = filter_factor_query(query, params,
             dates_sql='SELECT arrayJoin({signal_dates:Array(Date)}) AS trade_date', universe=universe, market=market,
             sector_codes=sector_codes, industry_group_codes=industry_group_codes,
-            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table,
+            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table, listing_table=listing_table,
             batch=True, exact_signal_values=exact_signal_values)
     return query, params
 
@@ -559,6 +562,7 @@ def build_factor_raw_batch_query(
     raw_lookback_days: int | None = None,
     catalog_table: str = "factor_catalog",
     security_table: str = "security_master",
+    listing_table: str | None = None,
     issuer_table: str = "issuers",
     identifier_table: str = "identifiers",
     sector_codes: list[str] | None = None,
@@ -675,7 +679,7 @@ selected_catalog AS (
 security_universe AS (
     SELECT
         sm.security_id AS security_id
-    FROM {_validate_table_name(security_table)} AS sm
+    FROM {security_source_sql(security_table, listing_table)} AS sm
     LEFT JOIN {_validate_table_name(issuer_table)} AS iss
         ON iss.issuer_id = sm.issuer_id
     WHERE 1 = 1{market_filter}{sector_filter}{industry_group_filter}
@@ -777,7 +781,7 @@ SELECT
         )
     ) AS percentile_score
 FROM ranked_factor_values AS rf
-LEFT JOIN {_validate_table_name(security_table)} AS sm
+LEFT JOIN {security_source_sql(security_table, listing_table)} AS sm
     ON sm.security_id = rf.security_id
 LEFT JOIN {_validate_table_name(issuer_table)} AS iss
     ON iss.issuer_id = sm.issuer_id
@@ -794,11 +798,11 @@ ORDER BY
     rf.security_id ASC,
     rf.factor_id ASC
 """.strip()
-    if has_universe_filters(universe) or exact_signal_values:
+    if has_universe_filters(universe) or exact_signal_values or listing_table:
         query, params = filter_factor_query(query, params,
             dates_sql='SELECT arrayJoin({signal_dates:Array(Date)}) AS trade_date', universe=universe, market=market,
             sector_codes=sector_codes, industry_group_codes=industry_group_codes,
-            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table,
+            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table, listing_table=listing_table,
             batch=True, exact_signal_values=exact_signal_values)
     return query, params
 
@@ -811,6 +815,7 @@ def build_trading_days_query(
     lookback_days: int = 10,
     price_table: str = "price_daily",
     security_table: str = "security_master",
+    listing_table: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     start = date.fromisoformat(_resolve_date(start_date)) - timedelta(days=lookback_days)
     normalized_market = _normalize_market(market)
@@ -823,7 +828,7 @@ def build_trading_days_query(
     if normalized_market:
         params["market_country"] = normalized_market.upper()
         market_join = (
-            f"\nINNER JOIN {_validate_table_name(security_table)} AS sm"
+            f"\nINNER JOIN {security_source_sql(security_table, listing_table)} AS sm"
             "\n    ON sm.security_id = p.security_id"
         )
         market_filter = "\n    AND sm.country = {market_country:String}"
@@ -850,12 +855,14 @@ def build_price_history_query(
 SELECT
     security_id,
     trade_date,
-    close
-FROM {_validate_table_name(price_table)}
+    toFloat64(argMax(coalesce(price_source.adj_close, price_source.close), price_source.updated_at)) AS close
+FROM {_validate_table_name(price_table)} AS price_source
 WHERE has({{security_ids:Array(String)}}, security_id)
     AND trade_date >= {{start_date:Date}}
     AND trade_date <= {{end_date:Date}}
-    AND close IS NOT NULL
+    AND coalesce(price_source.adj_close, price_source.close) IS NOT NULL
+GROUP BY security_id, trade_date
+HAVING argMax(price_source.volume, price_source.updated_at) > 0
 ORDER BY trade_date ASC, security_id ASC
 """.strip()
     return query, {
@@ -871,7 +878,12 @@ def build_portfolio_return_query(
     trading_days: list[str | date],
     price_table: str = "price_daily",
 ) -> tuple[str, dict[str, Any], list[tuple[int, str, str, str, float]]]:
-    """Calculate equal-weight segment returns in ClickHouse."""
+    """Buy equal capital amounts at the segment's first close, then hold.
+
+    Missing entry quotes leave that allocation in cash. Suspended holdings
+    keep their last traded mark; they must not increase other stocks' weights.
+    The caller supplies the cost charged once at each segment's entry close.
+    """
 
     if not segments:
         raise ValueError("segments must not be empty")
@@ -930,64 +942,62 @@ raw_prices AS (
     SELECT
         prices_source.security_id AS security_id,
         prices_source.trade_date AS trade_date,
-        toFloat64(argMax(prices_source.close, prices_source.updated_at)) AS close
+        toFloat64(argMax(coalesce(prices_source.adj_close, prices_source.close), prices_source.updated_at)) AS close
     FROM {_validate_table_name(price_table)} AS prices_source
     WHERE has({{security_ids:Array(String)}}, prices_source.security_id)
         AND prices_source.trade_date >= {{start_date:Date}}
         AND prices_source.trade_date <= {{end_date:Date}}
         AND prices_source.trade_date IN {{trading_days:Array(Date)}}
-        AND prices_source.close IS NOT NULL
+        AND coalesce(prices_source.adj_close, prices_source.close) IS NOT NULL
     GROUP BY prices_source.security_id, prices_source.trade_date
+    HAVING argMax(prices_source.volume, prices_source.updated_at) > 0
 ),
-prices_with_lag AS (
-    SELECT
-        security_id,
-        trade_date,
-        close,
-        lagInFrame(close, 1, NULL) OVER (
-            PARTITION BY security_id
-            ORDER BY trade_date
-            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-        ) AS previous_close
-    FROM raw_prices
-),
-security_returns AS (
-    SELECT
-        security_id,
-        trade_date,
-        if(
-            close IS NULL OR previous_close IS NULL OR previous_close = 0,
-            NULL,
-            close / previous_close - 1
-        ) AS daily_return
-    FROM prices_with_lag
-),
-position_day_returns AS (
+position_calendar AS (
     SELECT
         positions.segment_id AS segment_id,
+        positions.security_id AS security_id,
+        positions.start_date AS start_date,
+        positions.end_date AS end_date,
         positions.transaction_cost_bps AS transaction_cost_bps,
-        returns.trade_date AS trade_date,
-        returns.daily_return AS daily_return
+        calendar.trade_date AS trade_date
     FROM portfolio_positions AS positions
-    INNER JOIN security_returns AS returns
-        ON returns.security_id = positions.security_id
-        AND returns.trade_date >= positions.start_date
-        AND returns.trade_date <= positions.end_date
+    CROSS JOIN (SELECT arrayJoin({{trading_days:Array(Date)}}) AS trade_date) calendar
+    WHERE calendar.trade_date BETWEEN positions.start_date AND positions.end_date
 ),
-segment_daily_returns AS (
+position_prices AS (
+    SELECT
+        calendar.segment_id AS segment_id,
+        calendar.security_id AS security_id,
+        calendar.start_date AS start_date,
+        calendar.end_date AS end_date,
+        calendar.transaction_cost_bps AS transaction_cost_bps,
+        calendar.trade_date AS trade_date,
+        if(prices.close > 0 AND isFinite(prices.close), prices.close, NULL) AS close
+    FROM position_calendar calendar
+    LEFT JOIN raw_prices prices ON prices.security_id = calendar.security_id
+        AND prices.trade_date = calendar.trade_date
+),
+position_marks AS (
+    SELECT
+        *,
+        maxIf(ifNull(close, 0.0), trade_date = start_date) OVER (
+            PARTITION BY segment_id, security_id
+        ) AS entry_close,
+        argMax(close, trade_date) OVER (
+            PARTITION BY segment_id, security_id ORDER BY trade_date
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS carried_close
+    FROM position_prices
+),
+segment_daily_nav AS (
     SELECT
         segment_id,
         trade_date,
         any(transaction_cost_bps) AS transaction_cost_bps,
-        if(
-            countIf(daily_return IS NOT NULL AND isFinite(daily_return)) = 0,
-            0.0,
-            avgIf(
-                daily_return,
-                daily_return IS NOT NULL AND isFinite(daily_return)
-            )
-        ) AS daily_return
-    FROM position_day_returns
+        avg(if(entry_close > 0, carried_close / entry_close, 1.0)) AS segment_nav,
+        countIf(entry_close <= 0) AS missing_entry_count,
+        countIf(entry_close > 0 AND close IS NULL AND trade_date = end_date) AS unpriced_exit_count
+    FROM position_marks
     GROUP BY segment_id, trade_date
 ),
 ranked_segment_returns AS (
@@ -995,21 +1005,29 @@ ranked_segment_returns AS (
         segment_id,
         trade_date,
         transaction_cost_bps,
-        daily_return,
+        segment_nav,
+        missing_entry_count,
+        unpriced_exit_count,
+        lagInFrame(segment_nav, 1, 1.0) OVER (
+            PARTITION BY segment_id ORDER BY trade_date
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS previous_nav,
         row_number() OVER (
             PARTITION BY segment_id
             ORDER BY trade_date
         ) AS segment_day_number
-    FROM segment_daily_returns
+    FROM segment_daily_nav
 )
 SELECT
     segment_id,
     trade_date,
-    daily_return - if(
+    (segment_nav / previous_nav) * (1.0 - if(
         segment_day_number = 1,
         transaction_cost_bps / 10000.0,
         0.0
-    ) AS daily_return
+    )) - 1.0 AS daily_return,
+    missing_entry_count,
+    unpriced_exit_count
 FROM ranked_segment_returns
 ORDER BY segment_id ASC, trade_date ASC
 """.strip()

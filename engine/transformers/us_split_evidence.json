@@ -1,0 +1,2180 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "security_id": "SEC_US_HON",
+      "effective_date": "2026-06-29",
+      "new_shares": "1",
+      "old_shares": "2",
+      "review_reference": "docs/research/us_official_split_conflicts_20260910.md",
+      "sources": [
+        {
+          "source_id": "0000773840-26-000084",
+          "cik": "773840",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/773840/000077384026000084/hon-20260625.htm",
+          "source_sha256": "b5a195314fa5a0be04873c05755d2ede1aef87d04d41bff20377fddb281c1aa0",
+          "published_date": "2026-06-29",
+          "filename": "hon-20260625.htm",
+          "roles": [
+            "exact_ratio",
+            "actual_execution",
+            "trading_date"
+          ],
+          "markers": [
+            "every two shares of Company Common Stock issued and outstanding or held by Honeywell as treasury shares were automatically combined into one share of Company Common Stock",
+            "the previously announced reverse stock split of Company Common Stock became effective",
+            "commencement of trading on June 29, 2026"
+          ]
+        },
+        {
+          "source_id": "0000773840-26-000084",
+          "cik": "773840",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/773840/000077384026000084/exhibit991-pressrelease629.htm",
+          "source_sha256": "d80bb0fca8118b11fa33e8a0969e4969de35d434f94b3b48938d3e22c9c5167b",
+          "published_date": "2026-06-29",
+          "filename": "exhibit991-pressrelease629.htm",
+          "roles": [
+            "corroboration"
+          ],
+          "markers": [
+            "Reverse Stock Split",
+            "June 29, 2026"
+          ]
+        }
+      ],
+      "other_actions": [
+        {
+          "kind": "spin_off_distribution",
+          "distributed_security_id": "SEC_US_HONA",
+          "distributed_shares_per_old_share": "0.5",
+          "reason": "HONA distribution precedes HON consolidation on the same day; holder wealth requires the distributed shares"
+        }
+      ],
+      "ratio_marker": "every two shares of Company Common Stock issued and outstanding or held by Honeywell as treasury shares were automatically combined into one share of Company Common Stock"
+    },
+    {
+      "security_id": "SEC_US_PMCB",
+      "effective_date": "2021-07-12",
+      "new_shares": "1",
+      "old_shares": "1500",
+      "review_reference": "docs/research/us_official_split_conflicts_20260910.md",
+      "sources": [
+        {
+          "source_id": "0001683168-21-002921",
+          "cik": "1157075",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1157075/000168316821002921/pharmacyte_8k.htm",
+          "source_sha256": "836bc9962ac2b24d02ddb4fdabd0cb7c04f29f44057368d3ad6f53dca36181f1",
+          "published_date": "2021-07-13",
+          "filename": "pharmacyte_8k.htm",
+          "roles": [
+            "exact_ratio",
+            "actual_execution"
+          ],
+          "markers": [
+            "1-for-1,500 reverse stock split",
+            "was effected as of 12:01 A.M., Eastern Time, on Monday, July 12, 2021"
+          ]
+        },
+        {
+          "source_id": "0001683168-21-002921",
+          "cik": "1157075",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1157075/000168316821002921/pharmacyte_ex9902.htm",
+          "source_sha256": "725ead004c3ed29453b649928ee360a0066a136d69d57cf7e1417cd14c5d4781",
+          "published_date": "2021-07-13",
+          "filename": "pharmacyte_ex9902.htm",
+          "roles": [
+            "trading_date"
+          ],
+          "markers": [
+            "1-for-1,500 reverse stock split",
+            "at the opening of the market on Monday, July 12, 2021"
+          ]
+        }
+      ],
+      "ratio_marker": "1-for-1,500 reverse stock split"
+    },
+    {
+      "security_id": "SEC_US_AIV",
+      "effective_date": "2020-12-01",
+      "new_shares": "1",
+      "old_shares": "1.23821",
+      "review_reference": "docs/research/us_three_decimal_split_conflicts_20260910.md",
+      "ratio_marker": "1-for-1.23821 reverse split",
+      "sources": [
+        {
+          "source_id": "0001193125-20-307169",
+          "cik": "922864",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/922864/000119312520307169/d48150d8k.htm",
+          "source_sha256": "bac52c05dabb04635ffb47af37d6b03ff9ad8fa6c06e7a94a8161dea34b66f21",
+          "published_date": "2020-12-01",
+          "filename": "d48150d8k.htm",
+          "roles": [
+            "exact_ratio",
+            "actual_execution",
+            "trading_date"
+          ],
+          "markers": [
+            "1-for-1.23821 reverse split",
+            "effected the previously announced",
+            "common stock began trading on a post-split basis on December 1, 2020."
+          ]
+        },
+        {
+          "source_id": "0001193125-20-307169",
+          "cik": "922864",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/922864/000119312520307169/d48150dex31.htm",
+          "source_sha256": "0fca3fe4f2b71021f60c8eadce17293ed43b96574bf9754404251aa9f8b38107",
+          "published_date": "2020-12-01",
+          "filename": "d48150dex31.htm",
+          "roles": [
+            "corroboration"
+          ],
+          "markers": [
+            "every 1.23821 shares",
+            "shall be combined into one issued and outstanding share",
+            "5:01 p.m. EST on November 30, 2020"
+          ]
+        },
+        {
+          "source_id": "0001193125-20-307169",
+          "cik": "922864",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/922864/000119312520307169/d48150dex991.htm",
+          "source_sha256": "d6acc92ae55567b99025b284c3fd29514f2947f5fa3377d8a6335a5d0e06b2ef",
+          "published_date": "2020-12-01",
+          "filename": "d48150dex991.htm",
+          "roles": [
+            "separate_distribution"
+          ],
+          "markers": [
+            "approximately $121.8 million in cash",
+            "35,386,723 shares of common stock",
+            "$1.02924 per share in cash and $7.17076 per share in common stock"
+          ]
+        }
+      ],
+      "trading_date_evidence_status": "confirmed_past_tense_in_execution_8k",
+      "other_actions": [
+        {
+          "kind": "elective_cash_and_stock_dividend",
+          "reason": "Special cash/stock distribution immediately before consolidation; holder elections differ and require separate wealth accounting",
+          "record_date": "2020-11-04",
+          "payable_date": "2020-11-30"
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_CFBK",
+      "effective_date": "2018-08-21",
+      "new_shares": "1",
+      "old_shares": "5.5",
+      "review_reference": "docs/research/us_three_decimal_split_conflicts_20260910.md",
+      "ratio_marker": "1-for-5.5 reverse stock split",
+      "sources": [
+        {
+          "source_id": "0001070680-18-000036",
+          "cik": "1070680",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1070680/000107068018000036/cfbk-20181102xex99.htm",
+          "source_sha256": "7645011691e90c1167ceb75273322e37d02a06b198889b3f9ad737dafddbeb46",
+          "published_date": "2018-11-02",
+          "filename": "cfbk-20181102xex99.htm",
+          "roles": [
+            "exact_ratio",
+            "actual_execution"
+          ],
+          "markers": [
+            "1-for-5.5 reverse stock split",
+            "1-for-5.5 reverse stock split effected on August 20, 2018"
+          ]
+        },
+        {
+          "source_id": "0001193125-18-252756",
+          "cik": "1070680",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1070680/000119312518252756/d583787dex991.htm",
+          "source_sha256": "7f50d82d3fae33f2181733db349ff9be38114c0f9f1a481a92ba7000e54e8d4d",
+          "published_date": "2018-08-20",
+          "filename": "d583787dex991.htm",
+          "roles": [
+            "trading_date"
+          ],
+          "markers": [
+            "expected to begin trading",
+            "at market open on Tuesday, August 21, 2018."
+          ]
+        },
+        {
+          "source_id": "0001193125-18-252756",
+          "cik": "1070680",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1070680/000119312518252756/d583787dex31.htm",
+          "source_sha256": "5c99b524fead593abc9dc3f628e0dc679c2db19b5f0a24c45d4732d1c6d85e8d",
+          "published_date": "2018-08-20",
+          "filename": "d583787dex31.htm",
+          "roles": [
+            "corroboration"
+          ],
+          "markers": [
+            "each five and one-half (5.5) shares",
+            "will automatically be reclassified into one (1)"
+          ]
+        }
+      ],
+      "trading_date_evidence_status": "announced_market_open_date; legal_execution_confirmed_later; no_past_tense_trading_start_confirmation_in_saved_set"
+    },
+    {
+      "security_id": "SEC_US_AZTR",
+      "effective_date": "2025-08-21",
+      "new_shares": "1",
+      "old_shares": "6.66",
+      "review_reference": "docs/research/us_three_decimal_split_conflicts_20260910.md",
+      "ratio_marker": "1-for-6.66 reverse stock split",
+      "sources": [
+        {
+          "source_id": "0001493152-25-012191",
+          "cik": "1701478",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1701478/000149315225012191/form8-k.htm",
+          "source_sha256": "1d888a9350a541f99879d1b3f1ef32971051c37a1a119046717fcc012066de2f",
+          "published_date": "2025-08-20",
+          "filename": "form8-k.htm",
+          "roles": [
+            "exact_ratio"
+          ],
+          "markers": [
+            "1-for-6.66 reverse stock split",
+            "August 21, 2025 at 12:01 a.m., Eastern Time"
+          ]
+        },
+        {
+          "source_id": "0001493152-25-012495",
+          "cik": "1701478",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1701478/000149315225012495/forms-1.htm",
+          "source_sha256": "d2b1fd79503b7e5409bea38273cc32b175fb35b963292812975dfa91e301e3eb",
+          "published_date": "2025-08-29",
+          "filename": "forms-1.htm",
+          "roles": [
+            "actual_execution",
+            "trading_date"
+          ],
+          "markers": [
+            "commenced trading on a split-adjusted basis when the NYSE American opened on August 21, 2025"
+          ]
+        },
+        {
+          "source_id": "0001493152-25-012191",
+          "cik": "1701478",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1701478/000149315225012191/ex3-1.htm",
+          "source_sha256": "c0deccf8364582b46cdaa5d177f66efb559705d095ef6e25129e6c95291f6778",
+          "published_date": "2025-08-20",
+          "filename": "ex3-1.htm",
+          "roles": [
+            "corroboration"
+          ],
+          "markers": [
+            "each six and sixty-six hundredths (6.66) shares",
+            "shall be reclassified and combined into one (1) share",
+            "12:01 a.m. on August 21, 2025."
+          ]
+        }
+      ],
+      "trading_date_evidence_status": "confirmed_past_tense_in_post_execution_s1"
+    },
+    {
+      "security_id": "SEC_US_SRXH",
+      "effective_date": "2024-03-21",
+      "new_shares": "1",
+      "old_shares": "44",
+      "review_reference": "docs/research/us_three_decimal_split_conflicts_20260910.md",
+      "ratio_marker": "1-for-44 basis",
+      "sources": [
+        {
+          "source_id": "0001493152-24-011119",
+          "cik": "1471727",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1471727/000149315224011119/form8-k.htm",
+          "source_sha256": "00604807725110dba38f95099b03b2bdf1cb63c2324f6f8fb53574a9b67db9cd",
+          "published_date": "2024-03-25",
+          "filename": "form8-k.htm",
+          "roles": [
+            "exact_ratio",
+            "actual_execution"
+          ],
+          "markers": [
+            "1-for-44 basis",
+            "every forty-four shares",
+            "were converted into one share of Common Stock.",
+            "5:00 p.m. (Eastern Time) on March 20, 2024"
+          ]
+        },
+        {
+          "source_id": "0001493152-24-009914",
+          "cik": "1471727",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1471727/000149315224009914/form8-k.htm",
+          "source_sha256": "f2649549f9b8a70f8b6f0515fdc3aa327d4be739e0950babe6fcefee0523604b",
+          "published_date": "2024-03-14",
+          "filename": "form8-k.htm",
+          "roles": [
+            "trading_date"
+          ],
+          "markers": [
+            "will begin trading on a post-split basis at the market open on March 21, 2024."
+          ]
+        },
+        {
+          "source_id": "0001493152-24-020392",
+          "cik": "1471727",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1471727/000149315224020392/form10-q.htm",
+          "source_sha256": "855c08ec71d8a482c19d97b577b55788a924d7a38fb18062d6452ced32ccdac5",
+          "published_date": "2024-05-17",
+          "filename": "form10-q.htm",
+          "roles": [
+            "corroboration"
+          ],
+          "markers": [
+            "1-for-44",
+            "89 shares of common stock were issued in lieu of fractional shares."
+          ]
+        }
+      ],
+      "trading_date_evidence_status": "announced_market_open_date; legal_execution_confirmed_in_later_8k; no_past_tense_trading_start_confirmation_in_saved_set"
+    },
+    {
+      "security_id": "SEC_US_AMZE",
+      "effective_date": "2026-07-27",
+      "new_shares": "1",
+      "old_shares": "8",
+      "review_reference": "docs/research/us_six_split_trading_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "Issuer July 27 same-day clearance/resumption announcement following completed split; original July 15 EDGAR forecast corroborated",
+      "allow_missing_vendor_action": true,
+      "price_source_review": "deliverables/cross_market_top70_20260909/corrected/price_source_checks/AMZE_TIME_SERIES_DAILY.metadata.json",
+      "ratio_marker": "1-for-8 reverse stock split",
+      "sources": [
+        {
+          "source_id": "0001493152-26-038506",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1880343/000149315226038506/form10-q.htm",
+          "source_sha256": "09cb9b9ee53a9ccaa028dea009b7e753183efba3e5043717c4952a519270e4d1",
+          "published_date": "2026-08-14",
+          "cik": "1880343",
+          "provider": "EDGAR",
+          "roles": [
+            "exact_ratio",
+            "actual_execution"
+          ],
+          "markers": [
+            "1-for-8 reverse stock split",
+            "The Company then effected a 1-for-8 reverse stock split",
+            "effective July 24, 2026."
+          ],
+          "filename": "form10-q.htm"
+        },
+        {
+          "source_id": "AMZE-IR-press-release-162",
+          "source_url": "https://ir.amaze.co/news-events/press-releases/detail/162/amaze-announces-full-compliance-with-nyse-american-continued-listing-standards-and-resumption-of-trading",
+          "source_sha256": "1499ced05c7152aae05eb715c8442d0ed5d4686c197d8d0bbbbc16a521ef033b",
+          "published_date": "2026-07-27",
+          "cik": "1880343",
+          "provider": "issuer_IR",
+          "roles": [
+            "trading_date",
+            "market_resumption"
+          ],
+          "markers": [
+            "Following the completion",
+            "will resume on the NYSE American at market open today.",
+            "effective July 27, 2026"
+          ]
+        },
+        {
+          "source_id": "0001493152-26-033243",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1880343/000149315226033243/form8-k.htm",
+          "source_sha256": "611a75910824eb0840f383c687fe1e083bbd51d63407468de745dedffd07125a",
+          "published_date": "2026-07-15",
+          "cik": "1880343",
+          "provider": "EDGAR",
+          "roles": [
+            "corroboration"
+          ],
+          "markers": [
+            "pending acceptance",
+            "July 24, 2026",
+            "July 27, 2026"
+          ],
+          "filename": "form8-k.htm"
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_ATDS",
+      "effective_date": "2019-10-29",
+      "new_shares": "1",
+      "old_shares": "750",
+      "review_reference": "docs/research/us_six_split_trading_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "FINRA exDate=2019-10-29 final DA record 165774 plus issuer final effectiveness release; cancelled old 10/16 DA links to DD via dividendMasterID 40119287",
+      "ratio_marker": "1-for-750",
+      "sources": [
+        {
+          "source_id": "0001493152-19-016127",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1068689/000149315219016127/form8-k.htm",
+          "source_sha256": "3fc8b5afc6f0f67f072d63770e88e06abcb86f084a6763a9dbf09f74785c0712",
+          "published_date": "2019-10-30",
+          "cik": "1068689",
+          "provider": "EDGAR",
+          "roles": [
+            "exact_ratio",
+            "trading_date",
+            "supersedes_prior_schedule"
+          ],
+          "markers": [
+            "1-for-750",
+            "open of business on October 29, 2019.",
+            "FINRA cancelled these corporate actions"
+          ],
+          "filename": "form8-k.htm"
+        },
+        {
+          "source_id": "0001493152-19-016127",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1068689/000149315219016127/ex99-3.htm",
+          "source_sha256": "c4be19708632ccfef6f591c70ab9a8ffbac637b8ab81f76d713ac18bed355354",
+          "published_date": "2019-10-30",
+          "cik": "1068689",
+          "provider": "EDGAR",
+          "roles": [
+            "actual_execution"
+          ],
+          "markers": [
+            "has completed its planned reverse split",
+            "will become effective October 29, 2019",
+            "Every 750 shares"
+          ],
+          "filename": "ex99-3.htm"
+        }
+      ],
+      "supersedes_sources": [
+        {
+          "effective_date": "2019-10-16",
+          "source_id": "0001493152-19-016127",
+          "source_sha256": "0411217bdeffe1de75d8176cc9fc5b7b01a13a73456322371867ebfbc7f72a23",
+          "proof_source_url": "https://www.sec.gov/Archives/edgar/data/1068689/000149315219016127/form8-k.htm",
+          "proof_marker": "FINRA cancelled these corporate actions"
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_CLRO",
+      "effective_date": "2025-06-10",
+      "new_shares": "1",
+      "old_shares": "15",
+      "review_reference": "docs/research/us_six_split_trading_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "executed_with_prior_schedule_superseded",
+      "ratio_marker": "1-for-15 reverse stock split",
+      "sources": [
+        {
+          "source_id": "0001753926-25-001008",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/840715/000175392625001008/clro-20250625.htm",
+          "source_sha256": "ea6125289af0b8458ed081e2d5f08164bb1d9225c47b73864a7de740c63d8c18",
+          "published_date": "2025-06-25",
+          "cik": "840715",
+          "provider": "EDGAR",
+          "roles": [
+            "exact_ratio",
+            "actual_execution",
+            "trading_date"
+          ],
+          "markers": [
+            "1-for-15 reverse stock split",
+            "Effective as of the opening of trading on June 10, 2025",
+            "effected a 1-for-15 reverse stock split"
+          ],
+          "filename": "clro-20250625.htm"
+        },
+        {
+          "source_id": "0001753926-25-000914",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/840715/000175392625000914/ex991_2.htm",
+          "source_sha256": "b200104cd0282c3af5d79b6aea524e8d83b589ff002a4b2ddd7dd538d445c6d9",
+          "published_date": "2025-06-02",
+          "cik": "840715",
+          "provider": "EDGAR",
+          "roles": [
+            "supersedes_prior_schedule"
+          ],
+          "markers": [
+            "had previously announced",
+            "market effective date of June 3, 2025.",
+            "market open on June 10 , 2025."
+          ],
+          "filename": "ex991_2.htm"
+        }
+      ],
+      "supersedes_sources": [
+        {
+          "effective_date": "2025-06-03",
+          "source_id": "0001753926-25-000875",
+          "source_sha256": "c4a751c760c3e7bdfd8807587700b6cc0bcad32812e905be99f9a35c20f5ccd2",
+          "proof_source_url": "https://www.sec.gov/Archives/edgar/data/840715/000175392625000914/ex991_2.htm",
+          "proof_marker": "had previously announced"
+        },
+        {
+          "effective_date": "2025-06-03",
+          "source_id": "0001753926-25-000875",
+          "source_sha256": "ed101754ab5e33893836f1c6872b58064ddc98e61952ee6c5d9e58e0a0fa598f",
+          "proof_source_url": "https://www.sec.gov/Archives/edgar/data/840715/000175392625000914/ex991_2.htm",
+          "proof_marker": "had previously announced"
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_CREX",
+      "effective_date": "2018-10-31",
+      "new_shares": "1",
+      "old_shares": "30",
+      "review_reference": "docs/research/us_six_split_trading_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "FINRA OTC Daily List exDate on record 135638",
+      "supersession_kind": "approximate_estimate_replaced_by_regulatory_ex_date",
+      "ratio_marker": "1-for-30 reverse stock split",
+      "sources": [
+        {
+          "source_id": "0001213900-18-015267",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1356093/000121390018015267/f8k101818a1_creativereal.htm",
+          "source_sha256": "2d99a67db7b14707a2dd60db059c603cd8548df56277ddd0b513c3747910fc2e",
+          "published_date": "2018-11-09",
+          "cik": "1356093",
+          "provider": "EDGAR",
+          "roles": [
+            "exact_ratio",
+            "actual_execution"
+          ],
+          "markers": [
+            "1-for-30 reverse stock split",
+            "The Reverse Split became legally effective October 18, 2018.",
+            "on or about October 25, 2018",
+            "no later than October 29, 2018."
+          ],
+          "filename": "f8k101818a1_creativereal.htm"
+        },
+        {
+          "source_id": "FINRA-OTCDAILYLIST-CREX-20181001-20181130",
+          "source_url": "https://api.finra.org/data/group/otcMarket/name/otcDailyList",
+          "source_sha256": "fc18d672a659bdc1d1419c47e67c96a85307c40573bedf7cf456ebdac702ce1f",
+          "published_date": "2018-10-30",
+          "cik": "1356093",
+          "provider": "FINRA",
+          "roles": [
+            "trading_date",
+            "supersedes_prior_schedule"
+          ],
+          "markers": [
+            "Reverse Split/CUSIP Change"
+          ],
+          "request_body": {
+            "limit": 100,
+            "compareFilters": [
+              {
+                "fieldName": "oldSymbolCode",
+                "fieldValue": "CREX",
+                "compareType": "EQUAL"
+              }
+            ],
+            "dateRangeFilters": [
+              {
+                "fieldName": "calendarDay",
+                "startDate": "2018-10-01",
+                "endDate": "2018-11-30"
+              }
+            ]
+          },
+          "finra_list_id": 135638
+        }
+      ],
+      "supersedes_sources": [
+        {
+          "effective_date": "2018-10-25",
+          "source_id": "0001213900-18-015267",
+          "source_sha256": "2d99a67db7b14707a2dd60db059c603cd8548df56277ddd0b513c3747910fc2e",
+          "proof_source_url": "https://api.finra.org/data/group/otcMarket/name/otcDailyList",
+          "proof_marker": "Reverse Split/CUSIP Change"
+        },
+        {
+          "effective_date": "2018-10-25",
+          "source_id": "0001213900-18-014348",
+          "source_sha256": "789bd813b954337d43cc5199806ec53949b541fba031f9b763ecfef0a635d580",
+          "proof_source_url": "https://api.finra.org/data/group/otcMarket/name/otcDailyList",
+          "proof_marker": "Reverse Split/CUSIP Change"
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_DVA",
+      "effective_date": "2013-09-09",
+      "new_shares": "2",
+      "old_shares": "1",
+      "review_reference": "docs/research/us_six_split_trading_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "executed_with_prior_schedule_superseded",
+      "ratio_marker": "two-for-one stock split",
+      "sources": [
+        {
+          "source_id": "0001193125-13-427692",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/927066/000119312513427692/d622230dex991.htm",
+          "source_sha256": "0f8d7fd8c850f566efcd673369a8d76e3278623dea47d4c64d026178eda57a97",
+          "published_date": "2013-11-05",
+          "cik": "927066",
+          "provider": "EDGAR",
+          "roles": [
+            "exact_ratio",
+            "actual_execution",
+            "trading_date"
+          ],
+          "markers": [
+            "two-for-one stock split",
+            "Our common stock began trading on a post-split basis on September 9, 2013."
+          ],
+          "filename": "d622230dex991.htm"
+        },
+        {
+          "source_id": "0001193125-13-348117",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/927066/000119312513348117/d588850dex991.htm",
+          "source_sha256": "8b873a237b6e2a326c6dc3ae1a8744462b77df7c7fdb22c0b73cf96d0665430d",
+          "published_date": "2013-08-27",
+          "cik": "927066",
+          "provider": "EDGAR",
+          "roles": [
+            "supersedes_prior_schedule"
+          ],
+          "markers": [
+            "update on the timing of the previously announced two-for-one split",
+            "distributed on September 6, 2013",
+            "September 9, 2013"
+          ],
+          "filename": "d588850dex991.htm"
+        }
+      ],
+      "supersedes_sources": [
+        {
+          "effective_date": "2013-09-23",
+          "source_id": "0001193125-13-331018",
+          "source_sha256": "a2e9d16786f501a05593a9bd68ad7a56cb261ac056d5d3dbc511fdf64fb30381",
+          "proof_source_url": "https://www.sec.gov/Archives/edgar/data/927066/000119312513348117/d588850dex991.htm",
+          "proof_marker": "update on the timing of the previously announced two-for-one split"
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_ESEA",
+      "effective_date": "2015-07-23",
+      "new_shares": "1",
+      "old_shares": "10",
+      "review_reference": "docs/research/us_six_split_trading_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "executed_with_prior_schedule_superseded",
+      "ratio_marker": "1-for-10 reverse stock split",
+      "sources": [
+        {
+          "source_id": "0001317861-15-000052",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1341170/000131786115000052/f072315esea6k.htm",
+          "source_sha256": "1a06a1b9d3fc530d1dca06050e807817a7fcf878cacaef428376235f6a26b86a",
+          "published_date": "2015-07-23",
+          "cik": "1341170",
+          "provider": "EDGAR",
+          "roles": [
+            "exact_ratio",
+            "actual_execution",
+            "trading_date"
+          ],
+          "markers": [
+            "1-for-10 reverse stock split",
+            "has completed a 1-for-10 reverse stock split",
+            "effective at the close of trading on July 22, 2015.",
+            "July 23, 2015"
+          ],
+          "filename": "f072315esea6k.htm"
+        },
+        {
+          "source_id": "0001317861-15-000049",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1341170/000131786115000049/f070615esea6k.htm",
+          "source_sha256": "9277611d32e33aa15135a6abe3e213b07235f6a35f1331c599e2be16ebdffe17",
+          "published_date": "2015-07-06",
+          "cik": "1341170",
+          "provider": "EDGAR",
+          "roles": [
+            "supersedes_prior_schedule"
+          ],
+          "markers": [
+            "has been reset to be July 22, 2015.",
+            "begin trading on a split-adjusted basis on July 23, 2015"
+          ],
+          "filename": "f070615esea6k.htm"
+        }
+      ],
+      "supersedes_sources": [
+        {
+          "effective_date": "2015-08-03",
+          "source_id": "0000919574-15-005205",
+          "source_sha256": "4bc4e10fbd714af7d5472ddc1767bc2aa37fda2bb15ef40bdec7cd1ab2fa04c2",
+          "proof_source_url": "https://www.sec.gov/Archives/edgar/data/1341170/000131786115000049/f070615esea6k.htm",
+          "proof_marker": "has been reset to be July 22, 2015."
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_JXG",
+      "new_shares": "1",
+      "old_shares": "15",
+      "historical_symbol": "KBSF",
+      "sources": [
+        {
+          "provider": "EDGAR",
+          "cik": "1546383",
+          "source_id": "0001213900-21-026934",
+          "document_id": "0001213900-21-026934:f20f2020_kbsfashion.htm",
+          "published_date": "2021-05-17",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1546383/000121390021026934/f20f2020_kbsfashion.htm",
+          "source_sha256": "c58f5957390945d4b2df349fd380094ae5a497e3aed7b8d907ce04b2072eaa32",
+          "security_id": "SEC_US_JXG",
+          "filename": "f20f2020_kbsfashion.htm",
+          "roles": [
+            "exact_ratio",
+            "actual_execution",
+            "trading_date",
+            "supersedes_prior_schedule"
+          ],
+          "markers": [
+            "one-for-fifteen (1-for-15) reverse stock split",
+            "when the market opened on February 9, 2017"
+          ],
+          "location": "Introduction and Item 9.A; past-tense commencement plus February 2017 board/actual split discussion"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1546383",
+          "source_id": "0001144204-17-005951",
+          "document_id": "0001144204-17-005951:v458403_ex99-2.htm",
+          "published_date": "2017-02-03",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1546383/000114420417005951/v458403_ex99-2.htm",
+          "source_sha256": "b3ddd57a9ff89fd257966e6961e829626b83800d7df0d51878a71540918739a3",
+          "security_id": "SEC_US_JXG",
+          "filename": "v458403_ex99-2.htm",
+          "roles": [
+            "prior_schedule"
+          ],
+          "markers": [
+            "when the market opens on February 8, 2017"
+          ],
+          "location": "Original February 3 press release"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1546383",
+          "source_id": "0001213900-25-043744",
+          "document_id": "0001213900-25-043744:ea0239227-20f_jxluxven.htm",
+          "published_date": "2025-05-15",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1546383/000121390025043744/ea0239227-20f_jxluxven.htm",
+          "source_sha256": "dcdea10fb7b0b2cf9e47572d574f9a953ee6359acce8873d0f1a2155fa6fd7a9",
+          "security_id": "SEC_US_JXG",
+          "filename": "ea0239227-20f_jxluxven.htm",
+          "roles": [
+            "historical_security_identity"
+          ],
+          "markers": [
+            "Since December 20, 2024, our Common Stock is trading on the Nasdaq Capital Market under the symbol “JXG.”"
+          ],
+          "location": "Item 9.A ticker chronology, KBSF to LLL to JXJT to JXG"
+        }
+      ],
+      "ratio_marker": "one-for-fifteen (1-for-15) reverse stock split",
+      "effective_date": "2017-02-09",
+      "review_reference": "docs/research/us_eight_remaining_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "official_actual_market_date_confirmed",
+      "limitations": [
+        "The later report confirms actual trading on February 9, but a separate explicit cancellation announcement for February 8 was not located. Legal effective date is not resolved here."
+      ],
+      "supersedes_sources": [
+        {
+          "effective_date": "2017-02-08",
+          "source_id": "0001144204-17-005951",
+          "source_sha256": "b3ddd57a9ff89fd257966e6961e829626b83800d7df0d51878a71540918739a3",
+          "proof_source_url": "https://www.sec.gov/Archives/edgar/data/1546383/000121390021026934/f20f2020_kbsfashion.htm",
+          "proof_marker": "when the market opened on February 9, 2017"
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_PMI",
+      "new_shares": "1",
+      "old_shares": "50",
+      "historical_symbol": "PMI",
+      "sources": [
+        {
+          "provider": "EDGAR",
+          "cik": "2030617",
+          "source_id": "0001437749-26-028565",
+          "document_id": "0001437749-26-028565:pmi20260630_10q.htm",
+          "published_date": "2026-08-19",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/2030617/000143774926028565/pmi20260630_10q.htm",
+          "source_sha256": "1dd8f5f5f757e65f47cb5c402cc0e18834b3de3036587f9a2c04bbbc7f23c7fb",
+          "security_id": "SEC_US_PMI",
+          "filename": "pmi20260630_10q.htm",
+          "roles": [
+            "exact_ratio",
+            "actual_execution"
+          ],
+          "markers": [
+            "at a ratio of 1-for-50",
+            "The Reverse Stock Split became effective commencing July 31, 2026."
+          ],
+          "location": "Note 1, Basis of presentation; Note 14 also states completed July 31"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "2030617",
+          "source_id": "0001437749-26-024025",
+          "document_id": "0001437749-26-024025:ex_991235.htm",
+          "published_date": "2026-07-22",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/2030617/000143774926024025/ex_991235.htm",
+          "source_sha256": "7ce6b461c0ef72e4d18273eb8830e456391cbf2dc7d66067afa993c410bdee9c",
+          "security_id": "SEC_US_PMI",
+          "filename": "ex_991235.htm",
+          "roles": [
+            "operative_legal_time",
+            "legal_effectiveness"
+          ],
+          "markers": [
+            "Effective at 5:00 p.m. Eastern Daylight Time on July 31, 2026"
+          ],
+          "location": "Certificate Section 2, share-unit conversion operative time; Section 4 amendment filing effectiveness is distinct"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "2030617",
+          "source_id": "0001437749-26-024025",
+          "document_id": "0001437749-26-024025:pmi20260721_8k.htm",
+          "published_date": "2026-07-22",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/2030617/000143774926024025/pmi20260721_8k.htm",
+          "source_sha256": "a424a108e5854b97ae9135a4d0e540a6104b75b66b260b43f71c8bde480faf50",
+          "security_id": "SEC_US_PMI",
+          "filename": "pmi20260721_8k.htm",
+          "roles": [
+            "announced_trading_date",
+            "same_venue_and_symbol"
+          ],
+          "markers": [
+            "commencing at market open on August 3, 2026",
+            "under the existing trading symbol “PMI”"
+          ],
+          "location": "Item 8.01 prospective market opening on existing NYSE American ticker"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "2030617",
+          "source_id": "0001829126-25-006957",
+          "document_id": "0001829126-25-006957:picardmedical_424b4.htm",
+          "published_date": "2025-09-02",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/2030617/000182912625006957/picardmedical_424b4.htm",
+          "source_sha256": "d16af774d854fe7bfe94de3979a7a711e98baba3f8b9e954770973a9bf1ece63",
+          "security_id": "SEC_US_PMI",
+          "filename": "picardmedical_424b4.htm",
+          "roles": [
+            "historical_security_identity"
+          ],
+          "markers": [
+            "This is the initial public offering of common stock of Picard Medical, Inc",
+            "The date of this prospectus is August 29, 2025."
+          ],
+          "location": "IPO prospectus cover, SEC filing date September 2, 2025"
+        }
+      ],
+      "ratio_marker": "at a ratio of 1-for-50",
+      "effective_date": "2026-08-03",
+      "review_reference": "docs/research/us_eight_remaining_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "actual_share_unit_execution_confirmed_market_date_bridge_needed",
+      "limitations": [
+        "No contemporaneous or subsequent official document stating that actual market trading commenced on August 3 was located. No trading-resumption claim is made. The later execution confirmation states July 31 but does not repeat the intraday time; the time comes from the operative filed charter clause. The first-traded quote bridge and Alpha price units remain caller validations."
+      ],
+      "supersedes_sources": [],
+      "execution_bridge": {
+        "legal_effective_date": "2026-07-31",
+        "source_url": "https://www.sec.gov/Archives/edgar/data/2030617/000143774926024025/ex_991235.htm",
+        "marker": "Effective at 5:00 p.m. Eastern Daylight Time on July 31, 2026"
+      },
+      "allow_missing_vendor_action": true
+    },
+    {
+      "security_id": "SEC_US_POCI",
+      "new_shares": "1",
+      "old_shares": "3",
+      "historical_symbol": "PEYE",
+      "sources": [
+        {
+          "provider": "EDGAR",
+          "cik": "867840",
+          "source_id": "0001683168-22-007213",
+          "document_id": "0001683168-22-007213:poci_ex9903.htm",
+          "published_date": "2022-11-02",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/867840/000168316822007213/poci_ex9903.htm",
+          "source_sha256": "4ae1819dd5c55d7fac0b48da74158653d927f2e5c0238023680b2d21dc0af870",
+          "security_id": "SEC_US_POCI",
+          "filename": "poci_ex9903.htm",
+          "roles": [
+            "exact_ratio",
+            "actual_execution"
+          ],
+          "markers": [
+            "planned 1-for-3 reverse split of its common stock became effective after the close of business on Tuesday, November 1, 2022"
+          ],
+          "location": "November 2 completed-event press release opening paragraph"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "867840",
+          "source_id": "0001683168-22-007213",
+          "document_id": "0001683168-22-007213:poci_8k.htm",
+          "published_date": "2022-11-02",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/867840/000168316822007213/poci_8k.htm",
+          "source_sha256": "06a576947fdb8d587a1a1c1fe4fa3cfc392af0d62457e7021f89928ec5f86db8",
+          "security_id": "SEC_US_POCI",
+          "filename": "poci_8k.htm",
+          "roles": [
+            "actual_execution",
+            "trading_date"
+          ],
+          "markers": [
+            "Common Stock began trading on a reverse stock split-adjusted basis on the OTCQB on November 2, 2022"
+          ],
+          "location": "Item 5.03 actual trading paragraph; preceding paragraphs explain withdrawn and refiled amendments"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "867840",
+          "source_id": "0001683168-22-007213",
+          "document_id": "0001683168-22-007213:poci_ex9902.htm",
+          "published_date": "2022-11-02",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/867840/000168316822007213/poci_ex9902.htm",
+          "source_sha256": "bba9823d4dd57c843abfc331f56966188d755db2fffccd18acece7c75abd2fc3",
+          "security_id": "SEC_US_POCI",
+          "filename": "poci_ex9902.htm",
+          "roles": [
+            "supersedes_prior_schedule"
+          ],
+          "markers": [
+            "amending the date for its reverse stock split",
+            "due to an unanticipated delay in obtaining necessary regulatory clearances"
+          ],
+          "location": "October 27 announcement explicitly delays earlier October 26 legal/October 27 market plan"
+        },
+        {
+          "provider": "FINRA",
+          "cik": "867840",
+          "source_id": "FINRA-OTCDAILYLIST-PEYE-20221001-20221130",
+          "document_id": "FINRA-OTCDAILYLIST-PEYE-20221001-20221130",
+          "source_url": "https://api.finra.org/data/group/otcMarket/name/otcDailyList",
+          "source_sha256": "6ed7dab27afd1ddaa15d104196c6937b414f3cc4b52855b4d4592244d63e1a61",
+          "security_id": "SEC_US_POCI",
+          "request_body": {
+            "limit": 100,
+            "compareFilters": [
+              {
+                "fieldName": "oldSymbolCode",
+                "fieldValue": "PEYE",
+                "compareType": "EQUAL"
+              }
+            ],
+            "dateRangeFilters": [
+              {
+                "fieldName": "calendarDay",
+                "startDate": "2022-10-01",
+                "endDate": "2022-11-30"
+              }
+            ]
+          },
+          "published_date": "2022-11-01",
+          "roles": [
+            "trading_date",
+            "market_effective_date_confirmation"
+          ],
+          "finra_list_id": 247068,
+          "markers": [
+            "\"OTCDailyListID\":247068",
+            "\"exDate\":\"2022-11-02 00:00:00.0\"",
+            "\"reverseSplitRate\":\"1:3\""
+          ],
+          "location": "JSON record selected by OTCDailyListID; exDate is actual market effective date, calendarDay is partition",
+          "json_record_assertions": {
+            "OTCDailyListID": 247068,
+            "dividendMasterID": 40134398,
+            "dailyListDatetime": "2022-11-01 14:29:19.0",
+            "calendarDay": "2022-11-01",
+            "exDate": "2022-11-02 00:00:00.0",
+            "reverseSplitRate": "1:3",
+            "dailyListEventCode": "DA",
+            "commentText": null,
+            "oldSymbolCode": "PEYE",
+            "newSymbolCode": "PEYED"
+          }
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "867840",
+          "source_id": "0001683168-22-007213",
+          "document_id": "0001683168-22-007213:poci_ex9901.htm",
+          "published_date": "2022-11-02",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/867840/000168316822007213/poci_ex9901.htm",
+          "source_sha256": "f81e5c6ce7179d258240e9af300891f9a417035270c579b0d0932d740769afb2",
+          "security_id": "SEC_US_POCI",
+          "filename": "poci_ex9901.htm",
+          "roles": [
+            "prior_schedule",
+            "historical_security_identity"
+          ],
+          "markers": [
+            "when the market opens on October 27, 2022",
+            "the trading symbol for the shares will change to “POCI.”"
+          ],
+          "location": "Original October 26 plan and planned Nasdaq symbol after PEYE/PEYED"
+        }
+      ],
+      "ratio_marker": "planned 1-for-3 reverse split of its common stock became effective after the close of business on Tuesday, November 1, 2022",
+      "effective_date": "2022-11-02",
+      "review_reference": "docs/research/us_eight_remaining_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "official_actual_market_date_confirmed",
+      "limitations": [
+        "Alpha reported split coefficient on November 3, one day after both official actual trading confirmation and FINRA exDate. Parent also observes a positive-volume November 2 quote apparently still in earlier units. Moving only the coefficient can create a false one-day loss/recovery; independently verify source price units before price adjustment. No second split on November 3 is supported by these documents."
+      ],
+      "supersedes_sources": [
+        {
+          "effective_date": "2022-10-27",
+          "source_id": "0001683168-22-007213",
+          "source_sha256": "f81e5c6ce7179d258240e9af300891f9a417035270c579b0d0932d740769afb2",
+          "proof_source_url": "https://www.sec.gov/Archives/edgar/data/867840/000168316822007213/poci_ex9902.htm",
+          "proof_marker": "amending the date for its reverse stock split"
+        }
+      ],
+      "vendor_action_replacement": {
+        "effective_date": "2022-11-03",
+        "reported_ratio": "0.333333333333",
+        "source_sha256": "0543677656439ef2b5848cb924e176187ebdfd2982a857d4a92669e9cba5d260"
+      },
+      "other_actions": [
+        {
+          "kind": "price_source_review",
+          "reason": "Vendor raw quote units require independent review around the officially confirmed action; no inferred price repair",
+          "source_review": "deliverables/cross_market_top70_20260909/corrected/price_source_checks"
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_RDGL",
+      "new_shares": "1",
+      "old_shares": "8",
+      "historical_symbol": "RDGL",
+      "sources": [
+        {
+          "provider": "EDGAR",
+          "cik": "1449349",
+          "source_id": "0001493152-19-010114",
+          "document_id": "0001493152-19-010114:form8-k.htm",
+          "published_date": "2019-07-02",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1449349/000149315219010114/form8-k.htm",
+          "source_sha256": "ca4e4352311fe9e890b79883262b552e9efb6b03211c799fc35bed67181fb7f8",
+          "security_id": "SEC_US_RDGL",
+          "filename": "form8-k.htm",
+          "roles": [
+            "exact_ratio",
+            "actual_execution",
+            "trading_date"
+          ],
+          "markers": [
+            "1-for-8",
+            "at the opening of trading on June 28, 2019 under the symbol “RDGLD.”"
+          ],
+          "location": "Item 5.03: completed reverse split and FINRA approval June 27"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1449349",
+          "source_id": "0001493152-19-010114",
+          "document_id": "0001493152-19-010114:ex99-2.htm",
+          "published_date": "2019-07-02",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1449349/000149315219010114/ex99-2.htm",
+          "source_sha256": "a90c8a7664fa076558cda29dea0d6e9ee05f1c2b38ed6ee2c6fd15b456abae76",
+          "security_id": "SEC_US_RDGL",
+          "filename": "ex99-2.htm",
+          "roles": [
+            "supersedes_prior_schedule"
+          ],
+          "markers": [
+            "to correct its press release dated June 26, 2019",
+            "when the markets open on June 28, 2019"
+          ],
+          "location": "Corrective release dated June 27"
+        },
+        {
+          "provider": "FINRA",
+          "cik": "1449349",
+          "source_id": "FINRA-OTCDAILYLIST-RDGL-20190601-20190731",
+          "document_id": "FINRA-OTCDAILYLIST-RDGL-20190601-20190731",
+          "source_url": "https://api.finra.org/data/group/otcMarket/name/otcDailyList",
+          "source_sha256": "f44cec332db4c263671da164b9f2c558b242d9058c1739083282df84b0a548cd",
+          "security_id": "SEC_US_RDGL",
+          "request_body": {
+            "limit": 100,
+            "compareFilters": [
+              {
+                "fieldName": "oldSymbolCode",
+                "fieldValue": "RDGL",
+                "compareType": "EQUAL"
+              }
+            ],
+            "dateRangeFilters": [
+              {
+                "fieldName": "calendarDay",
+                "startDate": "2019-06-01",
+                "endDate": "2019-07-31"
+              }
+            ]
+          },
+          "published_date": "2019-06-27",
+          "roles": [
+            "trading_date",
+            "market_effective_date_confirmation"
+          ],
+          "finra_list_id": 156947,
+          "markers": [
+            "\"OTCDailyListID\":156947",
+            "\"exDate\":\"2019-06-28 00:00:00.0\"",
+            "\"reverseSplitRate\":\"1:8\""
+          ],
+          "location": "JSON record selected by OTCDailyListID; exDate is actual market effective date, calendarDay is partition",
+          "json_record_assertions": {
+            "OTCDailyListID": 156947,
+            "dividendMasterID": 40117776,
+            "dailyListDatetime": "2019-06-27 10:55:34.0",
+            "calendarDay": "2019-06-27",
+            "exDate": "2019-06-28 00:00:00.0",
+            "reverseSplitRate": "1:8",
+            "dailyListEventCode": "DA",
+            "commentText": null,
+            "oldSymbolCode": "RDGL",
+            "newSymbolCode": "RDGLD"
+          }
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1449349",
+          "source_id": "0001493152-19-010114",
+          "document_id": "0001493152-19-010114:ex99-1.htm",
+          "published_date": "2019-07-02",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1449349/000149315219010114/ex99-1.htm",
+          "source_sha256": "089a6ac9be53dbefec3a4c74ac968be0b740266f40ff416160ee23272da0c89e",
+          "security_id": "SEC_US_RDGL",
+          "filename": "ex99-1.htm",
+          "roles": [
+            "prior_schedule"
+          ],
+          "markers": [
+            "will begin trading on a post-split basis on June 26, 2019"
+          ],
+          "location": "Original June 26 release"
+        }
+      ],
+      "ratio_marker": "1-for-8",
+      "effective_date": "2019-06-28",
+      "review_reference": "docs/research/us_eight_remaining_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "official_actual_market_date_confirmed",
+      "limitations": [],
+      "supersedes_sources": [
+        {
+          "effective_date": "2019-06-26",
+          "source_id": "0001493152-19-010114",
+          "source_sha256": "089a6ac9be53dbefec3a4c74ac968be0b740266f40ff416160ee23272da0c89e",
+          "proof_source_url": "https://www.sec.gov/Archives/edgar/data/1449349/000149315219010114/ex99-2.htm",
+          "proof_marker": "to correct its press release dated June 26, 2019"
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_SHIP",
+      "new_shares": "1",
+      "old_shares": "15",
+      "historical_symbol": "SHIP",
+      "sources": [
+        {
+          "provider": "EDGAR",
+          "cik": "1448397",
+          "source_id": "0000919574-11-004401",
+          "document_id": "0000919574-11-004401:d1218694_6-k.htm",
+          "published_date": "2011-08-09",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1448397/000091957411004401/d1218694_6-k.htm",
+          "source_sha256": "d16a81ecd892b6a49bfd172f61b9c0635bbb1ec6407873f55587ee763fb0eb61",
+          "security_id": "SEC_US_SHIP",
+          "filename": "d1218694_6-k.htm",
+          "roles": [
+            "exact_ratio",
+            "actual_execution",
+            "trading_date"
+          ],
+          "markers": [
+            "1-for-15 reverse split",
+            "The shares commenced trading on a split-adjusted basis on June 27, 2011."
+          ],
+          "location": "Exhibit earnings release, Reverse Stock Split section; past-tense actual commencement"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1448397",
+          "source_id": "0000919574-11-003908",
+          "document_id": "0000919574-11-003908:d1207198_6-k.htm",
+          "published_date": "2011-06-23",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1448397/000091957411003908/d1207198_6-k.htm",
+          "source_sha256": "6295dff1aba7099dab5f75bad623a41314957388d9dca26d5e2a93e4ac3056db",
+          "security_id": "SEC_US_SHIP",
+          "filename": "d1207198_6-k.htm",
+          "roles": [
+            "announced_trading_date",
+            "exact_ratio_correspondence"
+          ],
+          "markers": [
+            "1-for-15 reverse split",
+            "at the opening of trading on June 27, 2011"
+          ],
+          "location": "Original June 23 reverse-split press release"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1448397",
+          "source_id": "0000919574-11-003954",
+          "document_id": "0000919574-11-003954:d1207693_6-k.htm",
+          "published_date": "2011-06-27",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1448397/000091957411003954/d1207693_6-k.htm",
+          "source_sha256": "1ddbbce2ba6b9f46b2d8fe8d97e6c676098d7620135b6daeb9ff87cd3fa4bd0a",
+          "security_id": "SEC_US_SHIP",
+          "filename": "d1207693_6-k.htm",
+          "roles": [
+            "operative_legal_date"
+          ],
+          "markers": [
+            "Effective with the commencement of business on June 24, 2011",
+            "1 for 15 reverse stock split"
+          ],
+          "location": "Filed Articles of Amendment operative paragraph"
+        }
+      ],
+      "ratio_marker": "1-for-15 reverse split",
+      "effective_date": "2011-06-27",
+      "review_reference": "docs/research/us_eight_remaining_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "official_actual_market_date_confirmed",
+      "limitations": [
+        "Alpha coefficient date is June 28, one day after the actual date stated in the subsequent 6-K. Parent observes positive-volume June 27 daily raw quotes apparently still in earlier units, while independently downloaded Alpha INTRADAY adjusted=false 2011-06 has a June 27 14:00 quote at 6.0 (volume1119), directly conflicting with daily June27 0.3488 (volume18000). Parent source: deliverables/cross_market_top70_20260909/corrected/price_source_checks/SHIP_TIME_SERIES_INTRADAY_2011-06.json. Official date alone cannot repair vendor quote units; avoid mechanical coefficient-only relocation. No second June28 split is supported. The 2011 issue precedes the 2017+ strategy research period but prevents claiming complete historical price validation."
+      ],
+      "supersedes_sources": [],
+      "vendor_action_replacement": {
+        "effective_date": "2011-06-28",
+        "reported_ratio": "0.0666666666667",
+        "source_sha256": "1f32bc54a01d50ac0318bc7e8f706064df00f3c5b305aec8aab38c57e3f9e48f"
+      },
+      "other_actions": [
+        {
+          "kind": "price_source_review",
+          "reason": "Vendor raw quote units require independent review around the officially confirmed action; no inferred price repair",
+          "source_review": "deliverables/cross_market_top70_20260909/corrected/price_source_checks"
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_SMTK",
+      "new_shares": "1",
+      "old_shares": "35",
+      "historical_symbol": "SMTK",
+      "sources": [
+        {
+          "provider": "EDGAR",
+          "cik": "1817760",
+          "source_id": "0001104659-23-102289",
+          "document_id": "0001104659-23-102289:tm2326434d1_8k.htm",
+          "published_date": "2023-09-20",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1817760/000110465923102289/tm2326434d1_8k.htm",
+          "source_sha256": "c234fe7aa781606fd0ca8bf3e738f3728583d69c76c10044017cfae095c25d30",
+          "security_id": "SEC_US_SMTK",
+          "filename": "tm2326434d1_8k.htm",
+          "roles": [
+            "exact_ratio"
+          ],
+          "markers": [
+            "a ratio of 1-for-35 (the “Reverse Stock Split”)"
+          ],
+          "location": "Item 5.03 final board ratio, distinct from prior permitted range"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1817760",
+          "source_id": "0001104659-23-102289",
+          "document_id": "0001104659-23-102289:tm2326434d1_ex99-2.htm",
+          "published_date": "2023-09-20",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1817760/000110465923102289/tm2326434d1_ex99-2.htm",
+          "source_sha256": "f23810d9a04d5d26867c54ab6cd872e2784a719bbe88690f02add702cf5f2368",
+          "security_id": "SEC_US_SMTK",
+          "filename": "tm2326434d1_ex99-2.htm",
+          "roles": [
+            "supersedes_prior_schedule",
+            "announced_trading_date"
+          ],
+          "markers": [
+            "September 21, 2023 rather than September 20, 2023",
+            "market open at 9:30 a.m. on September 21, 2023"
+          ],
+          "location": "Corrected press release after further discussion with FINRA"
+        },
+        {
+          "provider": "FINRA",
+          "cik": "1817760",
+          "source_id": "FINRA-OTCDAILYLIST-SMTK-20230901-20231031",
+          "document_id": "FINRA-OTCDAILYLIST-SMTK-20230901-20231031",
+          "source_url": "https://api.finra.org/data/group/otcMarket/name/otcDailyList",
+          "source_sha256": "3f97b998baf06ce5dc1fef7616c1e6ad899f8dd6988d6c5ab7736139ee06c0bb",
+          "security_id": "SEC_US_SMTK",
+          "request_body": {
+            "limit": 100,
+            "compareFilters": [
+              {
+                "fieldName": "oldSymbolCode",
+                "fieldValue": "SMTK",
+                "compareType": "EQUAL"
+              }
+            ],
+            "dateRangeFilters": [
+              {
+                "fieldName": "calendarDay",
+                "startDate": "2023-09-01",
+                "endDate": "2023-10-31"
+              }
+            ]
+          },
+          "published_date": "2023-09-20",
+          "roles": [
+            "trading_date",
+            "market_effective_date_confirmation"
+          ],
+          "finra_list_id": 268874,
+          "markers": [
+            "\"OTCDailyListID\":268874",
+            "\"exDate\":\"2023-09-21 00:00:00.0\"",
+            "\"reverseSplitRate\":\"1:35\""
+          ],
+          "location": "JSON record selected by OTCDailyListID; exDate is actual market effective date, calendarDay is partition",
+          "json_record_assertions": {
+            "OTCDailyListID": 268874,
+            "dividendMasterID": 40138762,
+            "dailyListDatetime": "2023-09-20 12:24:04.0",
+            "calendarDay": "2023-09-20",
+            "exDate": "2023-09-21 00:00:00.0",
+            "reverseSplitRate": "1:35",
+            "dailyListEventCode": "DA",
+            "commentText": null,
+            "oldSymbolCode": "SMTK",
+            "newSymbolCode": "SMTKD"
+          }
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1817760",
+          "source_id": "0001558370-24-004098",
+          "document_id": "0001558370-24-004098:smtk-20231231x10k.htm",
+          "published_date": "2024-03-27",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1817760/000155837024004098/smtk-20231231x10k.htm",
+          "source_sha256": "fa608dcc6d11eee95af5970397721e5139cb92205ac72d5bfe1e6ba393125fd0",
+          "security_id": "SEC_US_SMTK",
+          "filename": "smtk-20231231x10k.htm",
+          "roles": [
+            "actual_execution"
+          ],
+          "markers": [
+            "a one-for-thirty-five (1:35) reverse stock split effected on September 21, 2023"
+          ],
+          "location": "Note 2 Reverse Stock Split and audited financial statement footnotes"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1817760",
+          "source_id": "0001104659-23-102289",
+          "document_id": "0001104659-23-102289:tm2326434d1_ex3-2.htm",
+          "published_date": "2023-09-20",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1817760/000110465923102289/tm2326434d1_ex3-2.htm",
+          "source_sha256": "a2b115157802f935a1c36282e129cbbf86db5db4627a9483d4606f6bc0587263",
+          "security_id": "SEC_US_SMTK",
+          "filename": "tm2326434d1_ex3-2.htm",
+          "roles": [
+            "operative_legal_time",
+            "legal_date_correction"
+          ],
+          "markers": [
+            "Effective Time of 12:01 AM, Eastern Time, on September 21, 2023"
+          ],
+          "location": "Certificate of Correction Section 4 replaces Section SECOND of original charter"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1817760",
+          "source_id": "0001104659-23-102289",
+          "document_id": "0001104659-23-102289:tm2326434d1_ex99-1.htm",
+          "published_date": "2023-09-20",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1817760/000110465923102289/tm2326434d1_ex99-1.htm",
+          "source_sha256": "d4fbdb70deef6809373d70d9b57e4fb8f682216fc473b8e6e493600c8fefe3cd",
+          "security_id": "SEC_US_SMTK",
+          "filename": "tm2326434d1_ex99-1.htm",
+          "roles": [
+            "prior_schedule"
+          ],
+          "markers": [
+            "September 20, 2023"
+          ],
+          "location": "Original press release superseded by Exhibit 99.2"
+        }
+      ],
+      "ratio_marker": "a ratio of 1-for-35 (the “Reverse Stock Split”)",
+      "effective_date": "2023-09-21",
+      "review_reference": "docs/research/us_eight_remaining_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "official_actual_market_date_confirmed",
+      "limitations": [
+        "FINRA proves market effective date, not a claim that halted trading resumed. Alpha has no 2023 split coefficient and parent observes missing September 21/22 rows plus an unusual first later quote on September 25. Validate the first observed quote unit separately; neither missing quote dates nor a price jump establish an event ratio."
+      ],
+      "supersedes_sources": [
+        {
+          "effective_date": "2023-09-20",
+          "source_id": "0001104659-23-102289",
+          "source_sha256": "d4fbdb70deef6809373d70d9b57e4fb8f682216fc473b8e6e493600c8fefe3cd",
+          "proof_source_url": "https://www.sec.gov/Archives/edgar/data/1817760/000110465923102289/tm2326434d1_ex99-2.htm",
+          "proof_marker": "September 21, 2023 rather than September 20, 2023"
+        }
+      ],
+      "allow_missing_vendor_action": true,
+      "other_actions": [
+        {
+          "kind": "price_source_review",
+          "reason": "Vendor raw quote units require independent review around the officially confirmed action; no inferred price repair",
+          "source_review": "deliverables/cross_market_top70_20260909/corrected/price_source_checks"
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_SPRB",
+      "new_shares": "1",
+      "old_shares": "75",
+      "historical_symbol": "SPRB",
+      "sources": [
+        {
+          "provider": "EDGAR",
+          "cik": "1683553",
+          "source_id": "0000950170-25-108868",
+          "document_id": "0000950170-25-108868:sprb-ex99_1.htm",
+          "published_date": "2025-08-14",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1683553/000095017025108868/sprb-ex99_1.htm",
+          "source_sha256": "8a8b414f82beb30f11a11dd5ca84853ad83d307519882fae6541cb18bf252bd1",
+          "security_id": "SEC_US_SPRB",
+          "filename": "sprb-ex99_1.htm",
+          "roles": [
+            "exact_ratio",
+            "actual_execution",
+            "trading_date",
+            "supersedes_prior_schedule"
+          ],
+          "markers": [
+            "implemented a 1-for-75 reverse stock split",
+            "common stock began trading on a split-adjusted basis on the OTCQB on August 7, 2025"
+          ],
+          "location": "August 14 earnings release, Corporate Updates"
+        },
+        {
+          "provider": "FINRA",
+          "cik": "1683553",
+          "source_id": "FINRA-OTCDAILYLIST-SPRB-20250701-20250831",
+          "document_id": "FINRA-OTCDAILYLIST-SPRB-20250701-20250831",
+          "source_url": "https://api.finra.org/data/group/otcMarket/name/otcDailyList",
+          "source_sha256": "c3b4a71f41067a6620b61d1def24f3fcbaecc7c2d204502860dae7392e77b261",
+          "security_id": "SEC_US_SPRB",
+          "request_body": {
+            "limit": 100,
+            "compareFilters": [
+              {
+                "fieldName": "oldSymbolCode",
+                "fieldValue": "SPRB",
+                "compareType": "EQUAL"
+              }
+            ],
+            "dateRangeFilters": [
+              {
+                "fieldName": "calendarDay",
+                "startDate": "2025-07-01",
+                "endDate": "2025-08-31"
+              }
+            ]
+          },
+          "published_date": "2025-08-06",
+          "roles": [
+            "trading_date",
+            "market_effective_date_confirmation"
+          ],
+          "finra_list_id": 310719,
+          "markers": [
+            "\"OTCDailyListID\":310719",
+            "\"exDate\":\"2025-08-07 00:00:00.0\"",
+            "\"reverseSplitRate\":\"1:75\""
+          ],
+          "location": "JSON record selected by OTCDailyListID; exDate is actual market effective date, calendarDay is partition",
+          "json_record_assertions": {
+            "OTCDailyListID": 310719,
+            "dividendMasterID": 40150343,
+            "dailyListDatetime": "2025-08-06 13:25:51.0",
+            "calendarDay": "2025-08-06",
+            "exDate": "2025-08-07 00:00:00.0",
+            "reverseSplitRate": "1:75",
+            "dailyListEventCode": "DA",
+            "commentText": null,
+            "oldSymbolCode": "SPRB",
+            "newSymbolCode": "SPRBD"
+          }
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1683553",
+          "source_id": "0000950170-25-098340",
+          "document_id": "0000950170-25-098340:sprb-ex99_1.htm",
+          "published_date": "2025-07-24",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1683553/000095017025098340/sprb-ex99_1.htm",
+          "source_sha256": "340d5a5e0eb792eb934d6c5657d1256455a7068da20c5e6f9f04160a854b47b7",
+          "security_id": "SEC_US_SPRB",
+          "filename": "sprb-ex99_1.htm",
+          "roles": [
+            "prior_schedule",
+            "announced_legal_time"
+          ],
+          "markers": [
+            "effective at 5:00 p.m. Eastern Time on August 4, 2025",
+            "when the markets open on August 5, 2025"
+          ],
+          "location": "Original July 24 press release"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1683553",
+          "source_id": "0001193125-26-097558",
+          "document_id": "0001193125-26-097558:sprb-20251231.htm",
+          "published_date": "2026-03-09",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1683553/000119312526097558/sprb-20251231.htm",
+          "source_sha256": "8dd699e373f579804288fa5eee7b70207c85bd0bbfada4f71108e59cd3e73e72",
+          "security_id": "SEC_US_SPRB",
+          "filename": "sprb-20251231.htm",
+          "roles": [
+            "actual_execution",
+            "trading_date"
+          ],
+          "markers": [
+            "common stock began trading on the OTCQB on a split-adjusted basis on August 7, 2025"
+          ],
+          "location": "2025 10-K Note 1 Reverse Stock Split; final actual date"
+        }
+      ],
+      "ratio_marker": "implemented a 1-for-75 reverse stock split",
+      "effective_date": "2025-08-07",
+      "review_reference": "docs/research/us_eight_remaining_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "official_actual_market_date_confirmed",
+      "limitations": [
+        "The final date is confirmed by FINRA and later execution disclosures; a separate release explicitly cancelling the August 5 forecast was not found. Temporary SPRBD is the same common stock. Later Nasdaq relisting is not another reverse split."
+      ],
+      "supersedes_sources": [
+        {
+          "effective_date": "2025-08-05",
+          "source_id": "0000950170-25-098340",
+          "source_sha256": "340d5a5e0eb792eb934d6c5657d1256455a7068da20c5e6f9f04160a854b47b7",
+          "proof_source_url": "https://www.sec.gov/Archives/edgar/data/1683553/000095017025108868/sprb-ex99_1.htm",
+          "proof_marker": "common stock began trading on a split-adjusted basis on the OTCQB on August 7, 2025"
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_WLFC",
+      "new_shares": "3",
+      "old_shares": "1",
+      "historical_symbol": "WLFC",
+      "sources": [
+        {
+          "provider": "EDGAR",
+          "cik": "1018164",
+          "source_id": "0001018164-26-000068",
+          "document_id": "0001018164-26-000068:wlfc-20260630.htm",
+          "published_date": "2026-08-04",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1018164/000101816426000068/wlfc-20260630.htm",
+          "source_sha256": "ee3dd8b2fcae3a7cf4e753f088211a962365e603939505fce6cbcf2bbfe75884",
+          "security_id": "SEC_US_WLFC",
+          "filename": "wlfc-20260630.htm",
+          "roles": [
+            "exact_ratio",
+            "actual_execution",
+            "trading_date",
+            "supersedes_prior_schedule"
+          ],
+          "markers": [
+            "effected a three-for-one forward stock split",
+            "Trading on a split-adjusted basis commenced on July 21, 2026."
+          ],
+          "location": "Note 1 and Note 14 Subsequent Events, actual execution and actual market commencement"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1018164",
+          "source_id": "0001193125-26-300912",
+          "document_id": "0001193125-26-300912:d142690d8k.htm",
+          "published_date": "2026-07-10",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1018164/000119312526300912/d142690d8k.htm",
+          "source_sha256": "0b9e5e1eb10d30380d1704594f0d0875932fd9c72becd93334d2c7644383213f",
+          "security_id": "SEC_US_WLFC",
+          "filename": "d142690d8k.htm",
+          "roles": [
+            "updated_announced_trading_date"
+          ],
+          "markers": [
+            "Trading of the Common Stock on a split-adjusted basis is expected to commence on or about July 21, 2026"
+          ],
+          "location": "July 10 8-K updates earlier forecast"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1018164",
+          "source_id": "0001193125-26-307870",
+          "document_id": "0001193125-26-307870:d85905dex31.htm",
+          "published_date": "2026-07-17",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1018164/000119312526307870/d85905dex31.htm",
+          "source_sha256": "744121fcbb0ac558c309de1ca8014a60798447440a3aad7d34e51201feef8250",
+          "security_id": "SEC_US_WLFC",
+          "filename": "d85905dex31.htm",
+          "roles": [
+            "operative_legal_time",
+            "exact_ratio_correspondence"
+          ],
+          "markers": [
+            "subdivided and reclassified into three (3)",
+            "effective at 4:05 p.m. Eastern Time on July 17, 2026"
+          ],
+          "location": "Filed certificate, conversion paragraph and Section 5"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1018164",
+          "source_id": "0001193125-26-279754",
+          "document_id": "0001193125-26-279754:d129925dex991.htm",
+          "published_date": "2026-06-23",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1018164/000119312526279754/d129925dex991.htm",
+          "source_sha256": "8c100da4394be98b3c82e6e3c4f3e0578f5285968adcb5a8993729fa832fe170",
+          "security_id": "SEC_US_WLFC",
+          "filename": "d129925dex991.htm",
+          "roles": [
+            "prior_schedule"
+          ],
+          "markers": [
+            "split-adjusted basis at market open on July 20, 2026"
+          ],
+          "location": "Original June 23 stockholder approval release"
+        }
+      ],
+      "ratio_marker": "effected a three-for-one forward stock split",
+      "effective_date": "2026-07-21",
+      "review_reference": "docs/research/us_eight_remaining_date_conflicts_20260910.md",
+      "trading_date_evidence_status": "official_actual_market_date_confirmed",
+      "limitations": [
+        "July 17 after-close charter effectiveness and July 21 market commencement are different fields. July 20 is the superseded forecast, not a separate additional split."
+      ],
+      "supersedes_sources": [
+        {
+          "effective_date": "2026-07-20",
+          "source_id": "0001193125-26-279754",
+          "source_sha256": "8c100da4394be98b3c82e6e3c4f3e0578f5285968adcb5a8993729fa832fe170",
+          "proof_source_url": "https://www.sec.gov/Archives/edgar/data/1018164/000101816426000068/wlfc-20260630.htm",
+          "proof_marker": "Trading on a split-adjusted basis commenced on July 21, 2026."
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_LVLU",
+      "effective_date": "2025-07-07",
+      "new_shares": "1",
+      "old_shares": "15",
+      "review_reference": "docs/research/us_lvlu_split_date_20260910.md",
+      "ratio_marker": "1-for-15 reverse stock split that became effective as of the opening of business on July 7, 2025.",
+      "limitations": [
+        "No price/Vendor split fields used for ratio or date inference.",
+        "Post-event August13 evidence confirms historical execution; June26 filing already disclosed final market schedule.",
+        "Same-event link is a documented analytical inference from identical issuer/share class/authorization/Board ratio, not a claimed verbatim postponed-from-June30 clause."
+      ],
+      "sources": [
+        {
+          "source_id": "0001558370-25-008550",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1780201/000155837025008550/tmb-20250606x8k.htm",
+          "source_sha256": "fd32e67e230815326ec80c9896380d5a43665d1047f1447d99fc329cd02f8a72",
+          "published_date": "2025-06-12",
+          "cik": "1780201",
+          "filename": "tmb-20250606x8k.htm",
+          "markers": [
+            "opening of trading on June 30, 2025",
+            "reverse stock split ratio of 1-for-15",
+            "not less than 1-for-2 and not more than 1-for-22"
+          ],
+          "roles": [
+            "corroboration"
+          ]
+        },
+        {
+          "source_id": "0001558370-25-008916",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1780201/000155837025008916/tmb-20250623x8k.htm",
+          "source_sha256": "2cc0f1bc73059109498253e0f5618a34e78b888825010360a6a66e5983d9c153",
+          "published_date": "2025-06-26",
+          "cik": "1780201",
+          "filename": "tmb-20250623x8k.htm",
+          "markers": [
+            "opening of business on July 7, 2025",
+            "on June 11, 2025, the Board approved",
+            "Ratio of 1-for-15"
+          ],
+          "roles": [
+            "corroboration"
+          ]
+        },
+        {
+          "source_id": "0001558370-25-008916",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1780201/000155837025008916/tmb-20250623xex3d2.htm",
+          "source_sha256": "aec036afb2113fd02b813062fe13d20a7c81cdbadac0d2757e78315d798055d5",
+          "published_date": "2025-06-26",
+          "cik": "1780201",
+          "filename": "tmb-20250623xex3d2.htm",
+          "markers": [
+            "each fifteen shares of Common Stock",
+            "shall be combined into one",
+            "effective at 5:00 p.m., Eastern Time, on July 3, 2025."
+          ],
+          "roles": [
+            "corroboration"
+          ]
+        },
+        {
+          "source_id": "0001558370-25-008916",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1780201/000155837025008916/tmb-20250623xex99d1.htm",
+          "source_sha256": "a41121f77428e1691787b96bb59f65debf01a98cfc5c20b959cd73c4413b3dcb",
+          "published_date": "2025-06-26",
+          "cik": "1780201",
+          "filename": "tmb-20250623xex99d1.htm",
+          "markers": [
+            "opening of business on July 7, 2025"
+          ],
+          "roles": [
+            "corroboration"
+          ]
+        },
+        {
+          "source_id": "0001558370-25-011376",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1780201/000155837025011376/tmb-20250813xex99d1.htm",
+          "source_sha256": "92c6e21b40b397bde361e83ae2ef34dec93d40f2028cce12fa782c17ef57ac9c",
+          "published_date": "2025-08-13",
+          "cik": "1780201",
+          "filename": "tmb-20250813xex99d1.htm",
+          "markers": [
+            "1-for-15 reverse stock split that became effective as of the opening of business on July 7, 2025."
+          ],
+          "roles": [
+            "exact_ratio",
+            "actual_execution",
+            "trading_date",
+            "supersedes_prior_schedule"
+          ]
+        }
+      ],
+      "supersedes_sources": [
+        {
+          "effective_date": "2025-06-30",
+          "source_id": "0001558370-25-008550",
+          "source_sha256": "fd32e67e230815326ec80c9896380d5a43665d1047f1447d99fc329cd02f8a72",
+          "proof_source_url": "https://www.sec.gov/Archives/edgar/data/1780201/000155837025011376/tmb-20250813xex99d1.htm",
+          "proof_marker": "1-for-15 reverse stock split that became effective as of the opening of business on July 7, 2025."
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_CAPS",
+      "new_shares": "1",
+      "old_shares": "1000",
+      "historical_symbol": "CAPS",
+      "effective_date": "2019-09-10",
+      "sources": [
+        {
+          "provider": "EDGAR",
+          "cik": "887151",
+          "source_id": "0001171843-19-005659",
+          "document_id": "0001171843-19-005659:f8k_082619.htm",
+          "published_date": "2019-08-26",
+          "security_id": "SEC_US_CAPS",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/887151/000117184319005659/f8k_082619.htm",
+          "source_sha256": "a3490fb1cb86f188947258ee8d12ad925f296987227aa96e0b02da8666137706",
+          "filename": "f8k_082619.htm",
+          "roles": [
+            "legal_effective_time",
+            "same_common_share_action"
+          ],
+          "markers": [
+            "Effective Date (12:01AM Eastern August 31, 2019)",
+            "to be combined into one share"
+          ],
+          "location": "Item 5.03 legal scheduled effectiveness, not market ex-date"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "887151",
+          "source_id": "0001171843-19-005659",
+          "document_id": "0001171843-19-005659:exh_31.htm",
+          "published_date": "2019-08-26",
+          "security_id": "SEC_US_CAPS",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/887151/000117184319005659/exh_31.htm",
+          "source_sha256": "1a101aec58583597cf32879a7bf5dd39c70bbee206bf5f38fa42084262ec5b3b",
+          "filename": "exh_31.htm",
+          "roles": [
+            "exact_ratio",
+            "operative_charter"
+          ],
+          "markers": [
+            "each 1,000 shares of Common Stock",
+            "reclassified and combined into one validly issued, fully paid and non-assessable share",
+            "each 1,000 shares of Common Stock (the “Old Common Stock”), issued and outstanding immediately prior to the Effective Date shall be reclassified and combined into one validly issued, fully paid and non-assessable share"
+          ],
+          "location": "ARTICLE FOURTH actual issued/outstanding common shares; fractional shares aggregated and sold for cash"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "887151",
+          "source_id": "0001213900-25-026436",
+          "document_id": "0001213900-25-026436:ea0235933-10k_capstone.htm",
+          "published_date": "2025-03-31",
+          "security_id": "SEC_US_CAPS",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/887151/000121390025026436/ea0235933-10k_capstone.htm",
+          "source_sha256": "3265a4623777deee804f9dc611b390471d27ef3030d86859e1984ec2db4b5946",
+          "filename": "ea0235933-10k_capstone.htm",
+          "roles": [
+            "actual_execution",
+            "exact_ratio",
+            "historical_security_identity"
+          ],
+          "markers": [
+            "each 1,000 shares of common stock of the Company became 1 share of common stock"
+          ],
+          "location": "Corporate History August 22, 2019 amendment; later annual execution confirmation"
+        },
+        {
+          "provider": "FINRA",
+          "cik": "887151",
+          "source_id": "FINRA-OTCDAILYLIST-CAPS-20190801-20191031",
+          "document_id": "FINRA-OTCDAILYLIST-CAPS-20190801-20191031",
+          "published_date": "2019-09-09",
+          "security_id": "SEC_US_CAPS",
+          "source_url": "https://api.finra.org/data/group/otcMarket/name/otcDailyList",
+          "source_sha256": "0e636ebf5aa6b3f5d8e3cd30c04d3f8853c560b56958d0a59d6ce7b4db9420f1",
+          "filename": "finra_oldSymbolCode_CAPS_20190801_20191031.json",
+          "roles": [
+            "exact_ratio",
+            "trading_date",
+            "market_effective_date_confirmation",
+            "historical_security_identity"
+          ],
+          "markers": [
+            "1:1000",
+            "2019-09-10 00:00:00.0",
+            "CAPSD"
+          ],
+          "location": null,
+          "request_body": {
+            "limit": 100,
+            "compareFilters": [
+              {
+                "fieldName": "oldSymbolCode",
+                "fieldValue": "CAPS",
+                "compareType": "EQUAL"
+              }
+            ],
+            "dateRangeFilters": [
+              {
+                "fieldName": "calendarDay",
+                "startDate": "2019-08-01",
+                "endDate": "2019-10-31"
+              }
+            ]
+          },
+          "request_method": "POST",
+          "request_headers": {
+            "Accept": "application/json"
+          },
+          "finra_record_fields": {
+            "OTCDailyListID": 162116,
+            "dailyListDatetime": "2019-09-09 10:23:54.0",
+            "calendarDay": "2019-09-09",
+            "exDate": "2019-09-10 00:00:00.0",
+            "dailyListEventCode": "DA",
+            "dividendMasterID": 40118783,
+            "dividendTypeCode": "RS",
+            "reverseSplitRate": "1:1000",
+            "oldSymbolCode": "CAPS",
+            "newSymbolCode": "CAPSD",
+            "oldSecurityDescription": "Capstone Therapeutics Corp Common Stock",
+            "newSecurityDescription": "CAPSTONE THERAPEUTICS CORP Common Stock",
+            "dailyListReasonDescription": "Reverse Split/CUSIP Change",
+            "commentText": null
+          },
+          "finra_list_id": 162116
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "887151",
+          "source_id": "0001171843-19-005659",
+          "document_id": "0001171843-19-005659:exh_101.htm",
+          "published_date": "2019-08-26",
+          "security_id": "SEC_US_CAPS",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/887151/000117184319005659/exh_101.htm",
+          "source_sha256": "e5eeae34c8db436de6238228a0ce9d5ec0731fc2e00f48ceb0f5520bc8e70e33",
+          "filename": "exh_101.htm",
+          "roles": [
+            "non_price_wealth_distribution",
+            "CVR_record_date"
+          ],
+          "markers": [
+            "Shareholders of record on July 10, 2019",
+            "DATED AS OF August 23, 2019"
+          ],
+          "location": "LDI contingent value rights agreement; economic distribution separate from split"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "887151",
+          "source_id": "0001213900-25-053782",
+          "document_id": "0001213900-25-053782:ea0245522-424b4_capstone.htm",
+          "published_date": "2025-06-12",
+          "security_id": "SEC_US_CAPS",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/887151/000121390025053782/ea0245522-424b4_capstone.htm",
+          "source_sha256": "496c095cfdd9a78596d395668d20ac30428e58923287da6452590f007163e2ee",
+          "filename": "ea0245522-424b4_capstone.htm",
+          "roles": [
+            "conflicting_historical_description"
+          ],
+          "markers": [
+            "1-for-750 reverse stock split",
+            "each 1,000 shares of Common Stock of the Company became 1 share"
+          ],
+          "location": "The same prospectus has both descriptions; the 2019 operative charter and independent FINRA action identify 1:1000"
+        }
+      ],
+      "ratio_marker": "each 1,000 shares of Common Stock (the “Old Common Stock”), issued and outstanding immediately prior to the Effective Date shall be reclassified and combined into one validly issued, fully paid and non-assessable share",
+      "allow_missing_vendor_action": true,
+      "review_reference": "docs/research/us_four_large_price_jumps_20260910.md",
+      "limitations": [
+        "August 31 is the charter legal effective date. FINRA exDate September 10 is the independently confirmed market application date; September 19 is only the later observed Alpha price jump.",
+        "Both cached and fresh Alpha daily retain close 0.013 and positive but tiny volume on September 10-18 despite the official September 10 action. The correct daily price unit in that interval is unresolved, so an exact split ratio alone does not fully repair these prices.",
+        "The Alpha cached SPLITS response is empty; all daily split coefficients in the research window are 1.",
+        "CVR value and cash from fractional-share liquidation are unmodeled. A split-only close cannot be certified as complete shareholder total wealth across this transaction.",
+        "No share ratio, cash value, replacement price, or event date is inferred from the raw jump. No automatic price repair is proposed by this evidence package."
+      ],
+      "other_actions": [
+        {
+          "kind": "price_source_review",
+          "reason": "Alpha raw quote units on 2019-09-10 through 2019-09-18 remain unresolved",
+          "source_review": "docs/research/us_four_large_price_jumps_20260910.md"
+        },
+        {
+          "effective_date": "2019-07-10",
+          "kind": "CVR_record_date",
+          "reason": "Separate CVR entitlement and fractional cash require wealth accounting; no value inferred",
+          "source_review": "docs/research/us_four_large_price_jumps_20260910.md"
+        },
+        {
+          "effective_date": "2019-08-23",
+          "kind": "CVR_agreement",
+          "reason": "Separate CVR entitlement and fractional cash require wealth accounting; no value inferred",
+          "source_review": "docs/research/us_four_large_price_jumps_20260910.md"
+        },
+        {
+          "effective_date": "2019-09-10",
+          "kind": "fractional_share_cash",
+          "reason": "Separate CVR entitlement and fractional cash require wealth accounting; no value inferred",
+          "source_review": "docs/research/us_four_large_price_jumps_20260910.md"
+        }
+      ],
+      "conflicting_descriptions": [
+        {
+          "description": "1-for-750",
+          "source_id": "0001213900-25-053782",
+          "status": "not_selected_for_issued_share_unit_ratio",
+          "reason": "Same prospectus also says each 1000 became 1; operative 2019 charter, later 10-K, and FINRA agree 1/1000. No issuer correction located."
+        }
+      ]
+    },
+    {
+      "security_id": "SEC_US_ASTI",
+      "new_shares": "1",
+      "old_shares": "1000",
+      "historical_symbol": "ASTI",
+      "effective_date": "2018-07-23",
+      "sources": [
+        {
+          "provider": "EDGAR",
+          "cik": "1350102",
+          "source_id": "0001350102-18-000024",
+          "document_id": "0001350102-18-000024:asti-form8xkxreversestocks.htm",
+          "published_date": "2018-07-23",
+          "security_id": "SEC_US_ASTI",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1350102/000135010218000024/asti-form8xkxreversestocks.htm",
+          "source_sha256": "6d4a8b97f22e2f5182475504b91fed0c94238854fa98035ca9a573e3c08421b6",
+          "filename": "asti-form8xkxreversestocks.htm",
+          "roles": [
+            "actual_execution",
+            "exact_ratio",
+            "legal_effective_time"
+          ],
+          "markers": [
+            "at a ratio of one-for-one thousand",
+            "became effective as of 5:00 p.m. Eastern Time on July 20, 2018"
+          ],
+          "location": "Item 5.03 operative reverse split"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1350102",
+          "source_id": "0001350102-18-000024",
+          "document_id": "0001350102-18-000024:finalasticharteramendment-.htm",
+          "published_date": "2018-07-23",
+          "security_id": "SEC_US_ASTI",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1350102/000135010218000024/finalasticharteramendment-.htm",
+          "source_sha256": "380c4ae19fcba131d35de270f565dda441947a77240866a9821a6c6678756be7",
+          "filename": "finalasticharteramendment-.htm",
+          "roles": [
+            "exact_ratio",
+            "operative_charter"
+          ],
+          "markers": [
+            "each one thousand (1,000) shares of Common Stock issued and outstanding at such time shall be combined into one (1) share"
+          ],
+          "location": "Amendment ARTICLE 4"
+        },
+        {
+          "provider": "EDGAR",
+          "cik": "1350102",
+          "source_id": "0001350102-19-000030",
+          "document_id": "0001350102-19-000030:asti-20181231x10k.htm",
+          "published_date": "2019-04-16",
+          "security_id": "SEC_US_ASTI",
+          "source_url": "https://www.sec.gov/Archives/edgar/data/1350102/000135010219000030/asti-20181231x10k.htm",
+          "source_sha256": "55581c60125e4debb0d7017161739c81004fa0dfc1a3f5499d1ec94c267060a5",
+          "filename": "asti-20181231x10k.htm",
+          "roles": [
+            "actual_execution",
+            "trading_date",
+            "exact_ratio"
+          ],
+          "markers": [
+            "at a ratio of one-for-one thousand",
+            "continued on the OTC Marketplace on a split-adjusted basis on July 23, 2018"
+          ],
+          "location": "Note 15 STOCKHOLDERS EQUITY / Reverse Stock Split; later annual actual execution"
+        },
+        {
+          "provider": "FINRA",
+          "cik": "1350102",
+          "source_id": "FINRA-OTCDAILYLIST-ASTI-20180723-127113",
+          "document_id": "FINRA-OTCDAILYLIST-ASTI-20180723-127113",
+          "published_date": "2018-07-20",
+          "security_id": "SEC_US_ASTI",
+          "source_url": "https://api.finra.org/data/group/otcMarket/name/otcDailyList",
+          "source_sha256": "f2070279a308cc0dae54035c6eb615f2c82b677b4b5deccb5c711e0c7880a6e9",
+          "filename": "finra_ASTI_effective_20180701_20180731.json",
+          "roles": [
+            "exact_ratio",
+            "trading_date",
+            "market_effective_date_confirmation",
+            "historical_security_identity"
+          ],
+          "markers": [
+            "1:1000",
+            "2018-07-23 00:00:00.0",
+            "ASTID"
+          ],
+          "location": null,
+          "request_body": {
+            "limit": 100,
+            "compareFilters": [
+              {
+                "fieldName": "oldSymbolCode",
+                "fieldValue": "ASTI",
+                "compareType": "EQUAL"
+              }
+            ],
+            "dateRangeFilters": [
+              {
+                "fieldName": "calendarDay",
+                "startDate": "2018-10-25",
+                "endDate": "2018-10-25"
+              },
+              {
+                "fieldName": "exDate",
+                "startDate": "2018-07-01",
+                "endDate": "2018-07-31"
+              }
+            ]
+          },
+          "request_method": "POST",
+          "request_headers": {
+            "Accept": "application/json"
+          },
+          "finra_record_fields": {
+            "OTCDailyListID": 127113,
+            "dailyListDatetime": "2018-07-20 11:58:31.0",
+            "calendarDay": "2018-10-25",
+            "exDate": "2018-07-23 00:00:00.0",
+            "dailyListEventCode": "DA",
+            "dividendMasterID": 40112558,
+            "dividendTypeCode": "RS",
+            "reverseSplitRate": "1:1000",
+            "oldSymbolCode": "ASTI",
+            "newSymbolCode": "ASTID",
+            "oldSecurityDescription": "ASCENT SOLAR TECHNOLOGIES INC Common Stock",
+            "newSecurityDescription": "ASCENT SOLAR TECHNOLOGIES INC Common Stock",
+            "dailyListReasonDescription": "Reverse Split/CUSIP Change",
+            "commentText": "Fractional shares rounded up to the nearest whole share"
+          },
+          "finra_list_id": 127113
+        }
+      ],
+      "ratio_marker": "at a ratio of one-for-one thousand",
+      "allow_missing_vendor_action": true,
+      "review_reference": "docs/research/us_four_large_price_jumps_20260910.md",
+      "limitations": [
+        "The Alpha Vantage cached SPLITS snapshot and both cached/current daily series omit the July 2018 action; daily split coefficients in this window are all 1.",
+        "Alpha Vantage has no rows from July 23 through August 16, 2018, the official temporary ASTID interval. The first returning ASTI row on August 17 is not a new split date.",
+        "The 1/1000 unit adjustment is independently confirmed. Missing temporary-symbol prices and exact performance across that gap are not repaired or fully validated here.",
+        "FINRA calendarDay 2018-10-25 is a migrated partition; using it as an action date or querying July partitions alone loses the action.",
+        "The existing narrow number-word contract parser may not recognize 'one thousand'; these evidence files do not modify it."
+      ],
+      "other_actions": [
+        {
+          "kind": "price_source_review",
+          "reason": "Missing temporary-symbol quotes; first later positive-volume observation does not certify the gap",
+          "source_review": "docs/research/us_four_large_price_jumps_20260910.md"
+        }
+      ]
+    }
+  ],
+  "event_exclusions": [
+    {
+      "security_id": "SEC_US_O",
+      "effective_date": "2020-12-18",
+      "new_shares": "1",
+      "old_shares": "5",
+      "reason": "different_issuer_in_acquisition_exhibit",
+      "affected_issuer_symbol": "VER",
+      "review_reference": "docs/research/us_issuer_and_year_conflicts_20260910.md",
+      "source": {
+        "source_id": "0001104659-21-138162",
+        "cik": "726728",
+        "source_url": "https://www.sec.gov/Archives/edgar/data/726728/000110465921138162/tm2132504d1_ex99-1.htm",
+        "source_sha256": "252077bc7ef99c21117aa4c3e58bd62a15d63ee9fb2d66c69ff5a28c26f088b3",
+        "published_date": "2021-11-12",
+        "filename": "tm2132504d1_ex99-1.htm",
+        "markers": [
+          "refer to VEREIT, together with its consolidated subsidiaries",
+          "trading symbol “VER”"
+        ]
+      }
+    }
+  ]
+}

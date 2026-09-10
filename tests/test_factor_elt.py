@@ -30,7 +30,9 @@ class FactorEltTest(unittest.TestCase):
                 }
             ).to_csv(price_path, index=False)
 
-            with patch("engine.loaders.factors.resolve_price_path", return_value=Path(price_path)):
+            from engine.core.paths import DataLakePaths
+            with (patch("engine.loaders.factors.resolve_price_path", return_value=Path(price_path)),
+                  patch("engine.loaders.factors.DATA_LAKE", DataLakePaths(Path(temp_dir)))):
                 result = _resolve_stock_codes(None, market="kr")
 
         self.assertEqual(result, ["000660", "005930"])

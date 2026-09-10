@@ -99,10 +99,10 @@ rule "us_total_assets" {
     }
 
 
-def test_default_us_v2_dsl_is_a_lossless_migration_of_every_v1_rule() -> None:
+def test_archived_us_v2_dsl_is_a_lossless_migration_of_every_v1_rule() -> None:
     legacy_path = Path("data-lake/meta/rules/us_mapping.yaml")
     expected = yaml.safe_load(legacy_path.read_text(encoding="utf-8"))
-    actual = load_us_mapping_rules()
+    actual = load_us_mapping_rules(Path("data-lake/meta/rules/semantic_us_v2.arcana"))
 
     assert US_MAPPING_RULE_PATH.name == "semantic_us_rule_manifest.json"
     for group, expected_rules in expected.items():
@@ -142,7 +142,9 @@ def test_us_rule_manifest_resolves_and_verifies_the_hmrb_bundle() -> None:
         Path("data-lake/meta/rules/semantic_us_rule_manifest.json")
     )
 
-    assert ruleset.name == "semantic_us_v2"
+    manifest = json.loads(US_MAPPING_RULE_PATH.read_text(encoding="utf-8"))
+    assert ruleset.name == Path(manifest["active_bundle"]).stem
+    assert ruleset.version == manifest["version"]
     assert ruleset.schema == "arcana.sec-semantic/v2"
     assert len(ruleset.rules) == 104
 

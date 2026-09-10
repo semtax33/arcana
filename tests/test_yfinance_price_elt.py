@@ -53,6 +53,53 @@ class FakeUrlResponse:
 
 
 class YFinancePriceEltTest(unittest.TestCase):
+    def test_us_price_download_prepends_requested_history_without_losing_newer_rows(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            output_path = output_dir / "AAPL.csv"
+            pd.DataFrame(
+                {
+                    "Date": ["2016-01-04", "2016-01-05"],
+                    "Open": [100, 101],
+                    "High": [101, 102],
+                    "Low": [99, 100],
+                    "Close": [100.5, 101.5],
+                    "Volume": [1000, 1100],
+                }
+            ).to_csv(output_path, index=False)
+            historical = pd.DataFrame(
+                {
+                    "Date": ["2006-01-03", "2015-12-31"],
+                    "Open": [10, 99],
+                    "High": [11, 100],
+                    "Low": [9, 98],
+                    "Close": [10.5, 99.5],
+                    "Volume": [100, 900],
+                }
+            )
+
+            with patch.object(
+                yfinance_market_prices,
+                "fetch_yfinance_price",
+                return_value=historical,
+            ) as fetch:
+                written = yfinance_market_prices.download_us_price_histories(
+                    symbols=["AAPL"],
+                    output_dir=output_dir,
+                    start_date="2006-01-01",
+                    end_date="2016-12-31",
+                )
+
+            result = pd.read_csv(output_path)
+
+        self.assertEqual(written, [output_path])
+        self.assertEqual(
+            result["Date"].tolist(),
+            ["2006-01-03", "2015-12-31", "2016-01-04", "2016-01-05"],
+        )
+        self.assertEqual(fetch.call_args.kwargs["start_date"], "2006-01-01")
+        self.assertEqual(fetch.call_args.kwargs["end_date"], "2016-01-03")
+
     def test_us_price_download_appends_new_dates_without_losing_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
@@ -562,19 +609,15 @@ class YFinancePriceEltTest(unittest.TestCase):
     def test_download_workflow_routes_us_prices_and_preserves_kr_prices(self):
         with (
             patch.object(sys, "argv", ["prog", "--market", "us", "--symbols", "AAPL,MSFT", "--limit", "2", "prices"]),
-            patch.object(download_workflow, "download_us_price_histories") as download_us,
+            patch("engine.extractors.alpha_vantage_prices.download_alpha_vantage_prices") as download_us,
         ):
             download_workflow.main()
 
         download_us.assert_called_once()
         self.assertEqual(download_us.call_args.kwargs["symbols"], ["AAPL", "MSFT"])
-        self.assertEqual(download_us.call_args.kwargs["limit"], 2)
-        self.assertIsNone(download_us.call_args.kwargs["start_date"])
-        self.assertIsNone(download_us.call_args.kwargs["end_date"])
-        self.assertEqual(download_us.call_args.kwargs["request_timeout"], 15.0)
-        self.assertEqual(download_us.call_args.kwargs["retries"], 2)
-        self.assertEqual(download_us.call_args.kwargs["retry_backoff_seconds"], 2.0)
-        self.assertFalse(download_us.call_args.kwargs["repair"])
+        self.assertIsNone(download_us.call_args.kwargs["as_of"])
+        self.assertFalse(download_us.call_args.kwargs["force"])
+        self.assertEqual(download_us.call_args.kwargs["max_calls_per_minute"], 75)
 
         with (
             patch.object(sys, "argv", ["prog", "--start-date", "2024-01-01", "--end-date", "20240131", "prices"]),

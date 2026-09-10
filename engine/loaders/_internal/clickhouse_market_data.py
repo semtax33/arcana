@@ -133,10 +133,14 @@ def create_price_dataframe(
     if market == "us":
         if source == "silver":
             return read_normalized_us_price()
-        return normalize_us_price(
-            str(DATA_LAKE.bronze("yfinance", "price", "*.csv")),
-            progress_interval=progress_interval,
+        from engine.workflows.stock_splits import (
+            normalize_split_ledger, build_split_price_panels, normalized_price_frame,
         )
+        ledger = normalize_split_ledger("us")
+        report = build_split_price_panels("us", ledger, refresh_us=False)
+        if report["errors"]:
+            raise ValueError(f"Alpha Vantage price normalization failed for {len(report['errors'])} symbols")
+        return normalized_price_frame("us", output_path=DATA_LAKE.silver("us", "price", "us_normalized_price.csv"))
     raise ValueError(f"unsupported market: {market}")
 
 

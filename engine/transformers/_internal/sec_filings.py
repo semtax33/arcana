@@ -1382,6 +1382,18 @@ def _match_filing_fact_rule(
 ) -> tuple[int, str] | None:
     concept = _filing_concept_qname(row.get("concept"))
     namespace, tag = split_tag_spec(concept)
+    report_excludes = _compile_patterns(rule.get("report_name_exclude_patterns", []))
+    if report_excludes:
+        element_id = _filing_element_id(concept)
+        roles = [
+            str(role) for role, tree in xbrl.presentation_trees.items()
+            if element_id in tree.all_nodes
+        ]
+        # A taxonomy tag can be misused for a component in a note (CELG's
+        # AOCI roll-forward uses the total-equity tag). Enforce the disclosed
+        # presentation scope before accepting even an exact concept match.
+        if roles and all(any(pattern.search(role) for pattern in report_excludes) for role in roles):
+            return None
     for rank, key in enumerate(("primary_tags", "alternate_tags")):
         if any(_tag_spec_matches(spec, namespace, tag) for spec in rule.get(key, []) or []):
             return rank, ""

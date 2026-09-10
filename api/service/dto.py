@@ -388,6 +388,7 @@ class BacktestAnnualReturnDto(BaseModel):
 
 
 class FactorBacktestResponseDto(BaseModel):
+    portfolio_history: list[dict[str, Any]] = Field(default_factory=list)
     universe_summary: dict[str, Any] | None = None
     summary: BacktestSummaryDto
     equity_curve: list[BacktestEquityCurvePointDto] = Field(default_factory=list)
