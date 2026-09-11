@@ -1357,20 +1357,21 @@ def build_factor_snapshot(
         net_debt_with_short_fin_assets = interest_bearing_debt - cash - short_fin_assets
 
     dna_is = abs_total_if_present("DNA_IS")
+    dna_cf = abs_total_if_present("DNA_CF")
     depreciation_cf = abs_total_if_present("DEPRECIATION_EXPENSE")
     amortization_cf = abs_total_if_present("AMORTIZATION")
 
-    cf_da_parts = [v for v in [depreciation_cf, amortization_cf] if v is not None]
-    cf_da = sum(cf_da_parts) if cf_da_parts else None
+    cf_da = (depreciation_cf + amortization_cf
+             if depreciation_cf is not None and amortization_cf is not None else None)
 
     depreciation_and_amortization = None
     da_source = ""
-    if dna_is is not None and cf_da is not None:
-        depreciation_and_amortization = max(dna_is, cf_da)
-        da_source = "DNA_IS" if dna_is >= cf_da else "DEPRECIATION_EXPENSE+AMORTIZATION"
-    elif dna_is is not None:
+    if dna_is is not None:
         depreciation_and_amortization = dna_is
         da_source = "DNA_IS"
+    elif dna_cf is not None:
+        depreciation_and_amortization = dna_cf
+        da_source = "DNA_CF"
     elif cf_da is not None:
         depreciation_and_amortization = cf_da
         da_source = "DEPRECIATION_EXPENSE+AMORTIZATION"
@@ -1438,6 +1439,7 @@ def build_factor_snapshot(
         "fcf": fcf,
         "fcf_after_disposal": fcf_after_disposal,
         "dna_is": dna_is,
+        "dna_cf": dna_cf,
         "depreciation_expense_cf": depreciation_cf,
         "amortization_cf": amortization_cf,
         "depreciation_and_amortization": depreciation_and_amortization,

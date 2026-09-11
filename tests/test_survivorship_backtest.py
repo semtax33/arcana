@@ -11,6 +11,61 @@ from api.service.dto import FactorBacktestRequestDto, FactorConditionDto
 pytestmark = pytest.mark.integration
 
 
+def test_alpha_snapshot_restores_missing_stock_before_factorlab_top70(tmp_path, lifecycle_database):
+    import json
+    from engine.workflows.survivorship import run_survivorship_refresh
+    from engine.loaders.survivorship import SCHEMAS
+    from test_listing_history_replay import snapshot
+    from api.service.factor_lab_service import FactorLabService
+    from api.service.dto import FactorLabGraphDto
+    from scripts.research_cross_market_factorlab import recipe_graph
+    client, factory = lifecycle_database
+    snapshot(tmp_path / 'bronze', '2022-01-03', 'delisted', [
+        ['HIST', 'Former Issuer', 'NYSE', 'Stock', '2000-01-01', '2021-01-01', 'Delisted'],
+        ['ENDED', 'Earlier Issuer', 'NYSE', 'Stock', '2000-01-01', '2019-01-01', 'Delisted'],
+        ['REUSE', 'Old Issuer', 'NYSE', 'Stock', '2000-01-01', '2010-01-01', 'Delisted']])
+    snapshot(tmp_path / 'bronze', '2022-01-03', 'active', [
+        [name, name, 'NYSE', 'Stock', '2021-01-01' if name == 'FUTURE' else '2000-01-01', '', 'Active']
+        for name in ['A', 'B', 'C', 'FUTURE']] + [
+        ['ETF', 'An ETF', 'NYSE', 'ETF', '2000-01-01', '', 'Active'],
+        ['REUSE', 'New Issuer', 'NASDAQ', 'Stock', '2019-01-01', '', 'Active']])
+    run_survivorship_refresh(market='us', end_date='2022-01-03', download=False, load_clickhouse=False,
+        source_dir=tmp_path / 'bronze', output_dir=tmp_path / 'silver', gold_dir=tmp_path / 'gold',
+        manifest_path=tmp_path / 'no-review.json')
+    rows = json.loads((tmp_path / 'gold/listing_episodes.json').read_bytes())['rows']
+    columns = SCHEMAS['listing_episodes'][1]
+    client.command('CREATE TEMPORARY TABLE security_listing_episodes (' +
+        ', '.join(f'{column} {kind}' for column, kind in columns.items()) + ') ENGINE = Memory')
+    client.insert('security_listing_episodes', [[date.fromisoformat(row[column])
+        if 'Date32' in kind and row.get(column) else row.get(column)
+        for column, kind in columns.items()] for row in rows], column_names=list(columns))
+    # No historical/current security-master row supplies HIST, yet it must rank.
+    client.insert('factor_catalog', [('roe', 'ROE', 'HIGHER_BETTER')],
+        column_names=['factor_id', 'factor_name', 'value_direction'])
+    client.insert('security_master', [('SEC_US_ETF', 'ETF', 'US', True, 'NYSE'),
+        ('SEC_US_REUSE', 'New Issuer', 'US', True, 'NASDAQ')],
+        column_names=['security_id', 'issuer_id', 'country', 'is_active', 'exchange_code'])
+    caps = {'HIST': 200, 'A': 100, 'B': 90, 'C': 80, 'FUTURE': 10000, 'ENDED': 9000, 'ETF': 50000, 'REUSE': 100000}
+    client.insert('fact_daily_factors', [('SEC_US_' + name, date(2020, 1, 3), factor, float(value), 'USD')
+        for name, cap in caps.items() for factor, value in [('mcap_mil', cap), ('roe', 100 if name == 'C' else 1)]],
+        column_names=['security_id', 'trade_date', 'factor_id', 'factor_value', 'currency'])
+    client.insert('price_daily', [('SEC_US_' + name, date(2020, 1, 3), 100., 100., 100, 'USD')
+        for name in caps], column_names=['security_id', 'trade_date', 'close', 'adj_close', 'volume', 'currency'])
+    graph = recipe_graph({'id': 'alpha_listing_contract', 'weights': {'roe': 1.0}, 'gate': None},
+        'US', {'roe': {'direction': 'higher'}}, {}, start='2020-01-03', end='2020-01-03')
+    compiled = FactorLabService(client_factory=factory).compile_graph(FactorLabGraphDto(**graph))
+    scores = client.query_df(compiled.query, parameters=compiled.parameters)
+    assert not scores.empty, 'Retained Alpha listings must reach FactorLab'
+    assert set(scores.loc[scores.is_valid, 'security_id']) == {'SEC_US_HIST', 'SEC_US_A', 'SEC_US_B'}
+    from api.repository.universe_query import load_universe_details
+    summary, _ = load_universe_details(client, dates=['2020-01-03'], market='us',
+        universe={'size_percentile': {'side': 'top', 'percent': 70}})
+    # The separately identified reused listing remains in the population, with
+    # missing cap reported rather than filled from the current symbol alias.
+    assert summary['dates'][0]['before_count'] == 5
+    assert summary['dates'][0]['missing_market_cap_count'] == 1
+
+
 @pytest.fixture
 def lifecycle_database():
     # Session-local Memory tables shadow production names without writing there.

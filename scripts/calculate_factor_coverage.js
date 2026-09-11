@@ -542,10 +542,10 @@ function addAnnualFinancialFactors(rows) {
     r.gross_profit = first(source, "GROSS_PROFIT");
     if (!isCovered(r.gross_profit)) r.gross_profit = sub(r.sale, r.cogs);
     const cfDa =
-      isCovered(source.DEPRECIATION_EXPENSE) || isCovered(source.AMORTIZATION)
-        ? fill0(source.DEPRECIATION_EXPENSE) + fill0(source.AMORTIZATION)
+      isCovered(source.DEPRECIATION_EXPENSE) && isCovered(source.AMORTIZATION)
+        ? source.DEPRECIATION_EXPENSE + source.AMORTIZATION
         : null;
-    r.dp = first(source, "DNA_IS");
+    r.dp = first(source, "DNA_IS", "DNA_CF");
     if (!isCovered(r.dp)) r.dp = cfDa;
     r.oibdp = first(source, "EBITDA");
     if (!isCovered(r.oibdp)) r.oibdp = add(r.oiadp, r.dp);

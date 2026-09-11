@@ -70,7 +70,7 @@ def build_universe_ctes(*, dates_sql: str, universe=None, market=None,
            h.published_date AS classification_date, 1 AS listing_verified
     FROM uv_dates d CROSS JOIN {listing_table} h
     INNER JOIN uv_securities s ON s.security_id = h.security_id
-    WHERE h.status = 'confirmed' AND h.security_type = 'common_stock'
+    WHERE h.status = 'confirmed' AND h.security_type IN ('common_stock', 'provider_stock')
       AND d.trade_date >= h.valid_from AND (h.valid_until IS NULL OR d.trade_date < h.valid_until)
       AND (empty({{uv_exchanges:Array(String)}}) OR has({{uv_exchanges:Array(String)}}, h.exchange_code))
 )""")

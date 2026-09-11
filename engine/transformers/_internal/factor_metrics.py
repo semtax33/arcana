@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from engine.core.paths import (
+    resolve_sec_ticker_map,
     DATA_LAKE,
     first_existing_path,
     market_csv_name,
@@ -361,7 +362,7 @@ def us_filing_share_fallback_is_unambiguous(
     """
 
     ticker_map_path = Path(
-        ticker_map_path or DATA_LAKE.meta("sec_company_tickers.csv")
+        resolve_sec_ticker_map(ticker_map_path, data_lake=DATA_LAKE)
     ).resolve()
     aliases_path = Path(
         aliases_path or DATA_LAKE.meta("sec_ticker_aliases.csv")
@@ -407,6 +408,7 @@ def _us_ticker_identity_maps(ticker_map_path,aliases_path,ticker_map_mtime,alias
                 path,
                 usecols=lambda column: column in {"cik", "ticker"},
                 dtype={"cik": "string", "ticker": "string"},
+                keep_default_na=False,
             )
         except (OSError, ValueError, pd.errors.EmptyDataError):
             continue
@@ -1612,9 +1614,10 @@ def add_annual_financial_factors(
 
     cf_depreciation = numeric_column(df, "DEPRECIATION_EXPENSE")
     cf_amortization = numeric_column(df, "AMORTIZATION")
-    df["dp"] = first_value_frame(df, "DNA_IS")
-    cf_da = cf_depreciation.fillna(0) + cf_amortization.fillna(0)
-    cf_da = cf_da.where(cf_depreciation.notna() | cf_amortization.notna())
+    df["dp"] = first_value_frame(df, "DNA_IS", "DNA_CF")
+    # A missing component is not evidence of zero expense. Reported totals
+    # above remain usable without separately disclosed components.
+    cf_da = cf_depreciation + cf_amortization
     df["dp"] = df["dp"].fillna(cf_da)
     df["oibdp"] = first_value_frame(df, "EBITDA")
     df["oibdp"] = df["oibdp"].fillna(df["oiadp"] + df["dp"])

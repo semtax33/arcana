@@ -96,9 +96,10 @@ def download_alpha_vantage_prices(*,symbols=None,as_of=None,force=False,max_call
     root=Path(output_dir or price_root());root.mkdir(parents=True,exist_ok=True)
     snapshot=str(pd.Timestamp(as_of or date.today()).date())
     if symbols is None:
-        # The saved equity universe is already filtered by the normal US ingestion.
-        from engine.extractors._internal.yfinance_market_prices import _resolve_download_symbols
-        symbols=_resolve_download_symbols(None)
+        from engine.transformers.alpha_listing_population import resolve_alpha_listing_symbols
+        symbols=resolve_alpha_listing_symbols(as_of=snapshot,
+            source_dir=DATA_LAKE.bronze('alpha-vantage','listings'),
+            output_dir=DATA_LAKE.silver('survivorship','us','listing_history'))
     symbols=sorted({str(s).strip().upper() for s in symbols if str(s).strip()})
     if any(not re.fullmatch(r'[A-Z0-9][A-Z0-9.^_-]{0,31}',symbol) for symbol in symbols):
         raise ValueError('invalid Alpha Vantage ticker filename')

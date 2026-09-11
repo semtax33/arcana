@@ -9,7 +9,7 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 
-from engine.core.paths import DATA_LAKE
+from engine.core.paths import DATA_LAKE, resolve_sec_ticker_map
 from engine.core.source_storage import write_source_text
 
 
@@ -66,7 +66,7 @@ def align_disclosed_shares(prices, observations):
 
 def build_disclosed_shares(*, symbols=None, as_of='2026-09-09', output_path=None):
     from engine.transformers._internal.factor_metrics import us_filing_share_fallback_is_unambiguous
-    mapping=pd.read_csv(DATA_LAKE.meta('sec_company_tickers.csv'),dtype=str)
+    mapping=pd.read_csv(resolve_sec_ticker_map(data_lake=DATA_LAKE),dtype=str,keep_default_na=False)
     if symbols is not None:mapping=mapping[mapping.ticker.isin(symbols)]
     mapping=mapping.drop_duplicates('ticker')
     frames=[];review=[]

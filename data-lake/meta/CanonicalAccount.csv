@@ -38,6 +38,7 @@ CFF,재무활동현금흐름,CF,FALSE,,재무활동현금흐름,
 CAPEX_PPE,유형자산의 취득(지출),CF,FALSE,,유형자산의 취득(지출),
 CAPEX_INTANG,무형자산의 취득,CF,FALSE,,무형자산의 취득,
 DEPRECIATION_EXPENSE,감가상각비,CF,FALSE,,감가상각비,
+DNA_CF,감가상각·상각비 합계,CF,FALSE,,현금흐름표 본표의 감가상각·상각비 합계,구성요소인 감가상각비·무형자산상각비를 다시 더하지 않음
 AMORTIZATION,무형자산상각비,CF,FALSE,,무형자산상각비,
 WC_CHANGE,운전자본변동,CF,FALSE,,운전자본변동,
 INT_PAID,이자지급,CF,FALSE,,이자지급,

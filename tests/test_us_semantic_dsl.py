@@ -146,7 +146,7 @@ def test_us_rule_manifest_resolves_and_verifies_the_hmrb_bundle() -> None:
     assert ruleset.name == Path(manifest["active_bundle"]).stem
     assert ruleset.version == manifest["version"]
     assert ruleset.schema == "arcana.sec-semantic/v2"
-    assert len(ruleset.rules) == 104
+    assert len(ruleset.rules) == 105
 
 
 def test_us_rule_manifest_rejects_a_modified_bundle(tmp_path: Path) -> None:

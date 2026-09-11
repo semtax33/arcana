@@ -882,6 +882,7 @@ class FactorNormalizerTest(unittest.TestCase):
                             "PBT": 100,
                             "TAX_EXPENSE": 20,
                             "DEPRECIATION_EXPENSE": 10,
+                            "AMORTIZATION": 0,
                             "CURRENT_ASSETS": 200,
                             "CURRENT_LIABILITIES": 100,
                             "CFO": 100,

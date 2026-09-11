@@ -645,7 +645,7 @@ class BacktestService:
                 f"""SELECT security_id, valid_from, valid_until, status
                 FROM {listing_table}
                 WHERE has({{security_ids:Array(String)}}, security_id)
-                    AND status = 'confirmed' AND security_type = 'common_stock'""",
+                    AND status = 'confirmed' AND security_type IN ('common_stock', 'provider_stock')""",
                 parameters={"security_ids": sorted(price_ids)},
             ))
         has_listing_closures = any(row.get("valid_until") is not None

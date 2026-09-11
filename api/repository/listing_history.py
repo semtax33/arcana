@@ -45,7 +45,7 @@ def security_source_sql(security_table="security_master", listing_table=None):
                argMax(exchange_code, published_date) AS exchange_code,
                toDateTime64(max(published_date), 3) AS updated_at
         FROM {listing_table}
-        WHERE status = 'confirmed' AND security_type = 'common_stock'
+        WHERE status = 'confirmed' AND security_type IN ('common_stock', 'provider_stock')
             AND security_id NOT IN (SELECT security_id FROM {security_table})
         GROUP BY security_id
     )"""

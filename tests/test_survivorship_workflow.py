@@ -319,7 +319,7 @@ def test_clickhouse_publication_replaces_one_market_atomically_without_duplicate
         client.close()
 
 
-def test_refresh_downloads_both_us_listing_states_without_promoting_unreviewed_identities(tmp_path, monkeypatch):
+def test_refresh_downloads_both_us_listing_states_without_inventing_terminal_proceeds(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from engine.workflows import refresh
     import requests
@@ -343,8 +343,9 @@ def test_refresh_downloads_both_us_listing_states_without_promoting_unreviewed_i
     refresh.run_refresh(args)
     assert sorted(calls) == ["active", "delisted"]
     summary = json.loads((tmp_path / "silver" / "summary.json").read_text(encoding="utf-8"))
-    assert summary["status"] == "awaiting_review"
-    assert not (tmp_path / "silver" / "listing_episodes.json").exists()
+    assert summary["status"] == "listing_population_ready"
+    rows = json.loads((tmp_path / 'silver/events.json').read_bytes())['rows']
+    assert all(row['cash_per_share'] is None and not row['entitlements_complete'] for row in rows)
     assert (tmp_path / "bronze" / "snapshot_date=2026-01-07" / "delisted.csv").exists()
 
 
@@ -396,8 +397,9 @@ def test_us_refresh_reports_changed_provider_delisting_date_and_preserves_snapsh
         "previous_delisting_date": "2026-01-05", "current_delisting_date": "2026-01-06",
     }]
     assert quality["coverage_complete"] is False
-    assert summary["status"] == "awaiting_review"
-    assert not (lake / "gold/survivorship/us/listing_episodes.json").exists()
+    assert summary["status"] == "listing_population_ready"
+    rows = json.loads((lake / 'gold/survivorship/us/listing_episodes.json').read_bytes())['rows']
+    assert next(row for row in rows if row['symbol'] == 'MOVE')['valid_until'] == '2026-01-06'
     for (day, state), raw in originals.items():
         path = lake / f"bronze/alpha-vantage/listings/snapshot_date={day}/{state}.csv"
         assert path.read_bytes() == raw
@@ -467,7 +469,8 @@ def test_us_refresh_separates_name_changes_duplicate_rows_and_conflicting_listin
     }]
     assert (root / "snapshot_date=2026-06-30/active.csv").read_text("utf-8") == header + duplicate * 2
     assert quality["coverage_complete"] is False
-    assert not (lake / "gold/survivorship/us/events.json").exists()
+    events = json.loads((lake / 'gold/survivorship/us/events.json').read_bytes())['rows']
+    assert all(row['cash_per_share'] is None and not row['entitlements_complete'] for row in events)
 
 
 def test_dart_refresh_retains_actual_receipt_date_and_unavailable_response(tmp_path, monkeypatch):

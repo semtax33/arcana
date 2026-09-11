@@ -176,36 +176,102 @@ def read_reviewed_manifest(path, *, market, end_date):
 
 def run_survivorship_refresh(*, market, end_date, manifest_path=None, output_dir=None,
                             source_dir=None, start_date=None, panel_dir=None, download=True, load_clickhouse=True, force=False,
-                            gold_dir=None):
+                              gold_dir=None, identity_dir=None, sec_submissions_manifest=None,
+                              sec_notice_source_dir=None, sec_notice_max_requests=None,
+                              sec_notice_retry_failed=False, sec_evidence=False):
     end_date = _day(end_date)
     if market not in {"us", "kr"}:
         raise ValueError("market must be us or kr")
     output = Path(output_dir or DATA_LAKE.silver("survivorship", market))
     gold = Path(gold_dir or DATA_LAKE.gold("survivorship", market))
-    from engine.core.serving_storage import export_json, export_frame, export_prices
+    from engine.core.serving_storage import export_json, export_frame, export_prices, export_csv
     manifest_path = Path(manifest_path or DATA_LAKE.meta("survivorship", f"{market}_reviewed.json"))
     collection = None
     if download:
         from engine.extractors.survivorship import download_survivorship_sources
         collection = download_survivorship_sources(market=market, end_date=end_date, start_date=start_date,
                                                   force=force, output_dir=source_dir)
-    listing_quality = None
-    if download and market == "us":
+    listing_quality, listing_history, identity_linkage = None, None, None
+    issuer_discovery = None
+    filing_inventory = None
+    notice_documents = None
+    notice_observations = None
+    notice_event_evidence = None
+    alpha_population = None
+    if market == "us":
+        from engine.transformers.listing_history import normalize_alpha_listing_history
         from engine.transformers.listing_source_quality import audit_alpha_vantage_listing_snapshots
-        listing_quality, audit_artifact = audit_alpha_vantage_listing_snapshots(
-            root=source_dir or DATA_LAKE.bronze("alpha-vantage", "listings"), end_date=end_date,
-            output_dir=output / "listing_source_quality")
-        collection["source_quality_audit"] = audit_artifact
-    if not manifest_path.exists():
+        listing_root = Path(source_dir or DATA_LAKE.bronze("alpha-vantage", "listings"))
+        listing_history = normalize_alpha_listing_history(root=listing_root, end_date=end_date,
+            output_dir=output / "listing_history")
+        if listing_history is not None:
+            from engine.transformers.alpha_listing_population import build_alpha_listing_population
+            alpha_population = build_alpha_listing_population(history=listing_history,
+                output_dir=output / 'alpha_listing_population')
+            from engine.transformers.listing_identity import corroborate_listing_identities
+            identity_linkage = corroborate_listing_identities(history=listing_history,
+                identity_dir=identity_dir or DATA_LAKE.silver("sec", "normalized", "security_identity"),
+                end_date=end_date, output_dir=output / "identity_linkage")
+            bulk_manifest = Path(sec_submissions_manifest or DATA_LAKE.silver('sec', 'submissions', 'latest.json'))
+            if sec_evidence and bulk_manifest.exists():
+                from engine.transformers.sec_issuer_discovery import discover_sec_issuers
+                issuer_discovery = discover_sec_issuers(history=listing_history,
+                    submissions_manifest=bulk_manifest, output_dir=output / 'issuer_discovery')
+                from engine.transformers.sec_disclosure_inventory import build_sec_disclosure_inventory
+                filing_inventory = build_sec_disclosure_inventory(discovery=issuer_discovery,
+                    end_date=end_date, output_dir=output / 'filing_inventory')
+                from engine.extractors.sec_notice_documents import download_sec_notice_documents
+                notice_documents = download_sec_notice_documents(inventory=filing_inventory,
+                    source_dir=sec_notice_source_dir, output_dir=output / 'notice_documents',
+                    max_requests=sec_notice_max_requests, download=download, force=force,
+                    retry_failed=sec_notice_retry_failed)
+                from engine.transformers.sec_notice_observations import normalize_sec_notice_documents
+                notice_observations = normalize_sec_notice_documents(collection=notice_documents,
+                    output_dir=output / 'notice_observations')
+                from engine.transformers.sec_notice_event_evidence import extract_sec_notice_event_evidence
+                notice_event_evidence = extract_sec_notice_event_evidence(notices=notice_observations,
+                    output_dir=output / 'notice_event_evidence')
+        if all((listing_root / f"snapshot_date={end_date}" / f"{state}.csv").exists()
+               for state in ("active", "delisted")):
+            listing_quality, audit_artifact = audit_alpha_vantage_listing_snapshots(
+                root=listing_root, end_date=end_date, output_dir=output / "listing_source_quality")
+            if collection is not None:
+                collection["source_quality_audit"] = audit_artifact
+    if not manifest_path.exists() and alpha_population is None:
         summary = {"status": "awaiting_review", "market": market, "as_of": end_date,
                    "coverage_complete": False, "collection": collection,
                    "manifest_path": str(manifest_path.resolve()), "gold_dir": str(gold.resolve()), "artifacts": []}
         if listing_quality is not None:
             summary["listing_source_quality"] = export_json(gold / "listing_source_quality.json", listing_quality)
+        if listing_history is not None:
+            summary["listing_history"] = export_json(gold / "listing_history.json", listing_history)
+        if alpha_population is not None:
+            import pandas as pd
+            summary['alpha_listing_population'] = export_json(gold / 'alpha_listing_population.json', alpha_population)
+            summary['alpha_delistings'] = export_csv(gold / 'alpha_delistings.csv',
+                pd.read_parquet(alpha_population['delistings']['path']))
+        if identity_linkage is not None:
+            summary["identity_linkage"] = export_json(gold / "identity_linkage.json", identity_linkage)
+        if issuer_discovery is not None:
+            summary['issuer_discovery'] = export_json(gold / 'issuer_discovery.json', issuer_discovery)
+        if filing_inventory is not None:
+            summary['filing_inventory'] = export_json(gold / 'filing_inventory.json', filing_inventory)
+        if notice_documents is not None:
+            summary['notice_documents'] = export_json(gold / 'notice_documents.json', notice_documents)
+        if notice_observations is not None:
+            summary['notice_observations'] = export_json(gold / 'notice_observations.json', notice_observations)
+        if notice_event_evidence is not None:
+            summary['notice_event_evidence'] = export_json(gold / 'notice_event_evidence.json', notice_event_evidence)
         _write_json(output / "summary.json", summary)
         export_json(gold / "summary.json", summary)
         return summary
-    result = read_reviewed_manifest(manifest_path, market=market, end_date=end_date)
+    result = (read_reviewed_manifest(manifest_path, market=market, end_date=end_date)
+        if manifest_path.exists() else {key: [] for key in (
+            'listing_episodes', 'events', 'entitlements', 'trading_halts', 'sources', 'unresolved',
+            'price_sources', 'share_sources', 'market_data_sources')})
+    if alpha_population is not None:
+        from engine.transformers.alpha_listing_population import apply_alpha_listing_population
+        result = apply_alpha_listing_population(result, population=alpha_population)
     if market == "us" and result["market_data_sources"]:
         raise ValueError("US historical prices must use Alpha Vantage price sources")
     from engine.transformers.survivorship_prices import prepare_survivorship_prices, prepare_survivorship_shares
@@ -327,6 +393,7 @@ def run_survivorship_refresh(*, market, end_date, manifest_path=None, output_dir
         artifacts.append(export_prices(gold / "prices" / f"{market}_{metadata['symbol']}.parquet", frame))
     artifacts.append(export_frame(gold / "market_cap_factors.parquet", market_cap_factors))
     summary = {"market": market, "as_of": end_date,
+               "status": 'listing_population_ready' if alpha_population is not None else 'reviewed_lifecycle_loaded',
                **{key: len(value) for key, value in result.items()},
                "restored_price_rows": sum(len(frame) for _, frame in prices),
                "restored_share_rows": (len(capitalizations) if market == "kr" else sum(metadata["valid_price_days"] for metadata, _, _ in shares)),
@@ -337,6 +404,24 @@ def run_survivorship_refresh(*, market, end_date, manifest_path=None, output_dir
     if listing_quality is not None:
         summary["collection"] = collection
         summary["listing_source_quality"] = export_json(gold / "listing_source_quality.json", listing_quality)
+    if listing_history is not None:
+        summary["listing_history"] = export_json(gold / "listing_history.json", listing_history)
+    if alpha_population is not None:
+        summary['alpha_listing_population'] = export_json(gold / 'alpha_listing_population.json', alpha_population)
+        summary['alpha_delistings'] = export_csv(gold / 'alpha_delistings.csv',
+            pd.read_parquet(alpha_population['delistings']['path']))
+    if identity_linkage is not None:
+        summary["identity_linkage"] = export_json(gold / "identity_linkage.json", identity_linkage)
+    if issuer_discovery is not None:
+        summary['issuer_discovery'] = export_json(gold / 'issuer_discovery.json', issuer_discovery)
+    if filing_inventory is not None:
+        summary['filing_inventory'] = export_json(gold / 'filing_inventory.json', filing_inventory)
+    if notice_documents is not None:
+        summary['notice_documents'] = export_json(gold / 'notice_documents.json', notice_documents)
+    if notice_observations is not None:
+        summary['notice_observations'] = export_json(gold / 'notice_observations.json', notice_observations)
+    if notice_event_evidence is not None:
+        summary['notice_event_evidence'] = export_json(gold / 'notice_event_evidence.json', notice_event_evidence)
     _write_json(output / "summary.json", summary)
     export_json(gold / "summary.json", summary)
     return summary

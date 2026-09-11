@@ -1040,10 +1040,14 @@ def _reviewed_historical_symbols(market: str, *, data_lake=None) -> set[str]:
         raise ValueError("Invalid historical factor-universe metadata")
     issuers_by_symbol = {}
     for episode in payload.get("rows", []):
-        if episode.get("status") != "confirmed" or episode.get("security_type") != "common_stock":
+        if episode.get("status") != "confirmed" or episode.get("security_type") not in {"common_stock", "provider_stock"}:
             continue
         symbol = str(episode["symbol"]).strip().upper()
         if episode["security_id"] != f"SEC_{market.upper()}_{symbol}":
+            if episode.get('security_type') == 'provider_stock':
+                # These listings remain in the dated population and missing-
+                # data report until issuer-specific price/financial inputs bind.
+                continue
             raise ValueError("Historical factor inputs require an unambiguous security identity")
         issuers_by_symbol.setdefault(symbol, set()).add(episode["issuer_id"])
     if any(len(issuers) != 1 for issuers in issuers_by_symbol.values()):
@@ -1076,6 +1080,14 @@ def _resolve_stock_codes(stock_codes: list[str] | None, market: str = "kr") -> l
         # historical financial statements have been normalized. They still
         # belong in price/share factor computation.
         symbols.update(_reviewed_historical_symbols(market))
+        if market == 'us':
+            import json
+            episode_path = DATA_LAKE.silver('survivorship', market, 'listing_episodes.json')
+            if episode_path.exists():
+                episodes = json.loads(episode_path.read_text(encoding='utf-8'))['rows']
+                excluded = {row['symbol'] for row in episodes if row.get('status') == 'confirmed'
+                    and row.get('security_type') in {'unresolved_provider_alias', 'provider_etf'}}
+                symbols.difference_update(excluded)
         return sorted(symbols)
 
     local_stock_codes = _kr_stock_codes_from_normalized_price()

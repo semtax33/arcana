@@ -9,7 +9,7 @@ from engine.core.paths import DATA_LAKE
 
 
 DEFAULT_EDGAR_IDENTITY = "Arcana contact@example.com"
-DEFAULT_EDGAR_LOCAL_DATA_DIR = DATA_LAKE.root / "cache" / "edgar"
+DEFAULT_EDGAR_LOCAL_DATA_DIR = DATA_LAKE.bronze("sec", "edgar-cache")
 EDGAR_CACHE_MIGRATION_MARKERS = (
     ".locale_fix_457_applied",
     ".empty_response_fix_672_applied",

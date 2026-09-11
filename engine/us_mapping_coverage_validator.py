@@ -342,6 +342,11 @@ def _build_factor_readiness(
     def has_all(key: str, canonical_ids: list[str]) -> bool:
         return all(has(key, canonical_id) for canonical_id in canonical_ids)
 
+    def has_da(key: str) -> bool:
+        return has_any(key, ["DNA_IS", "DNA_CF"]) or has_all(
+            key, ["DEPRECIATION_EXPENSE", "AMORTIZATION"]
+        )
+
     specs: list[dict[str, Any]] = [
         {
             "factor_id": "RND",
@@ -369,10 +374,10 @@ def _build_factor_readiness(
         },
         {
             "factor_id": "D_AND_A_AVAILABLE",
-            "description": "Depreciation and amortization is available from IS or CF components.",
+            "description": "D&A is available from a reported total or both CF components.",
             "required": [],
-            "any_of": ["DNA_IS", "DEPRECIATION_EXPENSE", "AMORTIZATION"],
-            "predicate": lambda key: has_any(key, ["DNA_IS", "DEPRECIATION_EXPENSE", "AMORTIZATION"]),
+            "any_of": ["DNA_IS", "DNA_CF", "DEPRECIATION_EXPENSE+AMORTIZATION"],
+            "predicate": has_da,
         },
         {
             "factor_id": "EBITDA_DIRECT",
@@ -384,9 +389,9 @@ def _build_factor_readiness(
             "factor_id": "EBITDA_CALCULATED",
             "description": "EBITDA can be derived as operating income plus D&A.",
             "required": ["OPERATING_INCOME"],
-            "any_of": ["DNA_IS", "DEPRECIATION_EXPENSE", "AMORTIZATION"],
+            "any_of": ["DNA_IS", "DNA_CF", "DEPRECIATION_EXPENSE+AMORTIZATION"],
             "predicate": lambda key: has(key, "OPERATING_INCOME")
-            and has_any(key, ["DNA_IS", "DEPRECIATION_EXPENSE", "AMORTIZATION"]),
+            and has_da(key),
         },
         {
             "factor_id": "EV_INPUTS_STRICT",
@@ -402,14 +407,14 @@ def _build_factor_readiness(
             "required": ["OPERATING_INCOME", "CASH_AND_EQUIVALENTS"],
             "any_of": [
                 "DNA_IS",
-                "DEPRECIATION_EXPENSE",
-                "AMORTIZATION",
+                "DNA_CF",
+                "DEPRECIATION_EXPENSE+AMORTIZATION",
                 "SHORT_TERM_DEBT",
                 "LONG_TERM_DEBT",
                 "LEASE_LIABILITY",
             ],
             "predicate": lambda key: has(key, "OPERATING_INCOME")
-            and has_any(key, ["DNA_IS", "DEPRECIATION_EXPENSE", "AMORTIZATION"])
+            and has_da(key)
             and has(key, "CASH_AND_EQUIVALENTS")
             and has_any(key, ["SHORT_TERM_DEBT", "LONG_TERM_DEBT", "LEASE_LIABILITY"]),
         },

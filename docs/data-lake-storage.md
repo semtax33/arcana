@@ -113,3 +113,40 @@ SEC 재무 정정본은 `bronze/sec/fillings/10-K_A/{symbol}/{accession}`, `10-Q
 4종목의 180개 보존 공시 이력과 총 182개 수집 묶음의 대조, 최초 검사의 실패와 메타데이터 보완 내역, 재개 검증, 추가 정정본의 설명문 검토, 전체 Silver 정규화와 141개 계정 차이, 테스트·실행 코드 사본은 `silver/survivorship/financial_research/us_filing_bundle_coverage_20260911`에 둔다. 사용자용 범위·제한 사항은 `gold/survivorship/pipeline_verification/20260911_us_filing_bundles/summary.json`에 제공한다. 재무값을 바꾸지 않는 두 추가 정정본의 원문도 Bronze에서 유지한다.
 
 계정 선택 후속 검증은 `silver/survivorship/financial_research/us_statement_account_scope_20260911`에 원문 경로·해시, 실패·통과 테스트, 규칙 마이그레이션, 코드 사본과 공개 계산을 보존한다. 사용한 원본 공시 묶음은 계속 `bronze/sec/fillings`에 있으며 새 다운로드나 원문 교체는 하지 않았다. 중간 정규화는 해당 검토 폴더의 `full_normalization`, 최종 v5 정규화는 별도 `us_statement_account_scope_v5_20260911/full_normalization`에 둔다. 첫 공개 계산의 기대값 오류는 `public_factors`에 유지하고 원문 대조 후 재검증은 `public_factors_v2`에 저장했다. 사용자용 범위·제한은 `gold/survivorship/pipeline_verification/20260911_us_statement_accounts/summary.json`에 제공한다. 실행 규칙 v5는 `meta/rules`에 새 버전으로 추가하며 이전 버전을 수정하지 않는다.
+
+
+판관비·리스 구성요소의 원본 공시는 `bronze/sec/fillings`, CompanyFacts는 `bronze/sec/companyfacts`에 유지한다. v6 규칙 검토·원문 기준값·실패와 통과 XML·마이그레이션·실행 전 사본은 `silver/survivorship/financial_research/us_complete_components_20260911`에, 전체 정규화와 v5 대비 차이는 `us_complete_components_v6_20260911/full_normalization`에 둔다. 정규화된 공시별 CSV에 합산 구성요소의 태그·원래 금액·문맥·기간과 원천 경로가 남으며 원문 자체를 수정하지 않는다. 사용자용 검증 범위는 `gold/survivorship/pipeline_verification/20260911_us_complete_components/summary.json`에 제공한다. Gold의 최신 재무 준비본 연결은 v6 이후 재준비 필요 상태로 갱신하고 이전 내용은 Silver에 보존했다. 운영 팩터·스냅샷의 새 발행은 아직 수행하지 않았다.
+
+
+혼합된 직접 총액·구성요소 기간의 수정 근거는 `silver/survivorship/financial_research/us_component_duration_scope_20260911`에 저장한다. `full_normalization`은 기존 v6를 기준으로 한 재실행이며, `implementation/{sha256}`에 당시 코드·규칙의 바이트 사본을 보존한다. 후속 감가상각·상각 검토용 공시 표 추출·계정 목록과 `cash_flow_da_public_red`의 실제 공개 팩터 실패도 이 검토 범위에 둔다. 해당 표는 가공된 추출문이므로 Silver에 두며 원본 HTML·XBRL은 Bronze에 유지한다. 사용자용 결과는 `gold/survivorship/pipeline_verification/20260911_us_component_durations/summary.json`이다.
+
+
+US v7 공통 본표 범위 검증(2026-09-11)은 기존 Bronze SEC 공시를 읽어 Silver `survivorship/financial_research/us_primary_statement_scope_20260911`에 정규화 결과, 규칙 이관 기록, 코드 사본, 테스트 결과와 원인별 검토 목록을 저장한다. 사용자용 범위·커버리지 요약은 Gold `survivorship/pipeline_verification/20260911_us_primary_statement_scope/summary.json`에 둔다. 이번 실행의 입력 1,455개 해시를 재확인했으며 원문은 변경하지 않았다. 정규화의 원인별 검토 때문에 과거 투자 가능 증권을 제거하지 않는다.
+
+
+상장 관측 재사용: Alpha 원본 CSV와 수집 메타데이터는 Bronze `alpha-vantage/listings/snapshot_date=...`에 유지한다. 정규 `survivorship` 실행은 Silver `survivorship/us/listing_history/partitions`에 원문·코드 버전별 관측을, `generations`에 기준일별 후보 인덱스와 매니페스트를 저장한다. Gold `survivorship/us/listing_history.json`은 해당 처리 범위와 근거를 연결한다. 연구 검증에서는 동일 구조를 별도 Silver/Gold 출력 디렉터리에 생성한다. 테스트·코드 사본·처리 성능 자료는 Silver에 두며 docs/tests에 원본 CSV·JSON·HTML을 생성하지 않는다.
+
+
+SEC 공시 식별 관측은 Bronze의 공시 원문을 재사용하고 Silver 정규화 출력의 `security_identity/{symbol}/{accession}.json`에 저장한다. 같은 위치의 `versions`에는 내용 해시별 과거 관측을 보존한다. 원문 경로·해시·발표일과 문맥별 증권 정보를 포함하며 상장 기간은 검증되지 않은 상태로 남긴다. 별도 검증 범위는 Silver `survivorship/financial_research/us_reported_security_identity_20260911`, 사용자용 검증 요약은 Gold `survivorship/pipeline_verification/20260911_us_reported_security_identity`에 둔다.
+
+
+상장 후보–SEC 식별 연결 결과는 Silver `survivorship/us/identity_linkage/generations/{generation}`에 저장한다. 세대는 목록·SEC 관측·기준일·코드로 구분하며, 모든 원래 공급자 후보 열과 미해결 상태를 보존한다. Gold `survivorship/us/identity_linkage.json`은 연결 범위를 제공한다. 현재 별도 검증은 Silver `survivorship/financial_research/us_listing_identity_linkage_20260911`, Gold `survivorship/pipeline_verification/20260911_us_listing_identity_linkage`를 사용했다. SEC와 Alpha 원본은 Bronze에 유지하고 다운로드를 반복하지 않았다.
+
+
+SEC 종목 목록 수집은 `bronze/sec/company-tickers/{수집ID}`에 원본 응답과 URL·해시·UTC 수집 시각·HTTP 상태를 보존한다. JSON 오류, 차단 HTML, 빈 응답과 HTTP 오류 본문도 보존하며 정상 Silver 파일을 바꾸지 않는다. 가공 CSV는 `silver/sec/company_tickers.csv`, 과거 변환본과 출처는 `silver/sec/company_tickers.versions`에 둔다. 기본 소비자는 Silver를 읽으며 Silver가 없는 설치에서는 이전 meta 파일을 읽을 수 있다. 명시적으로 지정한 이전 파일은 대체하지 않는다. 기존 meta 파일은 이번에 수정하지 않았다. 사용자용 검증 범위는 Gold `survivorship/pipeline_verification/20260911_sec_ticker_source_retention`에 있다.
+
+SEC 코드 CSV를 읽을 때 `NA` 같은 실제 종목코드를 결측값으로 바꾸지 않는다. 이번 전체 대조는 가공 CSV를 다시 읽어 기대값으로 삼지 않고 원본 JSON의 코드·CIK·이름을 기준으로 수행했다.
+
+
+SEC 전체 제출 이력은 `bronze/sec/submissions-bulk/{수집ID}/submissions.zip`에 원본 그대로 저장한다. 실패·중단 응답도 같은 수집 폴더에 남기며 정상 `latest.json` 포인터를 대체하지 않는다. 현재·이전 이름, 보고된 코드/거래소 배열, 추가 이력 파일 참조는 `silver/sec/submissions/generations/{generation}/issuer_index.parquet`에 저장한다. 원본 ZIP을 파일별로 풀어 중복 보관하지 않는다. 각 행에 ZIP 멤버 이름과 해시가 남는다. Gold `survivorship/sec_submissions/summary.json`은 처리 범위·오류·검토 사유를 제공한다. 전체 CIK에는 개인 신고자 등도 포함되므로 상장기업 수로 해석하지 않는다.
+
+
+SEC CIK 조사 결과는 Silver `survivorship/us/issuer_discovery/generations`에 저장한다. `candidate_discovery.parquet`는 모든 공급자 후보와 현재·이전 이름 일치 근거를, `collection_candidates.parquet`는 공시 수집용 CIK별 대상과 관련 후보를 보존한다. 각 결과는 `collection_only=true`이고 확정 증권으로 등록되지 않는다. 원문 ZIP은 Bronze, 메타데이터 인덱스는 기존 Silver에 유지한다. Gold `survivorship/us/issuer_discovery.json`은 조사 범위와 출처를 제공한다. 실제 검증은 Silver `survivorship/financial_research/sec_bulk_issuer_discovery_20260911`, Gold `survivorship/pipeline_verification/20260911_sec_bulk_issuer_discovery`에 있다.
+
+SEC 공시 이력 목록은 Silver `survivorship/us/filing_inventory/generations/{generation}`의 `filings.parquet`, `reviews.json`, `cik_coverage.json`에 저장한다. 원본은 기존 Bronze ZIP이고 가공 행에 멤버 위치·해시를 남긴다. Gold `survivorship/us/filing_inventory.json`은 범위·검토 상태와 가공 데이터 위치를 제공한다. 실제 검증 결과는 Silver `survivorship/financial_research/sec_disclosure_inventory_20260911`, Gold `survivorship/pipeline_verification/20260911_sec_disclosure_inventory`에 있다. 실제 검증의 Parquet는 앞선 조사 단계의 Silver 검증 폴더를 재사용하며 Gold에 원본이나 전체 가공 행을 복제하지 않는다.
+
+Form 25·15 통지의 완전 제출문과 수집 메타데이터는 Bronze `sec/notice-submissions/{CIK}/{접수번호}/{수집ID}`에 보존한다. `latest.json`은 검증된 정상 원문, `last_attempt.json`은 마지막 시도에 대한 해시 고정 포인터다. 실패 응답도 수집 폴더에 남는다. 수집 상태·관측 참조는 Silver `survivorship/us/notice_documents/runs`, XML 증권 종류 관측은 Silver `survivorship/us/notice_observations/generations`에 저장한다. Gold의 `notice_documents.json`과 `notice_observations.json`은 각 단계의 범위·검토 상태·자료 위치를 제공한다. 공시 본문에서 추출한 증권 종류는 승인된 상장 이력과 구분한다.
+
+EDGAR 라이브러리의 원본 HTTP 캐시 기본 위치도 Bronze `sec/edgar-cache/_tcache`로 변경했다. 기존 `data-lake/cache/edgar`의 627,553개 파일·235,999,511,441바이트를 같은 드라이브에서 폴더 이동했다. 이전 경로는 NTFS junction으로 새 위치에 연결해 기존 출처 참조를 유지한다. 원본 응답과 `.meta` 수집 메타데이터를 함께 보존했으며, 자료를 다시 다운로드하거나 파생 재무 수치를 재계산한 작업은 아니다.
+
+이동 전후 전체 상대 경로·크기·수정 시각 목록과 디렉터리 파일 식별자가 같고, 표본 64개의 전체 내용 해시도 일치했다. 모든 파일의 내용 해시를 새로 계산한 검증은 아니다. 실제 라이브러리의 새 경로 캐시 조회와 관련 18개 테스트가 통과했다. 검증 목록은 Silver `survivorship/financial_research/edgar_cache_bronze_20260911`, 결과는 Gold `survivorship/pipeline_verification/20260911_edgar_cache_bronze`에 있다.

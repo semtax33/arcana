@@ -11,6 +11,7 @@ import pandas as pd
 
 from api.config.clickhouse import get_clickhouse_client
 from api.repository.factor_lab_query import compile_factor_lab_graph
+from api.repository.factor_lab_execution import configure_factor_lab_client, materialize_factor_lab_query
 from api.repository.listing_history import listing_history_table, trading_halt_history_table
 from api.service.factor_identity import canonical_factor_id
 from api.service.factor_lab_outcomes import evaluate_forward_outcome
@@ -48,6 +49,7 @@ def _json(value):
 
 def prepare_evaluation_run(client, run_id, graph, *, factor_table, trade_dates=None):
     """Freeze selected score inputs before any future labels are queried."""
+    configure_factor_lab_client(client)
     history_tables = dict(listing_table=listing_history_table(client),
                           trading_halt_table=trading_halt_history_table(client))
     evaluation_ids = graph.get("outputs", {}).get("evaluation_node_ids", [])
@@ -55,15 +57,27 @@ def prepare_evaluation_run(client, run_id, graph, *, factor_table, trade_dates=N
         client.command(ddl)
     score_ids = sorted({e["source"] for e in graph["edges"] if e["target"] in evaluation_ids and e.get("target_handle") == "score"})
     for score_id in score_ids:
+        if score_id == graph.get("outputs", {}).get("final_node_id"):
+            # The final INSERT already applies the same is_valid filter as
+            # compilation. Freeze exactly those values instead of rerunning
+            # the graph against possibly changed observations.
+            client.command("""INSERT INTO factor_lab_node_cache
+                (run_id, node_id, trade_date, security_id, value, is_valid, invalid_reason)
+                SELECT run_id, node_id, trade_date, security_id, factor_value, is_valid, invalid_reason
+                FROM factor_lab_values WHERE run_id = {evaluation_run_id:UUID}
+                    AND node_id = {evaluation_score_id:String} AND is_valid""",
+                parameters={"evaluation_run_id": run_id, "evaluation_score_id": score_id})
+            continue
         score_graph = deepcopy(graph)
         score_graph["outputs"] = {"final_node_id": score_id, "evaluation_node_ids": []}
         compiled = compile_factor_lab_graph(score_graph, trade_dates=trade_dates, factor_table=factor_table, **history_tables)
-        client.command(f"""INSERT INTO factor_lab_node_cache
-            (run_id, node_id, trade_date, security_id, value, is_valid, invalid_reason)
-            SELECT {{evaluation_run_id:UUID}}, {{evaluation_score_id:String}},
-                trade_date, security_id, value, is_valid, invalid_reason
-            FROM ({compiled.query})""", parameters={**compiled.parameters,
-                "evaluation_run_id": run_id, "evaluation_score_id": score_id})
+        with materialize_factor_lab_query(client, compiled) as execution:
+            client.command(f"""INSERT INTO factor_lab_node_cache
+                (run_id, node_id, trade_date, security_id, value, is_valid, invalid_reason)
+                SELECT {{evaluation_run_id:UUID}}, {{evaluation_score_id:String}},
+                    trade_date, security_id, value, is_valid, invalid_reason
+                FROM ({execution.query})""", parameters={**compiled.parameters,
+                    "evaluation_run_id": run_id, "evaluation_score_id": score_id})
     # Keep the actual execution dates/source modes, not a mutable experiment reference.
     compiled = compile_factor_lab_graph(graph, trade_dates=trade_dates, factor_table=factor_table, **history_tables)
     client.command("""INSERT INTO factor_lab_run_definition (run_id, graph_hash, graph_json)

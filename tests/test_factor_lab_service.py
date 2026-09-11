@@ -363,7 +363,7 @@ class FactorLabServiceTest(unittest.TestCase):
         self.assertIn("AND factor_id = {factor_id:String}", ranking_query)
         self.assertEqual(factor_insert_params["start_date"], "2026-12-30")
         self.assertEqual(factor_insert_params["end_date"], "2026-12-30")
-        self.assertIn("FROM fact_daily_factor_snapshot AS f", factor_insert_query)
+        self.assertIn("FROM fact_daily_factor_snapshot AS f", command_sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS factor_lab_experiment", command_sql)
         self.assertIn("INSERT INTO factor_lab_values", command_sql)
         self.assertIn("INSERT INTO factor_catalog", command_sql)
@@ -385,7 +385,7 @@ class FactorLabServiceTest(unittest.TestCase):
         )
         self.assertEqual(factor_insert_params["start_date"], "2026-12-29")
         self.assertEqual(factor_insert_params["end_date"], "2026-12-29")
-        self.assertIn("FROM fact_daily_factors AS f", factor_insert_query)
+        self.assertIn("FROM fact_daily_factors AS f", "\n".join(q for q, _ in client.commands))
 
     def test_run_graph_history_mode_keeps_requested_date_range(self):
         client = FakeFactorLabClient()
@@ -402,7 +402,7 @@ class FactorLabServiceTest(unittest.TestCase):
         )
         self.assertEqual(factor_insert_params["start_date"], "2026-01-01")
         self.assertEqual(factor_insert_params["end_date"], "2026-12-31")
-        self.assertIn("FROM fact_daily_factors AS f", factor_insert_query)
+        self.assertIn("FROM fact_daily_factors AS f", "\n".join(q for q, _ in client.commands))
 
     def test_run_graph_history_mode_limits_inputs_to_backtest_signal_dates(self):
         client = FakeFactorLabClient()
@@ -427,7 +427,7 @@ class FactorLabServiceTest(unittest.TestCase):
             factor_insert_params["trade_dates"],
             ["2026-01-01", "2026-03-31", "2026-06-30", "2026-09-30"],
         )
-        self.assertIn("f.trade_date IN {trade_dates:Array(Date)}", factor_insert_query)
+        self.assertIn("f.trade_date IN {trade_dates:Array(Date)}", "\n".join(q for q, _ in client.commands))
 
     def test_run_graph_history_mode_can_require_point_in_time_snapshots(self):
         client = FakeFactorLabClient()
@@ -450,7 +450,7 @@ class FactorLabServiceTest(unittest.TestCase):
             for query, params in client.commands
             if "INSERT INTO factor_lab_values" in query
         )
-        self.assertIn("FROM fact_daily_factor_snapshot AS f", factor_insert_query)
+        self.assertIn("FROM fact_daily_factor_snapshot AS f", "\n".join(q for q, _ in client.commands))
 
     def test_factor_lab_graph_preserves_snapshot_coverage_policy(self):
         graph_data = service_graph()

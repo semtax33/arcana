@@ -11,7 +11,7 @@ import os
 import re
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import date as date_type, timedelta
 from hashlib import sha256
 from pathlib import Path
@@ -21,9 +21,10 @@ import pandas as pd
 import yaml
 
 from engine.core.identifiers import security_id_of
-from engine.core.paths import DATA_LAKE, first_existing_path, statement_symbol_name
+from engine.core.paths import DATA_LAKE, first_existing_path, statement_symbol_name, resolve_sec_ticker_map
 from engine.markets.us import US_MARKET_CONFIG
 from engine.semantic.us_dsl import load_us_semantic_rules
+from engine.semantic.models import SemanticContext, StatementType, DisclosureSourceType
 from engine.transformers._internal.statement_files import (
     add_statement_period_columns,
     consolidated_statement_path,
@@ -51,14 +52,16 @@ US_FILINGS_DIR = DATA_LAKE.bronze("sec", "fillings")
 US_COMPANYFACTS_DIR = DATA_LAKE.bronze("sec", "companyfacts")
 US_NOTES_DATASET_DIR = DATA_LAKE.bronze("sec", "financial-statement-and-notes-data-set")
 US_NORMALIZED_DIR = DATA_LAKE.silver("sec", "normalized")
-US_TICKER_MAP_PATH = DATA_LAKE.meta("sec_company_tickers.csv")
+US_TICKER_MAP_PATH = DATA_LAKE.silver("sec", "company_tickers.csv")
 US_TICKER_ALIASES_PATH = DATA_LAKE.meta("sec_ticker_aliases.csv")
 US_REPORT_METADATA_PATH = DATA_LAKE.silver("sec", "us_report_metadata.csv")
 
 ALLOWED_SEC_FORMS = {"10-K", "10-K/A", "10-Q", "10-Q/A"}
 SOURCE_PRIORITY = {
     "filing_xbrl": 0,
+    "filing_xbrl_components": 0,
     "companyfacts_primary": 1,
+    "companyfacts_components": 1,
     "companyfacts_alternate": 2,
     "companyfacts_label": 3,
     "notes": 4,
@@ -112,6 +115,7 @@ class SecFactCandidate:
     period_start: str = ""
     reported_durations: str = ""
     graph_evidence: str = ""
+    component_facts: str = ""
     match_rank: int = 0
 
     @property
@@ -158,6 +162,7 @@ class FilingXbrlExtractResult:
     authoritative_periods: set[tuple[str, int, int]]
     authoritative_accessions: set[tuple[str, str]]
     descriptors: list[SecFilingBundleDescriptor]
+    security_identities: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -166,6 +171,7 @@ class FilingXbrlDescriptorExtractResult:
     candidates: list[SecFactCandidate]
     authoritative_period: tuple[str, int, int] | None = None
     error: str = ""
+    security_identity: dict[str, Any] | None = None
 
 
 def fan_out_sec_candidates(
@@ -252,10 +258,11 @@ def load_sec_ticker_map(
 
 
 def _read_sec_ticker_map(path: Path) -> pd.DataFrame:
+    path = resolve_sec_ticker_map(path, data_lake=DATA_LAKE)
     if not path.exists():
         return pd.DataFrame(columns=["cik", "ticker", "title"])
 
-    df = pd.read_csv(path, dtype=str).fillna("")
+    df = pd.read_csv(path, dtype=str, keep_default_na=False)
     columns = {column.lower(): column for column in df.columns}
     rename_map = {}
     for canonical, aliases in {
@@ -765,7 +772,11 @@ def extract_companyfacts_candidates_from_data(
         ]
     ] = []
 
-    for rule in rules:
+    for rule in _expand_component_rules(rules):
+        if rule.get("require_statement_scope"):
+            # CompanyFacts has no accession-local presentation graph. A tag
+            # alone cannot establish this rule's required statement scope.
+            continue
         for source, field_name in [
             ("companyfacts_primary", "primary_tags"),
             ("companyfacts_alternate", "alternate_tags"),
@@ -844,7 +855,7 @@ def extract_companyfacts_candidates_from_data(
                 period_start=safe_str(unit_row.get("start")), duration_days=duration,
                 source_path=str(path.resolve()) if source_digest else "",
                 source_sha256=source_digest, source_authority="SEC_COMPANYFACTS")
-            if canonical_id in PER_SHARE_DURATION_IDS or candidate.statement_type != "BS":
+            if canonical_id in PER_SHARE_DURATION_IDS or candidate.statement_type != "BS" or rule.get("_component_for"):
                 # EPS and weighted shares are not additive flows. Keep their
                 # same-tag/unit/accession duration observations beside the
                 # primary YTD/FY value, without borrowing a later comparative.
@@ -856,20 +867,21 @@ def extract_companyfacts_candidates_from_data(
                             or (canonical_id in PER_SHARE_DURATION_IDS and observation_end != end)):
                         continue
                     observation_start = _companyfacts_date(observation.get("start"))
-                    if observation_start is None or end is None:
+                    instant_component = bool(rule.get("_component_for")) and candidate.statement_type == "BS"
+                    if (observation_start is None and not instant_component) or end is None:
                         continue
                     variant = _candidate_from_companyfacts_unit(
                         symbol=symbol, cik=cik, entity_name=entity_name, canonical_names=canonical_names,
                         rule=rule, source=source, namespace=namespace, tag=tag, fact=fact, unit_row=observation)
                     if variant is not None:
-                        reported.append(dict(period_start=str(observation_start), period_end=str(observation_end),
-                            duration_days=(observation_end-observation_start).days+1, normalized_amount=variant.value,
+                        reported.append(dict(period_start=str(observation_start) if observation_start else "", period_end=str(observation_end),
+                            duration_days=(observation_end-observation_start).days+1 if observation_start else None, normalized_amount=variant.value,
                             raw_amount=variant.raw_value, unit=unit, context_ref=""))
                 candidate = replace(candidate, reported_durations=json.dumps(reported, sort_keys=True))
             if start_year <= candidate.fiscal_year <= end_year:
                 candidates.append(candidate)
 
-    return candidates
+    return _complete_component_totals(candidates, rules, canonical_names)
 
 
 def _companyfacts_unit_in_year_range(
@@ -1088,6 +1100,7 @@ def _extract_filing_xbrl_descriptor(
                 authoritative_period=period_key,
                 error="filing bundle contains no XBRL facts",
             )
+        from engine.transformers._internal.sec_security_identity import reported_security_identity
         return FilingXbrlDescriptorExtractResult(
             str(descriptor.path),
             _candidates_from_filing_facts(
@@ -1101,6 +1114,7 @@ def _extract_filing_xbrl_descriptor(
                 fp=fp,
             ),
             authoritative_period=period_key,
+            security_identity=reported_security_identity(descriptor, xbrl, facts),
         )
     except Exception as exc:
         fallback_period = _manifest_period_key(descriptor)
@@ -1270,6 +1284,7 @@ def extract_filing_xbrl_candidates(
         authoritative_periods,
         authoritative_accessions,
         descriptors,
+        tuple(result.security_identity for result in results_by_path.values() if result.security_identity is not None),
     )
 
 
@@ -1349,9 +1364,18 @@ def _candidates_from_filing_facts(
     taxonomy_version = _filing_taxonomy_version(descriptor.path)
     output: list[SecFactCandidate] = []
     records = facts.to_dict("records")
-    for rule in rules:
+    for rule in _expand_component_rules(rules):
+        if rule.get("require_statement_scope"):
+            rule = dict(rule, _statement_scope_matches=_filing_statement_scopes(xbrl, rule))
         matches: list[tuple[dict[str, Any], int, str]] = []
         for row in records:
+            if rule.get("_component_for") or rule.get("require_statement_scope"):
+                context_ref = safe_str(row.get("context_ref"))
+                context = xbrl.contexts.get(context_ref)
+                entity = getattr(context, "entity", {}) or {}
+                if (_filing_context_dimensions(xbrl, context_ref)
+                        or normalize_cik(entity.get("identifier")) != descriptor.cik):
+                    continue
             matched = _match_filing_fact_rule(row, rule, xbrl=xbrl)
             if matched is not None:
                 match_rank, graph_evidence = matched
@@ -1385,13 +1409,14 @@ def _candidates_from_filing_facts(
         dimensions = _filing_context_dimensions(xbrl, context_ref)
         unit = safe_str(row.get("unit") or row.get("unit_ref"))
         reported_durations = ""
-        if canonical_id in PER_SHARE_DURATION_IDS or safe_str(rule.get("fs_type")) != "BS":
+        if canonical_id in PER_SHARE_DURATION_IDS or safe_str(rule.get("fs_type")) != "BS" or rule.get("_component_for"):
             reported = []
             for observation, _, _ in matches:
                 observation_context = safe_str(observation.get("context_ref"))
                 observation_start = _companyfacts_date(observation.get("period_start"))
-                observation_end = _companyfacts_date(observation.get("period_end"))
-                if (observation_start is None or observation_end is None
+                observation_end = _companyfacts_date(_filing_fact_end(observation))
+                instant_component = bool(rule.get("_component_for")) and safe_str(rule.get("fs_type")) == "BS"
+                if ((observation_start is None and not instant_component) or observation_end is None
                         or _filing_fact_end(observation) > _filing_fact_end(row)
                         or (canonical_id in PER_SHARE_DURATION_IDS and _filing_fact_end(observation) != _filing_fact_end(row))
                         or _filing_concept_qname(observation.get("concept")) != concept
@@ -1407,8 +1432,8 @@ def _candidates_from_filing_facts(
                     continue
                 if not math.isfinite(amount):
                     continue
-                reported.append(dict(period_start=str(observation_start), period_end=str(observation_end),
-                    duration_days=(observation_end-observation_start).days+1,
+                reported.append(dict(period_start=str(observation_start) if observation_start else "", period_end=str(observation_end),
+                    duration_days=(observation_end-observation_start).days+1 if observation_start else None,
                     normalized_amount=apply_amount_policy_numeric(amount, amount_policy), raw_amount=amount,
                     unit=unit, context_ref=observation_context))
             reported_durations = json.dumps(reported, sort_keys=True)
@@ -1452,7 +1477,157 @@ def _candidates_from_filing_facts(
                 match_rank=match_rank,
             )
         )
+    return _complete_component_totals(output, rules, canonical_names)
+
+
+def _component_id(parent: str, concept: str) -> str:
+    return f"__component__:{parent}:{concept}"
+
+
+def _expand_component_rules(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    expanded = list(rules)
+    for rule in rules:
+        for concept in dict.fromkeys(tag for group in rule.get("component_sets", []) for tag in group):
+            expanded.append({
+                "canonical_id": _component_id(rule["canonical_id"], concept),
+                "fs_type": rule["fs_type"], "primary_tags": [concept],
+                "amount_policy": "as_reported", "_component_for": rule["canonical_id"],
+            })
+    return expanded
+
+
+def _complete_component_totals(
+    candidates: list[SecFactCandidate], rules: list[dict[str, Any]], canonical_names: dict[str, str],
+) -> list[SecFactCandidate]:
+    """Add only complete, co-periodic disclosures; private components never escape."""
+    output = [c for c in candidates if not c.canonical_id.startswith("__component__:")]
+
+    def scope(c: SecFactCandidate) -> tuple:
+        return (c.symbol, c.cik, c.accn, c.filed, c.form, c.fp, c.fiscal_year, c.fiscal_month,
+                c.period_end, c.unit, c.dimensions, c.source_authority, c.source_path, c.source_sha256)
+
+    for rule in rules:
+        groups = rule.get("component_sets", [])
+        if not groups:
+            continue
+        parent = rule["canonical_id"]
+        concept_ids = {_component_id(parent, tag): tag for group in groups for tag in group}
+        buckets: dict[tuple, list[SecFactCandidate]] = {}
+        for candidate in candidates:
+            if candidate.canonical_id in concept_ids and candidate.accn and candidate.unit:
+                buckets.setdefault(scope(candidate), []).append(candidate)
+        direct_scopes: dict[tuple, SecFactCandidate] = {}
+        for candidate in sorted(output, key=lambda c: c.source_rank):
+            if candidate.canonical_id == parent:
+                direct_scopes.setdefault(scope(candidate), candidate)
+        for key, components in buckets.items():
+            template = components[0]
+            direct = direct_scopes.get(key)
+            if direct is not None and template.statement_type == "BS":
+                continue
+            observations: dict[str, dict[tuple, list[dict[str, Any]]]] = {}
+            for candidate in components:
+                tag = concept_ids[candidate.canonical_id]
+                for fact in json.loads(candidate.reported_durations or "[]"):
+                    period = (fact["period_start"], fact["period_end"], fact["unit"])
+                    observations.setdefault(tag, {}).setdefault(period, []).append(
+                        dict(fact, concept=tag))
+            totals: dict[tuple, list[dict[str, Any]]] = {}
+            policy = safe_str(rule.get("amount_policy")) or "as_reported"
+            for group in groups:
+                if not all(tag in observations for tag in group):
+                    continue
+                common = set.intersection(*(set(observations[tag]) for tag in group))
+                for period in sorted(common):
+                    parts = [observations[tag][period] for tag in group]
+                    # Conflicting duplicate disclosures do not become a total.
+                    if any(len({p["raw_amount"] for p in part}) != 1 for part in parts):
+                        continue
+                    raw = math.fsum(part[0]["raw_amount"] for part in parts)
+                    if not math.isfinite(raw):
+                        continue
+                    start, end, unit = period
+                    duration = (date_type.fromisoformat(end) - date_type.fromisoformat(start)).days + 1 if start else None
+                    totals.setdefault(period, []).append(dict(
+                        period_start=start, period_end=end, unit=unit, duration_days=duration,
+                        raw_amount=raw, normalized_amount=apply_amount_policy_numeric(raw, policy),
+                        context_ref="", derivation="sum_complete_components",
+                        component_facts=[p for part in parts for p in part],
+                    ))
+            complete = [variants[0] for variants in totals.values()
+                        if len({v["raw_amount"] for v in variants}) == 1]
+            if direct is not None:
+                # A reported QTD total overrides only that exact duration. It
+                # must not discard a complete FY/YTD sum in the same accession.
+                reported = [dict(item, derivation="reported_total", source=direct.source,
+                                 source_rule_id=direct.rule_id)
+                            for item in json.loads(direct.reported_durations or "[]")]
+                direct_periods = {(item["period_start"], item["period_end"], item["unit"])
+                                  for item in reported}
+                complete = [item for item in complete if
+                            (item["period_start"], item["period_end"], item["unit"]) not in direct_periods]
+                complete.extend(reported)
+            instant = template.statement_type == "BS"
+            current = [item for item in complete if item["period_end"] == template.period_end
+                       and ((instant and item["duration_days"] is None) or
+                            (not instant and item["duration_days"] is not None and
+                             0 < item["duration_days"] <= (310 if template.form.startswith("10-Q") else 400)))]
+            if not current:
+                continue
+            selected = max(current, key=lambda item: item["duration_days"] or 0)
+            duration = selected["duration_days"]
+            if direct is not None:
+                output = [c for c in output if not (c.canonical_id == parent and scope(c) == key)]
+            if selected.get("derivation") == "reported_total":
+                output.append(replace(direct,
+                    value=selected["normalized_amount"], raw_value=selected["raw_amount"],
+                    period_start=selected["period_start"], duration_days=duration,
+                    period_semantic="FY" if duration >= 330 else ("QTD" if duration <= 120 else "YTD"),
+                    context_ref=selected["context_ref"],
+                    reported_durations=json.dumps(complete, sort_keys=True)))
+                continue
+            output.append(replace(template,
+                canonical_id=parent, canonical_name=canonical_names.get(parent, "미매핑"),
+                value=selected["normalized_amount"], raw_value=selected["raw_amount"],
+                amount_policy=policy, cash_direction=safe_str(rule.get("cash_direction")),
+                source=("filing_xbrl_components" if template.source == "filing_xbrl"
+                        else "companyfacts_components"), rule_id=f"complete_components:{parent}",
+                reason="Sum of all disclosed components in the same filing, entity, period and unit",
+                original_account_name=" + ".join(dict.fromkeys(p["concept"] for p in selected["component_facts"])),
+                context_ref="", period_start=selected["period_start"], duration_days=duration,
+                period_semantic="INSTANT" if instant else ("FY" if duration >= 330 else ("QTD" if duration <= 120 else "YTD")),
+                reported_durations="" if instant else json.dumps(complete, sort_keys=True),
+                component_facts=json.dumps(selected["component_facts"], sort_keys=True),
+            ))
     return output
+
+
+def _filing_statement_scopes(xbrl: Any, rule: dict[str, Any]) -> dict[str, str]:
+    """Match statement context once, independently of issuer and fact amounts."""
+    reports = _compile_patterns(rule.get("report_name_patterns", []))
+    labels = _compile_patterns(rule.get("label_patterns", []))
+    excludes = _compile_patterns(rule.get("label_exclude_patterns", []))
+    anchors = {_filing_element_id(tag) for tag in rule.get("statement_anchor_tags", [])}
+    matches: dict[str, list[dict[str, Any]]] = {}
+    for role, tree in xbrl.presentation_trees.items():
+        title = str(role) + " " + tree.definition
+        if not reports or not any(pattern.search(title) for pattern in reports):
+            continue
+        present_anchors = sorted(anchors.intersection(tree.all_nodes))
+        if not present_anchors:
+            continue
+        for element_id, node in tree.all_nodes.items():
+            label = node.display_label
+            if (node.is_abstract or not any(pattern.search(label) for pattern in labels)
+                    or any(pattern.search(label) for pattern in excludes)):
+                continue
+            context = SemanticContext(
+                source_type=DisclosureSourceType.FINANCIAL_STATEMENT,
+                statement_type=StatementType(rule["fs_type"]), section_path=(str(role), tree.definition))
+            matches.setdefault(element_id, []).append(dict(
+                context=asdict(context), statement_label=label, statement_anchors=present_anchors))
+    return {key: json.dumps(dict(selection="required_statement_scope", evidence=value),
+                           ensure_ascii=False, sort_keys=True) for key, value in matches.items()}
 
 
 def _match_filing_fact_rule(
@@ -1463,6 +1638,11 @@ def _match_filing_fact_rule(
 ) -> tuple[int, str] | None:
     concept = _filing_concept_qname(row.get("concept"))
     namespace, tag = split_tag_spec(concept)
+    statement_evidence = ""
+    if rule.get("require_statement_scope"):
+        statement_evidence = rule.get("_statement_scope_matches", {}).get(_filing_element_id(concept), "")
+        if not statement_evidence:
+            return None
     report_excludes = _compile_patterns(rule.get("report_name_exclude_patterns", []))
     if report_excludes:
         element_id = _filing_element_id(concept)
@@ -1482,11 +1662,15 @@ def _match_filing_fact_rule(
                  for spec in (rule.get(key, []) or [])]
     for rank, spec in enumerate(tag_specs):
         if _tag_spec_matches(spec, namespace, tag):
-            return rank, ""
+            return rank, statement_evidence
 
     label_patterns = _compile_patterns(rule.get("label_patterns", []))
     if not label_patterns or (namespace or "").lower() in DEFAULT_LABEL_EXCLUDE_NAMESPACES:
         return None
+    if statement_evidence:
+        # The declared standard anchor and the matching label are both in
+        # this filing's statement graph, including for extension concepts.
+        return len(tag_specs), statement_evidence
     label = safe_str(row.get("original_label") or row.get("label") or tag)
     excludes = _compile_patterns(rule.get("label_exclude_patterns", []))
     if excludes and any(pattern.search(label) for pattern in excludes):
@@ -2093,17 +2277,21 @@ def extract_notes_candidates(
             chunksize=250_000,
             usecols=lambda column: column in {"adsh", "tag", "version", "ddate", "uom", "dimh", "value"},
         ):
+            # Restrict the source rows before interpreting tags. Quarter-wide
+            # notes files contain mostly unrelated accessions and dimensions.
+            chunk = chunk.loc[
+                chunk["adsh"].isin(needed_adsh)
+                & chunk["uom"].eq("USD")
+                & chunk["dimh"].isin({"0x00000000", "0"})
+            ]
+            if chunk.empty:
+                continue
             tag_series = chunk["tag"].map(normalize_tag_name)
             tag_mask = tag_series.isin(needed_tags)
             if pattern_rules:
                 tag_mask |= tag_series.map(matches_any_pattern_rule)
 
-            part = chunk.loc[
-                chunk["adsh"].isin(needed_adsh)
-                & tag_mask
-                & chunk["uom"].eq("USD")
-                & chunk["dimh"].isin({"0x00000000", "0"})
-            ].copy()
+            part = chunk.loc[tag_mask].copy()
             if not part.empty:
                 num_parts.append(part)
 
@@ -2561,6 +2749,7 @@ def candidate_to_rows(candidate: SecFactCandidate) -> tuple[dict[str, Any], dict
             "period_start": candidate.period_start,
             "reported_durations": candidate.reported_durations,
             "graph_evidence": candidate.graph_evidence,
+            "component_facts": candidate.component_facts,
         }
     )
     return base, debug
@@ -3195,6 +3384,8 @@ def normalize_us_sec_filings(
         processed_symbols=processed_symbols,
         replace_year_range=None if replace_existing else replace_year_range,
     )
+    from engine.transformers._internal.sec_security_identity import write_security_identity_reports
+    write_security_identity_reports(filing_result.security_identities, output_dir)
     if log_progress:
         elapsed = time.monotonic() - started_at
         print(

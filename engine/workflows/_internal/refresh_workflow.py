@@ -306,6 +306,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "market-data",
             "stock-splits",
             "survivorship",
+            "sec-submissions",
             "financial-history",
             "filings",
             "business-info",
@@ -329,7 +330,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--survivorship-gold-output", type=Path, help="User-facing survivorship export directory.")
     parser.add_argument("--survivorship-panel-dir", type=Path, help="Optional staging directory for factor-input price panels.")
     parser.add_argument("--survivorship-source-dir", type=Path, help="Retained listing and disclosure source directory.")
+    parser.add_argument("--survivorship-identity-dir", type=Path, help="SEC reported security observations; defaults to the Silver financial normalization output.")
+    parser.add_argument("--survivorship-sec-evidence", action="store_true", help="Opt into the separate SEC notice research workflow; US delisting lists use Alpha Vantage by default.")
+    parser.add_argument("--survivorship-sec-submissions-manifest", type=Path, help="Retained SEC bulk index, used only with --survivorship-sec-evidence.")
+    parser.add_argument("--survivorship-sec-notice-source-dir", type=Path, help="Bronze archive for complete SEC Form 25/15 submissions.")
+    parser.add_argument("--survivorship-sec-notice-max-requests", type=int, help="Maximum new SEC notice requests this run; retained submissions are reused.")
+    parser.add_argument("--survivorship-sec-notice-retry-failed", action="store_true", help="Retry failed SEC notice requests while reusing successful and recognizable legacy responses.")
     parser.add_argument("--survivorship-start-date", type=parse_date_arg, help="DART historical search start; defaults to an overlapping incremental window.")
+    parser.add_argument("--financial-history-start-date", type=parse_date_arg, help="US financial collection start; full historical population defaults to 1994-01-01.")
     parser.add_argument("--survivorship-no-download", action="store_true", help="Use retained source evidence without new provider requests.")
     parser.add_argument("--financial-history-review", type=Path, action="append",
                         help="Reviewed receipt bundle for the financial-history target; repeat for additional issuers.")
@@ -409,6 +417,16 @@ def run_refresh(args: argparse.Namespace) -> None:
         raise ValueError("Financial-history options require --targets financial-history")
     if args.targets == "survivorship":
         run_survivorship_target(args)
+        return
+    if args.targets == "sec-submissions":
+        if args.market != 'us':
+            raise ValueError('SEC submission history is a US source')
+        if args.dry_run:
+            print('[DRY-RUN] SEC bulk history collection and issuer metadata index')
+            return
+        from engine.workflows.sec_submissions import run_sec_submissions_refresh
+        result = run_sec_submissions_refresh(force=args.force_full)
+        print(f'[SEC SUBMISSIONS] {json.dumps(result, ensure_ascii=False)}', flush=True)
         return
     if args.targets == "stock-splits":
         run_stock_split_target(args)
@@ -598,6 +616,9 @@ def run_us_refresh(args: argparse.Namespace) -> None:
         targets=targets,
         state=state,
         dry_run=args.dry_run,
+        end_date=end_date,
+        listing_source_dir=getattr(args, 'survivorship_source_dir', None),
+        refresh_listings=not getattr(args, 'survivorship_no_download', False),
     )
     progress = ProgressTracker(refresh_step_names(targets))
     client = None
@@ -610,8 +631,11 @@ def run_us_refresh(args: argparse.Namespace) -> None:
                 print("[RESUME] skipping completed step: filings", flush=True)
             else:
                 progress.begin("filings")
-                run_us_filing_refresh(args, symbols, end_date, client)
-                state.complete_step("filings")
+                filing_result = run_us_filing_refresh(args, symbols, end_date, client)
+                if filing_result is None or filing_result.get('coverage_complete', False):
+                    state.complete_step("filings")
+                else:
+                    print('[FINANCIAL-HISTORY] Unresolved collection inputs remain recorded; continuing other targets.', flush=True)
                 progress.done("filings")
 
         if "market-data" in targets:
@@ -695,7 +719,10 @@ def run_us_filing_refresh(
     symbols: list[str] | None,
     end_date: str,
     client: Any,
-) -> None:
+    *,
+    data_lake=None,
+    filings_provider=None,
+) -> dict | None:
     if args.dry_run:
         print(
             f"[DRY-RUN] US filings symbols={len(symbols) if symbols else 'ALL'}, "
@@ -710,37 +737,78 @@ def run_us_filing_refresh(
     )
     from engine.transformers.sec_filings import normalize_us_sec_filings
 
-    download_sec_company_tickers()
+    lake = data_lake or DATA_LAKE
+    planned_history = hasattr(args, 'symbols') or data_lake is not None
+    if planned_history:
+        download_sec_company_tickers(lake.silver('sec', 'company_tickers.csv'),
+            source_dir=lake.bronze('sec', 'company-tickers'))
+    else:
+        download_sec_company_tickers()
     end_iso = _to_iso_date(end_date)
     end_year = int(end_iso[:4])
-    start_iso = f"{end_year - 10:04d}-01-01"
-    download_us_filing_htmls(
-        symbols=symbols,
-        start_date=start_iso,
-        end_date=end_iso,
-        forms=["10-K", "10-Q"],
-        force=True,
-        workers=args.workers,
-        sleep_seconds=max(0.1, float(args.sleep_seconds or 0.0)),
-        retries=int(getattr(args, "stock_retries", 3)),
-        retry_backoff_seconds=float(getattr(args, "stock_retry_backoff", 30.0)),
-    )
-    download_us_companyfacts(
-        symbols=symbols,
-        force=True,
-        sleep_seconds=max(0.1, float(args.sleep_seconds or 0.0)),
-    )
+    start_iso = _to_iso_date(getattr(args, 'financial_history_start_date', None) or (
+        '19940101' if planned_history else f'{end_year - 10:04d}0101'))
+    force = bool(getattr(args, 'force_full', False))
+    plan, collection = None, None
+    normalization_options = {}
+    if planned_history:
+        from engine.workflows.us_financial_collection import plan_us_financial_collection, collect_us_financial_plan
+        from engine.core.serving_storage import export_json
+        retained_bulk = lake.silver('sec', 'submissions', 'latest.json')
+        plan = plan_us_financial_collection(as_of=end_iso, symbols=symbols,
+            listing_root=getattr(args, 'survivorship_source_dir', None) or lake.bronze('alpha-vantage', 'listings'),
+            ticker_map_path=lake.silver('sec', 'company_tickers.csv'),
+            ticker_aliases_path=lake.meta('sec_ticker_aliases.csv'),
+            output_dir=lake.silver('survivorship', 'us', 'financial_collection'),
+            gold_dir=lake.gold('survivorship', 'us', 'financial_collection'),
+            submissions_manifest=retained_bulk if retained_bulk.exists() else None)
+        symbols = plan['collection_symbols']
+        collection = collect_us_financial_plan(plan, start_date=start_iso, force=force,
+            filings_dir=lake.bronze('sec', 'fillings'), companyfacts_dir=lake.bronze('sec', 'companyfacts'),
+            filings_provider=filings_provider,
+            workers=args.workers, sleep_seconds=max(0.1, float(args.sleep_seconds or 0.0)),
+            retries=int(getattr(args, 'stock_retries', 3)),
+            retry_backoff_seconds=float(getattr(args, 'stock_retry_backoff', 30.0)))
+        normalization_options.update(ticker_map_path=Path(plan['ticker_map']['path']),
+            filings_dir=lake.bronze('sec', 'fillings'), companyfacts_dir=lake.bronze('sec', 'companyfacts'),
+            notes_root=lake.bronze('sec', 'financial-statement-and-notes-data-set'),
+            output_dir=lake.silver('sec', 'normalized'), report_metadata_path=lake.silver('sec', 'us_report_metadata.csv'))
+        if not symbols:
+            export_json(lake.gold('survivorship', 'us', 'financial_collection', 'refresh_result.json'), collection)
+            return collection
+    else:
+        download_us_filing_htmls(
+            symbols=symbols, start_date=start_iso, end_date=end_iso, forms=['10-K', '10-Q'],
+            force=force, workers=args.workers,
+            sleep_seconds=max(0.1, float(args.sleep_seconds or 0.0)),
+            retries=int(getattr(args, 'stock_retries', 3)),
+            retry_backoff_seconds=float(getattr(args, 'stock_retry_backoff', 30.0)))
+        download_us_companyfacts(symbols=symbols, force=force,
+            sleep_seconds=max(0.1, float(args.sleep_seconds or 0.0)))
     written = normalize_us_sec_filings(
         symbols=symbols,
-        start_year=end_year - 10,
+        start_year=int(start_iso[:4]),
         end_year=end_year,
         workers=args.workers,
         progress_interval=args.progress_interval,
+        **normalization_options,
     )
-    if not written:
+    if not written and plan is None:
         raise RuntimeError("US filing normalization produced no statement files")
     if not args.skip_clickhouse:
-        filing_loader.insert_report_metadata(market="us", client=client)
+        if planned_history:
+            filing_loader.insert_report_metadata(lake.silver('sec', 'us_report_metadata.csv'),
+                market='us', client=client, start_year=int(start_iso[:4]), end_year=end_year,
+                security_ids=normalized_security_ids('us', symbols))
+        else:
+            filing_loader.insert_report_metadata(market="us", client=client)
+    if plan is not None:
+        report = dict(collection, normalization_files=len(written),
+            coverage_complete=bool(collection['coverage_complete'] and written),
+            start_date=start_iso, end_date=end_iso, plan=plan['silver_manifest'])
+        export_json(lake.silver('survivorship', 'us', 'financial_collection', 'refresh_result.json'), report)
+        export_json(lake.gold('survivorship', 'us', 'financial_collection', 'refresh_result.json'), report)
+        return report
 
 
 def run_us_market_data_refresh(
@@ -1008,7 +1076,7 @@ def resume_state_path(args: argparse.Namespace) -> Path:
 
 
 def resume_signature(args: argparse.Namespace, end_date: str, targets: set[str]) -> dict[str, Any]:
-    return {
+    signature = {
         "market": args.market,
         "targets": refresh_step_names(targets),
         "end_date": end_date,
@@ -1032,6 +1100,10 @@ def resume_signature(args: argparse.Namespace, end_date: str, targets: set[str])
         "fmp_max_calls_per_minute": getattr(args, "fmp_max_calls_per_minute", None),
         "fmp_retries": getattr(args, "fmp_retries", None),
     }
+    if args.market == 'us' and 'filings' in targets:
+        signature['financial_collection_version'] = 4
+        signature['financial_history_start_date'] = getattr(args, 'financial_history_start_date', None)
+    return signature
 
 
 def refresh_window_to_state(window: RefreshWindow) -> dict[str, str | None]:
@@ -1209,7 +1281,7 @@ def run_financial_history_target(args: argparse.Namespace) -> None:
 def run_survivorship_target(args: argparse.Namespace) -> None:
     from engine.workflows.survivorship import run_survivorship_refresh
     if args.dry_run:
-        print(f"[DRY-RUN] survivorship market={args.market}, sources=DART/Alpha Vantage/EDGAR")
+        print(f"[DRY-RUN] survivorship market={args.market}, sources=DART/Alpha Vantage, sec_evidence={getattr(args, 'survivorship_sec_evidence', False)}")
         return
     result = run_survivorship_refresh(
         market=args.market, end_date=args.end_date,
@@ -1218,6 +1290,12 @@ def run_survivorship_target(args: argparse.Namespace) -> None:
         gold_dir=getattr(args, "survivorship_gold_output", None),
         panel_dir=getattr(args, "survivorship_panel_dir", None),
         source_dir=getattr(args, "survivorship_source_dir", None),
+        identity_dir=getattr(args, "survivorship_identity_dir", None),
+        sec_submissions_manifest=getattr(args, "survivorship_sec_submissions_manifest", None),
+        sec_notice_source_dir=getattr(args, "survivorship_sec_notice_source_dir", None),
+        sec_notice_max_requests=getattr(args, "survivorship_sec_notice_max_requests", None),
+        sec_notice_retry_failed=getattr(args, "survivorship_sec_notice_retry_failed", False),
+        sec_evidence=getattr(args, "survivorship_sec_evidence", False),
         start_date=getattr(args, "survivorship_start_date", None),
         download=not getattr(args, "survivorship_no_download", False),
         load_clickhouse=not args.skip_clickhouse,
@@ -2082,28 +2160,29 @@ def resolve_us_refresh_symbols(
     targets: set[str],
     state: RefreshState,
     dry_run: bool,
+    end_date=None,
+    listing_source_dir=None,
+    refresh_listings=False,
 ) -> list[str] | None:
-    if symbols is not None or dry_run:
+    if dry_run:
         return symbols
     source_targets = {"filings", "market-data"} & targets
     if not any(not state.is_step_completed(target) for target in source_targets):
-        return None
+        return symbols
 
-    from engine.extractors.market_prices import download_us_equity_universe
-
-    universe = download_us_equity_universe()
-    if universe.empty or "ticker" not in universe.columns:
-        raise RuntimeError("US equity universe download produced no symbols")
-    resolved = sorted(
-        {
-            str(symbol).strip().upper()
-            for symbol in universe["ticker"].dropna()
-            if str(symbol).strip()
-        }
-    )
+    from engine.transformers.alpha_listing_population import resolve_alpha_listing_symbols
+    cutoff = str(pd.Timestamp(end_date or date.today()).date())
+    source = listing_source_dir or DATA_LAKE.bronze('alpha-vantage', 'listings')
+    if refresh_listings:
+        from engine.extractors.alpha_vantage_prices import download_alpha_vantage_listings
+        download_alpha_vantage_listings(dates=[cutoff], states=('active', 'delisted'), output_dir=source)
+    if symbols is not None:
+        return symbols
+    resolved = resolve_alpha_listing_symbols(as_of=cutoff, source_dir=source,
+        output_dir=DATA_LAKE.silver('survivorship', 'us', 'listing_history'))
     if not resolved:
-        raise RuntimeError("US equity universe download produced no symbols")
-    print(f"[INFO] US refresh universe symbols={len(resolved):,}", flush=True)
+        raise RuntimeError("Alpha listing history produced no Stock symbols")
+    print(f"[INFO] US Alpha active/delisted history symbols={len(resolved):,}", flush=True)
     return resolved
 
 

@@ -55,6 +55,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_LAKE = DataLakePaths.from_project_root(PROJECT_ROOT)
 
 
+def resolve_sec_ticker_map(path: str | Path | None = None, *, data_lake=None) -> Path:
+    """Read the Silver projection; allow legacy installations to migrate on refresh."""
+    lake = data_lake or DATA_LAKE
+    current = lake.silver('sec', 'company_tickers.csv')
+    legacy = lake.meta('sec_company_tickers.csv')
+    if path is not None and Path(path).resolve() != current.resolve():
+        return Path(path)
+    return current if current.exists() or not legacy.exists() else legacy
+
+
 def market_csv_name(dataset: str, market: str = DEFAULT_MARKET) -> str:
     return f"{_normalize_market(market)}_{_safe_filename_part(dataset)}.csv"
 

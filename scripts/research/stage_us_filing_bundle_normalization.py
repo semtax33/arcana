@@ -44,7 +44,10 @@ def main():
     rule_manifest = DATA_LAKE.rules('semantic_us_rule_manifest.json')
     rule_path = rule_manifest.parent / json.loads(rule_manifest.read_bytes())['active_bundle']
     sources += [rule_path, rule_manifest,
+        DATA_LAKE.meta('CanonicalAccount.csv'),
+        ROOT / 'engine/semantic/us_dsl.py',
         ROOT / 'engine/transformers/_internal/sec_filings.py', Path(__file__)]
+    sources.append(ROOT / 'engine/transformers/_internal/sec_security_identity.py')
     sources += list((baseline / 'normalized').glob('us_normalized_*.csv'))
     pins = {str(p): digest(p) for p in sources}
     report = dict(status='normalizing', baseline=str(baseline), input_pins=pins, production_normalization_changed=False,

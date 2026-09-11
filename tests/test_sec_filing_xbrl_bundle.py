@@ -204,6 +204,7 @@ def test_filing_xbrl_extractor_parallel_results_are_complete_and_ordered():
                     }
                 ],
             }
+            (bundle / "filing.json").write_text(json.dumps(manifest), encoding="utf-8")
             descriptors.append(sec_filings.SecFilingBundleDescriptor(bundle, manifest))
 
         result = sec_filings.extract_filing_xbrl_candidates(

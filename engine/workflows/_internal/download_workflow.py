@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 import json
+import pandas as pd
 from datetime import date, datetime
 
 from engine.extractors.benchmarks import fetch_benchmark_prices, fetch_yfinance_benchmark_prices
@@ -142,10 +143,18 @@ def download_sec_company_tickers(args: argparse.Namespace) -> None:
     _download_sec_company_tickers()
 
 
+def download_sec_submissions(args: argparse.Namespace) -> None:
+    from engine.extractors.sec_submissions import download_sec_submissions_bulk
+    result = download_sec_submissions_bulk(force=args.force)
+    print(json.dumps(result), flush=True)
+
+
 def download_all_us_prices(args: argparse.Namespace) -> None:
     from engine.extractors.alpha_vantage_prices import download_alpha_vantage_prices
-    from engine.extractors._internal.yfinance_market_prices import _resolve_download_symbols
-    symbols = _resolve_download_symbols(_parse_symbols(args.symbols))
+    from engine.transformers.alpha_listing_population import resolve_alpha_listing_symbols
+    symbols = _parse_symbols(args.symbols)
+    if symbols is None:
+        symbols = resolve_alpha_listing_symbols(as_of=str(pd.Timestamp(args.end_date or date.today()).date()))
     symbols = symbols[args.offset:]
     if args.limit is not None:
         symbols = symbols[:args.limit]
@@ -409,6 +418,7 @@ US_DOWNLOAD_ACTIONS = {
     "prices": download_all_us_prices,
     "benchmarks": download_us_benchmarks,
     "sec-tickers": download_sec_company_tickers,
+    "sec-submissions": download_sec_submissions,
     "sec-filings": download_all_us_filing_htmls,
     "filing-html": download_all_us_filing_htmls,
     "consensus": download_us_consensus,

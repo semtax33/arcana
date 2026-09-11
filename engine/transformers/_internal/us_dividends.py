@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from engine.core.identifiers import security_id_of
-from engine.core.paths import DATA_LAKE, market_csv_name
+from engine.core.paths import DATA_LAKE, market_csv_name, resolve_sec_ticker_map
 from engine.extractors._internal.us_dividends import (
     BRONZE_US_DIVIDEND_DIR,
     US_DIVIDEND_SOURCE_PRIORITY,
@@ -53,7 +53,7 @@ US_DAILY_DIVIDEND_COLUMNS = [
 US_SILVER_DIVIDEND_DIR = DATA_LAKE.silver("us", "dividend")
 US_DIVIDEND_EVENTS_PATH = US_SILVER_DIVIDEND_DIR / "us_dividend_events.csv"
 US_DIVIDEND_NORMALIZED_PATH = US_SILVER_DIVIDEND_DIR / market_csv_name("dividend_normalized", market="us")
-US_SEC_TICKER_MAP_PATH = DATA_LAKE.meta("sec_company_tickers.csv")
+US_SEC_TICKER_MAP_PATH = DATA_LAKE.silver("sec", "company_tickers.csv")
 US_SEC_FINANCIAL_DIR = DATA_LAKE.silver("sec", "normalized")
 
 
@@ -374,10 +374,10 @@ def _annual_financial_metrics(tickers, financial_dir: str | Path) -> dict[tuple[
 
 def _ticker_metadata(ticker_map_path: str | Path) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {}
-    path = Path(ticker_map_path)
+    path = resolve_sec_ticker_map(ticker_map_path, data_lake=DATA_LAKE)
     if path.exists():
         try:
-            frame = pd.read_csv(path, dtype=str).fillna("")
+            frame = pd.read_csv(path, dtype=str, keep_default_na=False)
         except (OSError, ValueError):
             frame = pd.DataFrame()
         lower = {str(column).lower(): column for column in frame.columns}

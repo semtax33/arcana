@@ -15,13 +15,15 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from engine.core.paths import DATA_LAKE
+from engine.core.paths import DATA_LAKE, resolve_sec_ticker_map
 from engine.core.source_storage import (
     json_source_validator,
     validate_nonempty_file,
     write_source_bytes,
     write_source_dataframe,
+    new_source_run_id,
 )
+from engine.core.serving_storage import export_csv, export_json
 from engine.markets.us import US_MARKET_CONFIG
 from engine.transformers._internal.edgar_identity import (
     DEFAULT_EDGAR_LOCAL_DATA_DIR,
@@ -32,7 +34,7 @@ from engine.transformers._internal.edgar_identity import (
 
 SEC_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_COMPANYFACTS_URL_TEMPLATE = "https://data.sec.gov/api/xbrl/companyfacts/{cik_file_key}.json"
-SEC_TICKER_MAP_PATH = DATA_LAKE.meta("sec_company_tickers.csv")
+SEC_TICKER_MAP_PATH = DATA_LAKE.silver("sec", "company_tickers.csv")
 SEC_TICKER_ALIASES_PATH = DATA_LAKE.meta("sec_ticker_aliases.csv")
 SEC_COMPANYFACTS_DIR = DATA_LAKE.bronze("sec", "companyfacts")
 SEC_FILINGS_DIR = DATA_LAKE.bronze("sec", "fillings")
@@ -101,6 +103,7 @@ def download_sec_company_tickers(
     output_path: str | Path = SEC_TICKER_MAP_PATH,
     *,
     user_agent: str = DEFAULT_SEC_USER_AGENT,
+    source_dir: str | Path | None = None,
 ) -> pd.DataFrame:
     request = Request(
         SEC_COMPANY_TICKERS_URL,
@@ -109,11 +112,43 @@ def download_sec_company_tickers(
             "Accept-Encoding": "identity",
         },
     )
-    with urlopen(request, timeout=60) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-
+    failure = None
+    try:
+        response = urlopen(request, timeout=60)
+    except HTTPError as exc:
+        response, failure = exc, exc
+    with response:
+        raw = response.read()
+        status = getattr(response, 'status', 200)
+        headers = getattr(response, 'headers', {}) or {}
+    run_id = new_source_run_id()
+    folder = Path(source_dir or DATA_LAKE.bronze('sec', 'company-tickers')) / run_id
+    original = folder / ('response.bin' if failure else 'response.json')
+    folder.mkdir(parents=True, exist_ok=False)
+    if raw:
+        write_source_bytes(original, raw, source='sec-company-tickers-http')
+    else:
+        original.touch()
+    metadata = dict(provider='SEC', source_url=SEC_COMPANY_TICKERS_URL,
+        source_path=str(original.resolve()), source_sha256=hashlib.sha256(raw).hexdigest(),
+        retrieved_at=datetime.now(timezone.utc).isoformat(), http_status=status,
+        http_date=headers.get('Date'), last_modified=headers.get('Last-Modified'),
+        historical_listing_intervals_verified=False)
+    export_json(folder / 'metadata.json', metadata)
+    if failure is not None:
+        raise failure
+    payload = json.loads(raw.decode('utf-8-sig'))
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError('SEC ticker response must contain a nonempty object')
     rows = []
     for item in payload.values():
+        if (not isinstance(item, dict) or isinstance(item.get('cik_str'), bool)
+                or not re.fullmatch(r'[0-9]{1,10}', str(item.get('cik_str', '')))
+                or int(item['cik_str']) <= 0
+                or not isinstance(item.get('ticker'), str)
+                or not re.fullmatch(r'[A-Z0-9][A-Z0-9._-]{0,31}', item['ticker'].strip().upper())
+                or not isinstance(item.get('title'), str) or not item['title'].strip()):
+            raise ValueError('Invalid SEC ticker row; retained source requires review')
         rows.append(
             {
                 "cik": str(int(item.get("cik_str"))),
@@ -123,14 +158,15 @@ def download_sec_company_tickers(
         )
 
     df = pd.DataFrame(rows).sort_values("ticker").reset_index(drop=True)
+    if df.ticker.duplicated().any():
+        raise ValueError('Duplicated SEC ticker identity requires review')
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    write_source_dataframe(
-        output_path,
-        df,
-        source="sec-company-tickers",
-        encoding="utf-8-sig",
-    )
+    version = output_path.parent / f'{output_path.stem}.versions' / run_id / output_path.name
+    artifact = export_csv(version, df)
+    projection = dict(**metadata, rows=len(df), artifact=artifact, source_kind='current_ticker_associations')
+    export_json(version.with_suffix('.metadata.json'), projection)
+    current = export_csv(output_path, df)
+    export_json(output_path.with_suffix('.metadata.json'), dict(projection, artifact=current))
     return df
 
 
@@ -169,12 +205,41 @@ def download_us_companyfacts(
             print(f"skipping {symbol} ({cik_file_key}, download_offset : {index})")
             continue
 
+        unavailable = output / 'unavailable' / cik_file_key / 'latest.json'
+        source_url = f'https://data.sec.gov/api/xbrl/companyfacts/{cik_file_key}.json'
+        if not force and unavailable.exists():
+            try:
+                saved = json.loads(unavailable.read_bytes())
+                body_path = Path(saved['source_path']).resolve()
+                age = (_utc_now(None) - datetime.fromisoformat(saved['retrieved_at'])).total_seconds()
+                if (saved['http_status'] == 404 and saved['source_url'] == source_url
+                        and 0 <= age < 86400 and body_path.is_relative_to(output.resolve())
+                        and hashlib.sha256(body_path.read_bytes()).hexdigest() == saved['source_sha256']):
+                    print(f'[MISSING-CACHED] SEC Company Facts {cik_file_key}', flush=True)
+                    continue
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+
         print(f"downloading {symbol} ({cik_file_key}, download_offset : {index})....")
         try:
             payload = _download_sec_companyfacts(cik, user_agent=user_agent)
         except HTTPError as exc:
             if exc.code != 404:
                 raise
+            received = _utc_now(None)
+            response_path = unavailable.parent / received.strftime('%Y%m%dT%H%M%S%fZ') / 'response.bin'
+            raw = exc.read()
+            # Error responses can legitimately have zero bytes. This unique
+            # attempt path is published by metadata only after the body write.
+            response_path.parent.mkdir(parents=True, exist_ok=True)
+            response_path.write_bytes(raw)
+            metadata = dict(provider='SEC', cik=cik_file_key, http_status=404,
+                source_url=source_url, source_path=str(response_path.resolve()),
+                source_sha256=hashlib.sha256(raw).hexdigest(), retrieved_at=received.isoformat(),
+                retry_after_seconds=86400)
+            for metadata_path in (response_path.with_name('metadata.json'), unavailable):
+                write_source_bytes(metadata_path, (json.dumps(metadata, indent=2) + '\n').encode(),
+                    source='sec-companyfacts-unavailable-metadata')
             print(
                 f"[MISSING] SEC Company Facts {symbol} "
                 f"({cik_file_key}, download_offset : {index}, http_status : 404)",
@@ -1033,7 +1098,7 @@ def _load_sec_filing_ticker_map(path: str | Path) -> pd.DataFrame:
     if not path.exists():
         return _empty_ticker_map()
     try:
-        frame = pd.read_csv(path, dtype={"cik": "string", "ticker": "string", "title": "string"})
+        frame = pd.read_csv(path, dtype={"cik": "string", "ticker": "string", "title": "string"}, keep_default_na=False)
     except pd.errors.EmptyDataError:
         return _empty_ticker_map()
     for column in ("cik", "ticker", "title"):
@@ -1281,12 +1346,12 @@ def _download_sec_companyfacts(cik: str, *, user_agent: str = DEFAULT_SEC_USER_A
 
 
 def _load_sec_ticker_map(path: str | Path) -> pd.DataFrame:
-    path = Path(path)
+    path = resolve_sec_ticker_map(path, data_lake=DATA_LAKE)
     if not path.exists():
         return _empty_ticker_map()
 
     try:
-        frame = pd.read_csv(path, dtype={"cik": "string", "ticker": "string", "title": "string"})
+        frame = pd.read_csv(path, dtype={"cik": "string", "ticker": "string", "title": "string"}, keep_default_na=False)
     except pd.errors.EmptyDataError:
         return _empty_ticker_map()
 
@@ -1302,7 +1367,7 @@ def _load_sec_ticker_map(path: str | Path) -> pd.DataFrame:
     normalized["ticker"] = normalized["ticker"].map(US_MARKET_CONFIG.normalize_symbol)
     normalized["title"] = normalized["title"].fillna("").astype(str).str.strip()
     normalized = normalized.loc[normalized["cik"].ne("") & normalized["ticker"].ne("")]
-    return normalized.drop_duplicates("cik", keep="first").reset_index(drop=True)
+    return normalized.drop_duplicates(["cik", "ticker"], keep="first").reset_index(drop=True)
 
 
 def _empty_ticker_map() -> pd.DataFrame:
@@ -1329,7 +1394,7 @@ def _resolve_companyfacts_downloads(
             raise RuntimeError(
                 "SEC ticker map is empty. Run `python -m engine.workflows.download --market us sec-tickers` first."
             )
-        return rows
+        return list(by_cik.values())
 
     resolved: list[dict[str, str]] = []
     seen_ciks: set[str] = set()

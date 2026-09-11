@@ -27,6 +27,7 @@ class UsSemanticRule:
     statement_type: str
     primary_concepts: tuple[str, ...] = ()
     alternate_concepts: tuple[str, ...] = ()
+    component_sets: tuple[tuple[str, ...], ...] = ()
     exact_concepts: tuple[str, ...] = ()
     concept_patterns: tuple[str, ...] = ()
     concept_excludes: tuple[str, ...] = ()
@@ -64,9 +65,15 @@ class UsSemanticRule:
         if self.legacy_group == "companyfacts_rules":
             _put_list(rule, "primary_tags", self.primary_concepts, explicit)
             _put_list(rule, "alternate_tags", self.alternate_concepts, explicit)
+            if self.component_sets:
+                rule["component_sets"] = [list(group) for group in self.component_sets]
             _put_list(rule, "label_patterns", self.label_patterns, explicit)
             _put_list(rule, "label_exclude_patterns", self.label_excludes, explicit)
+            _put_list(rule, "report_name_patterns", self.report_patterns, explicit)
             _put_list(rule, "report_name_exclude_patterns", self.report_excludes, explicit)
+            if self.constraints.get("presentation_required"):
+                rule["require_statement_scope"] = True
+                rule["statement_anchor_tags"] = list(self.constraints.get("presentation_anchor", []))
         elif self.legacy_group == "notes_rules":
             _put_list(rule, "tags", self.exact_concepts, explicit)
             _put_list(rule, "tag_patterns", self.concept_patterns, explicit)
@@ -263,6 +270,19 @@ def _put_list(
         target[key] = list(values)
 
 
+def _component_sets(value: Any) -> tuple[tuple[str, ...], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(
+        not isinstance(group, list) or len(group) < 2
+        or any(not isinstance(tag, str) or not tag.strip() for tag in group)
+        or len(set(group)) != len(group)
+        for group in value
+    ):
+        raise ValueError("concept.component_sets requires lists of at least two distinct concepts")
+    return tuple(tuple(group) for group in value)
+
+
 def _compile_rule(rule_id: str, data: dict[str, Any]) -> UsSemanticRule:
     applies = data.get("applies", {})
     match = data.get("match fact", {})
@@ -281,6 +301,14 @@ def _compile_rule(rule_id: str, data: dict[str, Any]) -> UsSemanticRule:
     missing = [name for name, value in required_blocks.items() if not isinstance(value, dict)]
     if missing:
         raise ValueError(f"rule {rule_id!r} missing blocks: {', '.join(missing)}")
+    if "presentation_required" in constraint and type(constraint["presentation_required"]) is not bool:
+        raise ValueError("presentation_required must be a boolean")
+    if constraint.get("presentation_required"):
+        anchors = constraint.get("presentation_anchor")
+        if not isinstance(anchors, list) or not anchors or any(not isinstance(v, str) or not v for v in anchors):
+            raise ValueError("presentation_required needs nonempty presentation_anchor concepts")
+        if not match.get("report.matches") or not match.get("label.matches"):
+            raise ValueError("presentation_required needs report and statement label patterns")
 
     return UsSemanticRule(
         rule_id=rule_id,
@@ -291,6 +319,7 @@ def _compile_rule(rule_id: str, data: dict[str, Any]) -> UsSemanticRule:
         statement_type=str(constraint.get("statement", "UNKNOWN")),
         primary_concepts=_tuple_of_strings(match.get("concept.primary")),
         alternate_concepts=_tuple_of_strings(match.get("concept.alternate")),
+        component_sets=_component_sets(match.get("concept.component_sets")),
         exact_concepts=_tuple_of_strings(match.get("concept.exact")),
         concept_patterns=_tuple_of_strings(match.get("concept.matches")),
         concept_excludes=_tuple_of_strings(match.get("concept.excludes")),
@@ -442,6 +471,7 @@ def _render_legacy_rule(group: str, index: int, rule: dict[str, Any]) -> list[st
     match_fields = {
         "primary_tags": "concept.primary",
         "alternate_tags": "concept.alternate",
+        "component_sets": "concept.component_sets",
         "tags": "concept.exact",
         "tag_patterns": "concept.matches",
         "tag_exclude_patterns": "concept.excludes",
@@ -465,6 +495,9 @@ def _render_legacy_rule(group: str, index: int, rule: dict[str, Any]) -> list[st
             f"    statement = {literal(str(rule.get('fs_type', 'UNKNOWN')))}",
             '    entity = "filing.entity"',
             '    dimensions = "CONSOLIDATED_OR_NONE"',
+            *([f"    presentation_required = {literal(rule['require_statement_scope'])}",
+               f"    presentation_anchor = {literal(rule.get('statement_anchor_tags', []))}"]
+              if rule.get("require_statement_scope") else []),
             "  }",
             "  emit {",
             f"    canonical = {literal(canonical_id)}",

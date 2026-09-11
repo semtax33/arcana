@@ -23,6 +23,7 @@ from api.repository.factor_lab_query import (
     node_type_specs,
     validate_factor_lab_graph,
 )
+from api.repository.factor_lab_execution import configure_factor_lab_client, materialize_factor_lab_query
 from api.repository.factor_screen_query import (
     DEFAULT_FACTOR_SNAPSHOT_TABLE,
     DEFAULT_FACTOR_TABLE,
@@ -444,6 +445,7 @@ LIMIT 1
         factor_id = _lab_factor_id(run_id)
         client = self._client_factory()
         try:
+            configure_factor_lab_client(client)
             _ensure_tables(client)
             known_factor_ids = _load_known_factor_ids(client, graph_dict)
             validation = validate_factor_lab_graph(
@@ -547,12 +549,16 @@ LIMIT 1
                 graph_dict=execution_graph,
                 error="",
             )
-            insert_query, params = build_factor_lab_insert_query(
-                compile_result,
-                factor_id=factor_id,
-                run_id=run_id,
-            )
-            _execute(client, insert_query, params)
+            with materialize_factor_lab_query(
+                client, compile_result,
+                disk_backed=request.mode == "history" or "temporal_end_date" in compile_result.parameters,
+            ) as execution:
+                insert_query, params = build_factor_lab_insert_query(
+                    execution,
+                    factor_id=factor_id,
+                    run_id=run_id,
+                )
+                _execute(client, insert_query, params)
             _insert_factor_catalog(client, factor_id=factor_id, run_id=run_id)
             prepare_evaluation_run(client, run_id, execution_graph,
                                    factor_table=factor_table, trade_dates=history_trade_dates)

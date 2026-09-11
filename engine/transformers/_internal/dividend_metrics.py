@@ -11,6 +11,7 @@ import pandas as pd
 import yaml
 
 from engine.core.paths import (
+    resolve_sec_ticker_map,
     DATA_LAKE,
     PROJECT_ROOT,
     first_existing_path,
@@ -42,7 +43,7 @@ krx_price_file_path = DATA_LAKE.silver("krx", "price", "kr_normalized_price.csv"
 us_price_base_dir = DATA_LAKE.bronze("yfinance", "price")
 us_sec_notes_dir = DATA_LAKE.bronze("sec", "financial-statement-and-notes-data-set")
 us_sec_financial_dir = DATA_LAKE.silver("sec", "normalized")
-us_sec_ticker_map_path = DATA_LAKE.meta("sec_company_tickers.csv")
+us_sec_ticker_map_path = DATA_LAKE.silver("sec", "company_tickers.csv")
 us_dividend_rule_path = DATA_LAKE.rules("us_dividend.yaml")
 us_silver_dividend_dir = DATA_LAKE.silver("us", "dividend")
 us_dividend_events_path = us_silver_dividend_dir / "us_dividend_events.csv"
@@ -1171,12 +1172,12 @@ def _us_dividend_field_by_tag(rules):
 
 
 def _load_sec_ticker_map(path=None):
-    path = Path(path) if path is not None else us_sec_ticker_map_path
+    path = resolve_sec_ticker_map(path if path is not None else us_sec_ticker_map_path, data_lake=DATA_LAKE)
     columns = ["cik", "ticker", "title"]
     if not path.exists():
         return pd.DataFrame(columns=columns)
 
-    df = pd.read_csv(path, dtype=str).fillna("")
+    df = pd.read_csv(path, dtype=str, keep_default_na=False)
     lower = {str(column).lower(): column for column in df.columns}
     rename_map = {}
     for canonical, aliases in {

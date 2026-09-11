@@ -107,7 +107,7 @@ class RefreshWorkflowTest(unittest.TestCase):
             start_date="2016-01-01",
             end_date="2026-09-06",
             forms=["10-K", "10-Q"],
-            force=True,
+            force=False,
             workers=2,
             sleep_seconds=0.1,
             retries=4,
@@ -115,7 +115,7 @@ class RefreshWorkflowTest(unittest.TestCase):
         )
         facts.assert_called_once_with(
             symbols=["AAPL"],
-            force=True,
+            force=False,
             sleep_seconds=0.1,
         )
         normalize.assert_called_once_with(
@@ -472,7 +472,7 @@ class RefreshWorkflowTest(unittest.TestCase):
 
         self.assertIsNone(latest)
 
-    def test_us_full_refresh_uses_downloaded_equity_universe(self):
+    def test_us_full_refresh_uses_active_and_delisted_alpha_history(self):
         state = refresh_workflow.RefreshState(
             Path("unused.json"),
             {
@@ -483,20 +483,19 @@ class RefreshWorkflowTest(unittest.TestCase):
             },
             enabled=False,
         )
-        universe = pd.DataFrame({"ticker": ["MSFT", "AAPL", "AAPL"]})
-        with patch(
-            "engine.extractors.market_prices.download_us_equity_universe",
-            return_value=universe,
-        ) as download_universe:
-            symbols = refresh_workflow.resolve_us_refresh_symbols(
-                None,
-                targets={"filings", "market-data"},
-                state=state,
-                dry_run=False,
-            )
-
-        self.assertEqual(symbols, ["AAPL", "MSFT"])
-        download_universe.assert_called_once_with()
+        from test_listing_history_replay import snapshot
+        with TemporaryDirectory() as temporary:
+            lake = DataLakePaths(Path(temporary) / 'data-lake')
+            root = lake.bronze('alpha-vantage', 'listings')
+            snapshot(root, '2020-01-03', 'active', [
+                ['LIVE', 'Listed Issuer', 'NYSE', 'Stock', '2000-01-01', '', 'Active']])
+            snapshot(root, '2020-01-03', 'delisted', [
+                ['OLD', 'Former Issuer', 'NYSE', 'Stock', '1990-01-01', '2019-12-30', 'Delisted']])
+            with patch.object(refresh_workflow, 'DATA_LAKE', lake):
+                symbols = refresh_workflow.resolve_us_refresh_symbols(
+                    None, targets={'filings', 'market-data'}, state=state,
+                    dry_run=False, end_date='2020-01-03')
+        self.assertEqual(symbols, ['LIVE', 'OLD'])
 
     def test_progress_tracker_prints_step_status(self):
         stdout = io.StringIO()
@@ -1106,6 +1105,9 @@ class RefreshWorkflowTest(unittest.TestCase):
                 args.survivorship_no_download = True
                 args.survivorship_manifest = str(Path(temp_dir) / "unreviewed.json")
                 args.survivorship_output = str(Path(temp_dir) / "survivorship")
+                args.survivorship_gold_output = str(Path(temp_dir) / "gold")
+                args.survivorship_source_dir = str(Path(temp_dir) / "bronze/listings")
+                args.survivorship_identity_dir = str(Path(temp_dir) / "silver/identity")
                 refresh_workflow.run_us_refresh(args)
 
         filings.assert_called_once()

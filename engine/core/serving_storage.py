@@ -25,6 +25,10 @@ def export_frame(path, frame):
     return {**_write(path, frame.to_parquet(index=False)), "rows": len(frame)}
 
 
+def export_csv(path, frame):
+    return {**_write(path, frame.to_csv(index=False).encode('utf-8-sig')), "rows": len(frame)}
+
+
 def export_prices(path, frame):
     consumer = frame.assign(adj_close=frame["split_adj_close"])[PRICE_COLUMNS]
     return {**export_frame(path, consumer), "adjustment_basis": "split_only"}

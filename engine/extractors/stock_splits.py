@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import requests
 
-from engine.core.paths import DATA_LAKE
+from engine.core.paths import DATA_LAKE, resolve_sec_ticker_map
 from engine.core.source_storage import write_source_bytes, write_source_text
 from engine.transformers._internal.edgar_identity import resolve_edgar_identity
 
@@ -381,7 +381,7 @@ EDGAR_QUERY='"stock split" OR "share consolidation" OR "reverse split"'
 def download_edgar_splits(*,symbols=None,start_date='20020101',end_date=None,force=False,
                           sleep_seconds=.22,output_dir=None,only_known_actions=False):
     root=Path(output_dir or root_for('us'));root.mkdir(parents=True,exist_ok=True)
-    mapping=pd.read_csv(DATA_LAKE.meta('sec_company_tickers.csv'),dtype=str)
+    mapping=pd.read_csv(resolve_sec_ticker_map(data_lake=DATA_LAKE),dtype=str,keep_default_na=False)
     mapping['cik']=mapping.cik.map(lambda c:str(int(c)))
     if symbols:
         selected_ciks=set(mapping.loc[mapping.ticker.isin({str(s).upper() for s in symbols}),'cik'])

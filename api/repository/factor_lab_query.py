@@ -108,6 +108,8 @@ class FactorLabCompileResult:
     execution_order: list[str]
     graph_hash: str
     warnings: list[FactorLabIssue] = field(default_factory=list)
+    common_table_expressions: tuple[str, ...] = ()
+    result_query: str = ""
 
 
 @dataclass(frozen=True)
@@ -519,10 +521,11 @@ def compile_factor_lab_graph(
         )
     if universe_active:
         final_scope_filter += "\n    AND (trade_date, security_id) IN (SELECT trade_date, security_id FROM uv_eligible)"
+    result_query = f"SELECT *\nFROM {final_cte}\nWHERE toUInt8(is_valid) = 1{final_scope_filter}"
     query = (
         "WITH\n"
         + ",\n".join(ctes)
-        + f"\nSELECT *\nFROM {final_cte}\nWHERE toUInt8(is_valid) = 1{final_scope_filter}"
+        + "\n" + result_query
     )
     return FactorLabCompileResult(
         query=query,
@@ -531,6 +534,8 @@ def compile_factor_lab_graph(
         execution_order=validation.execution_order,
         graph_hash=validation.graph_hash,
         warnings=validation.warnings,
+        common_table_expressions=tuple(ctes),
+        result_query=result_query,
     )
 
 

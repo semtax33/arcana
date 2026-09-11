@@ -46,8 +46,8 @@ def _alternative_paths(dependency: str) -> tuple[frozenset[str], ...]:
     if dependency == "EBITDA":
         return (
             frozenset({"OPERATING_INCOME", "DNA_IS"}),
-            frozenset({"OPERATING_INCOME", "DEPRECIATION_EXPENSE"}),
-            frozenset({"OPERATING_INCOME", "AMORTIZATION"}),
+            frozenset({"OPERATING_INCOME", "DNA_CF"}),
+            frozenset({"OPERATING_INCOME", "DEPRECIATION_EXPENSE", "AMORTIZATION"}),
         )
     if dependency == "DEBT_NET_BORROWING":
         # The JS derives net borrowing when either gross leg is reported; the
