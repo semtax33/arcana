@@ -67,7 +67,73 @@ def read_receipt_financial_history(stock_code, financial_dir, market, *, basis="
         receipts.append(values)
     if not receipts:
         return pd.DataFrame()
-    versions = pd.DataFrame(receipts).sort_values(["report_date", "rcept_no"], kind="stable")
+    return financial_vintage_events(pd.DataFrame(receipts), basis=basis,
+                                    cumulative_statement_types=cumulative_statement_types)
+
+
+def read_period_financial_history(stock_code, financial_dir, market, *, report_metadata_path,
+                                  basis="annual", cumulative_statement_types=None):
+    """Evaluate retained period observations only from their evidenced dates.
+
+    A consolidated file does not recover superseded versions. Its retained
+    amounts enter at the associated publication date and never replace a newer
+    known period merely because an older period was published later.
+    """
+    from engine.transformers._internal.factor_metrics import (
+        aggregate_annual_canonical_values, extract_fallback_values,
+        security_id_for_market, _strictly_disclosed_financial_rows,
+    )
+    from engine.transformers._internal.filing_periods import attach_report_metadata, period_end_date
+    from engine.transformers._internal.statement_files import read_statement_period_frames
+
+    if basis not in {"annual", "quarterly", "ttm"}:
+        raise ValueError("Unsupported financial history basis")
+    accession_years, accession_rows = set(), []
+    if market == "us":
+        from engine.transformers._internal.sec_accession_history import read_accession_rows, accession_financial_versions
+        accession_years, accession_frame = read_accession_rows(financial_dir, stock_code)
+        accession_rows = accession_financial_versions(accession_frame, symbol=stock_code, basis=basis)
+    rows = []
+    for year, month, frame in read_statement_period_frames(stock_code, financial_dir, market=market):
+        if year in accession_years:
+            continue
+        if basis == "annual" and month != 12:
+            continue
+        frame = frame.loc[frame.canonical_account_id.notna() & frame.canonical_account_id.ne("UNMAPPED")].copy()
+        if frame.empty:
+            continue
+        frame["normalized_amount"] = pd.to_numeric(frame.normalized_amount, errors="coerce")
+        values = aggregate_annual_canonical_values(frame)
+        values.update(extract_fallback_values(frame))
+        values.update(stock_code=stock_code, security_id=security_id_for_market(stock_code, market),
+                      fiscal_year=year, fiscal_month=month, financial_period=period_end_date(year, month),
+                      _fs_type_by_id=dict(zip(frame.canonical_account_id, frame.statement_type)))
+        rows.append(values)
+    versions = pd.DataFrame()
+    if rows:
+        versions = attach_report_metadata(pd.DataFrame(rows), report_metadata_path, fallback_to_period_end=False)
+        versions = _strictly_disclosed_financial_rows(versions)
+    versions = pd.concat([versions, pd.DataFrame(accession_rows)], ignore_index=True)
+    if versions.empty:
+        return versions
+    for column, default in [("financial_scope", "UNKNOWN"), ("accounting_regime", "UNKNOWN"),
+                            ("source_url", ""), ("rcept_no", "")]:
+        if column not in versions:
+            versions[column] = default
+        else:
+            versions[column] = versions[column].fillna(default)
+    return financial_vintage_events(versions, basis=basis,
+                                    cumulative_statement_types=cumulative_statement_types)
+
+
+def financial_vintage_events(versions, *, basis, cumulative_statement_types=None):
+    """Recalculate the newest known period whenever disclosed history changes."""
+    from engine.transformers._internal.factor_metrics import (
+        add_annual_financial_factors, _financial_frame_from_periodized,
+    )
+    from engine.transformers._internal.filing_periods import add_quarter_and_ttm_amounts
+
+    versions = versions.sort_values(["report_date", "rcept_no"], kind="stable")
     latest_by_period = {}
     events = []
     for published, group in versions.groupby("report_date", sort=True):
@@ -124,7 +190,11 @@ def read_receipt_financial_history(stock_code, financial_dir, market, *, basis="
         event["history_comparability_start_date"] = comparability_start
         window = 3 * periods_per_year
         ownership = calculated.roe_ownership_basis.tail(window)
-        consistent_ownership = len(ownership) == window and ownership.notna().all() and ownership.nunique() == 1
+        # RIM compares this fallback with an annual required return. A raw
+        # quarterly ROE average is not an annual forecast; annual and TTM
+        # histories provide the supported return bases.
+        consistent_ownership = (basis != "quarterly" and len(ownership) == window
+                                and ownership.notna().all() and ownership.nunique() == 1)
         event["historical_roe_3y_avg"] = (calculated.roe.tail(window).mean()
                                           if consistent_ownership else float("nan"))
         events.append(event)

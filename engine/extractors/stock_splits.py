@@ -62,6 +62,44 @@ def _save_response(root,name,response,metadata):
     return item
 
 
+def _retain_failed_dart_document(root,record,code,family,stage,error,*,response=None,source_url):
+    """Retain a failed request or navigation body as an unavailable document version."""
+    receipt=record['source_id']
+    raw=response.content if response is not None else b''
+    digest=hashlib.sha256(raw).hexdigest()
+    family=sorted(set([receipt,*family]))
+    metadata={**record,'provider':'DART','security_id':f'SEC_KR_{code}','stock_code':code,
+        'published_date':record.get('published_date'),
+        'family':family,'family_id':min(family),'source_validation':'failed',
+        'document_stage':stage,'validation_error':str(error),'error_type':type(error).__name__,
+        'http_response_received':response is not None,
+        'http_status':response.status_code if response is not None else None,'byte_count':len(raw)}
+    path=Path(root)/'public_documents'/receipt/f'{digest}.{stage}.html'
+    if raw:
+        return _save_response(path.parent,path.name,response,metadata)
+    item={**metadata,'source_url':response.url if response is not None else source_url,
+          'source_sha256':digest,'path':None,'retrieved_at':datetime.now(timezone.utc).isoformat()}
+    _json(path.with_suffix('.html.metadata.json'),item)
+    return item
+
+
+def _refresh_cached_dart_publication(root,record,metadata_path):
+    """Correct legacy availability metadata while retaining its exact prior version."""
+    if not record.get('published_date'):return
+    raw=metadata_path.read_bytes()
+    metadata=json.loads(raw)
+    same_date=metadata.get('published_date')==record['published_date']
+    if same_date and (metadata.get('publication_date_source') or not record.get('publication_date_source')):return
+    digest=hashlib.sha256(raw).hexdigest()
+    archive=Path(root)/'metadata_versions'/record['source_id']/f'{digest}.metadata.json'
+    write_source_bytes(archive,raw,source='DART-publication-date-metadata-before-correction')
+    correction={key:record[key] for key in ['published_date','publication_date_text','publication_date_source']
+                if key in record}
+    _json(metadata_path,{**metadata,**correction,'publication_date_prior_metadata':{
+        'path':str(archive.resolve()),'sha256':digest,'published_date':metadata.get('published_date')},
+        'publication_date_corrected_at':datetime.now(timezone.utc).isoformat()})
+
+
 def parse_dart_search(html):
     soup=BeautifulSoup(html,'lxml')
     records=[]
@@ -74,8 +112,14 @@ def parse_dart_search(html):
         corp=re.search(r"openCorpInfoNew\(\s*['\"](\d{8})",str(row))
         title=anchor.get_text(' ',strip=True)
         if not any(k in re.sub(r'\s+','',title) for k in ['주식분할','주식병합']):continue
-        records.append({'source_id':match.group(1),'corp_code':corp.group(1) if corp else '',
-                        'title':title,'main_url':urljoin('https://dart.fss.or.kr',href)})
+        record={'source_id':match.group(1),'corp_code':corp.group(1) if corp else '',
+                'title':title,'main_url':urljoin('https://dart.fss.or.kr',href)}
+        displayed_dates=[cell.get_text(' ',strip=True) for cell in row.find_all('td',recursive=False)
+                         if re.fullmatch(r'\d{4}\.\d{2}\.\d{2}',cell.get_text(' ',strip=True))]
+        if len(displayed_dates)>1:raise ValueError('Ambiguous DART receipt-date cells')
+        if displayed_dates:
+            record.update(published_date=iso(displayed_dates[0]),publication_date_text=displayed_dates[0])
+        records.append(record)
     text=soup.get_text(' ',strip=True)
     totals=re.findall(r'총\s*([\d,]+)\s*건',text)
     if not totals:
@@ -93,6 +137,22 @@ def dart_family(html):
     select=soup.find('select',id='family')
     if select is None:return []
     return sorted(set(re.findall(r'rcpNo=(\d{14})',str(select))))
+
+
+def dart_family_dates(html):
+    """Read each receipt's own displayed publication date from the official family."""
+    soup=BeautifulSoup(html,'lxml')
+    result={}
+    for option in soup.select('select#family option'):
+        receipt=re.search(r'rcpNo=(\d{14})',option.get('value',''))
+        displayed=re.match(r'(\d{4}\.\d{2}\.\d{2})(?:\s|$)',option.get_text(' ',strip=True))
+        if receipt and displayed:
+            value={'published_date':iso(displayed[1]),'publication_date_text':displayed[1]}
+            if option.get('title'):value['title']=option['title']
+            if receipt[1] in result and result[receipt[1]]['published_date']!=value['published_date']:
+                raise ValueError('Conflicting DART family publication dates')
+            result[receipt[1]]=value
+    return result
 
 
 def dart_viewer_parameters(html,receipt):
@@ -175,7 +235,7 @@ def download_dart_splits(*,symbols=None,start_date='20020101',end_date=None,forc
                                     'Referer':'https://dart.fss.or.kr/','Accept-Language':'ko-KR,ko;q=0.9'})
     start=pd.Timestamp(iso(start_date));end=pd.Timestamp(iso(end_date or date.today()))
     wanted={str(s).zfill(6) for s in symbols} if symbols else None
-    records={};errors=[];search_pages=0
+    records={};errors=[];search_pages=0;outside_cutoff=[]
     for year in range(start.year,end.year+1):
         a=max(start,pd.Timestamp(year,1,1));b=min(end,pd.Timestamp(year,12,31))
         for title in ['주식분할결정','주식병합결정']:
@@ -195,6 +255,10 @@ def download_dart_splits(*,symbols=None,start_date='20020101',end_date=None,forc
                     _save_response(root/'search',cache.name,r,{'request':params});content=r.content
                 found,total=parse_dart_search(content)
                 if not found and total>0:raise ValueError('DART search returned a nonempty count without parseable disclosures')
+                for record in found:
+                    if record.get('published_date'):
+                        record['publication_date_source']={'kind':'DART_search_receipt_date',
+                            'path':str(cache.resolve()),'sha256':hashlib.sha256(content).hexdigest()}
                 records.update({r['source_id']:r for r in found});search_pages+=1
                 if page*100>=total:break
                 page+=1
@@ -211,24 +275,67 @@ def download_dart_splits(*,symbols=None,start_date='20020101',end_date=None,forc
             folder=root/'disclosures'/code
             meta_path=folder/f'{receipt}.html.metadata.json'
             if meta_path.exists() and not force:
+                _refresh_cached_dart_publication(root,record,meta_path)
                 done+=1;continue
-            main=session.request('GET',record['main_url'])
-            family=dart_family(main.content) or [receipt]
-            # A withdrawal/correction may no longer match the original search title.
-            # Follow the actual DART family, including revisions outside this search window.
-            for related in family:
-                if related not in seen and related[:8]<=end.strftime('%Y%m%d'):
-                    seen.add(related)
-                    pending.append((related,{**record,'source_id':related,'main_url':f'https://dart.fss.or.kr/dsaf001/main.do?rcpNo={related}'}))
-            _save_response(folder,f'{receipt}.main.html',main,{**record,'stock_code':code,'family':family})
-            params=dart_viewer_parameters(main.content,receipt)
+            main=None
+            family=record.get('family') or [receipt]
+            try:
+                main=session.request('GET',record['main_url'])
+                main_source=_save_response(folder,f'{receipt}.main.html',main,{**record,'stock_code':code})
+                family=sorted(set([*family,*(dart_family(main.content) or [receipt])]))
+                dates=dart_family_dates(main.content)
+                date_source={'kind':'DART_family_receipt_date','path':main_source['path'],
+                             'sha256':main_source['source_sha256']}
+                if (record.get('published_date') and receipt in dates
+                        and record['published_date']!=dates[receipt]['published_date']):
+                    record={**record,'publication_date_conflict':[
+                        {'published_date':record['published_date'],'source':record.get('publication_date_source')},
+                        {'published_date':dates[receipt]['published_date'],'source':date_source}],
+                        'published_date':None}
+                    raise ValueError('Conflicting DART publication dates in the index and document family')
+                if not record.get('published_date') and receipt in dates:
+                    record={**record,**dates[receipt],'publication_date_source':date_source}
+                if not record.get('published_date'):
+                    raise ValueError('Missing evidenced DART publication date')
+                if record['published_date']>end.date().isoformat():
+                    outside_cutoff.append({key:record[key] for key in
+                        ['source_id','published_date','publication_date_source'] if key in record})
+                    continue
+                # Preserve the observed family if a related main request later fails.
+                for related in family:
+                    related_date=dates.get(related,{}).get('published_date')
+                    if related not in seen and (related_date is None or related_date<=end.date().isoformat()):
+                        seen.add(related)
+                        related_record={key:value for key,value in record.items()
+                                        if key not in {'published_date','publication_date_text','publication_date_source'}}
+                        related_record.update(source_id=related,family=family,
+                            main_url=f'https://dart.fss.or.kr/dsaf001/main.do?rcpNo={related}')
+                        if related in dates:
+                            related_record.update(**dates[related],publication_date_source=date_source)
+                        pending.append((related,related_record))
+                params=dart_viewer_parameters(main.content,receipt)
+            except (requests.RequestException,ValueError,UnicodeError) as exc:
+                response=getattr(exc,'response',None)
+                if response is None:response=main
+                _retain_failed_dart_document(root,record,code,family,'main',exc,
+                    response=response,source_url=record['main_url'])
+                raise
             try:
                 viewer=session.request('GET','https://dart.fss.or.kr/report/viewer.do',params=params)
             except requests.HTTPError as exc:
-                if exc.response is None:raise
-                viewer=exc.response
+                if exc.response is not None:
+                    viewer=exc.response
+                else:
+                    _retain_failed_dart_document(root,record,code,family,'viewer',exc,
+                        source_url='https://dart.fss.or.kr/report/viewer.do?'+urlencode(params))
+                    raise
+            except requests.RequestException as exc:
+                _retain_failed_dart_document(root,record,code,family,'viewer',exc,
+                    response=getattr(exc,'response',None),
+                    source_url='https://dart.fss.or.kr/report/viewer.do?'+urlencode(params))
+                raise
             context={**record,'security_id':f'SEC_KR_{code}','stock_code':code,
-                     'published_date':record.get('published_date') or f'{receipt[:4]}-{receipt[4:6]}-{receipt[6:8]}',
+                     'published_date':record['published_date'],
                      'family':family,'family_id':min(family),'provider':'DART','request':params,
                      'source_validation':'pending','http_status':viewer.status_code,'byte_count':len(viewer.content)}
             digest=hashlib.sha256(viewer.content).hexdigest()
@@ -262,7 +369,8 @@ def download_dart_splits(*,symbols=None,start_date='20020101',end_date=None,forc
         if (done+len(errors))%25==0:
             print(f'[SPLITS] DART downloaded={done} errors={len(errors)}',flush=True)
     summary={'provider':'DART','start_date':str(start.date()),'end_date':str(end.date()),'search_pages':search_pages,
-             'disclosures_found':len(records),'downloaded_or_cached':done,'outside_symbols':skipped,'errors':errors}
+             'disclosures_found':len(records),'downloaded_or_cached':done,'outside_symbols':skipped,
+             'outside_cutoff':outside_cutoff,'errors':errors}
     _json(root/'download_report.json',summary)
     return summary
 

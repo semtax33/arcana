@@ -87,7 +87,13 @@ def normalize_split_ledger(market,*,as_of=None,source_root=None,output_path=None
         if metadata.get('provider') not in {'DART','KIND','EDGAR'}:return None,None
         if path.is_relative_to(root/'public_documents') and metadata.get('source_validation') not in {'pending','failed'}:
             return None,None
-        if metadata.get('published_date','9999')>cutoff:return None,None
+        # DART dates are resolved after source validation, so a successful retry
+        # of the same receipt can resolve an earlier undated failed request.
+        if metadata.get('provider')!='DART' and metadata.get('published_date','9999')>cutoff:return None,None
+        if (metadata.get('provider')=='DART' and metadata.get('published_date')
+                and metadata['published_date']>cutoff
+                and (metadata.get('security_id'),metadata.get('source_id')) not in undated_receipts):
+            return None,None
         # The local sidecar remains relocatable; never trust a manifest path to read outside this source tree.
         content_path=path.with_name(path.name.removesuffix('.metadata.json'))
         if metadata.get('source_validation') in {'pending','failed'} and metadata.get('byte_count')==0:
@@ -108,12 +114,36 @@ def normalize_split_ledger(market,*,as_of=None,source_root=None,output_path=None
         return metadata,None
     paths=list(root.glob('disclosures/**/*.metadata.json'))
     if market=='kr':paths.extend(root.glob('public_documents/**/*.metadata.json'))
+    undated_receipts=set()
+    for path in paths:
+        metadata=json.loads(path.read_text(encoding='utf-8'))
+        if (metadata.get('provider')=='DART' and not metadata.get('published_date')
+                and (not path.is_relative_to(root/'public_documents')
+                     or metadata.get('source_validation') in {'pending','failed'})):
+            undated_receipts.add((metadata.get('security_id'),metadata.get('source_id')))
     with ThreadPoolExecutor(max_workers=8) as pool:
         for count,(metadata,issue) in enumerate(pool.map(prepare_source,paths),1):
             if issue:reviews.append(issue)
             if metadata is not None:
                 sources.append(metadata)
             if count%1000==0:print(f'[SPLITS] verified market={market} documents={count}/{len(paths)}',flush=True)
+    dated_receipts={}
+    for metadata in sources:
+        if (metadata.get('provider')=='DART' and metadata.get('published_date')
+                and metadata.get('source_validation') not in {'pending','failed'}):
+            dated_receipts.setdefault((metadata.get('security_id'),metadata.get('source_id')),[]).append(metadata)
+    for metadata in sources:
+        if metadata.get('provider')=='DART' and not metadata.get('published_date'):
+            candidates=dated_receipts.get((metadata.get('security_id'),metadata.get('source_id')),[])
+            if metadata.get('publication_date_conflict'):
+                def revalidated_after_conflict(candidate):
+                    if not candidate.get('full_document_verified'):return False
+                    try:return pd.Timestamp(candidate.get('retrieved_at'))>pd.Timestamp(metadata.get('retrieved_at'))
+                    except (TypeError,ValueError):return False
+                candidates=[candidate for candidate in candidates if revalidated_after_conflict(candidate)]
+            if not candidates:
+                raise ValueError(f'Unresolved DART publication date: {metadata.get("source_id")}')
+    sources=[metadata for metadata in sources if metadata.get('published_date') and metadata['published_date']<=cutoff]
     # API archives initially know only their receipt; a public DART main page
     # supplies explicit links to the other versions of the same disclosure.
     # Join those identities before choosing the latest version, including a

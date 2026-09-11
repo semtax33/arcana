@@ -12,6 +12,14 @@
 
 ## 파이프라인 출력
 
+DART 본문과 안내 페이지의 실패 응답도 `bronze/dart/stock_splits/public_documents/{receipt}`에 바이트·해시·요청 단계와 함께 보존한다. HTTP 응답 자체가 없으면 원문 파일 없이 수집 실패 메타데이터만 남긴다. 기존 제공 불가 캐시를 읽을 때 보완하는 보류 메타데이터에는 원래 캐시의 경로·해시를 연결하고 원문이나 캐시를 수정하지 않는다. 이 경로의 테스트·구현 보관본은 `silver/survivorship/financial_research/dart_previewer_failures_20260911`, 사용자용 검증 요약은 `gold/survivorship/pipeline_verification/20260911_dart_previewer_failures`에 있다.
+
+실제 접수일 근거에는 검색 원문 또는 정정 이력 안내 페이지의 경로·SHA-256을 연결한다. 캐시의 날짜를 정정할 때 이전 메타데이터는 `bronze/dart/stock_splits/metadata_versions/{receipt}/{sha256}.metadata.json`에 그대로 보존한다. 현재 메타데이터의 `publication_date_prior_metadata`가 그 버전을 가리키며 공시 본문은 바꾸지 않는다. 날짜 보정 검증은 `silver/survivorship/financial_research/dart_publication_dates_20260911`, 사용자용 요약은 `gold/survivorship/pipeline_verification/20260911_dart_publication_dates`에 둔다.
+
+날짜 미확정 수집 기록은 `published_date=null`로 보존하며 충돌한 날짜와 원문 경로·해시를 `publication_date_conflict`에 남긴다. API ZIP의 날짜가 없으면 `document_archives`의 원본을 보존하고, 날짜 검증 실패 메타데이터에서 ZIP 경로·해시를 참조한다. 회귀 테스트·최종 CLI 재검증과 구현 보관본은 `silver/survivorship/financial_research/dart_date_validation_20260911`, 사용자용 검증 요약은 `gold/survivorship/pipeline_verification/20260911_dart_date_validation`에 있다. 과거 실패를 해제하더라도 그 원문과 메타데이터를 지우지 않는다.
+
+후속 날짜 검증에서 실제 수집한 KIND 원문·메타데이터는 `bronze/dart/corporate_actions/followup_dates_20260911`에 보존한다. KIND의 검색 행 날짜·시각 원문은 유지하며 DART와 KIND의 서로 다른 접수번호를 각각 기록한다. 공개 수집·CLI 테스트 131개의 결과, 실제 9개 보관 파일의 재실행 대조와 구현 사본은 `silver/survivorship/financial_research/split_followup_dates_20260911`, 사용자용 요약은 `gold/survivorship/pipeline_verification/20260911_split_followup_dates`에 둔다. 조회 상한 이후임을 새로 확인한 DART 원문도 Bronze에 남기고 수집 보고서의 `outside_cutoff`에 날짜 근거를 연결한다.
+
 주식분할 갱신은 silver 사건 원장과 가격 패널을 만든 뒤 gold의 `stock_splits.json`, `prices/{market}_{symbol}.parquet`, `summary.json`을 저장한다. 주식병합도 같은 기업행위 경로를 사용한다. 독립 실행의 `--gold-output` 또는 `run_stock_split_refresh(gold_dir=...)`로 gold 위치를 지정할 수 있다.
 
 생존편향 갱신은 gold에 `listing_episodes.json`, `events.json`, `entitlements.json`, `trading_halts.json`, `unresolved.json`, `prices/{market}_{symbol}.parquet`, `market_cap_factors.parquet`, `summary.json`을 저장한다. `--survivorship-output`은 silver, `--survivorship-gold-output`은 gold 경로다. `--skip-clickhouse` 실행에서도 파일은 두 계층에 저장된다. 검토 목록이 없으면 gold 요약에 `awaiting_review`를 표시한다.
@@ -19,6 +27,10 @@
 gold 가격 파일의 `adj_close`는 분할·병합만 반영한 수정종가다. `open`, `high`, `low`, `close`, `volume`은 거래 당시 값이며, 배당을 포함한 총수익률 가격이 아니다. 요약의 `artifacts`가 해당 실행에서 생성한 파일과 SHA-256을 가리킨다. 파일별 교체 후 요약을 마지막에 쓴다. 전체 디렉터리를 한 번에 교체하는 트랜잭션은 아니므로 동시 열람 시 파일 해시를 확인해야 한다.
 
 gold에 있다는 사실이 검증 완료를 의미하지 않는다. `coverage_complete=false`와 미해결 사건을 함께 제공하며, 미확정 현금·CVR·비상장 주식·단주 권리를 0으로 바꾸지 않는다. 생존편향의 전체 시장 보정 여부는 [파이프라인 현황](survivorship-pipeline.md)을 따른다.
+
+한국 시총·주식수의 1996~2026년 통합 검증은 `silver/survivorship/financial_research/kr_current_capitalization_export_20260911`에 보존한다. 최신 native·스냅샷 각각 369개 월별 파일은 `gold/survivorship/kr/capitalization_factors/1996_2026/kr_current_capitalization_export_20260911/{native|snapshot}`에 있으며, `capitalization_factors/current.json`이 검증된 요약의 경로·해시를 가리킨다. 기존 범위별 파일은 보존한다. 이 통합의 완료로 전체 주식수 의존 팩터 변경 기록을 해제하지 않는다.
+
+부채 결측 수정의 운영 코드·테스트·실제 입력 대조는 `silver/survivorship/financial_research/debt_abstention_main_20260911`, 실제 판독 전후 결과는 `reviewed_debt_inputs_before_20260911`과 `reviewed_debt_inputs_after_20260911`에 둔다. 사용자용 기능 검증은 `gold/survivorship/pipeline_verification/20260911_debt_abstention_main`에 있다. 미국 4종목의 전체 팩터 재계산 준비본은 `silver/survivorship/financial_research/us_reviewed_full_factor_preparation_20260911`에 있으며, 운영 native·스냅샷 반영 완료와 구분한다.
 
 일반 팩터 스크리너의 상장 이력·거래정지 연결 검증은 `silver/survivorship/financial_research/factor_screen_lifecycle_20260911`에 SQL, 실패·통과 기록, 코드 사본과 해시를 보존하고 `gold/survivorship/pipeline_verification/20260911_factor_screen_lifecycle`에 사용자용 요약을 둔다. 테스트는 고유한 격리 DB와 임시 Bronze 원문을 사용하며 운영 상장 이력을 추가하지 않는다.
 
@@ -75,3 +87,29 @@ gold에 있다는 사실이 검증 완료를 의미하지 않는다. `coverage_c
 ```powershell
 & .\.venv-llama\Scripts\python.exe -X utf8 scripts/maintenance/migrate_research_storage.py --verify
 ```
+
+
+일반 SEC 파일의 공시 시점별 재계산 테스트·수정 전 코드·실제 준비본 비교는 `silver/survivorship/financial_research/us_period_vintage_refresh_20260911`에 저장한다. 최종 준비본은 `us_reviewed_full_factor_preparation_period_vintage_20260911_v2`, 독립 부채비율 대조는 `us_reviewed_leverage_validation_period_vintage_20260911_v2`에 보존한다. 사용자용 검증 상태는 `gold/survivorship/pipeline_verification/20260911_us_period_vintage/summary.json`에 제공하며, 팩터의 운영 게시 여부와 분리한다. 이전 실패 준비본과 검토 상태는 덮어쓰지 않고 Silver에 유지한다.
+
+
+일반 과거 재무 입력의 변경 서명과 기준별 재계산 상태는 기존 `silver/{dart|sec}/normalized/history/rebuild_state.json`에 함께 저장한다. 일반 파일 항목은 실제 사용 파일의 해시와 발행사별 공시 메타데이터 해시를 기록하며 공시 이력 manifest 항목과 구분한다. 재적재 검증의 실패·통과 기록, 코드 사본, 실제 dry-run 계획과 SEC 공시별 관측 목록은 `silver/survivorship/financial_research/us_financial_source_refresh_20260911`에 있다. 사용자용 상태는 `gold/survivorship/pipeline_verification/20260911_financial_source_refresh/summary.json`에 제공한다. SEC 원본은 기존 Bronze 파일을 참조하며 Silver 관측 목록을 원본이나 승인된 공시 이력으로 표시하지 않는다.
+
+ALXN의 2015년 재무 표시 변경·정정 범위 검토 원문과 SEC 접수 화면은 `bronze/sec/financial_history/us_alxn_2015_filing_versions_20260911/ALXN`에 보존한다. 단위·날짜 열·12개 수치 대조와 캐시 재실행, 기존 기간별 정규화 자료 비교 및 실행 코드 사본은 `silver/survivorship/financial_research/us_alxn_2015_filing_versions_20260911`에, 사용자용 검토 요약은 `gold/survivorship/us/financial_version_reviews/20260911/ALXN`에 둔다. 운영 정규화 파일이나 공시 묶음의 원천 우선순위를 변경하지 않았다.
+
+미국 공시번호별 정규화 선택 결과는 `silver/sec/normalized/accessions/{symbol}`에 보존한다. 내용 해시를 이름으로 갖는 CSV를 먼저 저장하고 `manifest.json`을 마지막에 교체하며, 과거 CSV는 유지한다. CompanyFacts 항목에는 Bronze 원문 경로·SHA-256·단위·기간 시작과 종료·기간 길이를 남긴다. 이 자료는 디버그 출력과 무관한 일별 계산 입력이다. 공개 실행의 실패·통과, 코드 사본과 실제 네 종목의 별도 준비본은 `silver/survivorship/financial_research/us_sec_accession_refresh_20260911`에, 사용자용 검증 요약은 `gold/survivorship/pipeline_verification/20260911_sec_accessions`에 둔다. 실제 최종 준비본은 `actual_normalization_v3`이며 앞선 준비·실패 자료도 보존한다.
+
+EPS·가중평균 주식수의 추가 기간 관측은 같은 공시별 CSV의 `reported_durations`에 시작일·종료일·길이·금액·단위·문맥과 함께 저장한다. 부모 행의 공시번호와 원천 추적 정보를 공유하며 기간별 최종 CSV를 덮어쓰는 분기값으로 사용하지 않는다. ATVI의 실제 분기 검증 원문과 접수 화면·다운로드 메타데이터는 `bronze/sec/financial_history/us_per_share_periods_20260911/ATVI`에, 표 추출·CompanyFacts 대조·정규화 준비본·공개 일별 계산·테스트 결과·코드 사본은 `silver/survivorship/financial_research/us_per_share_periods_20260911`에 보존한다. 사용자용 상태는 `gold/survivorship/pipeline_verification/20260911_us_per_share_periods`에 제공하며 운영 재적재 완료와 구분한다.
+
+합산 가능한 계정의 동일 공시 내 기간 관측도 `reported_durations`에 보존한다. 당기 종료일의 분기값과 네 분기 합계의 근거를 보유하되, EPS·평균 주식수와 다른 계산 규칙을 사용한다. ATVI·ALXN·CELG의 원문·접수 화면·다운로드 응답은 `bronze/sec/financial_history/us_disclosed_flow_periods_20260911`, 표 추출·기간 검토·실패 및 통과 테스트·코드 사본은 같은 범위의 `silver/survivorship/financial_research`에 둔다. ALXN의 짧은 iXBRL 화면 응답도 원본으로 유지하고 실제 본문은 별도 파일로 저장했다.
+
+전체 미국 준비본은 `silver/survivorship/financial_research/us_accession_full_factor_preparation_flows_20260911`, 공시별 기간의 독립 대조는 `us_accession_full_factor_validation_flows_20260911`에 있다. 앞선 `us_accession_full_factor_preparation_20260911`과 검증 결과도 덮어쓰지 않는다. 사용자용 결과는 `gold/survivorship/pipeline_verification/20260911_us_disclosed_flow_periods`에 제공하며, CELG의 R&D 계정 범위 문제와 운영 미게시 상태를 명시한다.
+
+CELG 2010년 2분기 R&D의 원천 복구 자료는 정규 경로 `bronze/sec/fillings/10-Q/CELG/0000950123-10-072016`에 저장한다. 먼저 수집해 비교한 공시 묶음은 `bronze/sec/financial_history/us_celg_rnd_scope_20260911/filings`에 유지한다. 원문 XBRL·본문과 그 출처 메타데이터는 Bronze에, 문맥·표시 역할·재무상태표 행 대조·실패/통과 검사·규칙 마이그레이션·코드 사본은 `silver/survivorship/financial_research/us_celg_rnd_scope_20260911`에 보존한다. 규칙 자체는 실행 설정인 `meta/rules/semantic_us_v4.arcana`에 두고 이전 버전을 덮어쓰지 않는다. 원문 복구 후 준비본과 v4 반영 후 준비본은 각각 `us_accession_full_factor_preparation_rnd_20260911`, `us_accession_full_factor_preparation_rnd_v4_20260911`의 별도 Silver 범위로 구분한다.
+
+v4 준비본의 공시별 독립 기간 대조는 `silver/survivorship/financial_research/us_accession_full_factor_validation_rnd_v4_20260911`에 둔다. 원문 복구 전후·규칙 변경 전후의 전체 팩터 비교는 검토 범위 아래 `rnd_prepared_changes`, `v4_prepared_changes`에 저장하며 모든 계정의 의미를 독립 검증했다는 자료로 사용하지 않는다. 사용자용 완료 범위와 남은 검토는 `gold/survivorship/pipeline_verification/20260911_celg_rnd_scope/summary.json`에, 최신 준비본 연결은 기존 `gold/survivorship/us/financial_rebuild_preparation/20260911/summary.json`에 제공한다. 앞선 준비본과 Gold 연결의 이전 내용은 보존한다.
+
+SEC 재무 정정본은 `bronze/sec/fillings/10-K_A/{symbol}/{accession}`, `10-Q_A/{symbol}/{accession}`에 저장한다. JSON 내부에는 원래 `10-K/A`, `10-Q/A` 양식을 유지한다. 공시 메타데이터를 보완할 때 이전 원문은 같은 묶음의 `metadata_versions/{sha256}.json`에 보존하며, 수집 시각만 달라지는 반복 요청은 기존 원문을 교체하지 않는다. 과거 CELG 메타데이터 12건도 기존 사본과 해시를 대조해 이 위치에 보존했다.
+
+4종목의 180개 보존 공시 이력과 총 182개 수집 묶음의 대조, 최초 검사의 실패와 메타데이터 보완 내역, 재개 검증, 추가 정정본의 설명문 검토, 전체 Silver 정규화와 141개 계정 차이, 테스트·실행 코드 사본은 `silver/survivorship/financial_research/us_filing_bundle_coverage_20260911`에 둔다. 사용자용 범위·제한 사항은 `gold/survivorship/pipeline_verification/20260911_us_filing_bundles/summary.json`에 제공한다. 재무값을 바꾸지 않는 두 추가 정정본의 원문도 Bronze에서 유지한다.
+
+계정 선택 후속 검증은 `silver/survivorship/financial_research/us_statement_account_scope_20260911`에 원문 경로·해시, 실패·통과 테스트, 규칙 마이그레이션, 코드 사본과 공개 계산을 보존한다. 사용한 원본 공시 묶음은 계속 `bronze/sec/fillings`에 있으며 새 다운로드나 원문 교체는 하지 않았다. 중간 정규화는 해당 검토 폴더의 `full_normalization`, 최종 v5 정규화는 별도 `us_statement_account_scope_v5_20260911/full_normalization`에 둔다. 첫 공개 계산의 기대값 오류는 `public_factors`에 유지하고 원문 대조 후 재검증은 `public_factors_v2`에 저장했다. 사용자용 범위·제한은 `gold/survivorship/pipeline_verification/20260911_us_statement_accounts/summary.json`에 제공한다. 실행 규칙 v5는 `meta/rules`에 새 버전으로 추가하며 이전 버전을 수정하지 않는다.

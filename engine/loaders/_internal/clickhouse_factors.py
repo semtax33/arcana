@@ -780,15 +780,22 @@ def prepare_daily_factor_rows(
             raise ValueError("Abstention events require one calculation per security and date")
         wide_df = wide_df.sort_values(["security_id", "trade_date"]).reset_index(drop=True)
 
-    value_columns = factor_ids if factor_ids is not None else factor_columns(wide_df)
-    value_columns = [column for column in value_columns if column in wide_df.columns]
+    value_columns = factor_ids if factor_ids is not None else (
+        preferred_factor_columns() if include_abstentions else factor_columns(wide_df)
+    )
+    if not include_abstentions:
+        value_columns = [column for column in value_columns if column in wide_df.columns]
     if not value_columns:
         return empty_daily_factor_rows()
 
     long_parts = []
     id_frame = wide_df[id_columns]
     for factor_id in value_columns:
-        factor_value = pd.to_numeric(wide_df[factor_id], errors="coerce")
+        # A withdrawn source can remove the entire calculated column. Emit
+        # its initial missing event too, or a snapshot may carry an old value
+        # from before this replacement interval into the future.
+        values = wide_df[factor_id] if factor_id in wide_df else pd.Series(math.nan, index=wide_df.index)
+        factor_value = pd.to_numeric(values, errors="coerce")
         valid_mask = factor_value.notna() & factor_value.map(math.isfinite)
         selected_mask = valid_mask
         if include_abstentions:
@@ -1022,9 +1029,10 @@ def _iter_prepared_daily_factor_rows(
                 submit_next(executor)
 
 
-def _reviewed_historical_symbols(market: str) -> set[str]:
+def _reviewed_historical_symbols(market: str, *, data_lake=None) -> set[str]:
     import json
-    episode_path = DATA_LAKE.silver("survivorship", market, "listing_episodes.json")
+    data_lake = DATA_LAKE if data_lake is None else data_lake
+    episode_path = data_lake.silver("survivorship", market, "listing_episodes.json")
     if not episode_path.exists():
         return set()
     payload = json.loads(episode_path.read_text(encoding="utf-8"))

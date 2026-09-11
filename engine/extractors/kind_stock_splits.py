@@ -32,10 +32,15 @@ def parse_kind_search(content):
             continue
         row = anchor.find_parent('tr')
         company = row.select_one('a#companysum') if row else None
+        dates=[cell.get_text(' ',strip=True) for cell in row.find_all('td',recursive=False)
+               if re.fullmatch(r'\d{4}[-.]\d{2}[-.]\d{2}(?:\s+\d{2}:\d{2}(?::\d{2})?)?',cell.get_text(' ',strip=True))] if row else []
+        if len(dates)!=1:
+            raise ValueError('KIND search row has no unambiguous publication date')
         rows.append({'kind_acpt_no': match[1], 'search_doc_no': match[2],
                      'title': anchor.get_text(' ', strip=True),
                      'company_name': company.get('title', company.get_text(' ', strip=True)) if company else '',
-                     'published_date': str(pd.Timestamp(match[1][:8]).date())})
+                     'published_date': str(pd.Timestamp(dates[0][:10]).date()),
+                     'publication_date_text': dates[0]})
     return rows, int(total[1].replace(',', ''))
 
 
@@ -185,9 +190,13 @@ def download_kind_splits(*, unavailable=(), corporation_mapping=None, symbols=No
         code = mapping.get(record['corp_code'], '')
         if not code or (wanted is not None and code not in wanted):
             continue
-        day = pd.Timestamp(record['source_id'][:8])
         title = '주식분할' if '분할' in record['title'] else '주식병합'
         try:
+            if not record.get('published_date'):
+                raise ValueError('Missing evidenced DART publication date for KIND fallback')
+            day = pd.Timestamp(record['published_date'])
+            if pd.isna(day):
+                raise ValueError('Missing evidenced DART publication date for KIND fallback')
             found = client.search(day, day, title)
             matches = []
             for candidate in found:

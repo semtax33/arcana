@@ -1366,6 +1366,8 @@ def _financial_frame_from_periodized(periodized, *, suffix):
     base_columns = ["stock_code", "security_id", "fiscal_year", "fiscal_month", "financial_period"]
     if "report_date" in periodized.columns:
         base_columns.append("report_date")
+    if "_requires_reported_per_share" in periodized:
+        base_columns.append("_requires_reported_per_share")
     value_columns = {
         column[: -len(suffix)]: periodized[column]
         for column in periodized.columns
@@ -1829,9 +1831,9 @@ def add_annual_financial_factors(
     # Keep the established IROE factor id, but correct its former one-period
     # R&D add-back so existing graphs receive the audited adjusted definition.
     df["iroe"] = df["intangible_adjusted_roe_pct"]
-    df["debt"] = (
-        df["dltt"].fillna(0) + df["dlc"].fillna(0)
-    ).where(df["dltt"].notna() | df["dlc"].notna())
+    # Both maturity components must be known. An explicit reported zero is
+    # valid; an absent component cannot establish complete debt.
+    df["debt"] = df["dltt"] + df["dlc"]
     df["avg_debt"] = ((df["debt"] + df["debt"].shift(lag)) / 2).fillna(df["debt"])
     df["net_debt"] = df["debt"] - df["che"]
     df["invested_capital_financial"] = df["seq"] + df["debt"] - df["che"]
@@ -1932,9 +1934,11 @@ def add_annual_financial_factors(
         df,
         "DILUTED_SHARES",
         "BASIC_SHARES",
-        "COMMON_SHARES_OUTSTANDING",
-        "shares",
     )
+    requires_reported_per_share = df.get(
+        "_requires_reported_per_share", pd.Series(False, index=df.index)).eq(True)
+    diluted_shares = diluted_shares.fillna(
+        first_positive_value_frame(df, "COMMON_SHARES_OUTSTANDING", "shares").where(~requires_reported_per_share))
     df["intangible_adjusted_eps"] = (
         df["intangible_adjusted_net_income"] / diluted_shares
     )
@@ -1942,7 +1946,7 @@ def add_annual_financial_factors(
         df["normalized_intangible_adjusted_earnings_5y"] / diluted_shares
     )
     eps = first_value_frame(df, "BASIC_EPS", "DILUTED_EPS")
-    eps = eps.fillna(df["ni_parent"] / numeric_column(df, "shares"))
+    eps = eps.fillna((df["ni_parent"] / numeric_column(df, "shares")).where(~requires_reported_per_share))
     retained_earnings = first_value_frame(
         df,
         "RETAINED_EARNINGS",
@@ -3710,7 +3714,9 @@ def add_daily_market_valuation_factors(daily_df):
     df["mcap_mil"] = market_cap / 1_000_000
     df["trading_value"] = close * volume
     df["csho"] = shares
-    df["eps"] = numeric_column(df, "eps").fillna(ni_parent / shares)
+    requires_reported_per_share = df.get(
+        "_requires_reported_per_share", pd.Series(False, index=df.index)).eq(True)
+    df["eps"] = numeric_column(df, "eps").fillna((ni_parent / shares).where(~requires_reported_per_share))
     df["bps"] = ceq / shares
     df["sps"] = sale / shares
     df["cps"] = oancf / shares
@@ -4400,7 +4406,15 @@ def create_stock_factor_dataframe(
     else:
         shares_df = read_stock_shares(stock_code, shares_path, market=market)
 
-    if financial_basis == "quarterly":
+    if (require_report_metadata and not use_edgartools
+            and not (Path(financial_dir) / "history" / str(stock_code) / "manifest.json").exists()):
+        from engine.transformers._internal.financial_history import read_period_financial_history
+        financial_df = read_period_financial_history(
+            stock_code, financial_dir, market, basis=financial_basis,
+            report_metadata_path=report_metadata_path,
+            cumulative_statement_types=cumulative_statement_types,
+        )
+    elif financial_basis == "quarterly":
         financial_df = read_quarterly_financials(
             stock_code,
             cumulative_statement_types=cumulative_statement_types,

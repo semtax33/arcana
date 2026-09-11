@@ -13,6 +13,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import date as date_type, timedelta
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable
 
@@ -65,6 +66,7 @@ SOURCE_PRIORITY = {
     "derived_formula": 6,
 }
 EPS_CANONICAL_IDS = {"BASIC_EPS", "DILUTED_EPS"}
+PER_SHARE_DURATION_IDS = EPS_CANONICAL_IDS | {"BASIC_SHARES", "DILUTED_SHARES"}
 SHARE_CANONICAL_IDS = {
     "BASIC_SHARES",
     "DILUTED_SHARES",
@@ -106,6 +108,9 @@ class SecFactCandidate:
     period_semantic: str = ""
     duration_days: int | None = None
     source_path: str = ""
+    source_sha256: str = ""
+    period_start: str = ""
+    reported_durations: str = ""
     graph_evidence: str = ""
     match_rank: int = 0
 
@@ -741,11 +746,17 @@ def extract_companyfacts_candidates_from_data(
     cik = normalize_cik(data.get("cik")) or normalize_cik(path.stem)
     entity_name = safe_str(data.get("entityName"))
     facts = data.get("facts", {}) or {}
+    source_digest = ""
+    if path.is_file():
+        retained = path.read_bytes()
+        if json.loads(retained) == data:
+            source_digest = sha256(retained).hexdigest()
     candidates: list[SecFactCandidate] = []
 
     matched_fact_units: list[
         tuple[
             dict[str, Any],
+            str,
             str,
             str,
             str,
@@ -770,7 +781,7 @@ def extract_companyfacts_candidates_from_data(
                 ]
 
             for namespace, tag, fact in matched_facts:
-                for _, unit_rows in _fact_units_for_rule(fact, safe_str(rule.get("canonical_id"))):
+                for unit, unit_rows in _fact_units_for_rule(fact, safe_str(rule.get("canonical_id"))):
                     ranged_unit_rows = [
                         unit_row
                         for unit_row in unit_rows
@@ -787,6 +798,7 @@ def extract_companyfacts_candidates_from_data(
                                 source,
                                 namespace,
                                 tag,
+                                unit,
                                 fact,
                                 ranged_unit_rows,
                             )
@@ -795,11 +807,11 @@ def extract_companyfacts_candidates_from_data(
     accession_period_ends = _companyfacts_accession_period_ends(
         [
             (safe_str(rule.get("canonical_id")), unit_rows)
-            for rule, _, _, _, _, unit_rows in matched_fact_units
+            for rule, _, _, _, _, _, unit_rows in matched_fact_units
         ]
     )
 
-    for rule, source, namespace, tag, fact, unit_rows in matched_fact_units:
+    for rule, source, namespace, tag, unit, fact, unit_rows in matched_fact_units:
         canonical_id = safe_str(rule.get("canonical_id"))
         for unit_row in _select_current_companyfacts_unit_rows(
             unit_rows,
@@ -822,6 +834,38 @@ def extract_companyfacts_candidates_from_data(
             )
             if candidate is None:
                 continue
+            start = _companyfacts_date(unit_row.get("start"))
+            end = _companyfacts_date(unit_row.get("end"))
+            duration = (end - start).days + 1 if start and end else None
+            semantic = "INSTANT" if not unit_row.get("start") else ""
+            if duration is not None and duration > 0:
+                semantic = "FY" if duration >= 330 else ("QTD" if duration <= 120 else "YTD")
+            candidate = replace(candidate, unit=unit, period_semantic=semantic,
+                period_start=safe_str(unit_row.get("start")), duration_days=duration,
+                source_path=str(path.resolve()) if source_digest else "",
+                source_sha256=source_digest, source_authority="SEC_COMPANYFACTS")
+            if canonical_id in PER_SHARE_DURATION_IDS or candidate.statement_type != "BS":
+                # EPS and weighted shares are not additive flows. Keep their
+                # same-tag/unit/accession duration observations beside the
+                # primary YTD/FY value, without borrowing a later comparative.
+                reported = []
+                for observation in unit_rows:
+                    observation_end = _companyfacts_date(observation.get("end"))
+                    if (_companyfacts_accession_key(observation) != _companyfacts_accession_key(unit_row)
+                            or observation_end is None or end is None or observation_end > end
+                            or (canonical_id in PER_SHARE_DURATION_IDS and observation_end != end)):
+                        continue
+                    observation_start = _companyfacts_date(observation.get("start"))
+                    if observation_start is None or end is None:
+                        continue
+                    variant = _candidate_from_companyfacts_unit(
+                        symbol=symbol, cik=cik, entity_name=entity_name, canonical_names=canonical_names,
+                        rule=rule, source=source, namespace=namespace, tag=tag, fact=fact, unit_row=observation)
+                    if variant is not None:
+                        reported.append(dict(period_start=str(observation_start), period_end=str(observation_end),
+                            duration_days=(observation_end-observation_start).days+1, normalized_amount=variant.value,
+                            raw_amount=variant.raw_value, unit=unit, context_ref=""))
+                candidate = replace(candidate, reported_durations=json.dumps(reported, sort_keys=True))
             if start_year <= candidate.fiscal_year <= end_year:
                 candidates.append(candidate)
 
@@ -886,7 +930,7 @@ def resolve_sec_filing_bundles(
         if safe_str(symbol).strip()
     }
     descriptors: list[SecFilingBundleDescriptor] = []
-    for form in ("10-K", "10-Q"):
+    for form in ("10-K", "10-Q", "10-K_A", "10-Q_A"):
         form_root = root / form
         if not form_root.is_dir():
             continue
@@ -1312,12 +1356,18 @@ def _candidates_from_filing_facts(
             if matched is not None:
                 match_rank, graph_evidence = matched
                 matches.append((row, match_rank, graph_evidence))
-        selected = _select_current_filing_fact(
-            matches,
-            report_period=report_period,
-            form=form,
-            statement_type=safe_str(rule.get("fs_type")),
-        )
+        if safe_str(rule.get("canonical_id")) in {"CF_CASH_BEGIN", "CF_CASH_END"}:
+            selected = _select_filing_cash_balance(matches, xbrl=xbrl, records=records,
+                report_period=report_period, form=form,
+                opening=safe_str(rule.get("canonical_id")) == "CF_CASH_BEGIN")
+        else:
+            selected = _select_current_filing_fact(
+                matches,
+                report_period=report_period,
+                form=form,
+                statement_type=safe_str(rule.get("fs_type")),
+                allow_non_period_end=safe_str(rule.get("canonical_id")) == "COMMON_SHARES_OUTSTANDING",
+            )
         if selected is None:
             continue
         row, match_rank, graph_evidence, period_semantic, duration_days = selected
@@ -1333,6 +1383,35 @@ def _candidates_from_filing_facts(
         concept = _filing_concept_qname(row.get("concept"))
         context_ref = safe_str(row.get("context_ref"))
         dimensions = _filing_context_dimensions(xbrl, context_ref)
+        unit = safe_str(row.get("unit") or row.get("unit_ref"))
+        reported_durations = ""
+        if canonical_id in PER_SHARE_DURATION_IDS or safe_str(rule.get("fs_type")) != "BS":
+            reported = []
+            for observation, _, _ in matches:
+                observation_context = safe_str(observation.get("context_ref"))
+                observation_start = _companyfacts_date(observation.get("period_start"))
+                observation_end = _companyfacts_date(observation.get("period_end"))
+                if (observation_start is None or observation_end is None
+                        or _filing_fact_end(observation) > _filing_fact_end(row)
+                        or (canonical_id in PER_SHARE_DURATION_IDS and _filing_fact_end(observation) != _filing_fact_end(row))
+                        or _filing_concept_qname(observation.get("concept")) != concept
+                        or safe_str(observation.get("unit") or observation.get("unit_ref")) != unit
+                        or _filing_context_dimensions(xbrl, observation_context) != dimensions):
+                    continue
+                amount = observation.get("numeric_value")
+                if amount is None or (isinstance(amount, float) and math.isnan(amount)):
+                    amount = observation.get("value")
+                try:
+                    amount = float(str(amount).replace(",", ""))
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(amount):
+                    continue
+                reported.append(dict(period_start=str(observation_start), period_end=str(observation_end),
+                    duration_days=(observation_end-observation_start).days+1,
+                    normalized_amount=apply_amount_policy_numeric(amount, amount_policy), raw_amount=amount,
+                    unit=unit, context_ref=observation_context))
+            reported_durations = json.dumps(reported, sort_keys=True)
         output.append(
             SecFactCandidate(
                 symbol=descriptor.symbol,
@@ -1361,11 +1440,13 @@ def _candidates_from_filing_facts(
                 source_authority=safe_str(manifest.get("source_authority")),
                 accepted_at=safe_str(manifest.get("accepted_at")),
                 context_ref=context_ref,
-                unit=safe_str(row.get("unit") or row.get("unit_ref")),
+                unit=unit,
                 dimensions=json.dumps(dimensions, ensure_ascii=False, sort_keys=True),
                 taxonomy_version=taxonomy_version,
                 period_semantic=period_semantic,
                 duration_days=duration_days,
+                period_start=normalize_sec_date(row.get("period_start")),
+                reported_durations=reported_durations,
                 source_path=str(descriptor.path),
                 graph_evidence=graph_evidence,
                 match_rank=match_rank,
@@ -1394,8 +1475,13 @@ def _match_filing_fact_rule(
         # presentation scope before accepting even an exact concept match.
         if roles and all(any(pattern.search(role) for pattern in report_excludes) for role in roles):
             return None
-    for rank, key in enumerate(("primary_tags", "alternate_tags")):
-        if any(_tag_spec_matches(spec, namespace, tag) for spec in rule.get(key, []) or []):
+    # The rule's concept lists are ordered alternatives. Keeping only the
+    # primary/alternate group rank lets instance document order select a
+    # component (e.g. product sales) ahead of the reported total revenue.
+    tag_specs = [spec for key in ("primary_tags", "alternate_tags")
+                 for spec in (rule.get(key, []) or [])]
+    for rank, spec in enumerate(tag_specs):
+        if _tag_spec_matches(spec, namespace, tag):
             return rank, ""
 
     label_patterns = _compile_patterns(rule.get("label_patterns", []))
@@ -1410,7 +1496,7 @@ def _match_filing_fact_rule(
     graph_evidence = _filing_graph_evidence(xbrl, concept, rule)
     if not graph_evidence:
         return None
-    return 2, graph_evidence
+    return len(tag_specs), graph_evidence
 
 
 def _tag_spec_matches(spec: Any, namespace: str | None, tag: str) -> bool:
@@ -1472,12 +1558,72 @@ def _filing_element_id(value: Any) -> str:
     return _filing_concept_qname(value).replace(":", "_", 1)
 
 
+def _select_filing_cash_balance(
+    matches: list[tuple[dict[str, Any], int, str]], *, xbrl: Any,
+    records: list[dict[str, Any]], report_period: str, form: str, opening: bool,
+) -> tuple[dict[str, Any], int, str, str, int | None] | None:
+    """Select the cash-flow statement's roll-forward, preserving its cash scope."""
+    label_role = "http://www.xbrl.org/2003/role/" + ("periodStartLabel" if opening else "periodEndLabel")
+    eligible = []
+    for role, tree in xbrl.presentation_trees.items():
+        title = re.sub(r"[^a-z]", "", (str(role) + " " + tree.definition).lower())
+        if "statement" not in title or "cashflow" not in title:
+            continue
+        concept_roles: dict[str, set[str]] = {}
+        for node in tree.all_nodes.values():
+            for child, preferred in zip(node.children, node.child_preferred_labels):
+                concept_roles.setdefault(child, set()).add(preferred or "")
+        # Reconciliation components may also carry periodEndLabel. Only a
+        # concept explicitly used at both ends identifies the roll-forward.
+        rollforward_roles = {"http://www.xbrl.org/2003/role/periodStartLabel",
+                             "http://www.xbrl.org/2003/role/periodEndLabel"}
+        concepts = {concept for concept, roles in concept_roles.items()
+                    if rollforward_roles.issubset(roles)}
+        if not concepts:
+            continue
+        target_date = report_period
+        if opening:
+            # The opening instant is the day preceding the disclosed current
+            # cash-flow duration, not a balance copied from an older filing.
+            starts = []
+            for row in records:
+                if (bool(row.get("is_dimensioned")) or _filing_fact_end(row) != report_period
+                        or _filing_element_id(row.get("concept")) not in tree.all_nodes):
+                    continue
+                duration = _filing_duration_days(row)
+                start = _companyfacts_date(row.get("period_start"))
+                if start is not None and duration is not None and 0 < duration <= (310 if form.startswith("10-Q") else 400):
+                    starts.append(start)
+            if not starts:
+                continue
+            target_date = str(min(starts) - timedelta(days=1))
+        for row, rank, graph in matches:
+            concept = _filing_element_id(row.get("concept"))
+            if (concept not in concepts or bool(row.get("is_dimensioned"))
+                    or safe_str(row.get("period_type")).lower() != "instant"
+                    or _filing_fact_end(row) != target_date):
+                continue
+            selected_row = dict(row)
+            label = tree.all_nodes[concept].labels.get(label_role)
+            if label:
+                selected_row["original_label"] = label
+            evidence = f"cash_flow_role={role};preferred_label={label_role};balance_date={target_date}"
+            eligible.append((selected_row, rank, evidence, "INSTANT", None))
+    # Conflicting statement scopes or values require review, never a first-row
+    # tie-break. Identical references in the same disclosure are harmless.
+    identities = {(_filing_concept_qname(item[0].get("concept")),
+        _filing_fact_end(item[0]), str(item[0].get("numeric_value")),
+        safe_str(item[0].get("unit") or item[0].get("unit_ref"))) for item in eligible}
+    return eligible[0] if len(identities) == 1 else None
+
+
 def _select_current_filing_fact(
     matches: list[tuple[dict[str, Any], int, str]],
     *,
     report_period: str,
     form: str,
     statement_type: str,
+    allow_non_period_end: bool = False,
 ) -> tuple[dict[str, Any], int, str, str, int | None] | None:
     if not matches:
         return None
@@ -1488,6 +1634,8 @@ def _select_current_filing_fact(
         current = [item for item in matches if _filing_fact_end(item[0]) == report_period]
         if current:
             matches = current
+        elif not allow_non_period_end:
+            return None
 
     want_instant = statement_type == "BS"
     typed = [
@@ -1521,7 +1669,9 @@ def _select_current_filing_fact(
     )
     if want_instant:
         period_semantic = "INSTANT"
-    elif form.startswith("10-K"):
+    elif duration_days is None:
+        period_semantic = ""
+    elif form.startswith("10-K") and duration_days >= 330:
         period_semantic = "FY"
     elif duration_days is not None and duration_days <= 120:
         period_semantic = "QTD"
@@ -2407,6 +2557,9 @@ def candidate_to_rows(candidate: SecFactCandidate) -> tuple[dict[str, Any], dict
             "period_semantic": candidate.period_semantic,
             "duration_days": candidate.duration_days,
             "source_path": candidate.source_path,
+            "source_sha256": candidate.source_sha256,
+            "period_start": candidate.period_start,
+            "reported_durations": candidate.reported_durations,
             "graph_evidence": candidate.graph_evidence,
         }
     )
@@ -3024,6 +3177,10 @@ def normalize_us_sec_filings(
         | {candidate.symbol for candidate in deduped}
     )
     replace_year_range = (int(start_year), int(end_year))
+    from engine.transformers._internal.sec_accession_history import write_accession_rows
+    write_accession_rows(candidates, output_dir=output_dir, symbols=processed_symbols,
+                         year_range=replace_year_range, canonical_names=canonical_names,
+                         replace_existing=replace_existing)
     written = write_symbol_outputs(
         deduped,
         output_dir=output_dir,

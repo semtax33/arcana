@@ -1,7 +1,9 @@
 """Verify direct public DART collection and CLI version selection with real sources."""
+import argparse
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,11 +22,16 @@ def digest(path):
 
 
 def main():
-    output = DATA_LAKE.silver("survivorship", "financial_research", "dart_direct_validation_20260911")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--run-scope", default="direct_validation_20260911")
+    args = parser.parse_args()
+    if not re.fullmatch(r"[a-z0-9_]+", args.run_scope):
+        raise ValueError("run scope must contain only lowercase letters, digits, and underscores")
+    output = DATA_LAKE.silver("survivorship", "financial_research", f"dart_{args.run_scope}")
     target = output / "actual_collection.json"
     if target.exists():
         raise ValueError("Preserve the previous verification; choose a distinct run")
-    bronze = DATA_LAKE.bronze("dart", "corporate_actions", "direct_validation_20260911")
+    bronze = DATA_LAKE.bronze("dart", "corporate_actions", args.run_scope)
     fixtures = DATA_LAKE.bronze("fixtures", "dart_public_document")
     expected = {"20180131800068": fixtures / "samsung_original/full.html",
                 "20180316800856": fixtures / "html/full.html"}

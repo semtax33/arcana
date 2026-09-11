@@ -325,6 +325,68 @@ def infer_account_statement_types(snapshot_df: pd.DataFrame) -> dict[str, str]:
     return result
 
 
+def reported_flow_amounts(record):
+    """Use exact intervals or four contiguous quarters within one source context."""
+    result = dict(quarter=math.nan, annual=math.nan, quarter_reported=False, annual_reported=False)
+    if not isinstance(record, dict):
+        return result
+    target = pd.Timestamp(record["period_end"])
+    observations = set()
+    for row in record["observations"]:
+        start, end = pd.Timestamp(row["period_start"]), pd.Timestamp(row["period_end"])
+        value = float(row["normalized_amount"])
+        if pd.notna(start) and pd.notna(end) and start <= end <= target and math.isfinite(value):
+            observations.add((start, end, value))
+    quarters = {r for r in observations if 60 <= (r[1] - r[0]).days + 1 <= 120}
+    current_quarters = {r for r in quarters if r[1] == target}
+    result["quarter_reported"] = bool(current_quarters)
+    if len(current_quarters) == 1:
+        result["quarter"] = next(iter(current_quarters))[2]
+    annuals = {r for r in observations if r[1] == target and 330 <= (r[1] - r[0]).days + 1 <= 400}
+    if annuals:
+        result["annual_reported"] = True
+        if len(annuals) == 1:
+            result["annual"] = next(iter(annuals))[2]
+        return result
+    cursor, total = target, 0.0
+    for _ in range(4):
+        candidates = {r for r in quarters if r[1] == cursor}
+        if len(candidates) != 1:
+            return result
+        start, _, value = next(iter(candidates))
+        total += value
+        cursor = start - pd.Timedelta(days=1)
+    if 330 <= (target - cursor).days <= 400:
+        result.update(annual=total, annual_reported=True)
+    return result
+
+
+def _quarter_amounts_from_period_semantics(df, source, semantics, fallback, *, cumulative_default):
+    result = fallback.copy()
+    previous_year, previous_month, cumulative = None, None, math.nan
+    for index in df.index:
+        year, month = int(df.at[index, "fiscal_year"]), int(df.at[index, "fiscal_month"])
+        if year != previous_year or previous_month is None or month != previous_month + 3:
+            cumulative = math.nan
+        if month == 3:
+            cumulative = 0.0
+        value, semantic = source.at[index], semantics.at[index]
+        if semantic == "QTD":
+            result.at[index] = value
+            cumulative += value
+        elif semantic in {"YTD", "FY"}:
+            result.at[index] = value - cumulative
+            # A disclosed YTD value restores the cumulative baseline even
+            # when earlier quarters are missing; it does not restore them.
+            cumulative = value
+        elif cumulative_default:
+            cumulative = value
+        else:
+            cumulative += result.at[index]
+        previous_year, previous_month = year, month
+    return result
+
+
 def add_quarter_and_ttm_amounts(
     snapshot_df: pd.DataFrame,
     cumulative_statement_types: set[str] | None = None,
@@ -335,6 +397,9 @@ def add_quarter_and_ttm_amounts(
     cumulative_statement_types = cumulative_statement_types or DEFAULT_CUMULATIVE_STATEMENT_TYPES
     df = snapshot_df.sort_values("financial_period").reset_index(drop=True).copy()
     statement_type_by_id = infer_account_statement_types(df)
+    if "_reported_per_share" in df:
+        df["_requires_reported_per_share"] = df["_reported_per_share"].map(
+            lambda value: isinstance(value, dict) and bool(value))
 
     metadata_columns = {
         "stock_code",
@@ -347,6 +412,10 @@ def add_quarter_and_ttm_amounts(
         "report_name",
         "source_url",
         "_fs_type_by_id",
+        "_reported_per_share",
+        "_requires_reported_per_share",
+        "_period_semantics_by_id",
+        "_reported_flow_periods",
     }
     value_columns = [
         column
@@ -358,6 +427,25 @@ def add_quarter_and_ttm_amounts(
     for column in value_columns:
         statement_type = statement_type_by_id.get(column, "")
         source = pd.to_numeric(df[column], errors="coerce")
+
+        if column in {"BASIC_EPS", "DILUTED_EPS", "BASIC_SHARES", "DILUTED_SHARES"} and "_reported_per_share" in df:
+            reported = df["_reported_per_share"].map(
+                lambda value: value.get(column) if isinstance(value, dict) else None)
+            if reported.notna().any():
+                def exact_duration(record, *, annual):
+                    if not isinstance(record, dict) or (annual and not record["form"].startswith("10-K")):
+                        return float("nan")
+                    lower, upper = (330, 400) if annual else (60, 120)
+                    observations = {(row["period_start"], row["period_end"], row["normalized_amount"])
+                                    for row in record["observations"] if lower <= row["duration_days"] <= upper}
+                    return next(iter(observations))[2] if len(observations) == 1 else float("nan")
+
+                derived_columns[f"{column}_quarter"] = reported.map(lambda value: exact_duration(value, annual=False))
+                # A full-year reported EPS/weighted average is already a
+                # twelve-month observation. Summing four ratios or averages
+                # does not construct a reported TTM metric at other dates.
+                derived_columns[f"{column}_ttm"] = reported.map(lambda value: exact_duration(value, annual=True))
+                continue
 
         if statement_type in BALANCE_STATEMENT_TYPES:
             quarter_amount = source
@@ -376,11 +464,28 @@ def add_quarter_and_ttm_amounts(
             quarter_amount = quarter.copy()
             quarter_amount.loc[annual_mask] = source.loc[annual_mask] - prior_quarters.shift(1).loc[annual_mask]
 
+        if "_period_semantics_by_id" in df:
+            semantics = df["_period_semantics_by_id"].map(
+                lambda value: value.get(column, "") if isinstance(value, dict) else "")
+            if semantics.isin(["QTD", "YTD", "FY"]).any():
+                quarter_amount = _quarter_amounts_from_period_semantics(
+                    df, source, semantics, quarter_amount,
+                    cumulative_default=statement_type in cumulative_statement_types)
+        reported = None
+        if "_reported_flow_periods" in df:
+            reported = df["_reported_flow_periods"].map(
+                lambda value: reported_flow_amounts(value.get(column)) if isinstance(value, dict) else reported_flow_amounts(None))
+            quarter_amount = quarter_amount.mask(
+                reported.map(lambda value: value["quarter_reported"]), reported.map(lambda value: value["quarter"]))
         derived_columns[f"{column}_quarter"] = quarter_amount
-        derived_columns[f"{column}_ttm"] = pd.to_numeric(
+        ttm_amount = pd.to_numeric(
             quarter_amount,
             errors="coerce",
         ).rolling(window=4, min_periods=4).sum()
+        if reported is not None:
+            ttm_amount = ttm_amount.mask(reported.map(lambda value: value["annual_reported"]),
+                                         reported.map(lambda value: value["annual"]))
+        derived_columns[f"{column}_ttm"] = ttm_amount
 
     if derived_columns:
         df = pd.concat([df, pd.DataFrame(derived_columns, index=df.index)], axis=1).copy()

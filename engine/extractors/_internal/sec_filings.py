@@ -43,6 +43,7 @@ SEC_US_EQUITY_UNIVERSE_PATH = DATA_LAKE.bronze(
 )
 DEFAULT_SEC_USER_AGENT = "Arcana contact@example.com"
 SEC_PRIMARY_FORMS = ("10-K", "10-Q", "8-K")
+SEC_FINANCIAL_FORMS = ("10-K", "10-Q", "10-K/A", "10-Q/A")
 SEC_IR_EXHIBIT_PATTERN = re.compile(r"^EX-99(?:\.\d+)?$", re.IGNORECASE)
 SEC_FILING_SOURCE = "sec-edgartools-filing-html"
 SEC_FILING_BUNDLE_SOURCE = "sec-edgartools-xbrl-bundle"
@@ -356,7 +357,7 @@ def download_us_filing_htmls(
                             else None
                         )
                         if primary is None:
-                            if filing_form in {"10-K", "10-Q"}:
+                            if filing_form in SEC_FINANCIAL_FORMS:
                                 status, target, primary = _save_sec_full_submission(
                                     filing=filing,
                                     company_row=company_row,
@@ -382,7 +383,7 @@ def download_us_filing_htmls(
                                 retrieved_at=retrieved_at,
                                 force=force,
                             )
-                            if status == "non_html" and filing_form in {"10-K", "10-Q"}:
+                            if status == "non_html" and filing_form in SEC_FINANCIAL_FORMS:
                                 status, target, primary = _save_sec_full_submission(
                                     filing=filing,
                                     company_row=company_row,
@@ -405,7 +406,7 @@ def download_us_filing_htmls(
                             else:
                                 result["non_html_documents_skipped"] += 1
 
-                    if filing_form in {"10-K", "10-Q"}:
+                    if filing_form in SEC_FINANCIAL_FORMS:
                         bundle_result = _save_sec_xbrl_bundle(
                             filing=filing,
                             attachments=attachments or (),
@@ -675,7 +676,7 @@ def _save_sec_xbrl_bundle(
         "source": SEC_FILING_BUNDLE_SOURCE,
         "provider": "edgartools",
         "edgartools_version": _edgartools_version(),
-        "source_authority": "SEC_10K_AUDITED" if form == "10-K" else "SEC_10Q_UNAUDITED",
+        "source_authority": "SEC_10K_AUDITED" if form.startswith("10-K") else "SEC_10Q_UNAUDITED",
         "ticker": company_row.get("ticker", ""),
         "cik": _cik_file_key(company_row["cik"]),
         "company_name": company_row.get("title", ""),
@@ -693,7 +694,29 @@ def _save_sec_xbrl_bundle(
         "xbrl_documents": xbrl_documents,
         "retrieved_at": retrieved_at,
     }
-    _write_json_source(manifest_path, manifest, source=SEC_FILING_BUNDLE_SOURCE)
+    previous_manifest = None
+    previous_bytes = b""
+    if manifest_existed:
+        try:
+            previous_bytes = manifest_path.read_bytes()
+            previous_manifest = json.loads(previous_bytes)
+        except (OSError, ValueError):
+            pass
+    # A wider query is a new collection run, not a new copy of an unchanged
+    # accession. Keep the original retrieval time when its evidence is equal.
+    previous_comparable = ({key: item for key, item in previous_manifest.items() if key != "retrieved_at"}
+                           if isinstance(previous_manifest, dict) else None)
+    current_comparable = {key: item for key, item in manifest.items() if key != "retrieved_at"}
+    if force or previous_comparable != current_comparable:
+        if previous_bytes:
+            archive = bundle_dir / "metadata_versions" / f"{hashlib.sha256(previous_bytes).hexdigest()}.json"
+            if archive.exists():
+                if archive.read_bytes() != previous_bytes:
+                    raise RuntimeError(f"SEC metadata archive checksum mismatch: {archive}")
+            else:
+                write_source_bytes(archive, previous_bytes, source=SEC_FILING_BUNDLE_SOURCE,
+                                   validator=validate_nonempty_file)
+        _write_json_source(manifest_path, manifest, source=SEC_FILING_BUNDLE_SOURCE)
     paths.append(manifest_path.relative_to(output_dir).as_posix())
     return {
         "bundles_written": int(force or not manifest_existed),
@@ -972,7 +995,7 @@ def _edgartools_filings_provider(
     return company.get_filings(
         form=list(forms),
         filing_date=f"{start_date}:{end_date}",
-        amendments=False,
+        amendments=True,
         sort_by="filing_date",
         trigger_full_load=True,
     )
@@ -1105,7 +1128,7 @@ def _completed_filing_checkpoint(
             manifest = json.loads(artifact.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError, json.JSONDecodeError):
             return False
-        if str(manifest.get("form") or "").upper() not in {"10-K", "10-Q"}:
+        if str(manifest.get("form") or "").upper() not in SEC_FINANCIAL_FORMS:
             continue
         primary_name = str(manifest.get("primary_document") or "").strip()
         if not primary_name or Path(primary_name).name != primary_name:
@@ -1123,12 +1146,14 @@ def _write_json_source(path: Path, payload: Mapping[str, Any], *, source: str) -
 
 def _normalize_sec_forms(forms: Sequence[str]) -> list[str]:
     normalized = list(dict.fromkeys(str(form).strip().upper() for form in forms if str(form).strip()))
-    unsupported = sorted(set(normalized) - set(SEC_PRIMARY_FORMS))
+    unsupported = sorted(set(normalized) - set(SEC_PRIMARY_FORMS) - set(SEC_FINANCIAL_FORMS))
     if unsupported:
         raise ValueError("unsupported SEC filing forms: " + ", ".join(unsupported))
     if not normalized:
         raise ValueError("at least one SEC filing form is required")
-    return normalized
+    # A financial statement query includes later corrections. Expanding this
+    # declared query also invalidates pre-amendment resume fingerprints.
+    return list(dict.fromkeys(normalized + [form + "/A" for form in normalized if form in {"10-K", "10-Q"}]))
 
 
 def _normalize_sec_filing_date(value: Any) -> str:
