@@ -673,7 +673,7 @@ class BacktestService:
                     SELECT security_id, trade_date,
                         argMax(tuple(close, coalesce(adj_close, close), volume, currency), updated_at) AS quote
                     FROM price_daily
-                    WHERE has({security_ids:Array(String)}, security_id)
+                    WHERE security_id IN {security_ids:Array(String)}
                         AND trade_date BETWEEN {start_date:Date} AND {end_date:Date}
                     GROUP BY security_id, trade_date
                 ) ORDER BY trade_date, security_id""",

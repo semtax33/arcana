@@ -36,6 +36,24 @@ SCHEMAS = {
 }
 
 
+def _projection_fields(kind, schema):
+    fields = []
+    for column, datatype in schema.items():
+        if datatype == "Date32":
+            # Consumer date predicates can run before the view's kind filter.
+            # Guard the conversion's INPUT, so eager evaluation is safe too.
+            # The sentinel belongs only to other kinds, which the view excludes;
+            # matching rows still use strict parsing and preserve pre-1970 dates.
+            expression = (f"toDate32(if(kind = '{kind}', "
+                          f"JSONExtractString(payload, '{column}'), '1970-01-01'))")
+        elif datatype == "Nullable(Date32)":
+            expression = f"toDate32OrNull(JSONExtractString(payload, '{column}'))"
+        else:
+            expression = f"JSONExtract(payload, '{column}', '{datatype}')"
+        fields.append(f"{expression} AS {column}")
+    return fields
+
+
 def load_survivorship(bundle, *, market, client=None, table_prefix="", prices=(), market_cap_factors=None):
     """Append immutable rows, then expose them with a single commit marker.
 
@@ -130,15 +148,7 @@ def load_survivorship(bundle, *, market, client=None, table_prefix="", prices=()
             market LowCardinality(String), generation UInt64, fingerprint String
         ) ENGINE = MergeTree ORDER BY (market, generation)""")
         for kind, (name, schema) in SCHEMAS.items():
-            fields = []
-            for column, datatype in schema.items():
-                if datatype == "Date32":
-                    expression = f"toDate32(JSONExtractString(payload, '{column}'))"
-                elif datatype == "Nullable(Date32)":
-                    expression = f"toDate32OrNull(JSONExtractString(payload, '{column}'))"
-                else:
-                    expression = f"JSONExtract(payload, '{column}', '{datatype}')"
-                fields.append(f"{expression} AS {column}")
+            fields = _projection_fields(kind, schema)
             projections[kind] = ", ".join(fields)
             # Replace projections even for an unchanged source generation so
             # existing installations also preserve pre-1970 listing dates.

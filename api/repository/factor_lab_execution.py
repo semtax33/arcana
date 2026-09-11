@@ -2,8 +2,11 @@
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import replace
+import os
 import re
+import sys
 import uuid
+from urllib.parse import urlsplit
 
 
 def configure_factor_lab_client(client):
@@ -16,6 +19,13 @@ def configure_factor_lab_client(client):
     getter = getattr(client, "get_client_setting", None)
     if not callable(setter) or not callable(getter):
         return
+    # Reused HTTP connections through the Windows/WSL localhost relay add
+    # ~40 ms to tiny statements. Session IDs survive a new TCP connection.
+    # Keep pooling for remote hosts, where reconnecting can be expensive.
+    if (sys.platform == "win32"
+            and urlsplit(getattr(client, "url", "")).hostname in {"localhost", "127.0.0.1", "::1"}
+            and isinstance(getattr(client, "headers", None), dict)):
+        client.headers["Connection"] = "close"
     for name, limit in {
         "max_threads": 2,
         "max_memory_usage": 2 * 1024**3,
@@ -87,7 +97,16 @@ def materialize_factor_lab_query(client, compiled, *, disk_backed=None):
                        or "temporal_end_date" in compiled.parameters
                        or compiled.parameters.get("start_date") != compiled.parameters.get("end_date"))
     engine = "MergeTree ORDER BY tuple()" if disk_backed else "Memory"
+    memory_budget = 0
+    if disk_backed and callable(getattr(client, "get_client_setting", None)):
+        # This caps retained stage data, not the in-flight query's memory.
+        # A zero budget preserves the always-on-disk execution policy.
+        requested = int(os.getenv("ARCANA_FACTOR_LAB_STAGE_MEMORY_BYTES", str(128 * 1024**2)))
+        query_limit = int(client.get_client_setting("max_memory_usage"))
+        memory_budget = max(0, min(requested, 128 * 1024**2, query_limit // 4))
     created = {}
+    memory_sizes = {}
+    spill_tables = set()
     prefix = "lab_stage_" + uuid.uuid4().hex
     try:
         for index, name in enumerate(shared):
@@ -96,20 +115,52 @@ def materialize_factor_lab_query(client, compiled, *, disk_backed=None):
             # Retain the existing workaround for composed lab-factor reads.
             if "FROM factor_lab_values AS f" in stage_query:
                 stage_query += "\nSETTINGS query_plan_enable_optimizations = 0"
+            # HTTP sends bound values in the URL. Sending the entire graph's
+            # hundreds of parameters for every small stage adds relay latency.
+            parameter_names = {m.group()[1:].split(":", 1)[0] for m in tokens.finditer(stage_query)
+                               if m.group().startswith("{")}
+            stage_parameters = {key: compiled.parameters[key] for key in parameter_names}
             # Register first: CREATE AS SELECT can create the table before its
             # SELECT fails, and that partially created table also needs cleanup.
             created[name] = table
-            client.command(f"CREATE TEMPORARY TABLE {table} ENGINE={engine} AS\n{stage_query}",
-                           parameters=compiled.parameters)
+            use_memory = memory_budget > 0 and sum(memory_sizes.values()) < memory_budget
+            stage_engine = "Memory" if use_memory else engine
+            try:
+                client.command(f"CREATE TEMPORARY TABLE {table} ENGINE={stage_engine} AS\n{stage_query}",
+                               parameters=stage_parameters)
+            except Exception as exc:
+                if not use_memory or getattr(exc, "code", None) != 241:
+                    raise
+                # Memory CREATE AS SELECT retains the whole output. A large
+                # output can exceed the query limit even though streaming it
+                # into MergeTree succeeds. Discard partial output before retry.
+                client.command(f"DROP TEMPORARY TABLE IF EXISTS {table}")
+                client.command(f"CREATE TEMPORARY TABLE {table} ENGINE={engine} AS\n{stage_query}",
+                               parameters=stage_parameters)
+                use_memory = False
+            if use_memory:
+                size = client.query("""SELECT total_bytes FROM system.tables
+                    WHERE is_temporary AND name = {stage_name:String}""",
+                    parameters={"stage_name": table}).first_row[0]
+                if size is not None and sum(memory_sizes.values()) + size <= memory_budget:
+                    memory_sizes[name] = size
+                else:
+                    disk_table = table + "_disk"
+                    spill_tables.add(disk_table)
+                    client.command(f"CREATE TEMPORARY TABLE {disk_table} ENGINE={engine} AS SELECT * FROM {table}")
+                    client.command(f"DROP TEMPORARY TABLE {table}")
+                    created[name] = table = disk_table
+                    spill_tables.remove(disk_table)
             definitions[name] = f"SELECT * FROM {table}"
             remaining = reachable(compiled.result_query)
             for obsolete in list(created):
                 if obsolete not in remaining:
                     client.command(f"DROP TEMPORARY TABLE IF EXISTS {created[obsolete]}")
                     del created[obsolete]
+                    memory_sizes.pop(obsolete, None)
         yield replace(compiled, query=render(compiled.result_query))
     finally:
-        for table in reversed(list(created.values())):
+        for table in reversed([*created.values(), *spill_tables]):
             try:
                 client.command(f"DROP TEMPORARY TABLE IF EXISTS {table}")
             except Exception:
