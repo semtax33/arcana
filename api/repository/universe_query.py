@@ -8,14 +8,14 @@ from __future__ import annotations
 import re
 from datetime import date
 from api.model.universe import has_size_filters, normalize_universe
-from api.repository.listing_history import listing_history_table, security_source_sql
+from api.repository.listing_history import listing_history_table, trading_halt_history_table, security_source_sql
 
 
 def build_universe_ctes(*, dates_sql: str, universe=None, market=None,
                         sector_codes=None, industry_group_codes=None,
                         security_table="security_master", issuer_table="issuers",
-                        cap_table="fact_daily_factors", listing_table=None):
-    for table in (security_table, issuer_table, cap_table):
+                        cap_table="fact_daily_factors", listing_table=None, trading_halt_table=None):
+    for table in (security_table, issuer_table, cap_table, *([trading_halt_table] if trading_halt_table else [])):
         if not re.fullmatch(r"[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?", table):
             raise ValueError("invalid universe table name")
     filters = normalize_universe(universe, market)
@@ -55,8 +55,9 @@ def build_universe_ctes(*, dates_sql: str, universe=None, market=None,
                FROM {issuer_table} GROUP BY issuer_id) i ON s.issuer_id = i.issuer_id
     WHERE {' AND '.join(where)}
 )""", f"uv_dates AS ({dates_sql})"]
+    dated_cte = "uv_listed_securities" if trading_halt_table else "uv_dated_securities"
     if listing_table:
-        ctes.append(f"""uv_dated_securities AS (
+        ctes.append(f"""{dated_cte} AS (
     SELECT d.trade_date AS trade_date, s.security_id AS security_id,
            s.country AS country, s.exchange_code AS exchange_code,
            s.classification_date AS classification_date, 0 AS listing_verified
@@ -74,11 +75,21 @@ def build_universe_ctes(*, dates_sql: str, universe=None, market=None,
       AND (empty({{uv_exchanges:Array(String)}}) OR has({{uv_exchanges:Array(String)}}, h.exchange_code))
 )""")
     else:
-        ctes.append("""uv_dated_securities AS (
+        ctes.append(f"""{dated_cte} AS (
     SELECT d.trade_date AS trade_date, s.security_id AS security_id,
            s.country AS country, s.exchange_code AS exchange_code,
            s.classification_date AS classification_date, 0 AS listing_verified
     FROM uv_dates d CROSS JOIN uv_securities s
+)""")
+    if trading_halt_table:
+        ctes.append(f"""uv_dated_securities AS (
+    SELECT s.* FROM uv_listed_securities s
+    WHERE (s.trade_date, s.security_id) NOT IN (
+        SELECT d.trade_date, h.security_id
+        FROM uv_dates d CROSS JOIN {trading_halt_table} h
+        WHERE h.status = 'confirmed' AND d.trade_date >= h.start_date
+          AND (h.end_date IS NULL OR d.trade_date < h.end_date)
+    )
 )""")
     ctes.extend([f"""uv_cap_observations AS (
     SELECT f.trade_date AS trade_date, f.security_id AS security_id,
@@ -118,11 +129,11 @@ def filter_factor_query(query: str, parameters: dict, *, dates_sql: str, univers
                         market=None, sector_codes=None, industry_group_codes=None,
                         security_table="security_master", issuer_table="issuers",
                         cap_table="fact_daily_factors", batch=False, exact_signal_values=False,
-                        listing_table=None):
+                        listing_table=None, trading_halt_table=None):
     ctes, params = build_universe_ctes(dates_sql=dates_sql, universe=universe, market=market,
         sector_codes=sector_codes, industry_group_codes=industry_group_codes,
         security_table=security_table, issuer_table=issuer_table, cap_table=cap_table,
-        listing_table=listing_table)
+        listing_table=listing_table, trading_halt_table=trading_halt_table)
     parameters.update(params)
     query, n = re.subn(r"(?<!\w)latest_factor_values AS \(", "uv_unfiltered_values AS (", query, count=1)
     if n != 1:
@@ -138,16 +149,18 @@ def filter_factor_query(query: str, parameters: dict, *, dates_sql: str, univers
 
 
 def load_universe_details(client, *, dates, universe=None, market=None, sector_codes=None,
-                          industry_group_codes=None, security_ids=None, listing_table=None):
+                          industry_group_codes=None, security_ids=None, listing_table=None, trading_halt_table=None):
     if listing_table is None:
         listing_table = listing_history_table(client)
+    if trading_halt_table is None:
+        trading_halt_table = trading_halt_history_table(client)
     days = sorted({str(d)[:10] for d in dates if d is not None})
     if not days:
         return None, {}
     filters = normalize_universe(universe, market)
     ctes, params = build_universe_ctes(dates_sql="SELECT arrayJoin({uv_days:Array(Date)}) AS trade_date",
         universe=filters, market=market, sector_codes=sector_codes, industry_group_codes=industry_group_codes,
-        listing_table=listing_table)
+        listing_table=listing_table, trading_halt_table=trading_halt_table)
     params["uv_days"] = days
     prefix = "WITH\n" + ",\n".join(ctes)
     summary_sql = prefix + """
@@ -178,6 +191,7 @@ ORDER BY d.trade_date
                                   "industry_group_codes": industry_group_codes or []},
                "market": market, "classification_basis": "current",
                "listing_basis": "dated_with_current_fallback" if listing_table else "current_unverified",
+               "trading_halt_basis": "confirmed_intervals_before_size_ranking" if trading_halt_table else "unverified",
                "sector_classification_basis": "current",
                "classification_as_of": max(classification_dates, default=date.today().isoformat()),
                "dates": rows}
@@ -201,14 +215,15 @@ def load_row_metadata(client, rows):
     ids = sorted({str(r["security_id"]) for r in rows})
     if not ids:
         return {}
-    ctes, params = build_universe_ctes(dates_sql="SELECT arrayJoin({uv_days:Array(Date)}) AS trade_date")
+    ctes, params = build_universe_ctes(dates_sql="SELECT arrayJoin({uv_days:Array(Date)}) AS trade_date",
+        listing_table=listing_history_table(client), trading_halt_table=trading_halt_history_table(client))
     params.update(uv_days=days, uv_ids=ids)
     query = "WITH\n" + ",\n".join(ctes) + """
 /* universe_row_metadata */
-SELECT d.trade_date AS trade_date, s.security_id AS security_id,
+SELECT s.trade_date AS trade_date, s.security_id AS security_id,
        s.exchange_code AS exchange_code, s.country AS country, nullIf(c.market_cap, 0) AS market_cap
-FROM uv_dates d CROSS JOIN uv_securities s
-LEFT JOIN uv_caps c ON c.trade_date = d.trade_date AND c.security_id = s.security_id
+FROM uv_dated_securities s
+LEFT JOIN uv_caps c ON c.trade_date = s.trade_date AND c.security_id = s.security_id
 WHERE has({uv_ids:Array(String)}, s.security_id)
 """
     result = {}

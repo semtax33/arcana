@@ -549,7 +549,11 @@ def run_refresh(args: argparse.Namespace) -> None:
             from engine.workflows.share_input_rebuild import pending_rebuilds as pending_share_rebuilds
             share_changes = pending_share_rebuilds("kr", args.financial_basis,
                 symbols=parse_symbols_arg(getattr(args, "symbols", None)), data_lake=DATA_LAKE)
-            if state.is_step_completed("factors") and not share_changes:
+            from engine.workflows.financial_history_rebuild import pending_rebuilds as pending_financial_rebuilds
+            financial_changes = pending_financial_rebuilds("kr", args.financial_basis,
+                symbols=parse_symbols_arg(getattr(args, "symbols", None)), data_lake=DATA_LAKE)
+            if (state.is_step_completed("factors") and not share_changes and not financial_changes
+                    and not has_pending_price_rebuilds(args, kind="factors")):
                 print("[RESUME] skipping completed step: factors", flush=True)
             else:
                 progress.begin("factors")
@@ -562,7 +566,11 @@ def run_refresh(args: argparse.Namespace) -> None:
             from engine.workflows.share_input_rebuild import pending_rebuilds as pending_share_rebuilds
             share_changes = pending_share_rebuilds("kr", args.financial_basis, kind="snapshots",
                 symbols=parse_symbols_arg(getattr(args, "symbols", None)), data_lake=DATA_LAKE)
-            if state.is_step_completed("snapshots") and not share_changes:
+            from engine.workflows.financial_history_rebuild import pending_rebuilds as pending_financial_rebuilds
+            financial_changes = pending_financial_rebuilds("kr", args.financial_basis, kind="snapshots",
+                symbols=parse_symbols_arg(getattr(args, "symbols", None)), data_lake=DATA_LAKE)
+            if (state.is_step_completed("snapshots") and not share_changes and not financial_changes
+                    and not has_pending_price_rebuilds(args, kind="snapshots")):
                 print("[RESUME] skipping completed step: snapshots", flush=True)
             else:
                 progress.begin("snapshots")
@@ -653,7 +661,11 @@ def run_us_refresh(args: argparse.Namespace) -> None:
                 progress.done("benchmarks-wacc")
 
         if "factors" in targets:
-            if state.is_step_completed("factors"):
+            from engine.workflows.financial_history_rebuild import pending_rebuilds as pending_financial_rebuilds
+            financial_changes = pending_financial_rebuilds("us", args.financial_basis,
+                symbols=parse_symbols_arg(getattr(args, "symbols", None)), data_lake=DATA_LAKE)
+            if (state.is_step_completed("factors") and not financial_changes
+                    and not has_pending_price_rebuilds(args, kind="factors")):
                 print("[RESUME] skipping completed step: factors", flush=True)
             else:
                 progress.begin("factors")
@@ -662,7 +674,11 @@ def run_us_refresh(args: argparse.Namespace) -> None:
                 progress.done("factors")
 
         if "snapshots" in targets:
-            if state.is_step_completed("snapshots"):
+            from engine.workflows.financial_history_rebuild import pending_rebuilds as pending_financial_rebuilds
+            financial_changes = pending_financial_rebuilds("us", args.financial_basis,
+                kind="snapshots", data_lake=DATA_LAKE)
+            if (state.is_step_completed("snapshots") and not financial_changes
+                    and not has_pending_price_rebuilds(args, kind="snapshots")):
                 print("[RESUME] skipping completed step: snapshots", flush=True)
             else:
                 progress.begin("snapshots")
@@ -1487,6 +1503,23 @@ def run_dividend_refresh(
             date_column="trade_date",
         ),
     )
+
+
+def has_pending_price_rebuilds(args, *, kind):
+    """A completed run cannot hide a newer price-adjustment generation."""
+    from engine.workflows.stock_splits import rebuild_manifest_path
+
+    market = str(args.market).lower()
+    path = rebuild_manifest_path(market, data_lake=DATA_LAKE)
+    if not path.exists():
+        return False
+    dirty = json.loads(path.read_text(encoding="utf-8"))
+    completed_key = "completed_bases" if kind == "factors" else "completed_snapshot_bases"
+    # Factor inserts may select symbols; the ordinary snapshot rebuild is market-wide.
+    symbols = parse_symbols_arg(getattr(args, "symbols", None)) if kind == "factors" else None
+    requested_ids = set(normalized_security_ids(market, symbols)) if symbols else None
+    return any(args.financial_basis not in item.get(completed_key, [])
+        and (requested_ids is None or sid in requested_ids) for sid, item in dirty["items"].items())
 
 
 def rebuild_financial_history_factors(args, client, as_of_date, pending):

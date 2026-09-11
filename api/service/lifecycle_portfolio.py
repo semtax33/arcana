@@ -14,7 +14,8 @@ def _optional_day(value):
     return None if value is None or str(value) in {"NaT", "nan"} else _day(value)
 
 
-def simulate_lifecycle_portfolio(*, segments, trading_days, prices, events, entitlements=()):
+def simulate_lifecycle_portfolio(*, segments, trading_days, prices, events, entitlements=(), trading_halts=(),
+                                 listing_episodes=()):
     """Return daily observed wealth; only settled cash can fund a rebalance.
 
     Holdings use the supplied split-adjusted price unit. A cash entitlement is
@@ -61,14 +62,47 @@ def simulate_lifecycle_portfolio(*, segments, trading_days, prices, events, enti
                 raise ValueError("Lifecycle security currency requires explicit FX conversion")
         by_security[security] = event
 
+    halts_by_security, halt_ids = {}, set()
+    for source in trading_halts:
+        halt = dict(source)
+        if (halt.get("status") != "confirmed" or not halt.get("halt_id")
+                or halt["halt_id"] in halt_ids or not halt.get("security_id")
+                or not halt.get("source_url")
+                or not re.fullmatch(r"[0-9a-f]{64}", str(halt.get("source_sha256", "")))):
+            raise ValueError("Trading halt requires confirmed, unique source evidence")
+        halt_ids.add(halt["halt_id"])
+        start, end = _day(halt["start_date"]), _optional_day(halt.get("end_date"))
+        if end is not None and end <= start:
+            raise ValueError("Trading halt must end after its start")
+        halts_by_security.setdefault(halt["security_id"], []).append((start, end))
+
+    def is_halted(security, day):
+        return any(start <= day and (end is None or day < end)
+                   for start, end in halts_by_security.get(security, ()))
+
+    listings_by_security = {}
+    for source in listing_episodes:
+        start, end = _day(source["valid_from"]), _optional_day(source.get("valid_until"))
+        if source.get("status") != "confirmed" or (end is not None and end <= start):
+            raise ValueError("Listing interval requires a confirmed positive lifetime")
+        listings_by_security.setdefault(source["security_id"], []).append((start, end))
+
+    def listing_has_ended(security, day):
+        intervals = listings_by_security.get(security, ())
+        return (any(end is not None and end <= day for _, end in intervals)
+                and not any(start <= day and (end is None or day < end) for start, end in intervals))
+
     quotes = {}
     for row in prices:
         quote = dict(row)
         values = [quote.get(name) for name in ("raw_close", "close", "volume")]
         if any(value is None or not math.isfinite(float(value)) or float(value) <= 0 for value in values):
             continue
-        quote.update(raw_close=float(quote["raw_close"]), close=float(quote["close"]))
-        quotes[(_day(quote["trade_date"]), quote["security_id"])] = quote
+        day = _day(quote["trade_date"])
+        if is_halted(quote["security_id"], day) or listing_has_ended(quote["security_id"], day):
+            continue
+        quote.update(raw_close=float(quote["raw_close"]), close=float(quote["close"]), trade_date=day)
+        quotes[(day, quote["security_id"])] = quote
 
     schedule = {_day(segment["start_date"]): segment for segment in segments}
     days = sorted({_day(day) for day in trading_days})
@@ -120,6 +154,14 @@ def simulate_lifecycle_portfolio(*, segments, trading_days, prices, events, enti
                         "delivery_date": component["delivery_date"], "currency": component["currency"],
                         "tradable_date": component["tradable_date"],
                     })
+        # Exchange removal is evidence of the end of trading, even when no
+        # cash, private-equity or cancellation outcome has been registered.
+        # Process known terminal rights first; unresolved residual holdings
+        # cannot be sold or valued using a surviving vendor quotation.
+        for security in set(holdings) | {claim["security_id"] for claim in security_receivables}:
+            if listing_has_ended(security, day):
+                raise ValueError(f"Unresolved terminal outcome for listing: {security} on {day}")
+
         outstanding = []
         for claim in receivables:
             if claim["payment_date"] is not None and claim["payment_date"] <= day:
@@ -183,7 +225,10 @@ def simulate_lifecycle_portfolio(*, segments, trading_days, prices, events, enti
                 cash = 0.0
 
         positions = [{"security_id": security, "adjusted_units": units,
-                      "market_value": units * marks[security]["close"]}
+                      "market_value": units * marks[security]["close"],
+                      "mark_date": marks[security]["trade_date"],
+                      "trading_status": "halted" if is_halted(security, day) else
+                          ("trading" if (day, security) in quotes else "no_executable_quote")}
                      for security, units in sorted(holdings.items())]
         security_claims = [dict(claim, market_value=claim["adjusted_units"] * marks[claim["security_id"]]["close"])
                            for claim in security_receivables]

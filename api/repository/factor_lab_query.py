@@ -269,6 +269,7 @@ def compile_factor_lab_graph(
     security_table: str = "security_master",
     issuer_table: str = "issuers",
     listing_table: str | None = None,
+    trading_halt_table: str | None = None,
 ) -> FactorLabCompileResult:
     validation = validate_factor_lab_graph(graph, known_factor_ids=known_factor_ids)
     if not validation.valid:
@@ -324,7 +325,7 @@ def compile_factor_lab_graph(
     )
 
     ctes: list[str] = []
-    universe_active = has_universe_filters(experiment.get("universe")) or bool(listing_table)
+    universe_active = has_universe_filters(experiment.get("universe")) or bool(listing_table) or bool(trading_halt_table)
     if universe_active:
         if has_temporal_nodes:
             dates_sql = f"SELECT DISTINCT trade_date FROM {price_table} WHERE trade_date <= {{temporal_end_date:Date}}"
@@ -337,7 +338,7 @@ def compile_factor_lab_graph(
             market=experiment.get("market"), sector_codes=universe.get("sector_codes"),
             industry_group_codes=universe.get("industry_group_codes"),
             security_table=security_table, issuer_table=issuer_table, cap_table=cap_table,
-            listing_table=listing_table)
+            listing_table=listing_table, trading_halt_table=trading_halt_table)
         ctes.extend(uv_ctes)
         params.update(uv_params)
     if _needs_security_universe(nodes, validation.execution_order, experiment):

@@ -57,6 +57,7 @@ def build_factor_snapshot_query(
     catalog_table: str = "factor_catalog",
     security_table: str = "security_master",
     listing_table: str | None = None,
+    trading_halt_table: str | None = None,
     issuer_table: str = "issuers",
     identifier_table: str = "identifiers",
 ) -> tuple[str, dict[str, Any]]:
@@ -292,11 +293,11 @@ ORDER BY
     rf.security_id ASC,
     rf.factor_id ASC
 """.strip()
-    if has_universe_filters(universe) or exact_signal_values or listing_table:
+    if has_universe_filters(universe) or exact_signal_values or listing_table or trading_halt_table:
         query, params = filter_factor_query(query, params,
             dates_sql='SELECT {signal_date:Date} AS trade_date', universe=universe, market=market,
             sector_codes=sector_codes, industry_group_codes=industry_group_codes,
-            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table, listing_table=listing_table,
+            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table, listing_table=listing_table, trading_halt_table=trading_halt_table,
             batch=False, exact_signal_values=exact_signal_values)
     return query, params
 
@@ -315,6 +316,7 @@ def build_factor_snapshot_batch_query(
     catalog_table: str = "factor_catalog",
     security_table: str = "security_master",
     listing_table: str | None = None,
+    trading_halt_table: str | None = None,
     issuer_table: str = "issuers",
     identifier_table: str = "identifiers",
     sector_codes: list[str] | None = None,
@@ -540,11 +542,11 @@ ORDER BY
     rf.security_id ASC,
     rf.factor_id ASC
 """.strip()
-    if has_universe_filters(universe) or exact_signal_values or listing_table:
+    if has_universe_filters(universe) or exact_signal_values or listing_table or trading_halt_table:
         query, params = filter_factor_query(query, params,
             dates_sql='SELECT arrayJoin({signal_dates:Array(Date)}) AS trade_date', universe=universe, market=market,
             sector_codes=sector_codes, industry_group_codes=industry_group_codes,
-            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table, listing_table=listing_table,
+            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table, listing_table=listing_table, trading_halt_table=trading_halt_table,
             batch=True, exact_signal_values=exact_signal_values)
     return query, params
 
@@ -563,6 +565,7 @@ def build_factor_raw_batch_query(
     catalog_table: str = "factor_catalog",
     security_table: str = "security_master",
     listing_table: str | None = None,
+    trading_halt_table: str | None = None,
     issuer_table: str = "issuers",
     identifier_table: str = "identifiers",
     sector_codes: list[str] | None = None,
@@ -798,11 +801,11 @@ ORDER BY
     rf.security_id ASC,
     rf.factor_id ASC
 """.strip()
-    if has_universe_filters(universe) or exact_signal_values or listing_table:
+    if has_universe_filters(universe) or exact_signal_values or listing_table or trading_halt_table:
         query, params = filter_factor_query(query, params,
             dates_sql='SELECT arrayJoin({signal_dates:Array(Date)}) AS trade_date', universe=universe, market=market,
             sector_codes=sector_codes, industry_group_codes=industry_group_codes,
-            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table, listing_table=listing_table,
+            security_table=security_table, issuer_table=issuer_table, cap_table=cap_table, listing_table=listing_table, trading_halt_table=trading_halt_table,
             batch=True, exact_signal_values=exact_signal_values)
     return query, params
 

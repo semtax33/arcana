@@ -15,6 +15,7 @@ import pandas as pd
 
 from engine.transformers._internal import krx_market_data
 from engine.workflows._internal import refresh_workflow
+from engine.core.paths import DataLakePaths
 
 
 class FakeClickHouseClient:
@@ -46,6 +47,10 @@ class RefreshWorkflowTest(unittest.TestCase):
         temporary=TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.split_manifest_root=Path(temporary.name)
+        lake_patcher = patch.object(refresh_workflow, "DATA_LAKE",
+                                   DataLakePaths.from_project_root(self.split_manifest_root))
+        lake_patcher.start()
+        self.addCleanup(lake_patcher.stop)
         patcher=patch('engine.workflows.stock_splits.rebuild_manifest_path',
                       side_effect=lambda market,**kwargs:self.split_manifest_root/f'{market}_rebuild.json')
         patcher.start()

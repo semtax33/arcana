@@ -14,13 +14,25 @@
 
 주식분할 갱신은 silver 사건 원장과 가격 패널을 만든 뒤 gold의 `stock_splits.json`, `prices/{market}_{symbol}.parquet`, `summary.json`을 저장한다. 주식병합도 같은 기업행위 경로를 사용한다. 독립 실행의 `--gold-output` 또는 `run_stock_split_refresh(gold_dir=...)`로 gold 위치를 지정할 수 있다.
 
-생존편향 갱신은 gold에 `listing_episodes.json`, `events.json`, `entitlements.json`, `unresolved.json`, `prices/{market}_{symbol}.parquet`, `market_cap_factors.parquet`, `summary.json`을 저장한다. `--survivorship-output`은 silver, `--survivorship-gold-output`은 gold 경로다. `--skip-clickhouse` 실행에서도 파일은 두 계층에 저장된다. 검토 목록이 없으면 gold 요약에 `awaiting_review`를 표시한다.
+생존편향 갱신은 gold에 `listing_episodes.json`, `events.json`, `entitlements.json`, `trading_halts.json`, `unresolved.json`, `prices/{market}_{symbol}.parquet`, `market_cap_factors.parquet`, `summary.json`을 저장한다. `--survivorship-output`은 silver, `--survivorship-gold-output`은 gold 경로다. `--skip-clickhouse` 실행에서도 파일은 두 계층에 저장된다. 검토 목록이 없으면 gold 요약에 `awaiting_review`를 표시한다.
 
 gold 가격 파일의 `adj_close`는 분할·병합만 반영한 수정종가다. `open`, `high`, `low`, `close`, `volume`은 거래 당시 값이며, 배당을 포함한 총수익률 가격이 아니다. 요약의 `artifacts`가 해당 실행에서 생성한 파일과 SHA-256을 가리킨다. 파일별 교체 후 요약을 마지막에 쓴다. 전체 디렉터리를 한 번에 교체하는 트랜잭션은 아니므로 동시 열람 시 파일 해시를 확인해야 한다.
 
 gold에 있다는 사실이 검증 완료를 의미하지 않는다. `coverage_complete=false`와 미해결 사건을 함께 제공하며, 미확정 현금·CVR·비상장 주식·단주 권리를 0으로 바꾸지 않는다. 생존편향의 전체 시장 보정 여부는 [파이프라인 현황](survivorship-pipeline.md)을 따른다.
 
+일반 팩터 스크리너의 상장 이력·거래정지 연결 검증은 `silver/survivorship/financial_research/factor_screen_lifecycle_20260911`에 SQL, 실패·통과 기록, 코드 사본과 해시를 보존하고 `gold/survivorship/pipeline_verification/20260911_factor_screen_lifecycle`에 사용자용 요약을 둔다. 테스트는 고유한 격리 DB와 임시 Bronze 원문을 사용하며 운영 상장 이력을 추가하지 않는다.
+
+상장 종료 후 미해결 보유분 검증은 `silver/survivorship/financial_research/closed_listing_outcome_20260911`에 둔다. 한국 추가 상장 이력의 전체 등록안은 `kr_missing_listing_refresh_proposal_20260911`, 실제 원본과 격리 DB·FactorLab 대조는 `kr_missing_listing_isolated_verification_20260911`에 둔다. 사용자에게는 `gold/survivorship/kr/listing_refresh_proposal/20260911`에서 운영 미반영 상태와 함께 제공한다. 등록안은 기존 이력을 보존하며 원문을 복제·변경하지 않고 Bronze 경로와 해시로 연결한다.
+
+미국 목록의 원본은 `bronze/alpha-vantage/listings/snapshot_date={date}`에 보존한다. 정규 갱신의 스냅샷 비교·중복·충돌 감사는 `silver/survivorship/us/listing_source_quality/as_of={date}/source_set={hash}/audit.json`에 입력별로 저장하고, 사용자 요약은 `gold/survivorship/us/listing_source_quality.json`에 제공한다. Gold의 생존편향 요약은 감사 파일의 경로와 해시를 연결한다. 비교는 보관된 이전 날짜만 사용하며 공급자 식별 조합이 같다는 사실을 발행사·주식 종류의 연속성으로 해석하지 않는다.
+
 ## 연구 자료와 재현
+
+거래정지의 DART 원문·ZIP 응답은 `bronze/dart/listings/issuer_review_20260911/trading_halts`와 정규 수집 검증의 `bronze/dart/listings/regular_halt_collection_20260911`에 저장한다. 추출 텍스트·구간 대조는 `silver/survivorship/financial_research/kr_trading_halt_source_review_20260911`, 파이프라인 실패 재현·통과 기록·코드 버전은 `silver/survivorship/financial_research/trading_halt_pipeline_20260911`에 둔다. 사용자용 구간 검토는 `gold/survivorship/kr/trading_halt_reviews/20260911`, 기능 검증 상태는 `gold/survivorship/pipeline_verification/20260911_trading_halts`에서 제공한다. 원문 확보와 운영 등록 상태를 별도로 표시한다.
+
+2026-09-11에 추가로 확인한 한국 누락 증권 5개의 발행사별 DART 목록과 사업·반기보고서, 청산 공시 원본은 `bronze/dart/listings/issuer_review_20260911/missing_membership`에 보존한다. 정규 수집기를 통한 실제 재수집 원본은 `bronze/dart/listings/liquidation_collection_20260911`에 둔다. 원문에서 추출한 검토 텍스트·종목군 누락 비교는 `silver/survivorship/financial_research/kr_remaining_missing_membership_20260911`, 수집 테스트·재실행 결과는 `kr_liquidation_collection_20260911`에 둔다. 이 자료는 신규 상장 이력 승인이나 청산대금 확정과 구분한다.
+
+미국 상장 상태의 기준일별 원문은 `bronze/alpha-vantage/listings/snapshot_date={date}`에 둔다. 날짜 간 원문 비교·중복·상장폐지일 변동은 `silver/survivorship/financial_research/us_listing_status_20260910`, 사용자용 현황은 `gold/survivorship/us/source_coverage/20260910/listing_status.json`에 둔다. RTN 합병의 SEC 원문 5개는 `bronze/sec/listings/issuer_review_20260911/RTN`, 추출 텍스트와 검토는 Silver의 `us_rtn_source_review_20260911`, 사용자용 요약은 `gold/survivorship/us/issuer_reviews/RTN/20260911`에 보존한다.
 
 수집 표본은 `bronze/research/stock_splits/{market}/{bundle}` 또는 `bronze/research/financial_statements/eps/{bundle}`에 둔다. 추출 텍스트·예상 파서 값·정규화·검증 결과는 같은 분류의 silver 경로에 둔다. `docs/research`에는 설명과 Python 수집·검증 코드가 남는다. 테스트가 읽는 원문은 `bronze/fixtures/stock_splits`, 예상 정규화 값은 `silver/fixtures/stock_splits`에 둔다. 소규모 오프라인 테스트 표본만 `.gitignore` 예외로 관리한다.
 

@@ -19,6 +19,17 @@ def listing_history_table(client):
     return None
 
 
+def trading_halt_history_table(client):
+    query = getattr(client, "query", None)
+    if not callable(query):
+        return None
+    for prefix in ("", "TEMPORARY "):
+        rows = query(f"EXISTS {prefix}TABLE security_trading_halts").result_rows
+        if rows and rows[0][0]:
+            return "security_trading_halts"
+    return None
+
+
 def security_source_sql(security_table="security_master", listing_table=None):
     security_table = _table_name(security_table)
     if listing_table is None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from api.model.universe import has_universe_filters, normalize_universe
 from api.repository.universe_query import load_universe_details
-from api.repository.listing_history import listing_history_table
+from api.repository.listing_history import listing_history_table, trading_halt_history_table
 
 from collections import defaultdict
 import csv
@@ -504,6 +504,7 @@ class BacktestService:
         query, params = build_factor_snapshot_query(
             conditions,
             listing_table=listing_history_table(client),
+            trading_halt_table=trading_halt_history_table(client),
             universe=universe,
             exact_signal_values=exact_signal_values,
             signal_date=signal_date,
@@ -537,6 +538,7 @@ class BacktestService:
         query, params = build_factor_snapshot_batch_query(
             conditions,
             listing_table=listing_history_table(client),
+            trading_halt_table=trading_halt_history_table(client),
             universe=universe,
             exact_signal_values=exact_signal_values,
             signal_dates=signal_dates,
@@ -571,6 +573,7 @@ class BacktestService:
         query, params = build_factor_raw_batch_query(
             conditions,
             listing_table=listing_history_table(client),
+            trading_halt_table=trading_halt_history_table(client),
             universe=universe,
             exact_signal_values=exact_signal_values,
             signal_dates=signal_dates,
@@ -630,10 +633,39 @@ class BacktestService:
                 ))
                 entitlements.extend(received)
                 pending = {row["recipient_security_id"] for row in received} - visited
-        if lifecycle_events:
+        price_ids = {sid for segment in segments for sid in segment["security_ids"]}
+        price_ids.update(component["recipient_security_id"] for component in entitlements)
+        listing_episodes = []
+        listing_table = listing_history_table(client)
+        if price_ids and listing_table:
+            # Read the whole short history, including successor venue episodes.
+            # Date predicates on the JSON-backed view can be pushed ahead of
+            # its category filter; apply the closing-day check after projection.
+            listing_episodes = _records(client.query_df(
+                f"""SELECT security_id, valid_from, valid_until, status
+                FROM {listing_table}
+                WHERE has({{security_ids:Array(String)}}, security_id)
+                    AND status = 'confirmed' AND security_type = 'common_stock'""",
+                parameters={"security_ids": sorted(price_ids)},
+            ))
+        has_listing_closures = any(row.get("valid_until") is not None
+            and str(row["valid_until"]) not in {"NaT", "nan"}
+            and _as_date(row["valid_until"]) <= max(trading_days) for row in listing_episodes)
+        trading_halts = []
+        if price_ids and (_table_exists(client, "security_trading_halts", strict=True)
+                or _table_exists(client, "security_trading_halts", temporary=True, strict=True)):
+            trading_halts = _records(client.query_df(
+                """SELECT halt_id, security_id, start_date, end_date, status,
+                    published_date, source_url, source_sha256
+                FROM security_trading_halts
+                WHERE has({security_ids:Array(String)}, security_id) AND status = 'confirmed'
+                    AND start_date <= {last_day:Date}
+                    AND (end_date IS NULL OR end_date > {first_day:Date})""",
+                parameters={"security_ids": sorted(price_ids), "first_day": min(trading_days),
+                            "last_day": max(trading_days)},
+            ))
+        if lifecycle_events or trading_halts or has_listing_closures:
             from api.service.lifecycle_portfolio import simulate_lifecycle_portfolio
-            price_ids = {sid for segment in segments for sid in segment["security_ids"]}
-            price_ids.update(component["recipient_security_id"] for component in entitlements)
             price_rows = _records(client.query_df(
                 """SELECT security_id, trade_date,
                     quote.1 AS raw_close, quote.2 AS close, quote.3 AS volume, quote.4 AS currency
@@ -652,7 +684,8 @@ class BacktestService:
             ))
             history = simulate_lifecycle_portfolio(
                 segments=segments, trading_days=trading_days, prices=price_rows, events=lifecycle_events,
-                entitlements=entitlements,
+                entitlements=entitlements, trading_halts=trading_halts,
+                listing_episodes=listing_episodes,
             )
             if portfolio_history is not None:
                 portfolio_history.extend(history)

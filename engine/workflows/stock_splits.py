@@ -14,6 +14,7 @@ from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
+import re
 from uuid import uuid4
 
 import numpy as np
@@ -80,13 +81,22 @@ def load_alpha_split_candidates(*,as_of=None,root=None):
 def normalize_split_ledger(market,*,as_of=None,source_root=None,output_path=None):
     cutoff=str(pd.Timestamp(as_of or date.today()).date())
     root=Path(source_root or root_for(market))
-    observations=[];reviews=[];events=[];selected={};families={}
+    observations=[];reviews=[];events=[];selected={};families={};sources=[]
     def prepare_source(path):
         metadata=json.loads(path.read_text(encoding='utf-8'))
         if metadata.get('provider') not in {'DART','KIND','EDGAR'}:return None,None
+        if path.is_relative_to(root/'public_documents') and metadata.get('source_validation') not in {'pending','failed'}:
+            return None,None
         if metadata.get('published_date','9999')>cutoff:return None,None
         # The local sidecar remains relocatable; never trust a manifest path to read outside this source tree.
         content_path=path.with_name(path.name.removesuffix('.metadata.json'))
+        if metadata.get('source_validation') in {'pending','failed'} and metadata.get('byte_count')==0:
+            if metadata.get('source_sha256')!=hashlib.sha256(b'').hexdigest():
+                raise ValueError(f'empty response hash mismatch: {path}')
+            if content_path.exists() and content_path.stat().st_size:
+                raise ValueError(f'empty response metadata conflicts with source: {path}')
+            metadata['_path']=None
+            return metadata,None
         if not content_path.exists():
             return None,{'source_id':metadata.get('source_id'),'reason':'missing_source_file'}
         raw=content_path.read_bytes()
@@ -97,18 +107,61 @@ def normalize_split_ledger(market,*,as_of=None,source_root=None,output_path=None
             metadata['_parsed']=parse_edgar_split(raw,**{k:metadata[k] for k in ['security_id','source_id','source_url','published_date']})
         return metadata,None
     paths=list(root.glob('disclosures/**/*.metadata.json'))
+    if market=='kr':paths.extend(root.glob('public_documents/**/*.metadata.json'))
     with ThreadPoolExecutor(max_workers=8) as pool:
         for count,(metadata,issue) in enumerate(pool.map(prepare_source,paths),1):
             if issue:reviews.append(issue)
             if metadata is not None:
-                family=metadata.get('family_id') if market=='kr' else metadata.get('document_id',str(metadata['_path']))
-                key=(metadata.get('security_id'),family)
-                if key not in families or (metadata['published_date'],metadata['source_id'])>(families[key]['published_date'],families[key]['source_id']):
-                    families[key]=metadata
+                sources.append(metadata)
             if count%1000==0:print(f'[SPLITS] verified market={market} documents={count}/{len(paths)}',flush=True)
+    # API archives initially know only their receipt; a public DART main page
+    # supplies explicit links to the other versions of the same disclosure.
+    # Join those identities before choosing the latest version, including a
+    # withdrawal with no operative table. Sources beyond cutoff were excluded
+    # above, and every relationship remains scoped to the same security.
+    parents={}
+    def find(key):
+        parents.setdefault(key,key)
+        while parents[key]!=key:
+            parents[key]=parents[parents[key]]
+            key=parents[key]
+        return key
+    def source_key(metadata):
+        sid=metadata.get('security_id')
+        family=metadata.get('family_id')
+        if market=='kr' and metadata.get('provider')=='DART':
+            receipt=str(family or '').removeprefix('api:')
+            if re.fullmatch(r'\d{14}',receipt):return (sid,'dart_receipt',receipt)
+        if market=='us':family=metadata.get('document_id',str(metadata['_path']))
+        return (sid,'family',family)
+    if market=='kr':
+        for metadata in sources:
+            if metadata.get('provider')!='DART':continue
+            anchor=source_key(metadata)
+            for receipt in [metadata['source_id'],*metadata.get('family',[])]:
+                if not re.fullmatch(r'\d{14}',str(receipt)):continue
+                related=(metadata.get('security_id'),'dart_receipt',str(receipt))
+                parents[find(related)]=find(anchor)
+    family_members={}
+    def version_order(metadata):
+        return (metadata['published_date'],metadata['source_id'],
+                metadata.get('source_validation') not in {'pending','failed'})
+    for metadata in sources:
+        key=find(source_key(metadata))
+        family_members.setdefault(key,set()).add(metadata['source_id'])
+        if key not in families or version_order(metadata)>version_order(families[key]):
+            families[key]=metadata
     # First keep the final document of each official correction family. A
     # cancellation with no operative table must remove its earlier proposal.
-    for metadata in families.values():
+    for family_key,metadata in families.items():
+        if metadata.get('source_validation') in {'pending','failed'}:
+            item={key:metadata.get(key) for key in ['source_id','security_id','source_url','source_sha256','family_id']}
+            item.update(reason=['official_document_unavailable'],
+                        validation_error=metadata.get('validation_error','Document validation is pending'),
+                        blocked_family_source_ids=sorted(family_members[family_key]))
+            reviews.append(item)
+            observations.append({**item,'events':[],'issues':item['reason']})
+            continue
         family=metadata.get('family_id') if market=='kr' else metadata.get('document_id',str(metadata['_path']))
         if market=='kr':
             preliminary,_=parse_kr_share_unit_change(metadata['_path'].read_bytes(),source_title=metadata.get('title',''),**{k:metadata[k] for k in ['security_id','source_id','source_url','published_date']})

@@ -29,6 +29,10 @@ SCHEMAS = {
         "units_per_share": "Float64", "delivery_date": "Nullable(Date32)",
         "tradable_date": "Nullable(Date32)",
     }),
+    "trading_halts": ("security_trading_halts", {
+        **dict.fromkeys(("halt_id", "security_id", "status", "source_url", "source_sha256"), "String"),
+        "start_date": "Date32", "end_date": "Nullable(Date32)", "published_date": "Date32",
+    }),
 }
 
 
@@ -42,7 +46,8 @@ def load_survivorship(bundle, *, market, client=None, table_prefix="", prices=()
     if market not in {"us", "kr"} or (table_prefix and not re.fullmatch(r"[A-Za-z_]\w*", table_prefix)):
         raise ValueError("Invalid survivorship market or table prefix")
     serialized = []
-    keys = {"listing_episodes": "episode_id", "events": "event_id", "entitlements": "component_id"}
+    keys = {"listing_episodes": "episode_id", "events": "event_id", "entitlements": "component_id",
+            "trading_halts": "halt_id"}
     for kind, values in bundle.items():
         seen = set()
         for index, row in enumerate(values):

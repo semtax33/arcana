@@ -67,7 +67,8 @@ def read_reviewed_manifest(path, *, market, end_date):
             raise ValueError("KIND corroboration is only supported for Korean lifecycle facts")
 
     rows = {}
-    keys = {"listing_episodes": "episode_id", "events": "event_id", "entitlements": "component_id"}
+    keys = {"listing_episodes": "episode_id", "events": "event_id", "entitlements": "component_id",
+            "trading_halts": "halt_id"}
     for category, key in keys.items():
         unique = {}
         for original in manifest.get(category, []):
@@ -150,6 +151,24 @@ def read_reviewed_manifest(path, *, market, end_date):
                     episode["closure_supporting_sources"] = event["supporting_sources"]
         if episode.get("valid_until") and episode["valid_until"] <= episode["valid_from"]:
             raise ValueError("Listing episode must have a positive lifetime")
+    # Listing lifetime and exchange execution restrictions are distinct facts.
+    # A halt ends on the first session whose closing trade is executable again.
+    halt_intervals = {}
+    for halt in rows["trading_halts"]:
+        halt["start_date"] = _day(halt["start_date"])
+        halt["end_date"] = _day(halt["end_date"]) if halt.get("end_date") else None
+        if halt["end_date"] is not None and halt["end_date"] <= halt["start_date"]:
+            raise ValueError("Trading halt must end after its start")
+        if not any(episode["security_id"] == halt["security_id"]
+                   and episode["valid_from"] <= halt["start_date"]
+                   and (episode.get("valid_until") is None or halt["start_date"] < episode["valid_until"])
+                   for episode in rows["listing_episodes"]):
+            raise ValueError("Trading halt requires a matching confirmed listing lifetime")
+        prior = halt_intervals.setdefault(halt["security_id"], [])
+        stop = halt["end_date"] or "9999-12-31"
+        if any(halt["start_date"] < old_end and old_start < stop for old_start, old_end in prior):
+            raise ValueError("Overlapping trading halt intervals require review")
+        prior.append((halt["start_date"], stop))
     return {**rows, "sources": list(sources.values()), "unresolved": manifest.get("unresolved", []),
             "price_sources": manifest.get("price_sources", []), "share_sources": manifest.get("share_sources", []),
             "market_data_sources": manifest.get("market_data_sources", [])}
@@ -170,10 +189,19 @@ def run_survivorship_refresh(*, market, end_date, manifest_path=None, output_dir
         from engine.extractors.survivorship import download_survivorship_sources
         collection = download_survivorship_sources(market=market, end_date=end_date, start_date=start_date,
                                                   force=force, output_dir=source_dir)
+    listing_quality = None
+    if download and market == "us":
+        from engine.transformers.listing_source_quality import audit_alpha_vantage_listing_snapshots
+        listing_quality, audit_artifact = audit_alpha_vantage_listing_snapshots(
+            root=source_dir or DATA_LAKE.bronze("alpha-vantage", "listings"), end_date=end_date,
+            output_dir=output / "listing_source_quality")
+        collection["source_quality_audit"] = audit_artifact
     if not manifest_path.exists():
         summary = {"status": "awaiting_review", "market": market, "as_of": end_date,
                    "coverage_complete": False, "collection": collection,
                    "manifest_path": str(manifest_path.resolve()), "gold_dir": str(gold.resolve()), "artifacts": []}
+        if listing_quality is not None:
+            summary["listing_source_quality"] = export_json(gold / "listing_source_quality.json", listing_quality)
         _write_json(output / "summary.json", summary)
         export_json(gold / "summary.json", summary)
         return summary
@@ -196,7 +224,7 @@ def run_survivorship_refresh(*, market, end_date, manifest_path=None, output_dir
         capitalizations["mcap_mil"] = capitalizations.market_cap / 1_000_000
         capitalizations["currency"] = "USD" if market == "us" else "KRW"
     market_cap_factors = prepare_daily_factor_rows(capitalizations, financial_basis="annual", factor_ids=["mcap_mil"])
-    for category in ("listing_episodes", "events", "entitlements", "sources", "unresolved"):
+    for category in ("listing_episodes", "events", "entitlements", "trading_halts", "sources", "unresolved"):
         _write_json(output / f"{category}.json", {"schema_version": 1, "market": market,
                                                 "as_of": end_date, "rows": result[category]})
     for metadata, frame in prices:
@@ -291,7 +319,7 @@ def run_survivorship_refresh(*, market, end_date, manifest_path=None, output_dir
                 }
         _write_json(rebuild_path, dirty)
     artifacts = []
-    for category in ("listing_episodes", "events", "entitlements", "unresolved"):
+    for category in ("listing_episodes", "events", "entitlements", "trading_halts", "unresolved"):
         artifacts.append(export_json(gold / f"{category}.json", {
             "schema_version": 1, "market": market, "as_of": end_date,
             "coverage_complete": False, "rows": result[category]}))
@@ -306,6 +334,9 @@ def run_survivorship_refresh(*, market, end_date, manifest_path=None, output_dir
                "database_publication": publication,
                "coverage_complete": False, "output_dir": str(output.resolve()),
                "gold_dir": str(gold.resolve()), "artifacts": artifacts}
+    if listing_quality is not None:
+        summary["collection"] = collection
+        summary["listing_source_quality"] = export_json(gold / "listing_source_quality.json", listing_quality)
     _write_json(output / "summary.json", summary)
     export_json(gold / "summary.json", summary)
     return summary

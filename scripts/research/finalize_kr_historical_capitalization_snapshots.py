@@ -53,7 +53,13 @@ def main():
         raise ValueError("Complete native-year publication and real PIT consumer validation are required")
     check(args.snapshot_publication, consumer["snapshot_publication_sha256"])
     for path, digest in publication["dependencies"].items():
-        check(ROOT / path, digest)
+        if digest is None:
+            absent = (ROOT / path).resolve()
+            if absent.exists():
+                raise ValueError(f"A pinned absent input appeared: {absent}")
+            evidence[str(absent)] = None
+        else:
+            check(ROOT / path, digest)
     native = read(consumer["native_verification_path"], consumer["native_verification_sha256"])
     if consumer["annual_mcap_verified_days"] != native["verified_days"]:
         raise ValueError("PIT validation does not cover every audited native trading day")
@@ -119,7 +125,9 @@ def main():
         raise ValueError("Consumer exports do not cover the verified snapshot scope")
 
     years = publication["source_years"]
-    scope = str(years[0]) if len(years) == 1 else f"{years[0]}_{years[-1]}"
+    scope = "_".join(map(str, years))
+    if len(years) > 1 and years == list(range(years[0], years[-1] + 1)):
+        scope = f"{years[0]}_{years[-1]}"
     gold = DATA_LAKE.gold("survivorship", "kr", "capitalization_factors", scope)
     summaries = {"snapshot":gold / "snapshot_summary.json", "native":gold / "summary.json",
         "input":args.input_gold_summary,

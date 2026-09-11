@@ -313,13 +313,17 @@ def test_opendart_utf8_archive_with_stale_euckr_meta():
     assert events[0].effective_date=='2026-08-20'
 
 
-def test_opendart_unavailable_is_recorded_without_overwriting_source(tmp_path):
-    from engine.extractors.opendart_stock_splits import download_document
-    class Response:
-        content=b'<result><status>014</status><message>File does not exist</message></result>'
-    class Client:
-        def get(self,*args,**kwargs):return Response()
-    status=download_document(Client(),tmp_path,{'source_id':'20180316800856'},'005930')
+def test_opendart_unavailable_is_recorded_without_overwriting_source(tmp_path,monkeypatch):
+    import requests
+    from engine.extractors.opendart_stock_splits import OpenDartClient,download_document
+    def unavailable_response(session,request,**kwargs):
+        response=requests.Response()
+        response.status_code=200
+        response._content=b'<result><status>014</status><message>File does not exist</message></result>'
+        response.url=request.url
+        return response
+    monkeypatch.setattr(requests.Session,'send',unavailable_response)
+    status=download_document(OpenDartClient(key='transport-test'),tmp_path,{'source_id':'20180316800856'},'005930')
     assert status=='unavailable'
     assert not (tmp_path/'disclosures'/'005930'/'20180316800856.html').exists()
     assert (tmp_path/'document_archives'/'20180316800856.unavailable.json').exists()

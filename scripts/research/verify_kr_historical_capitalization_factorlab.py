@@ -27,6 +27,7 @@ KEYS = ["trade_date", "security_id"]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native-publication", type=Path, required=True)
+    parser.add_argument("--observation-sources", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not args.output.resolve().is_relative_to((DATA_LAKE.root / "silver").resolve()):
@@ -35,6 +36,8 @@ def main():
     publication = json.loads(args.native_publication.read_text("utf-8"))
     if not publication["native_published"]:
         raise ValueError("Finish native publication before full consumer verification")
+    requested_months = [row["month"] for row in publication["months"]]
+    cutoff = pd.Timestamp(publication.get("end_date") or f"{max(publication['source_years'])}-12-31")
     preparation_path = Path(publication["preparation"]) / "summary.json"
     if sha256_file(preparation_path) != publication["preparation_sha256"]:
         raise ValueError("Native source preparation changed")
@@ -44,7 +47,21 @@ def main():
         raise ValueError("Share input publication changed")
     share_publication = json.loads(share_publication_path.read_text("utf-8"))
     audit_refs, source_years = {}, []
-    if "preparation_path" in share_publication:
+    if args.observation_sources:
+        index_path = args.observation_sources.resolve()
+        index_hash = sha256_file(index_path)
+        if preparation["source_audits_sha256"].get(str(index_path)) != index_hash:
+            raise ValueError("Observation index was not used in the native source audit")
+        index = json.loads(index_path.read_text("utf-8"))
+        if (index["status"] != "original_observations_verified"
+                or index["share_publication_sha256"] != preparation["share_publication_sha256"]
+                or index["end_date"] != cutoff.date().isoformat()):
+            raise ValueError("Observation source scope differs from native publication")
+        audit_refs.update(index["source_audits_sha256"])
+        audit_refs[str(index_path)] = index_hash
+        source_years = [dict(year=year["year"], path=Path(year["path"]), sha256=year["sha256"])
+            for year in index["years"] if year["year"] in publication["source_years"]]
+    elif "preparation_path" in share_publication:
         path = Path(share_publication["preparation_path"])
         if sha256_file(path) != share_publication["preparation_sha256"]:
             raise ValueError("Share source preparation changed")
@@ -68,6 +85,14 @@ def main():
             sha256=year["prepared_sha256"]) for year in audit["years"] if year["year"] in publication["source_years"]]
     if sorted(year["year"] for year in source_years) != sorted(publication["source_years"]):
         raise ValueError("Original observation audit does not cover the native publication")
+    if (len(requested_months) != len(set(requested_months))
+            or requested_months != [str(month) for year in source_years
+                for month in pd.period_range(f"{year['year']}-01", f"{year['year']}-12", freq="M")
+                if month.start_time <= cutoff]):
+        raise ValueError("Native publication does not cover the requested source months")
+    for path, digest in audit_refs.items():
+        if sha256_file(path) != digest:
+            raise ValueError("An original observation source changed")
     episodes_path = DATA_LAKE.silver("survivorship","kr","listing_episodes.json")
     episodes_hash = sha256_file(episodes_path)
     episodes = [r for r in json.loads(episodes_path.read_text("utf-8"))["rows"] if r["status"] == "confirmed"]
@@ -77,6 +102,7 @@ def main():
         native_publication_sha256=sha256_file(args.native_publication), listing_episodes_sha256=episodes_hash,
         implementation_sha256=sha256_file(__file__), months=records,
         source_years=publication["source_years"], source_audits_sha256=audit_refs,
+        requested_months=requested_months, end_date=cutoff.date().isoformat(),
         policy="ceil(70% of security COUNT), before factor missingness. The dated universe still uses current-master fallback for unreviewed listings; excluded quote identities include preferred and other securities.")
     shutil.copy2(__file__, args.output / Path(__file__).name)
     export_json(args.output / "summary.json",report)
@@ -88,11 +114,16 @@ def main():
                 raise ValueError("Original observation preparation changed")
             source = pd.read_parquet(source_path)
             source.trade_date = pd.to_datetime(source.trade_date)
+            source = source.loc[source.trade_date.le(cutoff)]
             for month in pd.period_range(f"{year['year']}-01",f"{year['year']}-12",freq="M"):
+                if str(month) not in requested_months:
+                    continue
                 folder = args.output / str(month)
                 folder.mkdir()
                 observed = source.loc[source.trade_date.between(month.start_time,month.end_time)].copy()
                 days = sorted(observed.trade_date.dt.strftime("%Y-%m-%d").unique())
+                if not days:
+                    raise ValueError("Requested month has no verified original quote dates")
                 graph = {"version":2,"experiment":{"name":"restored_market_cap_observations","market":"KR",
                     "start_date":days[0],"end_date":days[-1],"universe":{"size_percentile":{"side":"top","percent":70}}},
                     "nodes":[{"id":"input","type":"factor_input","version":1,"config":{"factor_id":"mcap_mil","financial_basis":"annual","missing_policy":"drop"}}],

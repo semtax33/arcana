@@ -80,7 +80,9 @@ def parse_dart_search(html):
     totals=re.findall(r'총\s*([\d,]+)\s*건',text)
     if not totals:
         # An error/block page must not be recorded as a successful empty search.
-        if not records and not any(s in text for s in ['조회된 데이타가 없습니다','검색된 자료가 없습니다','검색결과가 없습니다','조회된 데이터가 없습니다']):
+        empty_cell=soup.select_one('table.tbList tbody td.no_data')
+        official_empty=empty_cell is not None and empty_cell.get_text(strip=True)=='조회 결과가 없습니다.'
+        if not records and not official_empty and not any(s in text for s in ['조회된 데이타가 없습니다','검색된 자료가 없습니다','검색결과가 없습니다','조회된 데이터가 없습니다']):
             raise ValueError('DART response has neither a result count nor a recognized empty-result marker')
     total=int(totals[-1].replace(',','')) if totals else len(records)
     return records,total
@@ -94,11 +96,59 @@ def dart_family(html):
 
 
 def dart_viewer_parameters(html,receipt):
-    text=html.decode('utf-8',errors='replace') if isinstance(html,bytes) else html
-    matches=re.findall(r"viewDoc\(['\"](\d{14})['\"]\s*,\s*['\"](\d+)['\"]",text)
-    chosen=next(((r,d) for r,d in matches if r==receipt),None)
-    if not chosen:raise ValueError('DART document number not found for requested receipt')
-    return {'rcpNo':chosen[0],'dcmNo':chosen[1],'dtd':'HTML'}
+    text=html.decode('utf-8-sig') if isinstance(html,bytes) else html
+    for match in re.finditer(r'\bviewDoc\s*\(([^()]*)\)',text):
+        tokens=[value.strip() for value in match[1].split(',')]
+        if len(tokens)<6:continue
+        values=[]
+        for token in tokens[:6]:
+            if token=='null':values.append(None)
+            elif re.fullmatch(r'''"[^"\\]*"|'[^'\\]*' ''',token,re.VERBOSE):values.append(token[1:-1])
+            else:break
+        if len(values)!=6 or values[0]!=receipt:continue
+        params=dict(zip(['rcpNo','dcmNo','eleId','offset','length','dtd'],values))
+        if not re.fullmatch(r'\d+',params['dcmNo'] or ''):continue
+        if params['dtd']=='HTML':
+            return {key:params[key] for key in ['rcpNo','dcmNo','dtd']}
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+',params['dtd'] or '') or any(
+            not re.fullmatch(r'\d+',params[key] or '') for key in ['eleId','offset','length']
+        ):raise ValueError('Incomplete DART XML viewer parameters')
+        # The official main page uses searchGubun=1 for the entire document.
+        # Omitting offsets gives an empty response; the first node alone is
+        # often just the correction cover. Keep the actual document DTD.
+        return {**params,'keyword':'주식','searchGubun':'1'}
+    raise ValueError('DART document number not found for requested receipt')
+
+
+def validate_dart_viewer(content,main,params):
+    from engine.transformers._internal.dart_document import _decode
+    decoded,encoding=_decode(content)
+    soup=BeautifulSoup(decoded,'lxml')
+    if soup.body is None or not soup.body.get_text(strip=True):
+        raise ValueError('DART viewer did not return a readable HTML document')
+    if params['dtd']=='HTML':
+        main_soup=BeautifulSoup(main,'lxml')
+        title=main_soup.title.get_text(strip=True) if main_soup.title else ''
+        parts=[re.sub(r'\s+','',part) for part in title.split('/')]
+        returned=re.sub(r'\s+','',soup.title.get_text() if soup.title else '')
+        if len(parts)<3 or any(not part or part not in returned for part in parts) or soup.body.find('table') is None:
+            raise ValueError('DART HTML viewer does not identify the requested disclosure')
+        return {'encoding':encoding,'full_document_verified':True,'toc_sections':None,
+                'document_title':title,'verification_basis':'Full HTML endpoint; issuer, report and date in document title'}
+    text=main.decode('utf-8-sig') if isinstance(main,bytes) else main
+    nodes=[]
+    pattern=r'''node(\d+)\['text'\]\s*=\s*"([^"]+)";([\s\S]*?)node\1\['dtd'\]\s*=\s*"([^"]+)";'''
+    for match in re.finditer(pattern,text):
+        fields=dict(re.findall(r'''\['(rcpNo|dcmNo|eleId)'\]\s*=\s*"([^"]+)"''',match[3]))
+        if fields.get('rcpNo')==params['rcpNo'] and fields.get('dcmNo')==params['dcmNo']:
+            nodes.append((fields.get('eleId'),match[2]))
+    expected={f'toc{element}' for element,_ in nodes}
+    actual={anchor.get('name') for anchor in soup.find_all('a',attrs={'name':re.compile(r'^toc\d+$')})}
+    compact=re.sub(r'\s+','',soup.body.get_text())
+    if (not nodes or len(expected)!=len(nodes) or expected!=actual or
+        any(re.sub(r'\s+','',title) not in compact for _,title in nodes)):
+        raise ValueError('DART viewer is missing declared document sections')
+    return {'encoding':encoding,'full_document_verified':True,'toc_sections':len(nodes)}
 
 
 def _dart_symbol(session,root,corp):
@@ -172,10 +222,34 @@ def download_dart_splits(*,symbols=None,start_date='20020101',end_date=None,forc
                     pending.append((related,{**record,'source_id':related,'main_url':f'https://dart.fss.or.kr/dsaf001/main.do?rcpNo={related}'}))
             _save_response(folder,f'{receipt}.main.html',main,{**record,'stock_code':code,'family':family})
             params=dart_viewer_parameters(main.content,receipt)
-            viewer=session.request('GET','https://dart.fss.or.kr/report/viewer.do',params=params)
-            _save_response(folder,f'{receipt}.html',viewer,{**record,'security_id':f'SEC_KR_{code}','stock_code':code,
-                           'published_date':f'{receipt[:4]}-{receipt[4:6]}-{receipt[6:8]}','family':family,
-                           'family_id':min(family),'provider':'DART'})
+            try:
+                viewer=session.request('GET','https://dart.fss.or.kr/report/viewer.do',params=params)
+            except requests.HTTPError as exc:
+                if exc.response is None:raise
+                viewer=exc.response
+            context={**record,'security_id':f'SEC_KR_{code}','stock_code':code,
+                     'published_date':record.get('published_date') or f'{receipt[:4]}-{receipt[4:6]}-{receipt[6:8]}',
+                     'family':family,'family_id':min(family),'provider':'DART','request':params,
+                     'source_validation':'pending','http_status':viewer.status_code,'byte_count':len(viewer.content)}
+            digest=hashlib.sha256(viewer.content).hexdigest()
+            raw_folder=root/'public_documents'/receipt
+            raw_path=raw_folder/f'{digest}.viewer.html'
+            if viewer.content:
+                source=_save_response(raw_folder,raw_path.name,viewer,context)
+            else:
+                source={**context,'source_url':viewer.url,'source_sha256':digest,'path':None,
+                        'retrieved_at':datetime.now(timezone.utc).isoformat()}
+                _json(raw_path.with_suffix('.html.metadata.json'),source)
+            try:
+                viewer.raise_for_status()
+                verification=validate_dart_viewer(viewer.content,main.content,params)
+            except (ValueError,requests.RequestException) as exc:
+                _json(raw_path.with_suffix('.html.metadata.json'),{
+                    **source,'source_validation':'failed','validation_error':str(exc)})
+                raise
+            _save_response(folder,f'{receipt}.html',viewer,{**context,**verification,
+                'source_validation':'verified','retained_viewer_path':str(raw_path.resolve())})
+            _json(raw_path.with_suffix('.html.metadata.json'),{**source,**verification,'source_validation':'verified'})
             done+=1
             consecutive_network_errors=0
         except Exception as exc:

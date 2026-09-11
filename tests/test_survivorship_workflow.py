@@ -314,7 +314,7 @@ def test_clickhouse_publication_replaces_one_market_atomically_without_duplicate
         with pytest.raises(ValueError, match="market.cap"):
             load_survivorship(bundle, market="us", client=client, table_prefix=prefix, market_cap_factors=caps)
     finally:
-        for name in ("security_listing_episodes", "security_lifecycle_events", "security_lifecycle_entitlements", "survivorship_rows", "survivorship_publications", "price_daily", "fact_daily_factors"):
+        for name in ("security_listing_episodes", "security_lifecycle_events", "security_lifecycle_entitlements", "security_trading_halts", "survivorship_rows", "survivorship_publications", "price_daily", "fact_daily_factors"):
             client.command(f"DROP TABLE IF EXISTS {prefix}{name}")
         client.close()
 
@@ -346,6 +346,128 @@ def test_refresh_downloads_both_us_listing_states_without_promoting_unreviewed_i
     assert summary["status"] == "awaiting_review"
     assert not (tmp_path / "silver" / "listing_episodes.json").exists()
     assert (tmp_path / "bronze" / "snapshot_date=2026-01-07" / "delisted.csv").exists()
+
+
+def test_us_refresh_reports_changed_provider_delisting_date_and_preserves_snapshots(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import requests
+    from engine.workflows import refresh
+
+    header = "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+    originals = {}
+    calls = []
+
+    def provider_response(url, *, params, timeout):
+        day, state = params["date"], params["state"]
+        calls.append((day, state))
+        if state == "active":
+            body = "LIVE,Listed Issuer,NYSE,Stock,2000-01-01,,Active\n"
+        else:
+            terminal = "2026-01-05" if day == "2026-01-06" else "2026-01-06"
+            body = (f"MOVE,Former Issuer,NYSE,Stock,2000-01-01,{terminal},Delisted\n"
+                    "FIXED,Stable Issuer,NASDAQ,Stock,2001-01-01,2020-01-02,Delisted\n")
+        raw = (header + body).encode()
+        originals[day, state] = raw
+        return SimpleNamespace(status_code=200, content=raw)
+
+    monkeypatch.setattr(requests, "get", provider_response)
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "synthetic-key")
+    lake = tmp_path / "data-lake"
+
+    def run(day):
+        args = refresh.build_arg_parser().parse_args([
+            "--market", "us", "--targets", "survivorship", "--end-date", day,
+            "--survivorship-source-dir", str(lake / "bronze/alpha-vantage/listings"),
+            "--survivorship-output", str(lake / "silver/survivorship/us"),
+            "--survivorship-manifest", str(lake / "silver/not-reviewed.json"), "--skip-clickhouse",
+        ])
+        refresh.run_refresh(args)
+        return json.loads((lake / "gold/survivorship/us/summary.json").read_text("utf-8"))
+
+    run("2026-01-06")
+    summary = run("2026-01-07")
+    quality = json.loads((lake / "gold/survivorship/us/listing_source_quality.json").read_text("utf-8"))
+    assert summary["listing_source_quality"]["sha256"] == hashlib.sha256(
+        (lake / "gold/survivorship/us/listing_source_quality.json").read_bytes()).hexdigest()
+    assert quality["status"] == "source_observations_require_review"
+    assert quality["previous_snapshot_dates"]["delisted"] == "2026-01-06"
+    assert quality["changed_delisting_dates"] == [{
+        "symbol": "MOVE", "exchange": "NYSE", "assetType": "Stock", "ipoDate": "2000-01-01",
+        "previous_delisting_date": "2026-01-05", "current_delisting_date": "2026-01-06",
+    }]
+    assert quality["coverage_complete"] is False
+    assert summary["status"] == "awaiting_review"
+    assert not (lake / "gold/survivorship/us/listing_episodes.json").exists()
+    for (day, state), raw in originals.items():
+        path = lake / f"bronze/alpha-vantage/listings/snapshot_date={day}/{state}.csv"
+        assert path.read_bytes() == raw
+    before = (lake / "gold/survivorship/us/listing_source_quality.json").read_bytes()
+    run("2026-01-07")
+    assert len(calls) == 4
+    assert (lake / "gold/survivorship/us/listing_source_quality.json").read_bytes() == before
+    assert list((lake / "silver/survivorship/us/listing_source_quality").rglob("audit.json"))
+
+
+def test_us_refresh_separates_name_changes_duplicate_rows_and_conflicting_listing_states(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import requests
+    from engine.extractors.alpha_vantage_prices import download_alpha_vantage_listings
+    from engine.workflows import refresh
+
+    header = "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+    duplicate = "DUP,Same Issuer,NYSE,Stock,2000-01-01,,Active\n"
+    overlap = "BOTH,Overlap Issuer,NYSE,Stock,2000-01-01"
+    source_rows = {
+        ("2026-06-30", "active"): duplicate * 2,
+        ("2026-09-09", "delisted"): (
+            "NAME,Old Fund,NYSE ARCA,ETF,2014-10-23,2020-01-02,Delisted\n"
+            "AMBIG,First Issuer,NYSE,Stock,2001-01-01,2020-01-02,Delisted\n"
+            "AMBIG,Second Issuer,NYSE,Stock,2001-01-01,2021-01-02,Delisted\n"),
+        ("2026-09-10", "active"): overlap + ",,Active\n",
+        ("2026-09-10", "delisted"): (
+            "NAME,New Fund,NYSE ARCA,ETF,2014-10-23,2020-01-02,Delisted\n"
+            "AMBIG,First Issuer,NYSE,Stock,2001-01-01,2022-01-02,Delisted\n"
+            + overlap + ",2020-01-02,Delisted\n"),
+    }
+
+    def provider_response(url, *, params, timeout):
+        return SimpleNamespace(status_code=200, content=(header + source_rows[params["date"], params["state"]]).encode())
+
+    monkeypatch.setattr(requests, "get", provider_response)
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "synthetic-key")
+    lake = tmp_path / "data-lake"
+    root = lake / "bronze/alpha-vantage/listings"
+    download_alpha_vantage_listings(dates=["2026-06-30"], states=("active",), output_dir=root)
+    download_alpha_vantage_listings(dates=["2026-09-09"], states=("delisted",), output_dir=root)
+    args = refresh.build_arg_parser().parse_args([
+        "--market", "us", "--targets", "survivorship", "--end-date", "2026-09-10",
+        "--survivorship-source-dir", str(root),
+        "--survivorship-output", str(lake / "silver/survivorship/us"),
+        "--survivorship-manifest", str(lake / "silver/not-reviewed.json"), "--skip-clickhouse",
+    ])
+    refresh.run_refresh(args)
+    quality = json.loads((lake / "gold/survivorship/us/listing_source_quality.json").read_text("utf-8"))
+    assert quality["previous_snapshot_dates"] == {"active": "2026-06-30", "delisted": "2026-09-09"}
+    assert quality["changed_historical_names"] == [{
+        "symbol": "NAME", "exchange": "NYSE ARCA", "assetType": "ETF", "ipoDate": "2014-10-23",
+        "previous_name": "Old Fund", "current_name": "New Fund",
+    }]
+    assert quality["same_provider_key_in_active_and_delisted"] == [{
+        "symbol": "BOTH", "exchange": "NYSE", "assetType": "Stock", "ipoDate": "2000-01-01",
+    }]
+    assert quality["changed_delisting_dates"] == []  # Ambiguous prior rows cannot select a date.
+    assert quality["ambiguous_provider_keys"] == [{
+        "symbol": "AMBIG", "exchange": "NYSE", "assetType": "Stock", "ipoDate": "2001-01-01",
+        "snapshot_date": "2026-09-09", "state": "delisted", "distinct_records": 2,
+    }]
+    assert quality["duplicate_records"] == [{
+        "symbol": "DUP", "exchange": "NYSE", "assetType": "Stock", "ipoDate": "2000-01-01",
+        "name": "Same Issuer", "delistingDate": "", "status": "Active",
+        "snapshot_date": "2026-06-30", "state": "active", "occurrences": 2,
+    }]
+    assert (root / "snapshot_date=2026-06-30/active.csv").read_text("utf-8") == header + duplicate * 2
+    assert quality["coverage_complete"] is False
+    assert not (lake / "gold/survivorship/us/events.json").exists()
 
 
 def test_dart_refresh_retains_actual_receipt_date_and_unavailable_response(tmp_path, monkeypatch):
@@ -385,6 +507,125 @@ def test_dart_refresh_retains_actual_receipt_date_and_unavailable_response(tmp_p
     raw = (tmp_path / "bronze" / candidate["document_path"]).read_bytes()
     assert b"<status>014</status>" in raw
     assert hashlib.sha256(raw).hexdigest() == candidate["document_sha256"]
+
+
+def test_dart_refresh_collects_liquidation_and_dissolution_without_approving_payouts(tmp_path, monkeypatch):
+    import io
+    from zipfile import ZipFile
+    import requests
+    from engine.workflows import refresh
+
+    documents = {}
+    for receipt in ("20260608900348", "20260618000252"):
+        buffer = io.BytesIO()
+        with ZipFile(buffer, "w") as archive:
+            archive.writestr(receipt + ".xml", "<DOCUMENT>Synthetic fixture: liquidation distribution remains planned.</DOCUMENT>")
+        documents[receipt] = buffer.getvalue()
+    calls = []
+
+    def provider_response(self, method, url, **kwargs):
+        params = kwargs["params"]
+        calls.append(url.rsplit("/", 1)[-1])
+        response = requests.Response()
+        response.status_code = 200
+        if url.endswith("list.json"):
+            fixtures = {
+                "I001": ("20260608900348", "20260608", "기타경영사항(자율공시) (청산관련 주요사항 안내)"),
+                "B001": ("20260618000252", "20260618", "주요사항보고서(해산사유발생)"),
+            }
+            if params["pblntf_detail_ty"] in fixtures:
+                receipt, day, title = fixtures[params["pblntf_detail_ty"]]
+                payload = dict(status="000", total_count=1, total_page=1, list=[dict(
+                    rcept_no=receipt, rcept_dt=day, corp_code="01775952", stock_code="464440",
+                    report_nm=title, corp_cls="K", corp_name="Synthetic liquidation issuer")])
+            else:
+                payload = dict(status="013", message="조회된 데이터가 없습니다.")
+            response._content = json.dumps(payload, ensure_ascii=False).encode()
+        else:
+            assert url.endswith("document.xml")
+            response._content = documents[params["rcept_no"]]
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", provider_response)
+    monkeypatch.setenv("DART_API_KEY", "synthetic-key")
+    lake = tmp_path / "data-lake"
+    args = refresh.build_arg_parser().parse_args([
+        "--market", "kr", "--targets", "survivorship", "--end-date", "2026-06-30",
+        "--survivorship-start-date", "2026-06-01", "--survivorship-source-dir", str(lake / "bronze/dart"),
+        "--survivorship-output", str(lake / "silver/survivorship/kr"),
+        "--survivorship-manifest", str(lake / "silver/not-yet-reviewed.json"), "--skip-clickhouse",
+    ])
+    refresh.run_refresh(args)
+    report_path = lake / "bronze/dart/collection_report.json"
+    report = json.loads(report_path.read_text("utf-8"))
+    candidates = {row["source_id"]: row for row in report["candidates"]}
+    assert set(candidates) == {"20260608900348", "20260618000252"}
+    for receipt, candidate in candidates.items():
+        assert candidate["document_status"] == "available"
+        assert candidate["review_status"] == "pending"
+        raw = (lake / "bronze/dart" / candidate["document_path"]).read_bytes()
+        assert raw == documents[receipt]
+        assert candidate["document_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert candidates["20260608900348"]["published_date"] == "2026-06-08"
+    assert candidates["20260618000252"]["published_date"] == "2026-06-18"
+    gold = lake / "gold/survivorship/kr"
+    summary = json.loads((gold / "summary.json").read_text("utf-8"))
+    assert summary["status"] == "awaiting_review"
+    assert summary["coverage_complete"] is False
+    assert not (gold / "events.json").exists()
+    assert not (gold / "listing_episodes.json").exists()
+    assert calls.count("document.xml") == 2
+    previous_calls = len(calls)
+    refresh.run_refresh(args)
+    assert len(calls) == previous_calls
+    assert json.loads(report_path.read_text("utf-8"))["candidates"] == report["candidates"]
+
+
+@pytest.mark.parametrize("title", ["투자유의안내", "기타시장안내 (상장적격성 실질심사 사유 발생 안내)", "주권매매거래정지"])
+def test_dart_refresh_retains_halt_review_notices_without_approving_a_halt_interval(tmp_path, monkeypatch, title):
+    import io
+    from zipfile import ZipFile
+    import requests
+    from engine.workflows import refresh
+
+    receipt = "20240202800801"
+    buffer = io.BytesIO()
+    with ZipFile(buffer, "w") as archive:
+        archive.writestr(receipt + ".xml", "<DOCUMENT>Synthetic notice: review exact execution halt timing.</DOCUMENT>")
+    raw_document = buffer.getvalue()
+
+    def response(self, method, url, **kwargs):
+        params = kwargs["params"]
+        result = requests.Response()
+        result.status_code = 200
+        if url.endswith("list.json"):
+            payload = dict(status="013")
+            if params["pblntf_detail_ty"] == "I003":
+                payload = dict(status="000", total_count=1, total_page=1, list=[dict(
+                    rcept_no=receipt, rcept_dt="20240202", corp_code="00860730", stock_code="140910",
+                    report_nm=title, corp_cls="Y", corp_name="Synthetic halt issuer")])
+            result._content = json.dumps(payload, ensure_ascii=False).encode()
+        else:
+            assert url.endswith("document.xml") and params["rcept_no"] == receipt
+            result._content = raw_document
+        return result
+
+    monkeypatch.setattr(requests.Session, "request", response)
+    monkeypatch.setenv("DART_API_KEY", "synthetic-key")
+    lake = tmp_path / "data-lake"
+    source_root = lake / "bronze/dart/listings"
+    args = refresh.build_arg_parser().parse_args([
+        "--market", "kr", "--targets", "survivorship", "--end-date", "2024-02-02",
+        "--survivorship-start-date", "2024-02-02", "--survivorship-source-dir", str(source_root),
+        "--survivorship-manifest", str(lake / "silver/not-reviewed.json"), "--skip-clickhouse",
+    ])
+    refresh.run_refresh(args)
+    report = json.loads((source_root / "collection_report.json").read_text("utf-8"))
+    assert len(report["candidates"]) == 1
+    candidate = report["candidates"][0]
+    assert candidate["review_status"] == "pending" and candidate["document_status"] == "available"
+    assert (source_root / candidate["document_path"]).read_bytes() == raw_document
+    assert not (lake / "gold/survivorship/kr/trading_halts.json").exists()
 
 
 def test_regular_market_data_cli_includes_survivorship_stage(tmp_path, monkeypatch, capsys):

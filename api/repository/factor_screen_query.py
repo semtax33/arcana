@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from api.model.universe import has_universe_filters
 from api.repository.universe_query import filter_factor_query
+from api.repository.listing_history import listing_history_table, trading_halt_history_table, security_source_sql
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -232,6 +233,8 @@ def build_factor_screen_query(
     *,
     universe=None,
     cap_table: str = "fact_daily_factors",
+    listing_table: str | None = None,
+    trading_halt_table: str | None = None,
     exact_signal_values: bool = False,
     as_of_date: str | date | None = None,
     market: str | None = None,
@@ -383,7 +386,7 @@ security_universe AS (
         any(iss.industry_group_code) AS industry_group_code,
         any(iss.industry_group_name) AS industry_group_name,
         any(mcap.market_cap) AS market_cap
-    FROM {_validate_table_name(security_table)} AS sm
+    FROM {security_source_sql(security_table, listing_table)} AS sm
     LEFT JOIN {_validate_table_name(issuer_table)} AS iss
         ON iss.issuer_id = sm.issuer_id
     LEFT JOIN (
@@ -409,7 +412,7 @@ security_universe AS (
         GROUP BY security_id
     ) AS mcap
         ON mcap.security_id = sm.security_id
-    WHERE sm.is_active{market_filter}{sector_filter}{industry_group_filter}
+    WHERE {"1" if listing_table else "sm.is_active"}{market_filter}{sector_filter}{industry_group_filter}
     GROUP BY sm.security_id
 )"""
         regular_security_universe_join = (
@@ -595,12 +598,13 @@ HAVING {having_clause}
 ORDER BY security_id ASC{limit_clause}
 """.strip()
     query = _clean_query(query)
-    if has_universe_filters(universe) or exact_signal_values:
+    if has_universe_filters(universe) or exact_signal_values or listing_table or trading_halt_table:
         query, params = filter_factor_query(query, params,
             dates_sql='SELECT latest_date AS trade_date FROM latest_trade_date', universe=universe, market=market,
             sector_codes=sector_codes, industry_group_codes=industry_group_codes,
             security_table=security_table, issuer_table=issuer_table, cap_table=cap_table,
-            batch=False, exact_signal_values=exact_signal_values)
+            batch=False, exact_signal_values=exact_signal_values,
+            listing_table=listing_table, trading_halt_table=trading_halt_table)
     return query, params
 
 
@@ -609,6 +613,8 @@ def screen_stocks_by_factors(
     conditions: list[FactorCondition | dict[str, Any]],
     *,
     universe=None,
+    listing_table: str | None = None,
+    trading_halt_table: str | None = None,
     as_of_date: str | date | None = None,
     market: str | None = None,
     financial_basis: str | None = DEFAULT_FINANCIAL_BASIS,
@@ -633,6 +639,8 @@ def screen_stocks_by_factors(
     query, params = build_factor_screen_query(
         conditions,
         universe=universe,
+        listing_table=listing_table or listing_history_table(client),
+        trading_halt_table=trading_halt_table or trading_halt_history_table(client),
         as_of_date=as_of_date,
         market=market,
         financial_basis=financial_basis,

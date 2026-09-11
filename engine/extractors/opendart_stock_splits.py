@@ -1,7 +1,7 @@
 """Authenticated OpenDART document collection, with cached public search indexes."""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import io
 import json
@@ -11,10 +11,14 @@ from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 
 import pandas as pd
+import requests
 
 from engine.core.local_secrets import get_local_secret
 from engine.core.source_storage import write_source_bytes
-from engine.extractors.stock_splits import OfficialSession, root_for, parse_dart_search, _json
+from engine.extractors.stock_splits import (
+    OfficialSession, root_for, parse_dart_search, _json, _save_response,
+    dart_viewer_parameters, validate_dart_viewer, dart_family,
+)
 
 
 class OpenDartClient:
@@ -70,6 +74,60 @@ def _list_period(client,root,start,end):
         page+=1
 
 
+def _download_public_document(client,root,record,code,unavailable,force=False):
+    receipt=record['source_id']
+    api_outcome=json.loads(unavailable.read_bytes())
+    if not force and api_outcome.get('public_fallback',{}).get('status')=='unavailable':
+        return 'unavailable'
+    folder=root/'public_documents'/receipt
+    retained=[]
+    def retain(response,kind,metadata):
+        digest=hashlib.sha256(response.content).hexdigest()
+        name=f'{digest}.{kind}.html'
+        if not response.content:
+            _json(folder/f'{digest}.{kind}.metadata.json',{
+                **metadata,'source_url':response.url,'source_sha256':digest,
+                'byte_count':0,'http_status':response.status_code,
+                'retrieved_at':datetime.now(timezone.utc).isoformat(),'path':None})
+            raise ValueError('DART public document response is empty')
+        item=_save_response(folder,name,response,{**metadata,'http_status':response.status_code})
+        retained.append(item)
+        return item
+    def request(url,kind,metadata,**kwargs):
+        try:
+            response=client.session.request('GET',url,**kwargs)
+        except requests.HTTPError as exc:
+            if exc.response is not None:
+                retain(exc.response,kind,metadata)
+            raise
+        return response,retain(response,kind,metadata)
+    try:
+        headers={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Arcana Research',
+                 'Referer':'https://dart.fss.or.kr/'}
+        main,main_source=request(f'https://dart.fss.or.kr/dsaf001/main.do?rcpNo={receipt}',
+                                 'main',{'source_id':receipt},headers=headers)
+        params=dart_viewer_parameters(main.content,receipt)
+        viewer,source=request('https://dart.fss.or.kr/report/viewer.do','viewer',
+            {'source_id':receipt,'request':params,'main_path':main_source['path'],
+             'main_sha256':main_source['source_sha256']},params=params,headers=headers)
+        verification=validate_dart_viewer(viewer.content,main.content,params)
+    except (requests.RequestException,ValueError,UnicodeError) as exc:
+        _json(unavailable,{**api_outcome,'public_fallback':{
+            'status':'unavailable','error_type':type(exc).__name__,'error':str(exc),
+            'retained_responses':retained}})
+        return 'unavailable'
+    path=root/'disclosures'/code/f'{receipt}.html'
+    write_source_bytes(path,viewer.content,source='DART-public-full-document')
+    family=dart_family(main.content) or [receipt]
+    _json(path.with_suffix('.html.metadata.json'),{
+        **record,**source,**verification,'provider':'DART','security_id':f'SEC_KR_{code}',
+        'stock_code':code,'published_date':record.get('published_date') or f'{receipt[:4]}-{receipt[4:6]}-{receipt[6:8]}',
+        'family':family,'family_id':min(family),'representation':'dart_public_full_document_html',
+        'retained_viewer_path':source['path'],'path':str(path.resolve()),
+        'api_unavailable_path':str(unavailable.resolve())})
+    return 'downloaded'
+
+
 def download_document(client,root,record,code,force=False):
     if not re.fullmatch(r'[0-9]{14}',record['source_id']) or not re.fullmatch(r'[A-Z0-9]{6}',code):
         raise ValueError('invalid OpenDART receipt or stock code')
@@ -78,14 +136,28 @@ def download_document(client,root,record,code,force=False):
     if path.exists() and meta.exists() and not force:return 'cached'
     archive=root/'document_archives'/f'{receipt}.zip'
     unavailable=archive.with_suffix('.unavailable.json')
-    if unavailable.exists() and not force:return 'unavailable'
+    if unavailable.exists() and not force:
+        return _download_public_document(client,root,record,code,unavailable)
     if not archive.exists() or force:
         response=client.get('document.xml',rcept_no=receipt)
         if not response.content.startswith(b'PK'):
+            digest=hashlib.sha256(response.content).hexdigest()
+            response_path=root/'document_responses'/receipt/f'{digest}.response'
+            if response.content:
+                write_source_bytes(response_path,response.content,source='OpenDART-document-response')
+            evidence={'source_id':receipt,
+                      'source_url':f'https://opendart.fss.or.kr/api/document.xml?rcept_no={receipt}',
+                      'response_path':str(response_path.resolve()) if response.content else None,
+                      'response_sha256':digest,'byte_count':len(response.content),
+                      'http_status':getattr(response,'status_code',None),
+                      'retrieved_at':datetime.now(timezone.utc).isoformat()}
+            _json(response_path.with_suffix('.metadata.json'),evidence)
+            if not response.content:
+                raise ValueError('OpenDART document response is empty; response metadata retained')
             status=_status(response.content)
             if status=='014':
-                _json(unavailable,{'source_id':receipt,'status':status,'source_url':f'https://opendart.fss.or.kr/api/document.xml?rcept_no={receipt}'})
-                return 'unavailable'
+                _json(unavailable,{**evidence,'status':status})
+                return _download_public_document(client,root,record,code,unavailable,force=force)
             raise ValueError(f'OpenDART document status={status}')
         write_source_bytes(archive,response.content,source='OpenDART-disclosure-archive')
     with ZipFile(archive) as z:

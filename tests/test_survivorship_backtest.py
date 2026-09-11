@@ -31,6 +31,9 @@ def lifecycle_database():
         "security_lifecycle_entitlements": """event_id String, component_id String,
             component_type String, recipient_security_id String, units_per_share Float64,
             delivery_date Nullable(Date), currency String""",
+        "security_trading_halts": """halt_id String, security_id String,
+            start_date Date, end_date Nullable(Date), status String,
+            published_date Date, source_url String, source_sha256 String""",
     }
     created = []
     try:
@@ -43,6 +46,40 @@ def lifecycle_database():
         for table in reversed(created):
             client.command(f"DROP TEMPORARY TABLE {table}")
         client.close()
+
+
+def test_confirmed_halt_blocks_sale_and_ignores_positive_volume_vendor_quotes_until_resumption(lifecycle_database):
+    client, factory = lifecycle_database
+    client.insert("security_master", [("SEC_KR_OLD", "OLD", "KR", True), ("SEC_KR_NEW", "NEW", "KR", True)],
+                  column_names=["security_id", "issuer_id", "country", "is_active"])
+    client.insert("factor_catalog", [("roe", "ROE", "HIGHER_BETTER")],
+                  column_names=["factor_id", "factor_name", "value_direction"])
+    client.insert("fact_daily_factors", [
+        ("SEC_KR_OLD", date(2026, 1, 2), "roe", 10.), ("SEC_KR_NEW", date(2026, 1, 2), "roe", 1.),
+        ("SEC_KR_OLD", date(2026, 1, 30), "roe", 1.), ("SEC_KR_NEW", date(2026, 1, 30), "roe", 10.),
+    ], column_names=["security_id", "trade_date", "factor_id", "factor_value"])
+    days = [date(2026, 1, 2), date(2026, 1, 5), date(2026, 1, 30), date(2026, 2, 2),
+            date(2026, 2, 3), date(2026, 2, 4), date(2026, 2, 5)]
+    old = [100., 100., 100., 500., 900., 110., 110.]
+    new = [100., 100., 100., 100., 200., 300., 300.]
+    client.insert("price_daily", [(sid, day, price, price, 100, "KRW")
+        for sid, values in (("SEC_KR_OLD", old), ("SEC_KR_NEW", new)) for day, price in zip(days, values)],
+        column_names=["security_id", "trade_date", "close", "adj_close", "volume", "currency"])
+    client.insert("security_trading_halts", [(
+        "synthetic-exchange-halt", "SEC_KR_OLD", date(2026, 2, 2), date(2026, 2, 4),
+        "confirmed", date(2026, 1, 30), "https://example.test/halt-and-resumption", "a" * 64,
+    )])
+    request = FactorBacktestRequestDto(
+        conditions=[FactorConditionDto(factor_id="roe", mode="top_percent", top_percent=100)],
+        start_date=date(2026, 1, 5), end_date=date(2026, 2, 5), rebalance_frequency="monthly",
+        market="kr", max_positions=1, transaction_cost_bps=0, benchmarks=[], factor_table="fact_daily_factors",
+    )
+    result = BacktestService(client_factory=factory).run_factor_backtest(request)
+    # Confirmed cessation overrides spurious positive-volume rows. The held
+    # share cannot finance NEW at the February rebalance; it resumes at 110.
+    assert [point.strategy_nav for point in result.equity_curve] == pytest.approx([1., 1., 1., 1., 1.1, 1.1])
+    assert all(state["cash"] == 0 for state in result.raw["portfolio_history"])
+    assert {p["security_id"] for p in result.raw["portfolio_history"][-1]["positions"]} == {"SEC_KR_OLD"}
 
 
 @pytest.mark.parametrize(("event_type", "cash_amount", "expected_nav", "complete"), [

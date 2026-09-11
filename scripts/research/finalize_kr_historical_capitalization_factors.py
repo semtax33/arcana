@@ -48,7 +48,13 @@ def main():
     check(args.publication, verification["native_publication_sha256"])
     preparation = read(Path(publication["preparation"]) / "summary.json", publication["preparation_sha256"])
     for path, digest in publication["dependencies"].items():
-        check(path, digest)
+        if digest is None:
+            absent = Path(path).resolve()
+            if absent.exists():
+                raise ValueError(f"A pinned absent input appeared: {absent}")
+            evidence[str(absent)] = None
+        else:
+            check(path, digest)
     years = sorted(publication["source_years"])
     scope = "_".join(map(str, years))
     if len(years) > 1 and years == list(range(years[0], years[-1] + 1)):
@@ -81,7 +87,12 @@ def main():
     check(ROOT / "scripts/research/verify_kr_historical_capitalization_factorlab.py", verification["implementation_sha256"])
     check(DATA_LAKE.silver("survivorship", "kr", "listing_episodes.json"), verification["listing_episodes_sha256"])
     if sum(row["new_rows"] for row in monthly.values()) != publication["inserted_rows"]:
-        raise ValueError("New native counts differ from the monthly checkpoints")
+        raise ValueError("Inserted native counts differ from the monthly checkpoints")
+    if "added_rows" in publication:
+        if (sum(row["added_rows"] for row in monthly.values()) != publication["added_rows"]
+                or sum(row["revised_rows"] for row in monthly.values()) != publication["revised_rows"]
+                or publication["added_rows"] + publication["revised_rows"] != publication["inserted_rows"]):
+            raise ValueError("Native additions or revisions differ from the monthly checkpoints")
     if sum(row["verified_rows"] for row in monthly.values()) != publication["verified_rows"]:
         raise ValueError("Native readback counts differ from monthly checkpoints")
     check(Path(__file__))
@@ -94,7 +105,9 @@ def main():
     evidence.pop(str(args.input_gold_summary.resolve()))
     check(output / "gold_input_summary_before.json")
     result = dict(status="native_and_factorlab_verified_snapshots_pending", checked_at=datetime.now(timezone.utc).isoformat(),
-        source_years=years, native_added_rows=publication["inserted_rows"], native_verified_rows=publication["verified_rows"],
+        source_years=years, native_added_rows=publication.get("added_rows", publication["inserted_rows"]),
+        native_revised_rows=publication.get("revised_rows", 0), native_inserted_rows=publication["inserted_rows"],
+        native_verified_rows=publication["verified_rows"],
         unchanged_existing_rows=publication["unchanged_existing_rows"], factorlab_verified_days=verification["verified_days"],
         factorlab_top70_output_rows=verification["top70_output_rows"], native_restored=True, snapshots_restored=False,
         coverage_complete=False, evidence_sha256=evidence,

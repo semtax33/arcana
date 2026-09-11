@@ -1,8 +1,9 @@
-"""Rebuild snapshots influenced by an audited contiguous native-year scope.
+"""Rebuild snapshots influenced by an audited native-observation scope.
 
 Select added keys, preserved existing keys, or the complete audited scope. Each observation applies
 until the next native event, including a NULL
-event. After the audited years the first subsequent event closes the influence interval.
+event. Events in intervening unaudited months and after the final audited date
+close the preceding influence interval without being republished themselves.
 Calendar caches do not grant listing eligibility or imply tradable prices.
 """
 import argparse
@@ -63,7 +64,8 @@ def first_subsequent_events(client, folder, security_ids=None, *, start="2016-01
     (folder / "query.sql").write_text(query, "utf-8")
     frames, records = [], []
     for month in pd.period_range(start, END, freq="M"):
-        parameters = dict(start=month.start_time.date(), end=(month + 1).start_time.date(), cutoff=date.fromisoformat(END))
+        parameters = dict(start=max(month.start_time.date(), pd.Timestamp(start).date()),
+            end=(month + 1).start_time.date(), cutoff=date.fromisoformat(END))
         rows = client.query_df(query, parameters=parameters)
         if rows.empty and not len(rows.columns):
             rows = pd.DataFrame(columns=GROUPS + ["stop_date"])
@@ -107,10 +109,10 @@ def affected_asof(source, dates, boundaries):
 
 def native_capture(client, month, path, security_ids):
     if security_ids is None:
-        return normalize(capture(client, month, path))
+        return normalize(capture(client, month, path, end_date=END))
     query = NATIVE_SQL.replace("AND startsWith(security_id,'SEC_KR_')", "AND security_id IN {sids:Array(String)}")
     rows = client.query_df(query, parameters=dict(start=month.start_time.date(),
-        end=(month + 1).start_time.date(), sids=security_ids))
+        end=min((month + 1).start_time.date(), (pd.Timestamp(END) + pd.Timedelta(days=1)).date()), sids=security_ids))
     if rows.empty and not len(rows.columns):
         rows = pd.DataFrame(columns=COLUMNS)
     rows.to_parquet(path, index=False)
@@ -147,12 +149,19 @@ def main():
     native = json.loads(args.native_publication.read_text("utf-8"))
     assert native["native_published"] and native["factor_ids"] == ["mcap_mil", "csho"]
     years = sorted(native["source_years"])
-    if not years or years != list(range(years[0], years[-1] + 1)):
-        raise ValueError("Snapshot preparation requires contiguous audited source years")
-    if [row["month"] for row in native["months"]] != [f"{year}-{month:02d}" for year in years for month in range(1, 13)]:
+    if not years or len(years) != len(set(years)):
+        raise ValueError("Snapshot preparation requires unique audited source years")
+    source_cutoff = pd.Timestamp(native.get("end_date") or f"{years[-1]}-12-31")
+    if source_cutoff.year != years[-1] or source_cutoff > pd.Timestamp(END):
+        raise ValueError("Native source cutoff is outside the audited scope")
+    if [row["month"] for row in native["months"]] != [str(month) for year in years
+            for month in pd.period_range(f"{year}-01", f"{year}-12", freq="M") if month.start_time <= source_cutoff]:
         raise ValueError("Complete monthly native publication is required")
-    source_start, subsequent_start = f"{years[0]}-01-01", f"{years[-1] + 1}-01"
-    scope_name = str(years[0]) if len(years) == 1 else f"{years[0]}_{years[-1]}"
+    source_start = f"{years[0]}-01-01"
+    subsequent_start = (source_cutoff + pd.Timedelta(days=1)).date().isoformat()
+    scope_name = "_".join(map(str, years))
+    if len(years) > 1 and years == list(range(years[0], years[-1] + 1)):
+        scope_name = f"{years[0]}_{years[-1]}"
     args.output.mkdir(parents=True, exist_ok=False)
     scoped_ids = None
     if args.source_scope in {"existing", "all"}:
@@ -172,7 +181,8 @@ def main():
         dependencies[str(path)] = sha256_file(path)
     def verify_dependencies():
         for path, checksum in dependencies.items():
-            if sha256_file(ROOT / path) != checksum:
+            dependency = ROOT / path
+            if (None if not dependency.exists() else sha256_file(dependency)) != checksum:
                 raise ValueError(f"Snapshot dependency changed: {Path(path).name}")
     verify_dependencies()
     implementation = args.output / "implementation"
@@ -186,7 +196,7 @@ def main():
         native_publication_sha256=sha256_file(args.native_publication), dependencies=dependencies,
         cutoff=END, months=records, inserted_rows=0, verified_rows=0, new_keys=0, revised_keys=0,
         source_scope=args.source_scope, scoped_security_ids=scoped_ids,
-        source_years=years, source_start=source_start, subsequent_start=subsequent_start,
+        source_years=years, source_start=source_start, source_cutoff=source_cutoff.date().isoformat(), subsequent_start=subsequent_start,
         scope=f"Only calendar snapshots whose latest native event belongs to the {args.source_scope} {scope_name} native-key scope. Stop at the next native event, including NULL, or the frozen cutoff. Other snapshots are preserved.")
     report_path = args.output / "publication.json"
     export_json(report_path, report)
@@ -211,23 +221,24 @@ def main():
             for month in pd.period_range(source_start, END, freq="M"):
                 folder = args.output / str(month)
                 folder.mkdir()
+                observed = native_capture(client, month, folder / "native_current.parquet", scoped_ids)
                 if str(month) in by_month:
                     record = by_month[str(month)]
                     original_folder = args.native_publication.parent / str(month)
                     for name, expected_hash in record["hashes"].items():
                         if sha256_file(original_folder / name) != expected_hash:
                             raise ValueError("Native publication evidence changed")
-                    observed = native_capture(client, month, folder / "native_current.parquet", scoped_ids)
                     original = pd.read_parquet(original_folder / "expected.parquet")
                     if scoped_ids is not None:
                         original = original.loc[original.security_id.isin(scoped_ids)]
-                    compare_complete(observed, original)
+                    audited = observed.trade_date.le(source_cutoff)
+                    compare_complete(observed.loc[audited], original)
                     added = normalize(pd.read_parquet(original_folder / "insert_delta.parquet"))
                     added_keys = pd.MultiIndex.from_frame(observed[KEYS]).isin(pd.MultiIndex.from_frame(added[KEYS]))
-                    observed["selected_source"] = True if args.source_scope == "all" else (added_keys if args.source_scope == "added" else ~added_keys)
-                    source = pd.concat([state, observed], ignore_index=True) if not state.empty else observed
+                    observed["selected_source"] = audited & (True if args.source_scope == "all" else (added_keys if args.source_scope == "added" else ~added_keys))
                 else:
-                    source = state.copy()
+                    observed["selected_source"] = False
+                source = pd.concat([state, observed], ignore_index=True) if not state.empty else observed
                 source = normalize(source)
                 state = source.sort_values("trade_date").drop_duplicates(GROUPS, keep="last")
                 days = calendar[(calendar >= month.start_time) & (calendar < (month + 1).start_time)]

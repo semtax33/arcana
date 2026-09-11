@@ -95,7 +95,7 @@ def download_survivorship_sources(*, market, end_date, start_date=None, output_d
                     found += len(rows)
                     for row in rows:
                         title = re.sub(r"\s+", "", row["report_nm"])
-                        if not any(token in title for token in ("상장폐지", "정리매매", "합병", "주식의포괄적교환", "주식교환", "주식소각")):
+                        if not any(token in title for token in ("상장폐지", "정리매매", "합병", "주식의포괄적교환", "주식교환", "주식소각", "청산", "해산", "매매거래", "상장적격성", "투자유의안내")):
                             continue
                         receipt = row["rcept_no"]
                         if not re.fullmatch(r"\d{14}", receipt):
